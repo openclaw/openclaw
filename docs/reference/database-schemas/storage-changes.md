@@ -130,8 +130,15 @@ join native reader cleanup before returning. Doctor imports legacy registry rows
 through the shared-state writer, with host transaction and commit admission under
 the captured maintenance scope. Imports retain sequential per-row transactions,
 existing-row precedence, and sharded-before-monolithic ordering; source cleanup
-waits for durable acknowledgement. Runtime registry writes, reservations, and
-currentness callbacks retain their synchronous owners.
+waits for durable acknowledgement. Container registry updates, completion, and
+removal execute through the same writer, preserving captured inputs, immutable
+fields, update/remove ordering, and removal-intent guards. Docker and Podman use
+the existing pending/ready state for one-time setup; interrupted setup retains
+its container and data and cannot be reused as ready. Legacy entries without a
+readiness marker keep their existing behavior. Browser writes, reservation/lock
+primitives, removal-intent admission, and currentness callbacks retain their
+existing synchronous owners. Existing records need no schema or data migration,
+and retention is unchanged.
 
 Shared-state operations that request host transaction or commit admission acquire
 fresh lifecycle coordinator custody on their executing SQLite worker. A live
@@ -272,6 +279,11 @@ outcomes, removed records, and the existing creating-open behavior. It does not
 probe checkouts or reconcile lifecycle state. Creation, removal, restoration,
 run leases, and cloned-project deletion checks retain their existing owners;
 these observational reads do not establish that a checkout is unreferenced.
+Provisioned snapshot path ledgers, file-state metadata, and individual binary
+chunks also read through that worker. Removal and restoration await the data and
+retain their current guards after those waits. Missing and malformed metadata,
+chunk ordering, schema, snapshot writes, and recovery policy are unchanged;
+these data reads do not move the entire cleanup or restoration flow off-thread.
 
 Profile enumeration for user lists, session-member pickers, and human-mention
 directories runs in the same shared-state worker. Ordered profile metadata,

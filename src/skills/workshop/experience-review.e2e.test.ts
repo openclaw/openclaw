@@ -77,7 +77,7 @@ afterEach(async () => {
 
 function writeToolCall(
   response: ServerResponse,
-  name: string,
+  name: "tool_search" | "tool_call",
   args: Record<string, unknown>,
   sequence: number,
 ): void {
@@ -105,7 +105,7 @@ function writeToolCall(
     {
       type: "response.completed",
       response: {
-        id: "resp_workshop_contract_tool",
+        id: `resp_workshop_contract_${name}_${sequence}`,
         status: "completed",
         output: [item],
         usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
@@ -196,8 +196,9 @@ describe("Workshop draft-only review through the real provider and tool owners",
             config: candidate.config,
             source,
           });
+          const laterSession = SessionManager.open(target);
           for (const message of laterMessages) {
-            SessionManager.appendMessageToTranscript(target, message, {
+            laterSession.appendMessage(message, {
               config: candidate.config,
             });
           }
@@ -289,8 +290,16 @@ describe("Workshop draft-only review through the real provider and tool owners",
                   (item) =>
                     item.type === "function_call_output" &&
                     item.call_id === "call_workshop_contract_tool_search_1",
+                )?.output;
+                if (typeof searchOutput !== "string") {
+                  throw new Error("Workshop discovery did not return a provider-visible result");
+                }
+                const candidates: unknown = JSON.parse(searchOutput);
+                expect(candidates).toEqual(
+                  expect.arrayContaining([
+                    expect.objectContaining({ name: "skill_workshop", source: "openclaw" }),
+                  ]),
                 );
-                const candidates: unknown = JSON.parse(String(searchOutput?.output));
                 const workshop = Array.isArray(candidates)
                   ? candidates.find(
                       (entry: unknown) => isRecord(entry) && entry.name === "skill_workshop",

@@ -47,6 +47,7 @@ import {
 import { activeTranscriptMessageId } from "./chat-transcript-position.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import { previewTranscriptRowKeys, focusedTranscriptRowKey } from "./chat-transcript-range.ts";
+import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
   applyPendingScrollOffset,
   type TranscriptScrollRestoreHost,
@@ -117,8 +118,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       }
     });
   }
-  private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
-  private pruneDetachedRowsQueued = false;
+  private readonly rowRefs: TranscriptRowRefs;
   private pendingRowMeasureFrame: number | null = null;
   private readonly captureInteractionResize = (event: Event) => {
     const anchor = resolveChatTranscriptInteractionAnchor(event);
@@ -166,53 +166,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
         this.measureConnectedRows();
       }
     });
-  }
-  private measureRowRefFor(key: string): (element?: Element) => void {
-    let callback = this.measureRowRefs.get(key);
-    if (!callback) {
-      callback = (element?: Element) => {
-        if (element instanceof HTMLElement) {
-          if (
-            this.offsetState.scrollCommand?.target === "message" &&
-            this.messageRowKeysById.get(this.offsetState.scrollCommand.messageId) === key
-          ) {
-            // The parent update can finish before a virtualized target mounts.
-            queueMicrotask(() => this.completeMessageReveal());
-          }
-          // Nested message refs finish their preview clamps in a microtask.
-          // Measure afterward, once the row is connected and those writes settle.
-          queueMicrotask(() => {
-            queueMicrotask(() => {
-              if (
-                element.isConnected &&
-                this.threadInnerElement?.contains(element) &&
-                element.dataset.virtualRowKey === key &&
-                this.rowIndexesByKey.has(key)
-              ) {
-                this.virtualizerController.getVirtualizer().measureElement(element);
-              }
-            });
-          });
-          return;
-        }
-        // Re-stamps (e.g. the chat<->dashboard face switch) re-invoke each
-        // stable row ref as an (undefined, element) pair while the new subtree
-        // is still detached. measureElement(null) prunes every disconnected
-        // row, so calling it synchronously unobserves just-registered sibling
-        // rows and freezes their heights at the old pane width (overlapping
-        // bubbles). Defer until the commit lands so only removed rows prune.
-        if (this.pruneDetachedRowsQueued) {
-          return;
-        }
-        this.pruneDetachedRowsQueued = true;
-        queueMicrotask(() => {
-          this.pruneDetachedRowsQueued = false;
-          this.virtualizerController.getVirtualizer().measureElement(null);
-        });
-      };
-      this.measureRowRefs.set(key, callback);
-    }
-    return callback;
   }
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
@@ -312,6 +265,24 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       // Disable isAtEnd()'s default too; callers must supply an explicit threshold.
       scrollEndThreshold: -1,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
+    });
+    this.rowRefs = new TranscriptRowRefs(this.virtualizerController.getVirtualizer(), {
+      // Preserve initial positioning and smooth-scroll measurement gates.
+      canMeasureVisibleRows: () =>
+        !this.implicitEndAnchorPending &&
+        this.offsetState.scrollCommand?.behavior !== "smooth" &&
+        (this.callbacks.visuallyPresented?.() ?? true),
+      isCurrentRow: (element, key) =>
+        this.threadInnerElement?.contains(element) === true && this.rowIndexesByKey.has(key),
+      onMount: (key) => {
+        if (
+          this.offsetState.scrollCommand?.target === "message" &&
+          this.messageRowKeysById.get(this.offsetState.scrollCommand.messageId) === key
+        ) {
+          // The parent update can finish before a virtualized target mounts.
+          queueMicrotask(() => this.completeMessageReveal());
+        }
+      },
     });
     this.scrollRestoreHost = {
       offsetState: this.offsetState,
@@ -457,7 +428,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   dispose(): void {
     this.disconnect();
-    this.measureRowRefs.clear();
+    this.rowRefs.clear();
     this.rowKeys = [];
     this.rowIndexesByKey.clear();
     this.messageRowKeysById = new Map();
@@ -563,7 +534,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           header: header?.template ?? nothing,
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.captureInteractionResize,
-          measureRowRefFor: (key) => this.measureRowRefFor(key),
+          measureRowRefFor: (key) => this.rowRefs.forKey(key),
           measureRows:
             // The first correction reveals new rows; their real sizes must land before retiring the anchor.
             this.prependAnchor.messageKey !== null ||
@@ -756,11 +727,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.rowKeys = Object.freeze(nextKeys);
     const rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
     this.rowIndexesByKey = rowIndexesByKey;
-    for (const key of this.measureRowRefs.keys()) {
-      if (!this.rowIndexesByKey.has(key)) {
-        this.measureRowRefs.delete(key);
-      }
-    }
+    this.rowRefs.retainKeys(rowIndexesByKey);
     // The header margin must land in the same setOptions as the key change:
     // the edge-key re-anchor uses absolute offsets, so a prepend that also
     // removes the header (exhausted history) compensates in one adjustment.

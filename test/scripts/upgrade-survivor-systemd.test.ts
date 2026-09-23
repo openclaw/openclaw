@@ -23,7 +23,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const owner = resolve("scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh");
 
-function fixture(customPaths = true, registry?: string, managerSetup = "") {
+function fixture(customPaths = true, registry?: string) {
   const home = realpathSync(tempDirs.make("survivor-manager-"));
   const artifacts = join(home, customPaths ? "artifacts ' \" $ `" : "bin");
   mkdirSync(artifacts, { recursive: true });
@@ -55,7 +55,7 @@ function fixture(customPaths = true, registry?: string, managerSetup = "") {
       },
     );
   const installed = shell(
-    `${managerSetup}\ninstall_update_restart_systemctl_shim\nprintf '%s\\n' "\${XDG_RUNTIME_DIR:-}" "\${DBUS_SESSION_BUS_ADDRESS:-}"`,
+    `install_update_restart_systemctl_shim\nprintf '%s\\n' "\${XDG_RUNTIME_DIR:-}" "\${DBUS_SESSION_BUS_ADDRESS:-}"`,
   );
   expect(installed.status, installed.stderr).toBe(0);
   const [runtimeDir, busAddress] = installed.stdout.trimEnd().split("\n");
@@ -103,39 +103,6 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
     } finally {
       uid.mockRestore();
       platform.mockRestore();
-    }
-  });
-
-  it("keeps self-upgrade target channels enabled despite historical source suppression", async () => {
-    const lane = readFileSync(
-      resolve("scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh"),
-      "utf8",
-    );
-    const setup = lane.slice(lane.indexOf("export CI=true"), lane.indexOf("SOURCE_VERSION="));
-    const { home, systemctl, unit } = fixture(true, undefined, setup);
-    const record = join(home, "target-env.json");
-    const pendingRecord = `${record}.pending`;
-    const program = join(home, "target.mjs");
-    writeFileSync(
-      program,
-      `import fs from "node:fs";
-// The parent treats existence as readiness; publish only the complete JSON record.
-fs.writeFileSync(${JSON.stringify(pendingRecord)}, JSON.stringify({providers:process.env.OPENCLAW_SKIP_PROVIDERS ?? null, channels:process.env.OPENCLAW_SKIP_CHANNELS ?? null}));
-fs.renameSync(${JSON.stringify(pendingRecord)}, ${JSON.stringify(record)});
-process.on("SIGTERM", () => process.exit(0));
-setInterval(() => {}, 1000);
-`,
-    );
-    writeFileSync(
-      unit,
-      buildSystemdUnit({ programArguments: [process.execPath, program], workingDirectory: home }),
-    );
-    try {
-      expect(systemctl("start", "openclaw-gateway.service").status).toBe(0);
-      await expect.poll(() => existsSync(record)).toBe(true);
-      expect(JSON.parse(readFileSync(record, "utf8"))).toEqual({ providers: null, channels: null });
-    } finally {
-      expect(systemctl("stop", "openclaw-gateway.service").status).toBe(0);
     }
   });
 

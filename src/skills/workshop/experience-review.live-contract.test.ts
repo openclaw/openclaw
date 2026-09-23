@@ -215,7 +215,7 @@ describe("Workshop live decision acceptance", () => {
       "rejected tool",
       (input: DecisionInput) => {
         input.observation.toolResults.push(
-          makeTextToolResult("rejected", "skill_workshop", "name required", true, 0),
+          makeTextToolResult("rejected", "tool_call", "name required", true, 0),
         );
       },
     ],
@@ -277,6 +277,29 @@ describe("Workshop live decision acceptance", () => {
       "wrong tool receipt",
       (input: DecisionInput) => {
         input.observation.toolResults[0]!.toolCallId = "unrelated";
+      },
+    ],
+    [
+      "arguments changed after validation",
+      (input: DecisionInput) => {
+        input.observation.toolCalls[0]!.arguments.id = "openclaw:core:exec";
+      },
+    ],
+    [
+      "failed inner target receipt",
+      (input: DecisionInput) => {
+        const envelope = workshopEnvelope("Created proposal-1", {
+          id: "proposal-1",
+          status: "pending",
+        });
+        const failedEnvelope = {
+          ...envelope,
+          result: { ...envelope.result, isError: true },
+        };
+        input.observation.toolResults[0]!.content = [
+          { type: "text", text: JSON.stringify(failedEnvelope) },
+        ];
+        input.observation.toolResults[0]!.details = failedEnvelope;
       },
     ],
     [

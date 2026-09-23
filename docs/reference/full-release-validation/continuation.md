@@ -15,7 +15,12 @@ when the run ID, workflow path, workflow ref, Tooling SHA, dispatch title, and
 event are unchanged. For each logical job, the newest observed attempt wins,
 including a newer failure; a job absent from a newer attempt carries forward
 from the last attempt that included it. Duplicate job names within one attempt,
-missing attempts, or provenance drift fail closed.
+missing attempts, or provenance drift fail closed. During GitHub's rerun-attempt
+materialization window, `status` and `continue` re-read duplicate identities in
+the newest retry attempt for up to 60 seconds. The run identity and attempt stay
+pinned throughout; request timeouts, pagination, and transport backoff share
+the retry deadline. Persistent duplicates, duplicates in an earlier attempt, and
+changed identities still fail closed; ambiguous rows never become evidence.
 
 Inspect or continue an existing parent:
 

@@ -7,14 +7,12 @@ import {
 import type { AssistantMessage } from "../../llm/types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import {
   appendTranscriptMessageInTransaction,
   type PreparedTranscriptMessageAppend,
 } from "./session-accessor.sqlite-transcript-message-append.js";
-import {
-  appendTranscriptEventInTransaction,
-  ensureTranscriptHeader,
-} from "./session-accessor.sqlite-transcript-store.js";
+import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
@@ -241,7 +239,7 @@ export function appendSelectedTranscriptReportInTransaction(
     );
     return;
   }
-  ensureTranscriptHeader(database, resolved, undefined);
+  ensureTranscriptHeader(database, resolved, undefined, projection);
   const event: unknown = JSON.parse(report.eventJson);
   const appended = appendTranscriptEventInTransaction(database, resolved, event, {
     ...projection,

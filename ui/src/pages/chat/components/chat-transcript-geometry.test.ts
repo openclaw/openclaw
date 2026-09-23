@@ -185,8 +185,10 @@ describe("chat transcript geometry", () => {
       updateComplete: Promise.resolve(true),
     });
     const viewportChanged = vi.fn();
-    const main = new ChatTranscriptController(host, { onViewportResize: viewportChanged });
-    const detail = new ChatTranscriptController(host);
+    const main = new ChatTranscriptController(host, () => "pane-geometry-main", {
+      onViewportResize: viewportChanged,
+    });
+    const detail = new ChatTranscriptController(host, () => "pane-geometry-detail");
     // Another pane may precede main chat in DOM order; neither observer nor
     // scroll commands may rediscover the first thread under the shared host.
     const detailPanel = host.appendChild(document.createElement("div"));

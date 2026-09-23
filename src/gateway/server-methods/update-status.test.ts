@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +7,7 @@ import * as snapshots from "../../infra/sqlite-readonly-location.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -80,6 +82,47 @@ afterEach(async () => {
 });
 
 describe("update history RPCs", () => {
+  it("keeps private recovery receipts durable while status and history stay public", async () => {
+    const capture = {
+      manifestSha256: "a".repeat(64),
+      configWrites: [
+        {
+          path: path.join(home.home, "private.json"),
+          beforeHash: null,
+          contiguous: true,
+          afterHash: "b".repeat(64),
+        },
+      ],
+      status: "pending" as const,
+    };
+    const run = createUpdateRun({ trigger: "api", origin: { updateRecoveryCapture: capture } });
+    const publicRun = { ...run, origin: {} };
+    expect(readUpdateRunStatus()).toMatchObject({ activeRun: publicRun, lastRun: publicRun });
+    expect(JSON.stringify(readUpdateRunStatus())).not.toContain("updateRecoveryCapture");
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(true, {
+      sentinel: null,
+      activeRun: publicRun,
+      lastRun: publicRun,
+      updateAvailable: null,
+      effectiveChannel: "stable",
+    });
+    expect(await requestUpdateRead("update.runs.get", { runId: run.runId })).toHaveBeenCalledWith(
+      true,
+      { run: publicRun },
+    );
+    expect(await requestUpdateRead("update.runs.list")).toHaveBeenCalledWith(true, {
+      runs: [publicRun],
+    });
+    markGatewayRestartDraining();
+    expect(await requestUpdateRead("update.runs.get", { runId: run.runId })).toHaveBeenCalledWith(
+      true,
+      { run: publicRun },
+    );
+    expect(getUpdateRun(run.runId)?.origin.updateRecoveryCapture).toEqual(capture);
+    expect(run.origin.updateRecoveryCapture).toEqual(capture);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it.each(["accepting", "suspension"] as const)(
     "rechecks root ownership after a lazy restart read resets into %s",
     async (nextPhase) => {

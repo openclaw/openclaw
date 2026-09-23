@@ -179,6 +179,7 @@ class DashboardsPage extends OpenClawLightDomElement {
         onSortChange: (sort) => {
           this.filters = { ...this.filters, sort };
         },
+        onNavigate: this.context?.navigate,
       },
       this.context?.gateway.snapshot,
       this.previewError,

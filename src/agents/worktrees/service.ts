@@ -18,6 +18,7 @@ import {
   requireWorktreeDiskSpace,
   WORKTREE_SETUP_HEADROOM_BYTES,
 } from "./capacity.js";
+import { inspectManagedWorktreeCheckout } from "./checkout-inspection.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import { resolveWorktreeSourceProfile } from "./checkout-profiles.js";
 import {
@@ -972,7 +973,8 @@ export class ManagedWorktreeService {
         let exactStateDigest: string | undefined;
         let capturedProvisionedPaths: readonly string[] = [];
         try {
-          const provisionedPaths = getRegistryWorktreeProvisionedPaths(this.env, record.id);
+          const provisionedPaths = await getRegistryWorktreeProvisionedPaths(this.env, record.id);
+          params.commitGuard?.();
           if (provisionedPaths === undefined) {
             throw new Error("provisioned path ledger is unavailable");
           }
@@ -1227,7 +1229,10 @@ export class ManagedWorktreeService {
     try {
       record = await this.rebindLiveRepository(record);
       inspectedHead = await requireManagedWorktreeHead(record, {});
-      const inspection = await this.inspectCheckout(record, "lossless");
+      const inspection = await inspectManagedWorktreeCheckout(record, "lossless", {
+        env: this.env,
+        getConfig: this.getConfig ?? getRuntimeConfig,
+      });
       const retainedOutcome =
         inspection.retainedReason === "nested-repository"
           ? "retained-dirty"
@@ -1420,30 +1425,6 @@ export class ManagedWorktreeService {
     return result;
   }
 
-  private async inspectCheckout(
-    record: ManagedWorktreeRecord,
-    kind: "lossless" | "provisioned" | "nested-repository",
-  ) {
-    return await withManagedWorktreeGit(
-      { record, env: this.env, getConfig: this.getConfig ?? getRuntimeConfig },
-      (git) =>
-        runGitWorkerOperation(
-          {
-            type: "worktree.cleanup-inspection",
-            input:
-              kind === "nested-repository"
-                ? { kind, checkoutPath: record.path }
-                : {
-                    kind,
-                    checkoutPath: record.path,
-                    provisionedPaths: getRegistryWorktreeProvisionedPaths(this.env, record.id),
-                  },
-          },
-          { git: git.worker },
-        ),
-    );
-  }
-
   private async autoRemovalProtectionReason(
     record: ManagedWorktreeRecord,
     isLocked: ReturnType<typeof createWorktreeLockPrefilter>,
@@ -1458,14 +1439,20 @@ export class ManagedWorktreeService {
     if (hasLiveWorktreeRunLease(this.env, record.id)) {
       return "run lease is active";
     }
-    const provisioned = await this.inspectCheckout(record, "provisioned");
+    const provisioned = await inspectManagedWorktreeCheckout(record, "provisioned", {
+      env: this.env,
+      getConfig: this.getConfig ?? getRuntimeConfig,
+    });
     if (provisioned.retainedReason !== undefined) {
       return `provisioned checkout state is ${provisioned.retainedReason}`;
     }
     if (await isLocked(record)) {
       return "worktree has a live or foreign lock";
     }
-    const nested = await this.inspectCheckout(record, "nested-repository");
+    const nested = await inspectManagedWorktreeCheckout(record, "nested-repository", {
+      env: this.env,
+      getConfig: this.getConfig ?? getRuntimeConfig,
+    });
     return nested.retainedReason === undefined
       ? undefined
       : "worktree contains a nested repository";

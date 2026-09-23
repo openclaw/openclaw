@@ -646,7 +646,7 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("warns on scoped max-lines budgets while excluding generated output", () => {
+  it("errors on scoped max-lines budgets while excluding generated output", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     const maxLinesOverrides = (config.overrides ?? []).filter(
       (override) => override.rules?.["max-lines"],
@@ -656,10 +656,10 @@ describe("oxlint config", () => {
 
     expect(scopedBudgets).toHaveLength(4);
     expect(scopedBudgets.map((override) => override.rules?.["max-lines"])).toEqual([
-      ["warn", { max: 700, skipBlankLines: true, skipComments: true }],
-      ["warn", { max: 700, skipBlankLines: true, skipComments: true }],
-      ["warn", { max: 800, skipBlankLines: true, skipComments: true }],
-      ["warn", { max: 1000, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 700, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 700, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 800, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 1000, skipBlankLines: true, skipComments: true }],
     ]);
     for (const override of scopedBudgets) {
       expect(override.excludeFiles).toContain("**/protocol-gen/**");
@@ -682,16 +682,86 @@ describe("oxlint config", () => {
       {
         files: ["extensions/copilot/src/event-bridge.ts"],
         rules: {
-          "max-lines": ["warn", { max: 950, skipBlankLines: true, skipComments: true }],
+          "max-lines": ["error", { max: 950, skipBlankLines: true, skipComments: true }],
         },
       },
       {
         files: ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
         rules: {
-          "max-lines": ["warn", { max: 1200, skipBlankLines: true, skipComments: true }],
+          "max-lines": ["error", { max: 1200, skipBlankLines: true, skipComments: true }],
         },
       },
     ]);
+  });
+
+  it("keeps native cap scopes and correctness while making only CI limits advisory", () => {
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-ci-limits-"));
+    fs.copyFileSync(".oxlintrc.json", path.join(root, ".oxlintrc.json"));
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    const sources = {
+      "src/oversized.ts": 702,
+      "src/within-cap.test.ts": 902,
+      "extensions/copilot/src/event-bridge.ts": 902,
+      "src/generated/ignored.ts": 1402,
+    };
+    for (const [file, lines] of Object.entries(sources)) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, file),
+        `export const values = [\n${"  0,\n".repeat(lines - 2)}];\n`,
+      );
+    }
+    fs.writeFileSync(path.join(root, "src/correctness.ts"), "export var legacy = 1;\n");
+    for (const { github, correctness } of [
+      { github: false, correctness: false },
+      { github: true, correctness: false },
+      { github: true, correctness: true },
+    ]) {
+      const summary = path.join(root, `summary-${github}-${correctness}.md`);
+      const result = spawnSync(
+        process.execPath,
+        [
+          path.resolve("scripts/run-oxlint.mts"),
+          "--openclaw-focused-config",
+          "--threads=1",
+          "--format",
+          "json",
+          ...Object.keys(sources),
+          ...(correctness ? ["src/correctness.ts"] : []),
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CI: "true",
+            GITHUB_ACTIONS: github ? "true" : "false",
+            GITHUB_STEP_SUMMARY: summary,
+          },
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(github && !correctness ? 0 : 1);
+      const report = JSON.parse(result.stdout) as {
+        diagnostics: Array<{ code: string; severity: string; filename: string; help?: string }>;
+      };
+      expect(report.diagnostics).toHaveLength(correctness ? 2 : 1);
+      expect(
+        report.diagnostics.find((diagnostic) => diagnostic.code === "eslint(max-lines)"),
+      ).toMatchObject({
+        severity: github ? "warning" : "error",
+        help: "Maximum allowed is 700.",
+      });
+      if (github) {
+        expect(result.stderr).toContain("::warning file=src/oversized.ts,");
+        expect(fs.readFileSync(summary, "utf8")).toContain("Maximum allowed is 700.");
+      }
+      if (correctness) {
+        expect(
+          report.diagnostics.find((diagnostic) => diagnostic.code === "eslint(no-var)")?.severity,
+        ).toBe("error");
+      }
+    }
   });
 
   it("enables strict empty object type lint with named single-extends interfaces allowed", () => {

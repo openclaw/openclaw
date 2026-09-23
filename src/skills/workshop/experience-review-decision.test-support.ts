@@ -64,6 +64,7 @@ export function assertExperienceReviewDecision(params: {
       name: "skill_workshop",
       source: "openclaw",
     });
+    expect(envelope.result.isError).not.toBe(true);
     expect(isToolResultError(envelope.result)).toBe(false);
     const toolArguments = observation.toolArguments.find((entry) => entry.toolCallId === call.id);
     if (!toolArguments) {
