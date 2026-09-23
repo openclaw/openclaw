@@ -634,7 +634,9 @@ export async function runExecProcess({
 
   // Foreground delivery keeps its caller context only until yield, abort, or exit.
   // Clearing the callback also releases the completed turn's captured authority.
-  let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
+  // Truthy non-functions (stale tool-update objects) must not reach ALS.bind.
+  let onUpdate =
+    typeof initialOnUpdate === "function" ? AsyncLocalStorage.bind(initialOnUpdate) : undefined;
   let beforeSpawn = initialBeforeSpawn;
   let assertPolicyCurrent = initialAssertCurrent;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
