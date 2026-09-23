@@ -612,7 +612,6 @@ export async function finalizePendingAnswerBlockDraft(turn: Turn): Promise<void>
   if (!content) {
     return;
   }
-  turn.previewLifecycle.beginFinalDelivery();
   await deliverFinalAnswerText(turn, block.payload, content, block.buttons);
   turn.activeAnswerBlockDelivery = undefined;
 }
