@@ -39,6 +39,7 @@ type GoogleLiveMessage = {
       }>;
     };
     generationComplete?: boolean;
+    interactionStatus?: "IN_PROGRESS" | "IDLE" | "INTERACTION_STATUS_UNSPECIFIED";
     turnComplete?: boolean;
   };
   toolCall?: {
@@ -88,6 +89,10 @@ function isGemini38LiveExtendedThinkingModel(model: string | undefined): boolean
 
 function supportsToolResultScheduling(model: string | undefined): boolean {
   return !isGemini31LiveModel(model) && !isGemini38LiveExtendedThinkingModel(model);
+}
+
+function isTerminalGoogleLiveTurn(model: string | undefined, interactionStatus?: string): boolean {
+  return !isGemini38LiveExtendedThinkingModel(model) || interactionStatus === "IDLE";
 }
 
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
@@ -426,11 +431,17 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         final: true,
         payload: { reason: "provider-interrupted" },
       });
-    } else if (content?.turnComplete && !this.interruptedTurn) {
+    } else if (
+      content?.turnComplete &&
+      !this.interruptedTurn &&
+      isTerminalGoogleLiveTurn(this.session.model, content.interactionStatus)
+    ) {
       this.emitTalkEvent({ type: "turn.ended", final: true });
     }
-    // Google completes interrupted turns separately; input transcription can
-    // arrive in between and must not have its new Talk turn closed by that frame.
+    // Every turnComplete finalizes that spoken utterance above. Extended Thinking filler
+    // remains IN_PROGRESS, so it does not end the overall Talk turn until IDLE. Google
+    // completes interrupted turns separately; their cancellation remains terminal even if
+    // the accompanying interaction status is not IDLE.
     if (content?.turnComplete) {
       this.interruptedTurn = false;
     }

@@ -219,6 +219,70 @@ describe("buildGoogleRealtimeVoiceProvider with Gemini 3.8 Live", () => {
     });
   });
 
+  it("keeps Extended Thinking active across a filler utterance and tool call", async () => {
+    const onResponseDone = vi.fn();
+    const onToolCall = vi.fn();
+    const onTranscript = vi.fn();
+    await openConfiguredBridge({
+      providerConfig: { model: "gemini-3.8-live-extended-thinking" },
+      onResponseDone,
+      onToolCall,
+      onTranscript,
+    });
+    const callbacks = lastConnectParams().callbacks;
+
+    callbacks.onmessage({
+      serverContent: {
+        outputTranscription: { text: "Checking now." },
+        turnComplete: true,
+        interactionStatus: "IN_PROGRESS",
+      },
+    });
+    expect(onTranscript.mock.calls).toEqual([
+      ["assistant", "Checking now.", false],
+      ["assistant", "Checking now.", true],
+    ]);
+    expect(onResponseDone).not.toHaveBeenCalled();
+
+    callbacks.onmessage({
+      toolCall: {
+        functionCalls: [
+          { id: "consult-call", name: "openclaw_agent_consult", args: { prompt: "hi" } },
+        ],
+      },
+    });
+    expect(onToolCall).toHaveBeenCalledOnce();
+    expect(onResponseDone).not.toHaveBeenCalled();
+
+    callbacks.onmessage({
+      serverContent: {
+        outputTranscription: { text: "The answer is 42." },
+        turnComplete: true,
+        interactionStatus: "IDLE",
+      },
+    });
+    expect(onTranscript).toHaveBeenLastCalledWith("assistant", "The answer is 42.", true);
+    expect(onResponseDone.mock.calls).toEqual([[{ status: "completed" }]]);
+  });
+
+  it("finishes an interrupted Extended Thinking turn even before interaction IDLE", async () => {
+    const onResponseDone = vi.fn();
+    await openConfiguredBridge({
+      providerConfig: { model: "gemini-3.8-live-extended-thinking" },
+      onResponseDone,
+    });
+
+    lastConnectParams().callbacks.onmessage({
+      serverContent: {
+        interrupted: true,
+        turnComplete: true,
+        interactionStatus: "IN_PROGRESS",
+      },
+    });
+
+    expect(onResponseDone.mock.calls).toEqual([[{ status: "cancelled" }]]);
+  });
+
   it("interrupts Gemini 3.8 Live Extended Thinking output with a client turn on barge-in", async () => {
     const bridge = await openConfiguredBridge({
       providerConfig: { model: "gemini-3.8-live-extended-thinking" },

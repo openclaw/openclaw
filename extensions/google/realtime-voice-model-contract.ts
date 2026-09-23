@@ -33,6 +33,14 @@ function isGemini38LiveExtendedThinkingModel(model: string): boolean {
   return modelId.startsWith("gemini-3.8-live") && modelId.includes("extended-thinking");
 }
 
+export function isResponseDone(
+  model: string,
+  interactionStatus: string | undefined,
+  interrupted: boolean,
+): boolean {
+  return interrupted || !isGemini38LiveExtendedThinkingModel(model) || interactionStatus === "IDLE";
+}
+
 export function supportsAsyncFunctionCalling(model: string): boolean {
   return !isGemini31LiveModel(model);
 }

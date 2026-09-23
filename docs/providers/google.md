@@ -438,8 +438,11 @@ Thinking (`gemini-3.8-live-extended-thinking`) requires `NON_BLOCKING` tools, re
 function response scheduling, and abandons a call after an interim response, so OpenClaw
 sends one final result per agent consult without a "working" interim. Configure its
 reasoning depth with `thinkingLevel` (`low`, `medium`, or `high`; `minimal` maps to
-`low`), or a positive `thinkingBudget` mapped to the nearest level. On this model an
-explicit stop or barge-in interrupts generation through a short client-content turn that
+`low`), or a positive `thinkingBudget` mapped to the nearest level. Spoken filler has its
+own utterance boundary while the interaction remains in progress; OpenClaw finalizes that
+transcript and audio but keeps the response active until Google reports the interaction
+as idle. On this model an explicit stop or barge-in interrupts generation through a short
+client-content turn that
 tells the model it was interrupted (an empty turn makes it resume). Cancelling the current
 generation is reliable, but the silence that follows is best effort: the model may still
 resume or start another response, so treat a stop as "stop this reply", not a guarantee of

@@ -64,6 +64,7 @@ import {
   buildGoogleLiveInterruptTurn,
   buildThinkingConfig,
   isGemini31LiveModel,
+  isResponseDone,
   modelSupportsToolResultContinuation,
   supportsAsyncFunctionCalling,
   supportsClientContentInterrupt,
@@ -935,8 +936,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
 
     if (content.outputTranscription) {
-      // outputAudioTranscription is requested in the session config. Keep that
-      // official stream canonical; modelTurn text has no transcript turn identity.
+      // Keep requested outputAudioTranscription canonical; modelTurn text has no turn identity.
       if (!this.appendTranscript("assistant", content.outputTranscription)) {
         return;
       }
@@ -965,14 +965,11 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         continue;
       }
     }
-    // Output transcription precedes these model boundaries; input transcription
-    // is independently ordered and must not be finalized by an assistant turn.
     if (content.generationComplete || content.interrupted || content.turnComplete) {
       this.flushPendingTranscript("assistant");
     }
-    if (content.turnComplete && this.connectionOwner === owner) {
-      // Google finishes interrupted turns with turnComplete too. generationComplete
-      // can precede playback completion, so only the native turn boundary releases output.
+    const done = isResponseDone(this.model, content.interactionStatus, this.responseInterrupted);
+    if (content.turnComplete && this.connectionOwner === owner && done) {
       const status = this.responseInterrupted ? "cancelled" : "completed";
       this.responseInterrupted = false;
       this.config.onResponseDone?.({ status });
@@ -985,15 +982,15 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     const completeInput = role === "user" && isGemini31LiveModel(this.model);
     const text = transcript.text;
     if (text) {
-      const pending = this.pendingTranscripts[role];
-      const textBytes = Buffer.byteLength(text, "utf8");
-      if (pending.byteCount + textBytes > GOOGLE_REALTIME_MAX_PENDING_TRANSCRIPT_BYTES) {
+      const pending = this.pendingTranscripts[role],
+        bytes = Buffer.byteLength(text, "utf8");
+      if (pending.byteCount + bytes > GOOGLE_REALTIME_MAX_PENDING_TRANSCRIPT_BYTES) {
         this.resetPendingTranscripts();
         this.failConnection(new Error(GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE));
         return false;
       }
       pending.text += text;
-      pending.byteCount += textBytes;
+      pending.byteCount += bytes;
       if (!completeInput) {
         this.emitTranscript(role, text, false);
         if (this.connectionOwner !== owner) {
@@ -1008,10 +1005,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private flushPendingTranscript(role: RealtimeVoiceRole): void {
-    const pending = this.pendingTranscripts[role];
-    const completeText = pending.text.trim();
-    pending.text = "";
-    pending.byteCount = 0;
+    const completeText = this.pendingTranscripts[role].text.trim();
+    this.pendingTranscripts[role] = { text: "", byteCount: 0 };
     if (completeText) {
       this.emitTranscript(role, completeText, true);
     }
