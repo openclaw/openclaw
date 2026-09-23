@@ -7134,6 +7134,30 @@ describe("chat model controls", () => {
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
   });
 
+  it("shows the configured active context from the detailed model catalog", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          contextTokens: 272_000,
+          contextWindow: 922_000,
+        },
+      ],
+    });
+    const container = renderModelControls(state);
+    const modelOption = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.6-sol"]',
+    );
+
+    expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
+      "272k active · 922k max",
+    );
+  });
+
   it("uses the default selection runtime for an implicit Codex model", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.6-sol",

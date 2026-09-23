@@ -72,6 +72,7 @@ describe("chat pane composer controls", () => {
         view: "configured",
         agentId: "main",
         sessionKey: "main",
+        includeDetails: true,
       });
       expect(state.chatModelsLoading).toBe(cachedModels.length === 0);
       render(renderChatPaneComposerControls(controlParams).composerControls, container);

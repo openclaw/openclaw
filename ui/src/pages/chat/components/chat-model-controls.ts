@@ -385,6 +385,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     if (catalogEntry?.contextWindow) {
       pickerOption.contextWindow = catalogEntry.contextWindow;
     }
+    if (catalogEntry?.contextTokens) {
+      pickerOption.contextTokens = catalogEntry.contextTokens;
+    }
     if (typeof catalogEntry?.supportsTools === "boolean") {
       pickerOption.supportsTools = catalogEntry.supportsTools;
     }
@@ -439,6 +442,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       commitValue: currentOverride,
       ...(currentCatalogEntry?.contextWindow
         ? { contextWindow: currentCatalogEntry.contextWindow }
+        : {}),
+      ...(currentCatalogEntry?.contextTokens
+        ? { contextTokens: currentCatalogEntry.contextTokens }
         : {}),
       ...(typeof currentCatalogEntry?.supportsTools === "boolean"
         ? { supportsTools: currentCatalogEntry.supportsTools }

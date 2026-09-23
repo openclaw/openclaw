@@ -435,18 +435,19 @@ async function loadChatModelCatalog(
     binding.isCurrent() && binding.catalogRequest?.controller === controller;
   host.chatModelsLoading = host.chatModelCatalog.length === 0;
   host.requestUpdate?.();
-  const promise = loadModelCatalog(binding.client, { ...binding.scope, signal: controller.signal })
+  const catalogScope = { ...binding.scope, includeDetails: true as const };
+  const promise = loadModelCatalog(binding.client, { ...catalogScope, signal: controller.signal })
     .then(
       (result) => {
         if (!binding.isCurrent()) {
           return false;
         }
-        const fresh = peekModelCatalog(binding.client, binding.scope);
+        const fresh = peekModelCatalog(binding.client, catalogScope);
         if (fresh || ownsRequest()) {
           applyCachedChatModelCatalog(host, binding);
           const accepted =
             Boolean(fresh) ||
-            peekModelCatalog(binding.client, binding.scope, { allowStale: true }) === result;
+            peekModelCatalog(binding.client, catalogScope, { allowStale: true }) === result;
           if (!accepted && ownsRequest()) {
             binding.catalogRequest = undefined;
             return loadChatModelCatalog(host, binding);
@@ -482,8 +483,13 @@ function applyChatModelCatalog(host: ChatPageHost, result: ModelCatalogResult) {
 }
 
 function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBinding): boolean {
-  const fresh = peekModelCatalog(binding.client, binding.scope);
-  const result = fresh ?? peekModelCatalog(binding.client, binding.scope, { allowStale: true });
+  const catalogScope = { ...binding.scope, includeDetails: true as const };
+  const detailed = peekModelCatalog(binding.client, catalogScope);
+  const fresh = detailed ?? peekModelCatalog(binding.client, binding.scope);
+  const result =
+    fresh ??
+    peekModelCatalog(binding.client, catalogScope, { allowStale: true }) ??
+    peekModelCatalog(binding.client, binding.scope, { allowStale: true });
   if (!result || !binding.isCurrent()) {
     return false;
   }
@@ -494,7 +500,7 @@ function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBi
   applyChatModelCatalog(host, result);
   host.chatModelsLoading = false;
   host.requestUpdate?.();
-  return Boolean(fresh);
+  return Boolean(detailed);
 }
 
 export function applyChatModelCatalogSnapshot(host: ChatPageHost): boolean {
