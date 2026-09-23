@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { coalesceStreamRuns } from "./chat-thread-grouping.ts";
@@ -120,6 +121,78 @@ describe("live terminal continuity with pending collaborators", () => {
     );
     expect(visibleMessages).toEqual([...history, stale.message]);
   });
+  it.each(["interrupted", "cancelled"] as const)(
+    "keeps earlier %s automation before a newly submitted message and its canonical receipt",
+    (state) => {
+      const automation = {
+        ...pending,
+        id: "earlier-automation",
+        runId: "automation-run",
+        state,
+        message: {
+          role: "user",
+          content: "Earlier scheduled maintenance",
+          timestamp: 30,
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+          senderSession: {
+            sessionKey: "agent:main:cron:maintenance:run:earlier",
+            label: "Scheduled maintenance",
+          },
+          __openclaw: { id: "pending:earlier-automation" },
+        },
+      };
+      const submitted = user("New follow-up", "reader", 4);
+      const submitting = {
+        id: "new-follow-up",
+        sendRunId: "New follow-up",
+        text: "New follow-up",
+        createdAt: 40,
+        sendSubmittedAtMs: 40,
+        sendState: "submitting" as const,
+      };
+      const disposition =
+        state === "interrupted"
+          ? "Interrupted before the agent started it. It will not run automatically; copy it and send again."
+          : "Cancelled before the agent started it. It will not run automatically; copy it and send again.";
+      const originalRows = ["earlier", "active", "Earlier scheduled maintenance", disposition];
+      for (const { overrides, expected } of [
+        { overrides: {}, expected: originalRows },
+        {
+          overrides: { queue: [submitting] },
+          expected: [...originalRows, "New follow-up"],
+        },
+        {
+          overrides: {
+            messages: [...history, submitted],
+            queue: [submitting],
+            pendingInputs: [
+              automation,
+              { ...pending, acceptedAt: 5, message: { ...pending.message, timestamp: 5 } },
+            ],
+          },
+          expected: [...originalRows, "New follow-up", "Peer follow-up"],
+        },
+      ]) {
+        const items = buildChatItems(
+          props({
+            pendingInputs: [automation],
+            stream: null,
+            runId: null,
+            runWorking: false,
+            ...overrides,
+          }),
+        );
+        const visibleRows = items.flatMap((item) =>
+          item.kind === "group"
+            ? item.messages.map(({ message }) => extractTextCached(message))
+            : item.kind === "notice"
+              ? [item.text]
+              : [],
+        );
+        expect(visibleRows).toEqual(expected);
+      }
+    },
+  );
   it("already attributes a streaming reply to the same participant as its terminal", () => {
     const before = project(props());
     const frame = before.find((item) => item.kind === "agent-run-frame");
