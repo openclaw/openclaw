@@ -17,12 +17,11 @@ function findOwnedEntry(
   runtimeId: string,
 ): ModelCatalogEntry | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  return catalog?.entries.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider &&
-      entry.id === modelId &&
-      entry.nativeRuntime === runtimeId,
-  );
+  const matchesSelection = (entry: ModelCatalogEntry) =>
+    normalizeProviderId(entry.provider) === normalizedProvider &&
+    entry.id === modelId &&
+    entry.nativeRuntime === runtimeId;
+  return catalog?.entries.find(matchesSelection) ?? catalog?.routeVariants.find(matchesSelection);
 }
 
 /**
@@ -36,12 +35,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
   modelId: string;
 }): Promise<ModelCatalogEntry | undefined> {
   const { snapshot, harness, provider, modelId } = params;
-  if (
-    !snapshot ||
-    !harness.loadModelCatalog ||
-    !harness.readModelCatalogReadiness ||
-    !snapshot.isCurrent()
-  ) {
+  if (!snapshot || !harness.loadModelCatalog || !snapshot.isCurrent()) {
     return undefined;
   }
   const ownerHarness = snapshot.pluginRegistry?.agentHarnesses.find(
