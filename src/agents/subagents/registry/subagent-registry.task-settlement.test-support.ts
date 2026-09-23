@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
-import { getTaskFlowById } from "../../../tasks/task-flow-registry.js";
+import { getTaskFlowByIdForOwner } from "../../../tasks/task-flow-owner-access.js";
 import { readTaskRegistryRevision } from "../../../tasks/task-registry-state.js";
 import {
   configureTaskRegistryRuntime,
@@ -137,7 +137,10 @@ export function registerRestoredTaskSettlementTest({
       });
       const restored = expectDefined(findTaskByRunIdForStatus(runId), "restored task");
       const flowId = expectDefined(restored.parentFlowId, "mirrored flow ID");
-      const firstFlow = expectDefined(getTaskFlowById(flowId), "restored mirrored flow");
+      const firstFlow = expectDefined(
+        getTaskFlowByIdForOwner({ flowId, callerOwnerKey: restored.ownerKey }),
+        "restored mirrored flow",
+      );
       expect(firstFlow.status).toBe("succeeded");
       const store = getTaskRegistryStore();
       const upsertTask = vi.fn(store.upsertTaskWithDeliveryState);
@@ -152,7 +155,9 @@ export function registerRestoredTaskSettlementTest({
       await settleRootWork();
       expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledTimes(2);
       expect(findTaskByRunIdForStatus(runId)).toEqual(restored);
-      expect(getTaskFlowById(flowId)).toEqual(firstFlow);
+      expect(getTaskFlowByIdForOwner({ flowId, callerOwnerKey: restored.ownerKey })).toEqual(
+        firstFlow,
+      );
       expect(upsertTask).not.toHaveBeenCalled();
       expect(readTaskRegistryRevision()).toBe(taskRevision);
     } finally {

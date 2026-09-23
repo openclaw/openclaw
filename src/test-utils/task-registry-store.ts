@@ -24,6 +24,7 @@ import {
   ensureTaskFlowRegistryReadyAsync,
   runTaskFlowRegistryWorkerMutation,
 } from "../tasks/task-flow-runtime-internal.js";
+import { buildManagedFlowCancellationPatch } from "../tasks/task-initial-flow.rules.js";
 import type { TaskInitialWorkerOperations } from "../tasks/task-initial-worker.types.js";
 import {
   acknowledgeTaskStateNotification,
@@ -316,7 +317,30 @@ export function createInMemoryTaskRegistryStore(
         },
         "tasks.linkInitialFlow": unsupported,
         "flows.deleteUnlinkedForTask": unsupported,
-        "flows.finalizeTaskCancellation": unsupported,
+        "flows.finalizeTaskCancellation": (input) => {
+          const task = state.tasks.get(input.taskId) ?? null;
+          if (!task || task.parentFlowId?.trim() !== input.flowId || !flowStore) {
+            return { changed: false, task, flow: null };
+          }
+          const stored = flowStore.loadSnapshot().flows.get(input.flowId);
+          if (!stored) {
+            return { changed: false, task, flow: null };
+          }
+          const flow = normalizeRestoredFlowRecord(stored);
+          const patch = buildManagedFlowCancellationPatch(
+            task,
+            flow,
+            () => [...state.tasks.values()].filter((row) => row.parentFlowId === flow.flowId),
+            input.now,
+          );
+          if (!patch) {
+            return { changed: false, task, flow };
+          }
+          const next = applyFlowPatch(flow, patch);
+          assertCurrent();
+          flowStore.upsertFlow(next);
+          return { changed: true, task, flow: next, previous: flow };
+        },
       };
       context.admission.assertCurrent();
       assertCurrent();

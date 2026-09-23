@@ -159,17 +159,26 @@ it.each(["canonical", "managed"] as const)(
     const completionCommitted = createDeferred();
     const store = getTaskRegistryStore();
     const upsert = store.upsertTaskWithDeliveryState!;
+    const mutate = store.runInitialMutationAsync.bind(store);
     let faults = 0;
+    vi.spyOn(store, "runInitialMutationAsync").mockImplementation(
+      async (context, command, assertCurrent, onGranted) => {
+        if (
+          command.type === "tasks.transitionRunRow" &&
+          "kind" in command.input &&
+          command.input.kind === "state" &&
+          command.input.taskId === selected.taskId &&
+          command.input.params.status === "succeeded" &&
+          faults === 0
+        ) {
+          faults += 1;
+          order.push("selected write refused");
+          throw new Error("one-shot selected task completion write failure");
+        }
+        return mutate(context, command, assertCurrent, onGranted);
+      },
+    );
     vi.spyOn(store, "upsertTaskWithDeliveryState").mockImplementation((params) => {
-      if (
-        params.task.taskId === selected.taskId &&
-        params.task.status === "succeeded" &&
-        faults === 0
-      ) {
-        faults += 1;
-        order.push("selected write refused");
-        throw new Error("one-shot selected task completion write failure");
-      }
       upsert(params);
       if (
         params.task.taskId === selected.taskId &&
@@ -295,22 +304,46 @@ it.each([
       }
     });
     const handoffOrder: string[] = [];
+    const mutate = taskStore.runInitialMutationAsync.bind(taskStore);
     let failures = 0;
     // Completion retries must retain the lagging projection until cancellation publishes.
     let rejectTerminalWrites = true;
     let registryCommittedBeforeFailure = false;
+    vi.spyOn(taskStore, "runInitialMutationAsync").mockImplementation(
+      async (context, command, assertCurrent, onGranted) => {
+        const transition =
+          command.type === "tasks.transitionRunRow" &&
+          "kind" in command.input &&
+          command.input.kind === "state"
+            ? command.input
+            : undefined;
+        if (
+          transition?.taskId === task.taskId &&
+          transition.params.status === "failed" &&
+          rejectTerminalWrites
+        ) {
+          registryCommittedBeforeFailure =
+            loadSubagentRegistryFromSqlite().get(b0.runId)?.execution.status === "terminal";
+          failures += 1;
+          failedWrite.resolve();
+          throw new Error("terminal task persistence failure before cancellation publication");
+        }
+        const result = await mutate(context, command, assertCurrent, onGranted);
+        if (
+          handoff &&
+          handoffOrder.includes("replacement") &&
+          transition &&
+          transition.params.status !== "running" &&
+          result &&
+          "persisted" in result &&
+          result.persisted
+        ) {
+          handoffOrder.push("task write");
+        }
+        return result;
+      },
+    );
     vi.spyOn(taskStore, "upsertTaskWithDeliveryState").mockImplementation((params) => {
-      if (
-        params.task.taskId === task.taskId &&
-        params.task.status === "failed" &&
-        rejectTerminalWrites
-      ) {
-        registryCommittedBeforeFailure =
-          loadSubagentRegistryFromSqlite().get(b0.runId)?.execution.status === "terminal";
-        failures += 1;
-        failedWrite.resolve();
-        throw new Error("terminal task persistence failure before cancellation publication");
-      }
       if (handoff && handoffOrder.includes("replacement") && params.task.status !== "running") {
         handoffOrder.push("task write");
       }
@@ -577,6 +610,8 @@ it.each([
       });
       await successorCompleted.promise;
       expect(subagentRuns.get("publication-b1")?.execution.status).toBe("terminal");
+      followup?.release();
+      await fixture.settle();
       expect.soft(getTaskById(task.taskId)?.status).toBe("succeeded");
     } finally {
       rejectTerminalWrites = false;

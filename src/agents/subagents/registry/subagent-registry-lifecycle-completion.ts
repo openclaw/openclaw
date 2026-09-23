@@ -436,6 +436,10 @@ export async function completeSubagentRunAttempt(
       completionOutcome.status === "ok" &&
       !terminalReply
     ) {
+      // An unproven success cannot replace the cancellation already owned by this run.
+      if (provisionalKillSnapshot) {
+        return;
+      }
       completionOutcome = { status: "error", error: MISSING_REQUIRED_FINAL_REPLY_ERROR };
       completionReason = SUBAGENT_ENDED_REASON_ERROR;
     }

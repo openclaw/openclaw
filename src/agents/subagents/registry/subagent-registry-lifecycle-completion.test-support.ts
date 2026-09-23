@@ -1,5 +1,6 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import { DetachedTaskLegacyRuntimeError } from "../../../tasks/detached-task-runtime-errors.js";
 import type { setDetachedTaskDeliveryStatusByRunId } from "../../../tasks/detached-task-runtime.js";
 import { TaskRunTransitionUnsettledError } from "../../../tasks/task-registry-transition.operation.js";
@@ -8,14 +9,17 @@ import type {
   blockSubagentCompletionDelivery,
   settleRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
 import { clearSubagentPendingDelivery } from "./subagent-registry-lifecycle-delivery.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function mockBlockedCompletionDeliveryOwner(
   completionDeliveryMocks: {
@@ -240,10 +244,11 @@ export function registerTaskFinalizationAuthorityTests({
   completeRun: (
     controller: SubagentLifecycleController,
     entry: SubagentRunRecord,
-    options?: { triggerCleanup?: boolean },
+    options?: Pick<SubagentCompletionRequest, "triggerCleanup" | "terminalReply" | "endedAt">,
   ) => Promise<void>;
   taskExecutorMocks: {
     completeTaskRunByRunId: Mock;
+    failTaskRunByRunId: Mock;
     setDetachedTaskDeliveryStatusByRunId: Mock;
   };
   helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
@@ -251,6 +256,58 @@ export function registerTaskFinalizationAuthorityTests({
   expectFields: (value: unknown, expected: Record<string, unknown>) => void;
   firstCall: (mock: Mock) => ReadonlyArray<unknown>;
 }) {
+  it("keeps provisional cancellation when a repeated success has no producer reply evidence", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      execution: {
+        status: "terminal",
+        endedAt: 4_000,
+        outcome: { status: "error", error: "killed" },
+      },
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      suppressAnnounceReason: "killed",
+      killReconciliation: {
+        killedAt: 4_000,
+        taskCancellationAccepted: true,
+        suppressTaskDelivery: true,
+      },
+      completion: { required: true, resultText: null, capturedAt: 4_000 },
+    });
+    const marker = entry.killReconciliation;
+    const original = structuredClone(entry);
+    const task: TaskRecord = {
+      taskId: "task-cancelled-completion",
+      runtime: "subagent",
+      requesterSessionKey: entry.requesterSessionKey,
+      ownerKey: entry.requesterSessionKey,
+      scopeKind: "session",
+      runId: entry.taskRunId ?? entry.runId,
+      childSessionKey: entry.childSessionKey,
+      task: "Cancelled child",
+      status: "cancelled",
+      error: SUBAGENT_KILL_TASK_ERROR,
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: 1,
+      endedAt: 4_000,
+    };
+    taskExecutorMocks.failTaskRunByRunId.mockReturnValue([task]);
+    const controller = createLifecycleController({
+      entry,
+      resolveSubagentTask: () => ({ lookup: "available", task }),
+    });
+    await completeRun(controller, entry, {
+      endedAt: 4_001,
+      terminalReply: undefined,
+      triggerCleanup: false,
+    });
+    expect(entry).toEqual(original);
+    expect(entry.killReconciliation).toBe(marker);
+    expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
+    expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
+    expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
+  });
+
   it.each([
     new TaskRunTransitionUnsettledError("Task publication remains unsettled"),
     new Error("Task writer failed before sibling settlement"),
