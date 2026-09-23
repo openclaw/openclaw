@@ -227,7 +227,7 @@ async function runDefaultStickyIpv4FallbackProbe(code = "EHOSTUNREACH"): Promise
     .mockResolvedValueOnce({ ok: true } as Response);
 
   const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
-  await resolved("https://api.telegram.org/botx/sendMessage");
+  await resolved("https://api.telegram.org/botx/getMe");
   await resolved("https://api.telegram.org/botx/sendChatAction");
 }
 
@@ -334,7 +334,7 @@ async function expectNoStickyRetryWithSameDispatcher(params: {
   expectedAgentCtor: typeof ProxyAgentCtor | typeof EnvHttpProxyAgentCtor;
   field: "connect" | "proxyTls" | "requestTls";
 }) {
-  await expect(params.resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
+  await expect(params.resolved("https://api.telegram.org/botx/getMe")).rejects.toThrow(
     "fetch failed",
   );
   await params.resolved("https://api.telegram.org/botx/sendChatAction");
@@ -542,7 +542,7 @@ describe("resolveTelegramFetch", () => {
       },
     });
 
-    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/getMe");
     for (let i = 0; i < 4; i += 1) {
       await resolved(`https://api.telegram.org/botx/sendChatAction?sticky=${i}`);
     }
@@ -600,7 +600,7 @@ describe("resolveTelegramFetch", () => {
       const reason = new Error("telegram fetch canceled after response headers");
 
       try {
-        await transport.fetch("https://api.telegram.org/botx/sendMessage");
+        await transport.fetch("https://api.telegram.org/botx/getMe");
         for (let i = 0; i < 3; i += 1) {
           await transport.fetch(`https://api.telegram.org/botx/sendChatAction?healthy=${i}`);
         }
@@ -649,7 +649,7 @@ describe("resolveTelegramFetch", () => {
       },
     });
 
-    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/getMe");
     for (let i = 0; i < 4; i += 1) {
       await resolved(`https://api.telegram.org/botx/sendChatAction?sticky=${i}`);
     }
@@ -695,7 +695,7 @@ describe("resolveTelegramFetch", () => {
       },
     });
 
-    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/getMe");
     for (let i = 0; i < 4; i += 1) {
       await resolved(`https://api.telegram.org/botx/sendChatAction?sticky=${i}`);
     }
@@ -1010,16 +1010,22 @@ describe("resolveTelegramFetch", () => {
       // Trigger fallback chain so the two lazy fallback dispatchers are instantiated.
       await transport.fetch("https://api.telegram.org/botx/getMe");
 
-      // Three Agents total: default + IPv4 fallback + pinned-IP fallback.
-      expect(AgentCtor).toHaveBeenCalledTimes(3);
+      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+      await transport.fetch("https://api.telegram.org/botx/sendMessage");
+      // Default + two pooled fallbacks + the selected fallback's fresh-send pool.
+      expect(AgentCtor).toHaveBeenCalledTimes(4);
       const instances = AgentCtor.mock.instances;
-      expect(instances).toHaveLength(3);
+      expect(instances).toHaveLength(4);
 
       await transport.close();
 
       for (const instance of instances) {
         expect(instance.destroy).toHaveBeenCalledTimes(1);
       }
+      await expect(
+        transport.fetch("https://api.telegram.org/botx/sendRichMessage"),
+      ).rejects.toBeInstanceOf(TelegramRequestNotStartedError);
+      expect(AgentCtor).toHaveBeenCalledTimes(4);
     });
 
     it("close() is idempotent", async () => {
