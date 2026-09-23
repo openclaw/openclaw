@@ -30,7 +30,7 @@ afterEach(() => {
   service.readDefinitionMutationCapability.mockReset();
 });
 
-async function fixture() {
+async function fixture({ systemd = false } = {}) {
   const root = tempDirs.make("service-root-plan-");
   const serviceRoot = path.join(root, "service");
   const invokingRoot = path.join(root, "invoking");
@@ -41,9 +41,12 @@ async function fixture() {
     JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
   );
   const nodeRunner = path.join(root, "bin", "node");
-  service.readCommand.mockResolvedValue({
+  const command = {
     programArguments: [nodeRunner, path.join(serviceRoot, "dist", "index.js"), "gateway"],
-  });
+  };
+  service.readCommand.mockResolvedValue(
+    systemd ? { ...command, managedDefinition: command, managedOverrides: {} } : command,
+  );
   service.readDefinitionMutationCapability.mockResolvedValue({ kind: "writable" });
   return { serviceRoot, invokingRoot, nodeRunner };
 }
@@ -101,7 +104,7 @@ describe("managed service root planning", () => {
     },
   );
   it.each(["darwin", "linux"])("keeps writable split-prefix rebinds on %s", async (platform) => {
-    const f = await fixture();
+    const f = await fixture({ systemd: platform === "linux" });
     vi.stubGlobal("process", { ...process, platform });
     expect(await resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot })).toEqual({
       rootRedirect: null,

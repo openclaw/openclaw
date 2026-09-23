@@ -1,4 +1,3 @@
-import type { Result } from "@openclaw/normalization-core/result";
 // Tracks task process state transitions used to reconcile running work.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -23,11 +22,20 @@ import type {
   TaskRegistryObservers,
 } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord, TaskRuntime } from "./task-registry.types.js";
+import type { TaskRunOwner } from "./task-run-owner.types.js";
+
+export type TaskRegistryReadIdentity =
+  | "preserved"
+  | {
+      kind: "creation";
+      taskId: string;
+      runId?: string;
+    };
 
 export type PendingTaskRegistryMutation = {
   scope: TaskRegistryMutationScope;
   readEventTarget?: () => TaskAgentEventTarget | undefined;
-  readIdentity?: "preserved";
+  readIdentity?: TaskRegistryReadIdentity;
   readSettlement?: {
     databaseKey: string;
     store: TaskExecutionRestoreStore;
@@ -41,13 +49,6 @@ export type PendingTaskRegistryMutation = {
   };
   readWitness?: { writtenTaskIds: Set<string>; replaced: boolean };
   recoveryWitness?: { writtenTaskIds: Set<string>; replaced: boolean };
-};
-
-export type TaskRunOwner = {
-  task: Readonly<
-    Pick<TaskRecord, "taskId" | "runtime" | "ownerKey" | "scopeKind" | "runId" | "childSessionKey">
-  >;
-  cancel: (reason: string) => Promise<Result<TaskRecord, string>>;
 };
 
 export type TaskActivityOverlayState = {

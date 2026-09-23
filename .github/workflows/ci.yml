@@ -1464,6 +1464,9 @@ jobs:
               ? "./scripts/lib/ci-changed-node-test-plan.mts"
               : "./scripts/lib/ci-changed-node-test-plan.mjs",
           );
+          const dockerSeedPlan = existsSync("./scripts/lib/ci-docker-seed-plan.mts")
+            ? await import("./scripts/lib/ci-docker-seed-plan.mts")
+            : {};
           const channelContractPlan = await importTargetPlan(
             existsSync("./scripts/lib/channel-contract-test-plan.mts")
               ? "./scripts/lib/channel-contract-test-plan.mts"
@@ -1651,10 +1654,13 @@ jobs:
             existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
             readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
               .includes("ui-e2e-projects-contract-v1");
-          // Keep the existing twelve-shard split on 16-class capacity; the compact
-          // six-shard plan can exceed the unchanged job deadline. Earlier failed-job
-          // reruns retain their emitted matrix and existing live routing.
-          const uiE2eJobCount = supportsUiE2eProjects
+          const includeReleaseOnlyUiTests =
+            (eventName === "workflow_dispatch" && !releaseGate) ||
+            !isCanonicalRepository || compatibilityTarget || changedPaths === null;
+          // Ordinary CI shares eight 16-class browser jobs; full inventories retain
+          // twelve. Private source-server projects keep their own one-worker limit.
+          const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
+          const uiE2eJobCount = compactUiE2e ? 9 : supportsUiE2eProjects
             ? 13
             : usesHostedRunnerProfile ? 14 : 4;
           // The logical profile already owns contributor routing. Reuse the
@@ -1755,18 +1761,13 @@ jobs:
           const ownerPathEvent = isCanonicalRepository &&
             eventName === "push" && eventRef === "refs/heads/main";
           const dockerSeedLanes =
-            ownerPathEvent &&
-            changedPaths &&
+            runProofTier && isCanonicalRepository &&
             supportsDockerSeedE2e &&
-            typeof changedNodeTestPlan.resolveChangedDockerSeedLanes === "function"
-              ? changedNodeTestPlan.resolveChangedDockerSeedLanes(changedPaths)
+            (ownerPathEvent || eventName === "workflow_dispatch")
+              ? typeof dockerSeedPlan.resolveDockerSeedLanes === "function"
+                ? dockerSeedPlan.resolveDockerSeedLanes({ includeReleaseOnly: eventName === "workflow_dispatch" })
+                : ["published-upgrade-survivor"]
               : [];
-          // Manual CI is Full Release Validation's owner for the exact
-          // legacy-operator-state + auto-auth seed contract.
-          if (runProofTier && isCanonicalRepository && supportsDockerSeedE2e && (
-              eventName === "workflow_dispatch" || (ownerPathEvent && changedPaths === null))) {
-            dockerSeedLanes.push("published-upgrade-survivor");
-          }
           // Canonical pushes also use compact bins: 80+ single-group jobs
           // drain the runner pool for minutes, and per-shard check names on
           // main have no branch-protection consumers. Dispatch (release
@@ -1897,9 +1898,7 @@ jobs:
           const uiTestGroups = runUiTests &&
             typeof nodeTestPlan.createUiTestShardGroups === "function"
               ? nodeTestPlan.createUiTestShardGroups({
-                  includeReleaseOnlyTests:
-                    (eventName === "workflow_dispatch" && !releaseGate) ||
-                    !isCanonicalRepository || compatibilityTarget || changedPaths === null,
+                  includeReleaseOnlyTests: includeReleaseOnlyUiTests,
                   changedPaths: changedPaths ?? [],
                 })
               : null;
@@ -2133,6 +2132,7 @@ jobs:
                 shard_count: uiE2eJobCount,
                 task: shard === uiE2eJobCount ? "browser-extension" : "control-ui",
                 vitest_shard_count: uiE2eJobCount - 1,
+                vitest_max_workers: compactUiE2e ? 3 : 2,
               };
             })),
             run_native_i18n: runNativeI18n,
@@ -2255,6 +2255,7 @@ jobs:
               "checks-node-core-test-nondist-shard": count(manifest.run_checks_node_core_nondist, hostedNodeRows),
               "check-shard": count(manifest.run_check, 4),
               "check-lint-hosted-core-shard": count(manifest.run_check && usesHostedRunnerProfile, runnerProfile === "hybrid" && !releaseGate ? 2 : 5),
+              "check-lint-hosted-extension-shard": count(manifest.run_check && runnerProfile === "hybrid" && !releaseGate, 6),
               "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
               "check-docs": count(manifest.run_check_docs),
               "skills-python": count(manifest.run_skills_python_job),
@@ -2277,7 +2278,7 @@ jobs:
           // The measured check rows consume only remaining hosted capacity.
           // Keep the original UI/security decision and all test-runner labels intact.
           const hybridHostedCheckRows = (manifest.run_check ? 1 : 0) +
-            (manifest.run_check && !manifest.changed_core_test_paths_json && usesHostedRunnerProfile ? 2 : 0) +
+            (manifest.run_check && !manifest.changed_core_test_paths_json && usesHostedRunnerProfile ? 5 : 0) +
             (manifest.run_check_additional ? manifest.check_additional_matrix.include.filter(
               (row) => ["extension-package-boundary", "runtime-topology-architecture"].includes(row.group),
             ).length : 0);
@@ -3124,6 +3125,7 @@ jobs:
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           VITEST_SHARD_INDEX: ${{ matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
+          VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}
         run: |
           if [[ -n "${OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:-}" ]]; then
@@ -3144,6 +3146,7 @@ jobs:
           node scripts/run-vitest.mjs run \
             --config test/vitest/vitest.ui-e2e.config.ts \
             --configLoader runner \
+            --maxWorkers "${VITEST_MAX_WORKERS:-2}" \
             --shard "$VITEST_SHARD_INDEX/$VITEST_SHARD_COUNT"
 
       - name: Upload Control UI E2E timeout diagnostics
@@ -4245,7 +4248,7 @@ jobs:
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
-        if: matrix.task == 'lint'
+        if: matrix.task == 'lint' && (needs.preflight.outputs.runner_profile != 'hybrid' || needs.preflight.outputs.frozen_target == 'true')
         shell: bash
         run: |
           set -euo pipefail
@@ -4419,9 +4422,12 @@ jobs:
               hosted_extension_stripe=""
               if [ "$HOSTED_RUNNER_STRIPES" = "true" ]; then
                 # Five dedicated hosted jobs own the aggregated core Programs.
-                # Historical and hybrid targets keep extension ownership here.
+                # Frozen targets keep their original extension ownership.
                 lint_args=(--only=extensions --only=scripts --threads=1)
                 if [ "$RELEASE_GATE" = "true" ]; then
+                  lint_args=(--only=scripts --threads=1)
+                elif [ "$RUNNER_PROFILE" = "hybrid" ] && [ "$FROZEN_TARGET" != "true" ]; then
+                  # Independent hosted rows own the complete extension inventory.
                   lint_args=(--only=scripts --threads=1)
                 elif [ "$RUNNER_PROFILE" = "github" ] &&
                   grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
@@ -4535,9 +4541,9 @@ jobs:
               fi
               ;;
             test-types)
-              # The github/hybrid jobs pair the first four core-test stripes;
-              # this row owns the fifth before extensions/scripts/root. Targets
-              # without stripe support keep the whole lane here.
+              # Current github/hybrid jobs own all five core-test stripes.
+              # Frozen targets retain their paired stripes and central fifth;
+              # targets without stripe support keep the whole lane here.
               root_covered=false
               if [ -n "${CHANGED_CORE_TEST_PATHS_JSON:-}" ]; then
                 # This owner validates the complete boundary once, then checks
@@ -4546,9 +4552,9 @@ jobs:
                 pnpm tsgo:extensions:test
               elif [ "$HOSTED_RUNNER_STRIPES" = "true" ] &&
                 grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
-                # Core stripes retain their safeguards; only the existing tail
-                # inherits this step's OPENCLAW_LOCAL_CHECK=0.
-                env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --stripe "5/5" --concurrency 2
+                if [ "$FROZEN_TARGET" = "true" ]; then
+                  env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --stripe "5/5" --concurrency 2
+                fi
                 pnpm tsgo:extensions:test
               else
                 pnpm check:test-types
@@ -4682,9 +4688,60 @@ jobs:
             fi
           done
 
-  # Pair four original core stripes; check-test-types owns the fifth and its tail.
-  # Each row retains fresh compiler processes and its two-child limit;
-  # all-Blacksmith mode uses one 16-vCPU test-types job for the full workload.
+  # Keep extension compilation off the already packed hybrid core-lint rows.
+  check-lint-hosted-extension-shard:
+    permissions:
+      contents: read
+    name: check-lint-extensions-${{ matrix.stripe }}
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.run_check == 'true' && needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && (!inputs.release_gate || needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        stripe: [1, 2, 3, 4, 5, 6]
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "false"
+
+      - name: Compute extension boundary input fingerprint
+        id: extension-boundary-inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "fingerprint=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore extension package boundary artifacts
+        if: needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/plugin-sdk/dist
+            .artifacts/extension-package-boundary/plugins
+            .artifacts/extension-package-boundary/*.json
+            .artifacts/extension-package-boundary/compile
+          key: ${{ runner.os }}-extension-package-boundary-v4-${{ steps.extension-boundary-inputs.outputs.fingerprint }}
+          restore-keys: |
+            ${{ runner.os }}-extension-package-boundary-v4-
+
+      - name: Run hosted extension lint stripe
+        env:
+          EXTENSION_STRIPE: ${{ matrix.stripe }}
+          OPENCLAW_LOCAL_CHECK: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx scripts/run-oxlint-shards.mts \
+            --only=extensions --extension-stripe="$EXTENSION_STRIPE/6" --threads=1
+
+  # Run each complete core stripe independently; the central row owns the tail.
+  # Keep two compiler children per row and the frozen target's paired layout.
   check-test-types-hosted-core-shard:
     permissions:
       contents: read
@@ -4696,9 +4753,9 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 5
       matrix:
-        stripe: [1, 2]
+        stripe: ${{ fromJSON(needs.preflight.outputs.frozen_target == 'true' && '[1,2]' || '[1,2,3,4,5]') }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -4720,6 +4777,7 @@ jobs:
 
       - name: Run hosted core test-types stripe
         env:
+          CORE_STRIPE: ${{ matrix.stripe }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         shell: bash
         run: |
@@ -4730,15 +4788,14 @@ jobs:
             echo "[skip] target does not support core test-type stripes"
             exit 0
           fi
-          first="$((2 * ${{ matrix.stripe }} - 1))"
-          last="$((2 * ${{ matrix.stripe }}))"
           if [ "$FROZEN_TARGET" = "true" ]; then
+            first="$((2 * CORE_STRIPE - 1))"
+            last="$((2 * CORE_STRIPE))"
             for stripe in "$first" "$last"; do
               node scripts/run-tsgo-core-test-shards.mjs --stripe "$stripe/5" --concurrency 2
             done
           else
-            # One queue fills an idle slot across the former stripe barrier.
-            node scripts/run-tsgo-core-test-shards.mjs --stripe "$first-$last/5" --concurrency 2
+            node scripts/run-tsgo-core-test-shards.mjs --stripe "$CORE_STRIPE/5" --concurrency 2
           fi
 
       - name: Save core test-type incremental state
@@ -5589,12 +5646,13 @@ jobs:
             swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
             echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
-            if [[ "$HISTORICAL_TARGET" == "true" ]]; then
-              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
-            else
+            # Rendered Quick Chat keeps its former XCTest process isolation from executor-changing tests;
+            # parallel suites take key status and dismiss its panel. Frozen targets without the suite skip the lane.
+            if [[ "$HISTORICAL_TARGET" != "true" || -f apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPresentationTests.swift ]]; then
               run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
-              # Rendered Quick Chat keeps its former XCTest process isolation from executor-changing tests.
               run_apple_command_logged "$native_test_log_dir/default-rendered-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "QuickChatCatalogPresentationTests"
+            else
+              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
             fi
             run_apple_command_logged "$native_test_log_dir/named-$native_test_log_id.log" node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
@@ -6527,7 +6585,21 @@ jobs:
             --target-context-ref "$TARGET_CONTEXT_REF")"
           printf 'OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=%s\n' "$baseline" >> "$GITHUB_ENV"
 
-      - name: Run changed Docker seed owner lanes
+      # The main update tripwire needs the complete runtime and public SDK types.
+      # Manual/release validation retains the full declaration-complete package.
+      - name: Prepare main Docker smoke package
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main')
+        run: |
+          set -euo pipefail
+          pnpm clean:dist
+          pnpm build:ci-artifacts
+          package_dir="${RUNNER_TEMP}/docker-seed-package"
+          node scripts/package-openclaw-for-docker.mjs --skip-build \
+            --allow-unreleased-changelog --output-dir "$package_dir" \
+            --output-name openclaw-current.tgz
+          printf 'OPENCLAW_CURRENT_PACKAGE_TGZ=%s/openclaw-current.tgz\n' "$package_dir" >> "$GITHUB_ENV"
+
+      - name: Run Docker seed tier
         env:
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
           OPENCLAW_DOCKER_ALL_LIVE_MODE: skip
@@ -6584,6 +6656,7 @@ jobs:
       - checks-node-core-test-nondist-shard
       - check-shard
       - check-lint-hosted-core-shard
+      - check-lint-hosted-extension-shard
       - check-test-types-hosted-core-shard
       - check-additional-shard
       - check-docs
@@ -6624,6 +6697,7 @@ jobs:
             checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}|${{ needs.preflight.outputs.run_checks_node_core_nondist }}
             check-shard=${{ needs.check-shard.result }}|${{ needs.preflight.outputs.run_check }}
             check-lint-hosted-core-shard=${{ needs.check-lint-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
+            check-lint-hosted-extension-shard=${{ needs.check-lint-hosted-extension-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && (!inputs.release_gate || needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') }}
             check-test-types-hosted-core-shard=${{ needs.check-test-types-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && !needs.preflight.outputs.changed_core_test_paths_json && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
             check-additional-shard=${{ needs.check-additional-shard.result }}|${{ needs.preflight.outputs.run_check_additional }}
             check-docs=${{ needs.check-docs.result }}|${{ needs.preflight.outputs.run_check_docs }}

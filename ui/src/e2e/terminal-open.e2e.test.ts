@@ -36,11 +36,11 @@ async function settleTerminalPaint(page: Page): Promise<void> {
 
 async function cycleThemeMode(page: Page, currentMode: "Dark" | "Light" | "System") {
   const sidebar = page.locator("openclaw-app-sidebar");
-  const toggle = sidebar.getByRole("button", { name: `Color mode: ${currentMode}` });
-  if (!(await toggle.isVisible())) {
-    await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
+  const identityMenu = sidebar.getByRole("button", { name: /^Identity and app menu for / });
+  if ((await identityMenu.getAttribute("aria-expanded")) !== "true") {
+    await identityMenu.click();
   }
-  await toggle.click();
+  await sidebar.getByRole("menuitem", { name: `Color mode: ${currentMode}`, exact: true }).click();
 }
 
 suite.define(() => {

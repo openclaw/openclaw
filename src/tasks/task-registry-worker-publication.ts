@@ -13,6 +13,7 @@ import {
   matchesScope,
   taskIdsInScope,
   type PendingTaskRegistryMutation,
+  type TaskRegistryReadIdentity,
 } from "./task-registry.process-state.js";
 import type { TaskRegistryStore } from "./task-registry.store.js";
 import type {
@@ -27,8 +28,8 @@ export type TaskRegistryWorkerMutationContext = {
   admission: OpenClawStateDatabaseReadAdmission;
   publicationRecords: () => ReadonlyMap<string, TaskRecord>;
   readEventTarget?: () => TaskAgentEventTarget | undefined;
-  /** Only a producer whose write contract preserves task routing, access, and detail. */
-  readIdentity?: "preserved";
+  /** Producer-owned identity writes; canonical readback and discovery retain the full scope. */
+  readIdentity?: TaskRegistryReadIdentity;
   /** Prepare current rows before this mutation invalidates their projection. */
   prepare?: () => Promise<void>;
   taskRowsWritten?: () => boolean;

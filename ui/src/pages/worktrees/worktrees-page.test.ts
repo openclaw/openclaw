@@ -176,9 +176,11 @@ describe("WorktreesPage lifecycle", () => {
     const newWorktreeButton = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "New worktree",
     );
+    expect(newWorktreeButton?.getAttribute("aria-expanded")).toBe("false");
     newWorktreeButton?.click();
     await page.updateComplete;
     expect(page.querySelectorAll('input.settings-input[type="text"]')).toHaveLength(3);
+    expect(newWorktreeButton?.getAttribute("aria-expanded")).toBe("true");
 
     source.setScopes(["operator.read"]);
     await page.updateComplete;
@@ -186,6 +188,7 @@ describe("WorktreesPage lifecycle", () => {
     expect(page.createOpen).toBe(false);
     expect(page.querySelectorAll('input.settings-input[type="text"]')).toHaveLength(0);
     expect(newWorktreeButton?.disabled).toBe(true);
+    expect(newWorktreeButton?.getAttribute("aria-expanded")).toBe("false");
     newWorktreeButton?.click();
     expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.create");
   });

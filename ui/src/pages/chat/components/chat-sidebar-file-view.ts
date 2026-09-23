@@ -264,7 +264,7 @@ export function renderSidebarFile(
                   @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
                     controls.onSearchInput(event.currentTarget.value)}
                 />
-                <span class="file-view__search-counter"
+                <span class="file-view__search-counter" role="status"
                   >${matchNumber}/${controls.matches.length}</span
                 >
                 <button

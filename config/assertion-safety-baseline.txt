@@ -1830,7 +1830,7 @@ src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
-src/agents/session-tool-result-guard.ts	23
+src/agents/session-tool-result-guard.ts	11
 src/agents/session-transcript-repair.ts	6
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
@@ -1848,7 +1848,7 @@ src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	3
 src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
-src/agents/sessions/session-manager-entries.ts	3
+src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2
 src/agents/sessions/settings-manager.ts	11
 src/agents/sessions/steering-message-identity.ts	2
@@ -2762,7 +2762,6 @@ src/gateway/worker-environments/worker-session-tool-executor.ts	1
 src/gateway/worker-environments/worker-turn-admission.ts	3
 src/gateway/worker-environments/workspace-accepted-publication.ts	1
 src/gateway/worker-environments/workspace-manifest.ts	14
-src/gateway/worker-environments/workspace-path-exclusions.ts	2
 src/gateway/worker-environments/workspace-result-staging.ts	2
 src/gateway/worker-workspace-conflict-transcript.ts	4
 src/gateway/ws-log.ts	3
@@ -3605,7 +3604,6 @@ ui/src/pages/agents/memory/view.ts	1
 ui/src/pages/agents/model-config.ts	3
 ui/src/pages/agents/panels-overview.ts	3
 ui/src/pages/agents/panels-status-files.ts	1
-ui/src/pages/agents/panels-tools-skills.ts	1
 ui/src/pages/channels/view.config.ts	1
 ui/src/pages/channels/view.detail.ts	1
 ui/src/pages/channels/view.nostr-profile-form.ts	4
@@ -3690,7 +3688,7 @@ ui/src/pages/config/view-schema.ts	2
 ui/src/pages/config/view.ts	5
 ui/src/pages/connection/view.ts	3
 ui/src/pages/cron/view-runs.ts	3
-ui/src/pages/cron/view.ts	9
+ui/src/pages/cron/view.ts	6
 ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/debug/view.ts	3
@@ -3714,13 +3712,13 @@ ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5
-ui/src/pages/sessions/view.ts	12
+ui/src/pages/sessions/view.ts	8
 ui/src/pages/skill-workshop/route.ts	1
 ui/src/pages/skill-workshop/self-learning.ts	1
 ui/src/pages/skill-workshop/view.ts	1
 ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/heatmap.ts	1
-ui/src/pages/usage/view-details.ts	6
+ui/src/pages/usage/view-details.ts	5
 ui/src/pages/usage/view-overview.ts	2
 ui/src/pages/usage/view.ts	5
 ui/src/pages/worktrees/worktrees-page.ts	3

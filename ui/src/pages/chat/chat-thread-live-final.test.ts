@@ -56,36 +56,50 @@ function completed() {
 }
 
 describe("live terminal continuity with pending collaborators", () => {
-  it("keeps the active reply and its working indicator together before queued custody", () => {
-    const items = project(props());
-    const frames = items.filter((item) => item.kind === "agent-run-frame");
-    expect(frames).toHaveLength(1);
-    const frame = frames[0]!;
-    const parts = frame.parts.flatMap((part) => (part.kind === "stream-run" ? part.parts : []));
-    expect(parts.map((part) => part.kind)).toEqual(["stream", "reading-indicator"]);
-    const peer = items.findIndex(
-      (item) =>
-        item.kind === "group" && item.messages.some((message) => message.key.includes("peer")),
-    );
-    expect(items.indexOf(frame)).toBeLessThan(peer);
-  });
-  it("keeps an unsequenced terminal in its existing turn before pending custody", () => {
-    const before = project(props());
-    const after = project(
-      props({ messages: [...history, completed()], stream: null, runId: null, runWorking: false }),
-    );
-    const initialFrame = before.find((item) => item.kind === "agent-run-frame");
-    const finalFrame = after.find((item) => item.kind === "agent-run-frame");
-    expect(finalFrame?.key).toBe(initialFrame?.key);
-    const peer = after.findIndex(
-      (item) =>
-        item.kind === "group" &&
-        item.role === "user" &&
-        item.sender?.id === "writer" &&
-        item.messages.some((source) => source.key.includes("peer")),
-    );
-    expect(after.findIndex((item) => item.kind === "agent-run-frame")).toBeLessThan(peer);
-  });
+  it.each([false, true])(
+    "keeps the live reply and terminal before queued custody (system=%s)",
+    (system) => {
+      const provenance = system
+        ? { kind: "internal_system", sourceTool: "main_session_restart_recovery" }
+        : undefined;
+      const pendingInputs = [{ ...pending, message: { ...pending.message, provenance } }];
+      const before = project(props({ pendingInputs }));
+      const after = project(
+        props({
+          messages: [...history, completed()],
+          pendingInputs,
+          stream: null,
+          runId: null,
+          runWorking: false,
+        }),
+      );
+      const frames = [before, after].map((items) => {
+        const runFrames = items.filter((item) => item.kind === "agent-run-frame");
+        expect(runFrames).toHaveLength(1);
+        const frame = runFrames[0]!;
+        expect(frame).toMatchObject({ runId: "active", boundaryId: "send:active" });
+        const peer = items.findIndex((item) =>
+          item.kind === "notice"
+            ? item.key.includes("peer")
+            : item.kind === "group" &&
+              item.role === "user" &&
+              item.sender?.id === "writer" &&
+              item.messages.some((source) => source.key.includes("peer")),
+        );
+        expect(items.indexOf(frame)).toBeLessThan(peer);
+        if (system) {
+          expect(items[peer]).toMatchObject({ kind: "notice", startsTurn: true });
+          expect(items[peer]).not.toHaveProperty("boundaryId");
+        }
+        return frame;
+      });
+      const parts = frames[0]?.parts.flatMap((part) =>
+        part.kind === "stream-run" ? part.parts : [],
+      );
+      expect(parts?.map((part) => part.kind)).toEqual(["stream", "reading-indicator"]);
+      expect(frames[1]?.key).toBe(frames[0]?.key);
+    },
+  );
   it.each([
     { label: "visible history", messages: history },
     {

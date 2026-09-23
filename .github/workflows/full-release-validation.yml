@@ -819,6 +819,7 @@ jobs:
             fi
             if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "ci" ]]; then
               echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
+              echo "- Locale preflight: generated-locale drift is a warning and does not block dispatch. Strict \`control-ui-i18n\` and \`native-i18n\` jobs still run in normal CI; their failures fail validation."
             else
               echo "- Normal CI: skipped by rerun group"
             fi
@@ -2194,6 +2195,28 @@ jobs:
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
         run: *full_release_state
+
+      - name: Summarize locale validation
+        if: always() && steps.state.outputs.state != ''
+        env:
+          DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const diagnostics = JSON.parse(fs.readFileSync(process.env.DIAGNOSTIC_DRAIN_PATH, "utf8"));
+          const jobs = diagnostics.children.normalCi?.timing.jobs ?? [];
+          const lines = ["## Generated locale validation", "", "| Job | Result |", "| --- | --- |"];
+          const warnings = [];
+          for (const name of ["control-ui-i18n", "native-i18n"]) {
+            const result = jobs.find((job) => job.name === name)?.conclusion || "not recorded";
+            lines.push(`| ${name} | ${result} |`);
+            if (!["success", "skipped", "not recorded"].includes(result)) {
+              console.log(`::warning::${name}: ${result}. Inspect the strict locale job; generated-locale drift must not prevent FRV dispatch.`);
+              warnings.push("", "> [!WARNING]", `> ${name}: ${result}. Generated-locale drift does not block dispatch; the strict job still fails validation.`);
+            }
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [...lines, ...warnings].join("\n") + "\n");
+          NODE
 
       - name: Upload diagnostic drain manifest
         if: always() && steps.state.outputs.state != ''

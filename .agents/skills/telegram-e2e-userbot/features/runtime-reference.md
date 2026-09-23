@@ -111,6 +111,17 @@ not claim that live transport or audit inspection has run.
 | `qa-mock`    | QA fixtures for tools, delays, and scenario actions.                    |
 | `claude-cli` | Real Claude CLI path for progress behavior the mock lane cannot render. |
 
+Prepare `qa-mock` with `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build` before leasing.
+The built lane starts both the provider and Gateway from that checkout's
+`dist/entry.js`; `--source-gateway` selects the development launcher for both.
+A leased run must not rebuild a dirty source checkout while waiting for provider
+readiness.
+
+The named tool-progress shell fixture emits command-style `exec` arguments.
+Use `E2E_ROOT_CONFIG_PATCH='{"tools":{"codeMode":false}}'` for that fixture, or
+choose a code-mode-aware fixture. Keep exec permissions unchanged and verify
+the actual tool result: a planned call alone does not prove the command ran.
+
 `claude-cli` uses the operator's Claude credentials and costs real usage. Its
 default model is `claude-haiku-4-5`; set `E2E_TELEGRAM_CLI_MODEL` to override it.
 

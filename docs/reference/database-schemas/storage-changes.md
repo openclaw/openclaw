@@ -770,6 +770,14 @@ it does not become a permanent restore failure.
 Task observation waits for each acknowledged row's required flow effects.
 Acknowledged task mutations are never replayed.
 
+Modern run-owner binding also awaits the shared-state worker. Its original creation
+receipt follows only matching committed lifecycle timestamp changes; replacement
+rows and rolled-back events cannot advance that identity. Binding joins accepted
+events and required publication, then rechecks the original run before installing
+its live cancellation owner. The receipt releases its lineage listener on failure
+or settlement. A confirmed no-op may reselect after a matching committed event;
+failed or uncertain writes are never replayed.
+
 Active core Gateway task completion retains the creation-time registry owners and
 updates its original run/runtime/session selection through the shared-state worker.
 Each selected task is reread against its exact receipt and current Gateway/run
