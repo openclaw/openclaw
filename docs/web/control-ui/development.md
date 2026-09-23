@@ -124,6 +124,18 @@ documents retain immediate invalidation because animation frames may be suspende
 The `chat-stream-runtime-budgets.e2e.test.ts` suite protects streaming with
 structural update counts; chat-page unit tests cover intervening roster publications.
 
+Shell callbacks retain their identity across renders so a background session update
+does not redraw navigation twice. The outbox subscription still invalidates draft
+and attention badges when their underlying facts change. Session-link decoration
+preserves unchanged attributes instead of rewriting them on each roster update.
+
+Transcript enhancement inspects inserted or changed Markdown blocks; settled code
+blocks and tables do not need another scan when neighboring prose streams. Resize
+observers own geometry changes. The command palette likewise retains its measured
+input layout while navigating results, and remeasures edits, width changes, and
+reconnected fields. Status clocks pause in hidden tabs and render only when their
+displayed value or properties change.
+
 ## Talk live smoke test
 
 Maintainers can exercise the browser Talk paths end to end from the repository

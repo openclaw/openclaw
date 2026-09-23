@@ -5,6 +5,10 @@ import { renderCommandPaletteInput } from "./command-palette-input.ts";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 const onInputRef = () => undefined;
+const nextFrame = () =>
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
 
 describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
   let host: HTMLDivElement | undefined;
@@ -15,9 +19,10 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
       host.remove();
       host = undefined;
     }
+    vi.restoreAllMocks();
   });
 
-  it("preserves the selected prompt while a settings control owns focus and layout rerenders", async () => {
+  it("preserves the prompt without remeasuring result navigation and measures again on reconnect", async () => {
     host = document.body.appendChild(document.createElement("div"));
     host.style.cssText = "width: 740px; max-width: 100%;";
     const props = {
@@ -27,19 +32,22 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
       onValueChange: () => undefined,
       actions: html`<button type="button">Settings</button>`,
     };
-    render(renderCommandPaletteInput(props), host);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    const part = render(renderCommandPaletteInput(props), host);
+    await document.fonts.ready;
+    // Initial layout installs ResizeObserver; its first delivery schedules
+    // the next frame. Observe result navigation after that commit completes.
+    await nextFrame();
+    await nextFrame();
+    await nextFrame();
     const input = host.querySelector("textarea")!;
+    const originalHeight = input.clientHeight;
+    const measureContent = vi.spyOn(input, "scrollHeight", "get");
     const settings = host.querySelector("button")!;
     input.focus();
     input.setSelectionRange(5, 11, "backward");
     settings.focus();
-    render(renderCommandPaletteInput(props), host);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    render(renderCommandPaletteInput({ ...props, activeDescendant: "next-result" }), host);
+    await nextFrame();
     expect(document.activeElement).toBe(settings);
     expect(input.value).toBe(props.value);
     expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([
@@ -47,6 +55,18 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
       11,
       "backward",
     ]);
+    expect(measureContent).not.toHaveBeenCalled();
+    expect(input.clientHeight).toBe(originalHeight);
+
+    part.setConnected(false);
+    host.remove();
+    host.style.width = "320px";
+    document.body.append(host);
+    part.setConnected(true);
+    await nextFrame();
+    expect(measureContent).toHaveBeenCalled();
+    expect(input.clientHeight).toBeGreaterThan(originalHeight);
+    expect(input.value).toBe(props.value);
   });
 
   it("keeps a scrolled prompt in place through rerenders and resizing until the user edits", async () => {
