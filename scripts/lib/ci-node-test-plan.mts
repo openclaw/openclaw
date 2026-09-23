@@ -1508,6 +1508,11 @@ export function createUiRealGatewayTestShards(
     e2eGroups.flatMap((group) => group.includePatterns ?? uiE2eRealGatewayTestFiles),
   );
   const parallelFiles = new Set(uiE2ePrebuiltParallelTestFiles);
+  // Pair standalone fixtures beside desktop proof without another preview build.
+  const desktopParallelFiles = new Set([
+    "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+  ]);
   const files = uiE2eRealGatewayTestFiles.filter(
     (file) => selected.has(file) && file !== "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   );
@@ -1519,8 +1524,10 @@ export function createUiRealGatewayTestShards(
     groups: [
       {
         configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
-        shard_name: `ui-e2e-real-gateway-${shard === 1 ? "serial" : "parallel"}`,
-        includePatterns: files.filter((file) => parallelFiles.has(file) === (shard === 2)),
+        shard_name: `ui-e2e-real-gateway-${shard === 1 ? "desktop" : "parallel"}`,
+        includePatterns: files.filter(
+          (file) => (parallelFiles.has(file) && !desktopParallelFiles.has(file)) === (shard === 2),
+        ),
       },
     ],
   }));

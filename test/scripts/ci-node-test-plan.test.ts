@@ -164,9 +164,13 @@ describe("Control UI release-only inventories", () => {
     ]);
     // Array equality also catches duplicate ownership between jobs or desktop proof.
     expect(files.toSorted()).toEqual(expectedFiles.toSorted());
-    expect(shards[0]?.groups[0]?.includePatterns).toContain(
+    for (const file of [
       "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
-    );
+      "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+    ]) {
+      expect(shards[0]?.groups[0]?.includePatterns).toContain(file);
+    }
     expect(shards[1]?.groups[0]?.includePatterns).toContain(
       "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
     );
