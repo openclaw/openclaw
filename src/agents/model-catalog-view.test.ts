@@ -510,6 +510,30 @@ describe("prepared native catalog readiness", () => {
     });
   });
 
+  it("uses native readiness when an OpenAI profile is present but not selected", () => {
+    const cfg: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai:work": { provider: "openai", mode: "oauth" },
+        },
+      },
+    };
+    const view = prepareModelCatalogView({
+      ...facts(cfg),
+      snapshot: snapshot([nativeEntry]),
+      observationConfig: cfg,
+      isCurrent: () => true,
+      pluginRegistry: nativeRegistry(() => ({ accountType: "chatgpt", authMode: "oauth" })),
+    });
+
+    expect(view.evaluateNative(nativeEntry, host, "native-test")).toMatchObject({
+      availability: true,
+      availabilityAuthoritative: true,
+      runtimeAuth: { id: "native-test", source: "native" },
+      selectedAuthMode: "oauth",
+    });
+  });
+
   it("reads the captured registry while an unrelated registry is active", () => {
     const previous = captureActivePluginRegistrySnapshot();
     setActivePluginRegistry(nativeRegistry(() => undefined));
@@ -531,6 +555,10 @@ describe("prepared native catalog readiness", () => {
   it.each([
     { name: "preferred account", preferredProfileId: "custom:chosen", cfg: {} },
     { name: "pinned account", pinnedProfileId: "custom:chosen", cfg: {} },
+    {
+      name: "auth profile order",
+      cfg: { auth: { order: { custom: ["custom:chosen"] } } },
+    },
     {
       name: "authored route",
       cfg: {

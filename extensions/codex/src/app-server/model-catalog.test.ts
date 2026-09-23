@@ -338,6 +338,94 @@ describe("Codex app-server model catalog", () => {
       expect.any(Function),
     );
   });
+
+  it("retries a cold empty model list once and preserves the retry account observation", async () => {
+    vi.mocked(probeCodexNativeAuth).mockResolvedValue({
+      apiKey: "native-presence",
+      source: "native login",
+      mode: "oauth",
+    });
+    listModelsMock.mockResolvedValueOnce({ models: [] }).mockResolvedValueOnce({
+      models: [
+        {
+          id: "gpt-6-luna",
+          model: "gpt-6-luna",
+          inputModalities: ["text", "image"],
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        },
+      ],
+    });
+    rpc.request
+      .mockResolvedValueOnce({ account: { type: "apiKey" }, requiresOpenaiAuth: true })
+      .mockResolvedValueOnce({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
+
+    const catalog = await owner.load(catalogParams, nativePluginConfig);
+
+    expect(catalog).toMatchObject([
+      {
+        provider: "openai",
+        id: "gpt-6-luna",
+        nativeRuntime: "codex",
+        reasoning: true,
+        input: ["text", "image"],
+        compat: {
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        },
+      },
+    ]);
+    expect(listModelsMock).toHaveBeenCalledTimes(2);
+    expect(rpc.request).toHaveBeenCalledTimes(2);
+    expect(read({ modelId: "gpt-6-luna" }, nativePluginConfig)).toEqual({
+      accountType: "chatgpt",
+      authMode: "oauth",
+    });
+  });
+
+  it("keeps a genuinely empty catalog empty after one retry", async () => {
+    listModelsMock.mockResolvedValue({ models: [] });
+
+    expect(await owner.load(catalogParams, nativePluginConfig)).toEqual([]);
+    expect(listModelsMock).toHaveBeenCalledTimes(2);
+    expect(rpc.request).toHaveBeenCalledTimes(2);
+    expect(read({}, nativePluginConfig)).toBeUndefined();
+  });
+
+  it("retries a catalog invalidated by account updates and publishes one current observation", async () => {
+    vi.mocked(probeCodexNativeAuth).mockResolvedValue({
+      apiKey: "native-presence",
+      source: "native login",
+      mode: "oauth",
+    });
+    listModelsMock.mockResolvedValue({
+      models: [
+        {
+          id: "gpt-6-sol",
+          model: "gpt-6-sol",
+          inputModalities: ["text", "image"],
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        },
+      ],
+    });
+    let accountReads = 0;
+    rpc.request.mockImplementation(async () => {
+      accountReads += 1;
+      if (accountReads === 1) {
+        rpc.epoch += 1;
+        return { account: { type: "apiKey" }, requiresOpenaiAuth: true };
+      }
+      return { account: { type: "chatgpt" }, requiresOpenaiAuth: true };
+    });
+
+    expect(await owner.load(catalogParams, nativePluginConfig)).toMatchObject([
+      { id: "gpt-6-sol", nativeRuntime: "codex", reasoning: true },
+    ]);
+    expect(listModelsMock).toHaveBeenCalledTimes(2);
+    expect(rpc.request).toHaveBeenCalledTimes(2);
+    expect(read({ modelId: "gpt-6-sol" }, nativePluginConfig)).toEqual({
+      accountType: "chatgpt",
+      authMode: "oauth",
+    });
+  });
   it.each([
     {
       account: { type: "apiKey" },
