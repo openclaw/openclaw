@@ -99,9 +99,15 @@ export async function executeMutableUpdate(
     onStateHandoff,
     admitExecutor,
   } = createUpdateCommandExecutionGuards(opts, params.root);
+  let retentionInstallTarget = params.packageInstallTarget;
   const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv, activationTimeoutMs?: number) => {
     assertExecutionCurrent();
-    await params.prepareMutableUpdate(env, activationTimeoutMs, admitExecutor);
+    await params.prepareMutableUpdate(
+      env,
+      activationTimeoutMs,
+      admitExecutor,
+      retentionInstallTarget,
+    );
     assertExecutionCurrent();
   };
   const mode: UpdateRunResult["mode"] =
@@ -575,7 +581,8 @@ export async function executeMutableUpdate(
         channel: params.channel,
         devTarget: params.devTarget,
         assertCurrent: assertExecutionCurrent,
-        inspectGitTarget: async (target) => {
+        inspectGitTarget: async (target, installTarget) => {
+          retentionInstallTarget = installTarget;
           recordInspectedGitTarget(opts.run, target, assertExecutionCurrent);
           await recheckSchemas(target.schemaVersions);
           if (!gitContextPrepared) {

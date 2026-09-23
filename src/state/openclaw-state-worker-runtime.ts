@@ -115,7 +115,10 @@ import * as skillWorkshop from "../skills/workshop/store.worker.js";
 import { isTaskRegistryWorkerCommand } from "../tasks/task-registry.worker-contract.js";
 import { executeTaskRegistryCommand } from "../tasks/task-registry.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
-import { executeTranscriptWrite } from "../transcripts/store-worker-write.js";
+import {
+  executeTranscriptWrite,
+  isTranscriptWriteCommand,
+} from "../transcripts/store-worker-write.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
@@ -437,10 +440,11 @@ export function executeSharedStateCommand(
   if (command.type === "deviceAuth.list") {
     return deviceAuth.readDeviceAuthTokensFromDatabase(database.db, command.input);
   }
-  if (command.type === "transcripts.append" || command.type === "transcripts.writeSummary") {
+  if (isTranscriptWriteCommand(command)) {
     return executeTranscriptWrite(command, { database, path: context.databasePath });
   }
   switch (command.type) {
+    case "transcripts.canonicalSessionRow":
     case "transcripts.readEntries":
     case "transcripts.exportOwnership":
     case "transcripts.exportPathCollisions":
