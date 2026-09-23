@@ -20,7 +20,7 @@ export function assertExperienceReviewDecision(params: {
 }): "proposed" | "abstained" {
   const { observation, progress, proposals, outcome } = params;
   expect(observation.requests[0]?.toolNames).toEqual(
-    expect.arrayContaining(["exec", "read", "skill_workshop"]),
+    expect.arrayContaining(["exec", "read", "tool_search", "tool_describe", "tool_call"]),
   );
   expect(observation.requests[0]?.outputs).toEqual(
     params.messages
@@ -30,22 +30,50 @@ export function assertExperienceReviewDecision(params: {
   expect(outcome?.attemptedAtMs).toBeGreaterThanOrEqual(params.startedAt);
   expect(outcome?.usage?.outputTokens).toBeGreaterThan(0);
   expect(observation.toolResults.some((result) => result.isError)).toBe(false);
+  const workshopCalls: Array<{ action: unknown; receiptText: string }> = [];
   for (const call of observation.toolCalls) {
-    expect(call.name).toBe("skill_workshop");
-    expect(observation.toolResults).toContainEqual(
-      expect.objectContaining({ toolName: call.name, toolCallId: call.id, isError: false }),
+    expect(["tool_search", "tool_describe", "tool_call"]).toContain(call.name);
+    const receipt = observation.toolResults.find(
+      (result) => result.toolName === call.name && result.toolCallId === call.id,
     );
+    expect(receipt).toMatchObject({ isError: false });
+    if (call.name !== "tool_call") {
+      continue;
+    }
+    if (!receipt || !isRecord(call.arguments) || !isRecord(call.arguments.args)) {
+      throw new Error("Workshop dispatch requires arguments and a matching receipt");
+    }
+    const envelope: unknown = JSON.parse(readExperienceReviewMessageText(receipt.content));
+    if (!isRecord(envelope) || !isRecord(envelope.tool) || !isRecord(envelope.result)) {
+      throw new Error("Workshop dispatch did not return its canonical target receipt");
+    }
+    expect(envelope.tool).toMatchObject({ name: "skill_workshop", source: "openclaw" });
+    expect(typeof call.arguments.id).toBe("string");
+    expect(call.arguments.id === envelope.tool.id || call.arguments.id === envelope.tool.name).toBe(
+      true,
+    );
+    expect(envelope.result.isError).not.toBe(true);
+    if (!Array.isArray(envelope.result.content)) {
+      throw new Error("Workshop target receipt did not retain its result content");
+    }
+    workshopCalls.push({
+      action: call.arguments.args.action,
+      receiptText: envelope.result.content
+        .flatMap((part: unknown) =>
+          isRecord(part) && part.type === "text" && typeof part.text === "string"
+            ? [part.text]
+            : [],
+        )
+        .join("\n"),
+    });
   }
-  const mutations = observation.toolCalls.filter(
-    (call) =>
-      call.name === "skill_workshop" &&
-      isRecord(call.arguments) &&
-      ["create", "patch", "update", "revise"].includes(String(call.arguments.action)),
+  const mutations = workshopCalls.filter((call) =>
+    ["create", "patch", "update", "revise"].includes(String(call.action)),
   );
   if (progress.mutationCount === 0) {
     expect(mutations).toHaveLength(0);
-    for (const call of observation.toolCalls) {
-      expect(isRecord(call.arguments) && call.arguments.action).toSatisfy(
+    for (const call of workshopCalls) {
+      expect(call.action).toSatisfy(
         (action: unknown) =>
           action === "list" ||
           action === "inspect" ||
@@ -63,10 +91,7 @@ export function assertExperienceReviewDecision(params: {
   expect(mutations).toHaveLength(1);
   const proposalId = progress.proposalIds[0]!;
   expect(proposals).toContainEqual(expect.objectContaining({ id: proposalId, status: "pending" }));
-  const receipt = observation.toolResults.find(
-    (result) => result.toolName === "skill_workshop" && result.toolCallId === mutations[0]!.id,
-  );
-  expect(receipt && readExperienceReviewMessageText(receipt.content)).toContain(proposalId);
+  expect(mutations[0]!.receiptText).toContain(proposalId);
   expect(outcome).toMatchObject({ outcome: "proposed", proposalId });
   return "proposed";
 }

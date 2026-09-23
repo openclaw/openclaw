@@ -82,6 +82,11 @@ export type ChannelAccountLinkState = "linked" | "not-linked" | "unknown";
 export type ChannelConfigAdapter<ResolvedAccount> = {
   listAccountIds: (cfg: OpenClawConfig) => string[];
   resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
+  /** Operational account preparation; preferred over the synchronous compatibility hook. */
+  resolveAccountAsync?: (
+    cfg: OpenClawConfig,
+    accountId?: string | null,
+  ) => Promise<ResolvedAccount>;
   inspectAccount?: (cfg: OpenClawConfig, accountId?: string | null) => unknown;
   defaultAccountId?: (cfg: OpenClawConfig) => string;
   setAccountEnabled?: (params: {
@@ -122,6 +127,10 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     allowFrom: Array<string | number>;
   }) => string[];
   hasConfiguredState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
+  hasConfiguredStateAsync?: (params: {
+    cfg: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+  }) => Promise<boolean>;
   hasPersistedAuthState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
   resolveDefaultTo?: (params: {
     cfg: OpenClawConfig;

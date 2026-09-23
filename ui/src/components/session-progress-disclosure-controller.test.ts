@@ -269,6 +269,40 @@ describe("elastic progress disclosure controller", () => {
     expect(current.querySelector("details")!.open).toBe(false);
   });
 
+  it("preserves disclosure while hidden and starts fresh scroll gestures when presented again", async () => {
+    const container = createContainer();
+    const cardLifetime = {};
+    const show = (presented: boolean) =>
+      renderTranscriptCard(container, { cardLifetime, readingHistory: true, presented });
+    show(true);
+    const transcript = observeTranscript(container, transcriptCleanups);
+    await Promise.resolve();
+    const card = container.querySelector("details")!;
+    transcript.wheel(200);
+    vi.advanceTimersByTime(201);
+    transcript.wheel(200);
+
+    show(false);
+    await Promise.resolve();
+    vi.advanceTimersByTime(1000);
+    expect(card.open).toBe(true);
+    transcript.wheel(200);
+    vi.advanceTimersByTime(301);
+    transcript.wheel(200);
+    vi.advanceTimersByTime(301);
+    expect(card.open).toBe(true);
+
+    show(true);
+    await Promise.resolve();
+    expect(container.querySelector("details")).toBe(card);
+    transcript.wheel(200);
+    vi.advanceTimersByTime(301);
+    expect(card.open).toBe(true);
+    transcript.wheel(200);
+    vi.advanceTimersByTime(301);
+    expect(card.open).toBe(false);
+  });
+
   it("header takeover clears pending transcript gestures before fresh history can collapse it", async () => {
     const container = createContainer();
     renderTranscriptCard(container, { readingHistory: true });

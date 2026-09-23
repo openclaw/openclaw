@@ -174,6 +174,15 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       client.connectionSignal,
       client.connect.role === "operator" && (!client.usesSharedGatewayAuth || generationState)
         ? {
+            dependencies: {
+              client,
+              context: sourceContext,
+              authPolicyGeneration: client.authPolicyGeneration,
+              sharedGenerationOwner: client.usesSharedGatewayAuth ? generationState : undefined,
+              sharedGeneration: client.usesSharedGatewayAuth
+                ? client.sharedGatewaySessionGeneration
+                : undefined,
+            },
             isCurrent: () =>
               hasCurrentGatewayPolicyClientSource(client) && isCommittedPolicyCurrent(),
             subscribe: (onRevoked) => {
