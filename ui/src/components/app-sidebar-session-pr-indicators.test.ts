@@ -1,5 +1,5 @@
 import { html, LitElement, type ReactiveController, type ReactiveControllerHost } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
@@ -18,6 +18,14 @@ class TestHost implements ReactiveControllerHost {
   readonly controllers: ReactiveController[] = [];
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
+
+  constructor() {
+    onTestFinished(() => {
+      for (const controller of this.controllers) {
+        controller.hostDisconnected?.();
+      }
+    });
+  }
 
   addController(controller: ReactiveController): void {
     this.controllers.push(controller);
@@ -221,7 +229,6 @@ describe("SessionPullRequestIndicatorsController", () => {
       expect(
         controller.summary(row.key, row.worktreeId ?? "", { numbers: [99], state }),
       ).toBeUndefined();
-      controller.hostDisconnected();
     },
   );
 
