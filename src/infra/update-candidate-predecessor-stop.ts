@@ -38,12 +38,34 @@ function readDoctorStop(runId: string, ledger: UpdateRunLedgerOptions) {
   if (!step?.detail) {
     return undefined;
   }
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(step.detail);
-    return parsed && typeof parsed === "object" ? (parsed as StoppedServiceIdentity) : undefined;
+    parsed = JSON.parse(step.detail);
   } catch {
     return undefined;
   }
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+  const record = parsed as Record<string, unknown>; // SAFETY: narrowed to a non-null object above
+  const optionalNumber = (value: unknown) => (typeof value === "number" ? value : undefined);
+  const stoppedAtMs = optionalNumber(record.stoppedAtMs);
+  if (stoppedAtMs === undefined) {
+    return undefined;
+  }
+  const identity: StoppedServiceIdentity = { stoppedAtMs };
+  const pid = optionalNumber(record.pid);
+  const managerUid = optionalNumber(record.managerUid);
+  if (pid !== undefined) {
+    identity.pid = pid;
+  }
+  if (managerUid !== undefined) {
+    identity.managerUid = managerUid;
+  }
+  if (typeof record.fingerprint === "string") {
+    identity.fingerprint = record.fingerprint;
+  }
+  return identity;
 }
 
 /**
