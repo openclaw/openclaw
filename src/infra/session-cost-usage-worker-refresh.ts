@@ -20,7 +20,6 @@ import {
   applyCostBreakdown,
   applyCostTotal,
   applyUsageTotals,
-  parseUsageCostTranscriptRecord,
   needsUsageCostEstimate,
   applyUsageCostEstimate,
 } from "./session-cost-usage-pricing.js";
@@ -36,6 +35,7 @@ import {
   type SessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
 import { createEmptyCostUsageTotals as emptyTotals } from "./session-cost-usage-totals.js";
+import { readUsageCostWorkerRecord } from "./session-cost-usage-worker-record.js";
 import type {
   CostUsageTotals,
   ParsedTranscriptEntry,
@@ -188,6 +188,7 @@ type RollupScanInput = {
     marker: SqliteSessionFileMarker,
     afterSeq: number,
     throughSeq: number,
+    projectUsage?: boolean,
   ) => Promise<Array<{ seq: number; event: unknown }>>;
   access: UsageCostCollectionAccess;
 };
@@ -217,7 +218,7 @@ function createUsageRollupScan(params: RollupScanInput & { appendOnly: boolean }
         batch = [];
       };
       for (const record of records) {
-        const entry = parseUsageCostTranscriptRecord(record);
+        const entry = readUsageCostWorkerRecord(record);
         if (entry) {
           batch.push(entry);
         }
@@ -364,13 +365,14 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
     anchorMatches,
   );
   const afterSeq = appendCandidate ? (previousCheckpoint?.maxSeq ?? 0) : 0;
-  const rows = await params.readRows(scope, afterSeq, maxSeq);
+  const rows = await params.readRows(scope, afterSeq, maxSeq, true);
   const rawRecords = rows.map((row) => row.event).filter(isRecord);
   const incremental = appendCandidate
     ? selectIncrementalSqliteRecords(rawRecords, previousCheckpoint?.visibleLeafId)
     : undefined;
   const appendOnly = Boolean(incremental && params.previous);
-  const allRows = appendOnly || afterSeq === 0 ? rows : await params.readRows(scope, 0, maxSeq);
+  const allRows =
+    appendOnly || afterSeq === 0 ? rows : await params.readRows(scope, 0, maxSeq, true);
   const allRecords = appendOnly
     ? (incremental?.records ?? [])
     : selectVisibleTranscriptEvents(allRows.map((row) => row.event)).filter(isRecord);
