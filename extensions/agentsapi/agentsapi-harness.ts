@@ -282,6 +282,8 @@ async function runAgentsApiSession(
       signal: controller.signal,
       assertCurrent,
       onSettled: () => deadlines.beginSettlement(Date.now()),
+      onUsageError: (error) =>
+        embeddedAgentLog.warn("Agents API token accounting unavailable", { error }),
       onEvent: (event) => {
         messageProjection.observe(event);
         params.onRunProgress?.({

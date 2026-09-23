@@ -11,6 +11,7 @@ export function createAgentsApiSession(options: {
   assertCurrent: () => void;
   onEvent: (event: AgentsApiEvent) => void;
   onSettled?: () => void;
+  onUsageError?: (error: unknown) => void;
 }) {
   const { client, cleanupClient, sessionId, signal, assertCurrent } = options;
   let streamController = new AbortController();
@@ -127,7 +128,7 @@ export function createAgentsApiSession(options: {
           }
         } catch (error) {
           if (!usageSignal.aborted) {
-            throw error;
+            options.onUsageError?.(error);
           }
           return turns;
         }

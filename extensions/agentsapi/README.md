@@ -16,7 +16,9 @@ failed work after native cleanup settles. Historical session usage is derived
 from transcript messages, so interrupted work without an assistant message is
 not included in that historical report. A bounded five-second settlement window
 waits for late turn records and usage. Counts are not refreshed after that
-snapshot. Missing native usage remains unavailable; native counts can change as
+snapshot. Accounting read failures retain the last available snapshot and log a
+warning; they do not discard a completed reply or replace cancellation. Missing
+native usage remains unavailable; native counts can change as
 upstream accounting arrives. See the
 [official usage guide](https://developers.openai.com/api/docs/guides/agents-api/observability).
 
