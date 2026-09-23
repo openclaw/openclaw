@@ -8,20 +8,16 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import {
-  getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { readHotSessionTranscriptSnapshot } from "../config/sessions/session-cold-storage-read.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
-import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
 } from "../state/openclaw-agent-db-readonly.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
-import { executeSqliteQuerySync } from "./kysely-sync.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
   readSessionCostUsageRollupBodyInDatabase,
@@ -46,6 +42,10 @@ import {
   isUsageCostRollupFresh,
   type UsageCostStoredRollup,
 } from "./session-cost-usage-rollup-codec.js";
+import {
+  projectUsageCostWorkerRecord,
+  readUsageCostSqliteRows,
+} from "./session-cost-usage-worker-record.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 import type {
   UsageCostWorkerDatabase,
@@ -455,6 +455,7 @@ export async function executeUsageCostWorker(
     marker: SqliteSessionFileMarker,
     afterSeq: number,
     throughSeq: number,
+    projectUsage = false,
   ): Promise<Array<{ seq: number; event: unknown }>> => {
     if (throughSeq <= afterSeq) {
       return [];
@@ -474,9 +475,10 @@ export async function executeUsageCostWorker(
         }
         chunks.push(frame.bytes);
         if (frame.final) {
+          const event: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
           events.push({
             seq: frame.seq,
-            event: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+            event: projectUsage ? projectUsageCostWorkerRecord(event) : event,
           });
           chunks = [];
         }
@@ -486,21 +488,12 @@ export async function executeUsageCostWorker(
       const stored = await readStore(marker.agentId, marker.storePath, () => {
         const result = withOpenClawAgentDatabaseReadOnly(
           (opened) =>
-            readHotSessionTranscriptSnapshot(opened, marker.sessionId, "incremental", () => {
-              const query = getSessionKysely(opened.db)
-                .selectFrom("transcript_events")
-                .select(["seq", transcriptEventJsonSql(opened.db).as("event_json")])
-                .where("session_id", "=", marker.sessionId)
-                .where("seq", ">", afterSeq)
-                .where("seq", "<=", throughSeq)
-                .orderBy("seq", "asc");
-              return executeSqliteQuerySync(opened.db, query).rows;
-            }),
+            readUsageCostSqliteRows(opened, marker.sessionId, afterSeq, throughSeq, projectUsage),
           { ...database, env },
         );
         return result.found ? result.value : [];
       });
-      return stored.map((row) => ({ seq: row.seq, event: JSON.parse(row.event_json) as unknown }));
+      return stored;
     };
     try {
       return await read();
