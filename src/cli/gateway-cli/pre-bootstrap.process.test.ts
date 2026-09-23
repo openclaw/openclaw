@@ -241,8 +241,11 @@ describe("Gateway config selection before migration admission", () => {
         fs.writeFileSync(selectedPath, JSON.stringify(clobbered));
         fs.writeFileSync(`${selectedPath}.bak`, JSON.stringify(future));
       } else if (name === "discarded clobbered environment") {
+        // The discarded current file must keep tripping a recovery-triggering
+        // anomaly (missing gateway mode vs the backup) in every fixture run:
+        // a schema-valid file that only lacks `meta` is the operator's accepted
+        // hand-authored state, and its env vars are then applied, not discarded.
         current = {
-          gateway: { mode: "local" },
           env: { vars: { OPENCLAW_GATEWAY_TOKEN: "discarded-test-token" } },
         };
         backup = healthy;
