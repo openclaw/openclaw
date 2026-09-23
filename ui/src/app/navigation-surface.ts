@@ -6,7 +6,6 @@ import {
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
 import type { ApplicationContext } from "./context.ts";
-import type { UpdateProgress } from "./update-confirmation.ts";
 
 const NAV_DRAWER_FOCUSABLE_SELECTOR =
   "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
@@ -134,26 +133,11 @@ export function renderFloatingUpdateCard(params: {
   mobileNavLayout: boolean;
   onboarding: boolean;
   compact?: boolean;
-  updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
-  updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];
-  heldUpdateCampaignId?: string | null;
-  updateBusy: boolean;
   updateRun?: ApplicationContext["overlays"]["snapshot"]["updateRun"];
-  updateRunAcknowledged?: boolean;
-  connected?: boolean;
-  onAcknowledge?: () => void;
-  onCheckStatus?: () => Promise<boolean>;
   statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
-  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
-  canUpdate?: boolean;
-  canHoldUpdate?: boolean;
-  onUpdate: () => void;
   refreshRequired: boolean;
   onRefresh: () => Promise<boolean>;
-  onHoldUpdate?: () => Promise<boolean>;
-  onReviewUpdate?: () => void;
   onNavigate?: ApplicationContext["navigate"];
-  onOpenApprovals?: () => void;
 }) {
   const showAttention = floatingSidebarAttentionVisible(params);
   const showUpdateCard = !params.compact && params.refreshRequired;
@@ -165,31 +149,16 @@ export function renderFloatingUpdateCard(params: {
       ? html`<openclaw-sidebar-attention
           class="sidebar-attention--floating"
           .onNavigate=${params.onNavigate}
-          .onOpenApprovals=${params.onOpenApprovals}
         ></openclaw-sidebar-attention>`
       : nothing
   }${
     showUpdateCard
       ? html`<openclaw-sidebar-update-card
           class="sidebar-update-card--floating"
-          .updateAvailable=${params.updateAvailable}
-          .updateSchedule=${params.updateSchedule ?? null}
-          .heldUpdateCampaignId=${params.heldUpdateCampaignId ?? null}
-          .updateBusy=${params.updateBusy}
           .updateRun=${params.updateRun ?? null}
-          .updateRunAcknowledged=${params.updateRunAcknowledged ?? false}
-          .connected=${params.connected ?? false}
-          .onAcknowledge=${params.onAcknowledge}
-          .onCheckStatus=${params.onCheckStatus}
           .statusBanner=${params.statusBanner ?? null}
-          .watchUpdateProgress=${params.watchUpdateProgress}
-          .canUpdate=${params.canUpdate ?? false}
-          .canHoldUpdate=${params.canHoldUpdate ?? false}
-          .onUpdate=${params.onUpdate}
           .refreshRequired=${params.refreshRequired}
           .onRefresh=${params.onRefresh}
-          .onHoldUpdate=${params.onHoldUpdate ?? (async () => false)}
-          .onReviewUpdate=${params.onReviewUpdate ?? (() => undefined)}
         ></openclaw-sidebar-update-card>`
       : nothing
   }`;
