@@ -14,7 +14,9 @@ import {
   allocateSignalManagedNativePort,
   assignSignalManagedNativePort,
   DEFAULT_SIGNAL_MANAGED_NATIVE_PORT,
+  independentLocalPortFromManagedNativeConnectionUrl,
   isSignalManagedNativeConnectionUrlForBind,
+  preferredManagedNativeAllocationPort,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
 import {
@@ -159,18 +161,13 @@ function resolveSignalManagedNativePort(params: {
           `Signal managed native accounts "${params.accountId}" and "${accountId}" both bind port ${explicitPort}. Assign each account a distinct transport.httpPort.`,
         );
       }
-      const independentLocalUrl =
-        transport?.kind === "external-native" ||
-        transport?.kind === "container" ||
-        (transport?.kind === "managed-native" &&
-          Boolean(transport.url) &&
-          !isSignalManagedNativeConnectionUrlForBind(transport))
-          ? transport.url
-          : undefined;
-      if (
-        independentLocalUrl &&
-        resolveLocalSignalTransportPort(independentLocalUrl) === explicitPort
-      ) {
+      const independentLocalPort =
+        transport?.kind === "external-native" || transport?.kind === "container"
+          ? resolveLocalSignalTransportPort(transport.url)
+          : transport?.kind === "managed-native"
+            ? independentLocalPortFromManagedNativeConnectionUrl(transport)
+            : undefined;
+      if (independentLocalPort === explicitPort) {
         throw new Error(
           `Signal managed native account "${params.accountId}" binds port ${explicitPort}, which conflicts with account "${accountId}" local transport endpoint. Assign a distinct transport.httpPort.`,
         );
@@ -208,11 +205,10 @@ function resolveSignalManagedNativePort(params: {
       } else {
         implicitManagedAccountIds.push(accountId);
       }
-      if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
-        const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
-        if (localConnectionPort !== undefined) {
-          reservedPorts.add(localConnectionPort);
-        }
+      const independentConnectionPort =
+        independentLocalPortFromManagedNativeConnectionUrl(transport);
+      if (independentConnectionPort !== undefined) {
+        reservedPorts.add(independentConnectionPort);
       }
       continue;
     }
@@ -220,7 +216,14 @@ function resolveSignalManagedNativePort(params: {
   }
 
   for (const accountId of implicitManagedAccountIds) {
-    const port = allocateSignalManagedNativePort({ reservedPorts });
+    const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
+    const preferredPort = preferredManagedNativeAllocationPort(
+      accountConfig.transport ?? { kind: "managed-native" },
+    );
+    const port = allocateSignalManagedNativePort({
+      reservedPorts,
+      ...(preferredPort !== undefined ? { preferredPort } : {}),
+    });
     reservedPorts.add(port);
     if (normalizeAccountId(accountId) === params.accountId) {
       return port;

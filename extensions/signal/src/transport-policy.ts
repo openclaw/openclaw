@@ -67,6 +67,59 @@ export function resolveLocalSignalTransportPort(baseUrl: string): number | undef
   }
 }
 
+/**
+ * When managed-native has a local connection URL but no explicit httpPort, prefer
+ * binding the daemon to that URL's port so the client and autoStart daemon agree.
+ * Returns undefined when the URL is an independent endpoint, so allocation can
+ * still reassign binds.
+ */
+export function preferredManagedNativePortFromConnectionUrl(
+  transport: SignalTransportConfig,
+): number | undefined {
+  if (transport.kind !== "managed-native" || transport.httpPort !== undefined || !transport.url) {
+    return undefined;
+  }
+  const localPort = resolveLocalSignalTransportPort(transport.url);
+  if (localPort === undefined || !isValidSignalManagedNativePort(localPort)) {
+    return undefined;
+  }
+  const candidate: SignalManagedNativeTransport = { ...transport, httpPort: localPort };
+  if (!isSignalManagedNativeConnectionUrlForBind(candidate)) {
+    return undefined;
+  }
+  return localPort;
+}
+
+export function preferredManagedNativeAllocationPort(
+  transport: SignalTransportConfig,
+): number | undefined {
+  if (transport.kind !== "managed-native") {
+    return undefined;
+  }
+  if (transport.httpPort !== undefined) {
+    return transport.httpPort;
+  }
+  return preferredManagedNativePortFromConnectionUrl(transport);
+}
+
+export function independentLocalPortFromManagedNativeConnectionUrl(
+  transport: SignalTransportConfig,
+): number | undefined {
+  if (transport.kind !== "managed-native" || !transport.url) {
+    return undefined;
+  }
+  const preferredBindPort = preferredManagedNativePortFromConnectionUrl(transport);
+  const effectiveForBindCheck =
+    preferredBindPort === undefined ? transport : { ...transport, httpPort: preferredBindPort };
+  if (isSignalManagedNativeConnectionUrlForBind(effectiveForBindCheck)) {
+    return undefined;
+  }
+  const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
+  return localConnectionPort !== undefined && isValidSignalManagedNativePort(localConnectionPort)
+    ? localConnectionPort
+    : undefined;
+}
+
 export function isSignalManagedNativeConnectionUrlForBind(
   transport: SignalTransportConfig,
 ): boolean {
@@ -77,6 +130,11 @@ export function isSignalManagedNativeConnectionUrlForBind(
   // signal-cli's daemon bind is plain HTTP. A local HTTPS URL is an independent proxy endpoint,
   // even when its host and port happen to match the configured daemon bind.
   if (connectionUrl.protocol !== "http:") {
+    return false;
+  }
+  // signal-cli serves only root /api/v1/*. A path prefix is an independent proxy.
+  const connectionPath = connectionUrl.pathname.replace(/\/+$/, "") || "/";
+  if (connectionPath !== "/") {
     return false;
   }
   const connectionPort = connectionUrl.port ? Number.parseInt(connectionUrl.port, 10) : 80;
@@ -114,7 +172,12 @@ export function assignSignalManagedNativePort(
     throw new Error("Signal managed native port must be an integer between 1 and 65535.");
   }
   const connectionUrlValue = transport.url;
-  if (!connectionUrlValue || !isSignalManagedNativeConnectionUrlForBind(transport)) {
+  // A URL-only local HTTP endpoint is the provisional bind. Fallback allocation
+  // still rewrites that URL onto the port that was actually assigned.
+  const preferredUrlPort = preferredManagedNativePortFromConnectionUrl(transport);
+  const alignmentProbe: SignalManagedNativeTransport =
+    preferredUrlPort === undefined ? transport : { ...transport, httpPort: preferredUrlPort };
+  if (!connectionUrlValue || !isSignalManagedNativeConnectionUrlForBind(alignmentProbe)) {
     return { ...transport, httpPort };
   }
   const connectionUrl = new URL(connectionUrlValue);

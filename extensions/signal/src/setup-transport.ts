@@ -24,7 +24,10 @@ import {
   allocateSignalManagedNativePort,
   assignSignalManagedNativePort,
   DEFAULT_SIGNAL_MANAGED_NATIVE_HOST,
+  independentLocalPortFromManagedNativeConnectionUrl,
   isSignalManagedNativeConnectionUrlForBind,
+  preferredManagedNativeAllocationPort,
+  preferredManagedNativePortFromConnectionUrl,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
 import {
@@ -133,6 +136,14 @@ export function resolveConfiguredSignalTransport(
     : resolveSignalAccountEntry(signal?.accounts, normalizedAccountId)?.transport;
 }
 
+function existingManagedTransportForAlignment(
+  existing: SignalManagedNativeTransport,
+): SignalManagedNativeTransport {
+  // URL-only local HTTP infers its bind; default 8080 is not that endpoint.
+  const preferredUrlPort = preferredManagedNativePortFromConnectionUrl(existing);
+  return preferredUrlPort === undefined ? existing : { ...existing, httpPort: preferredUrlPort };
+}
+
 function alignManagedConnectionUrlAfterBindChange(params: {
   existing: SignalManagedNativeTransport | undefined;
   prepared: SignalManagedNativeTransport;
@@ -142,7 +153,9 @@ function alignManagedConnectionUrlAfterBindChange(params: {
   if (
     params.hasUrlOverride ||
     !params.existing?.url ||
-    !isSignalManagedNativeConnectionUrlForBind(params.existing)
+    !isSignalManagedNativeConnectionUrlForBind(
+      existingManagedTransportForAlignment(params.existing),
+    )
   ) {
     return assignSignalManagedNativePort(params.prepared, params.httpPort);
   }
@@ -181,7 +194,6 @@ export function prepareSignalManagedNativeTransport(params: {
     assertSignalSocketTransport(socketCandidate);
     return socketCandidate;
   }
-  const preferredPort = params.overrides?.httpPort ?? existingManaged?.httpPort;
   const prepared: SignalManagedNativeTransport = {
     kind: "managed-native",
     ...existingManaged,
@@ -189,6 +201,12 @@ export function prepareSignalManagedNativeTransport(params: {
     httpHost:
       params.overrides?.httpHost ?? existingManaged?.httpHost ?? DEFAULT_SIGNAL_MANAGED_NATIVE_HOST,
   };
+  const preferredPort =
+    params.overrides?.httpPort ??
+    existingManaged?.httpPort ??
+    preferredManagedNativePortFromConnectionUrl(
+      params.overrides?.url !== undefined ? prepared : (existingManaged ?? prepared),
+    );
   const portsByAccountId = new Map<string, Set<number>>();
   const implicitManagedAccountIds: string[] = [];
   // Resolve the full current allocation before excluding the selected owner. Otherwise an
@@ -211,11 +229,10 @@ export function prepareSignalManagedNativeTransport(params: {
       } else {
         implicitManagedAccountIds.push(normalizedAccountId);
       }
-      if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
-        const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
-        if (localConnectionPort !== undefined) {
-          accountPorts.add(localConnectionPort);
-        }
+      const independentConnectionPort =
+        independentLocalPortFromManagedNativeConnectionUrl(transport);
+      if (independentConnectionPort !== undefined) {
+        accountPorts.add(independentConnectionPort);
       }
       continue;
     }
@@ -239,7 +256,14 @@ export function prepareSignalManagedNativeTransport(params: {
     if (!accountPorts) {
       continue;
     }
-    const httpPort = allocateSignalManagedNativePort({ reservedPorts: currentReservedPorts });
+    const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
+    const implicitPreferredPort = preferredManagedNativeAllocationPort(
+      accountConfig.transport ?? { kind: "managed-native" },
+    );
+    const httpPort = allocateSignalManagedNativePort({
+      reservedPorts: currentReservedPorts,
+      ...(implicitPreferredPort !== undefined ? { preferredPort: implicitPreferredPort } : {}),
+    });
     currentReservedPorts.add(httpPort);
     accountPorts.add(httpPort);
   }
@@ -254,18 +278,11 @@ export function prepareSignalManagedNativeTransport(params: {
     }
   }
 
-  const hasIndependentPreparedConnectionUrl =
-    prepared.url &&
-    (params.overrides?.url !== undefined
-      ? !isSignalManagedNativeConnectionUrlForBind(prepared)
-      : Boolean(
-          existingManaged?.url && !isSignalManagedNativeConnectionUrlForBind(existingManaged),
-        ));
-  if (hasIndependentPreparedConnectionUrl && prepared.url) {
-    const localConnectionPort = resolveLocalSignalTransportPort(prepared.url);
-    if (localConnectionPort !== undefined) {
-      reservedPorts.add(localConnectionPort);
-    }
+  const independentPreparedPort = independentLocalPortFromManagedNativeConnectionUrl(
+    params.overrides?.url !== undefined ? prepared : (existingManaged ?? prepared),
+  );
+  if (independentPreparedPort !== undefined) {
+    reservedPorts.add(independentPreparedPort);
   }
 
   if (params.overrides?.httpPort !== undefined && reservedPorts.has(params.overrides.httpPort)) {

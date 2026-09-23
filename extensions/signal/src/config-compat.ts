@@ -9,8 +9,9 @@ import {
   allocateSignalManagedNativePort,
   assignSignalManagedNativePort,
   DEFAULT_SIGNAL_MANAGED_NATIVE_PORT,
-  isSignalManagedNativeConnectionUrlForBind,
+  independentLocalPortFromManagedNativeConnectionUrl,
   isValidSignalManagedNativePort,
+  preferredManagedNativeAllocationPort,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
 import {
@@ -444,14 +445,14 @@ function allocateMigratedManagedPorts(params: {
       }
       continue;
     }
-    if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
-      const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
-      if (localConnectionPort !== undefined) {
-        reservedPorts.add(localConnectionPort);
-      }
+    const independentConnectionPort = independentLocalPortFromManagedNativeConnectionUrl(transport);
+    if (independentConnectionPort !== undefined) {
+      reservedPorts.add(independentConnectionPort);
     }
     if (index === canonicalDefaultIndex || isRecord(params.entries[index]?.transport)) {
-      reservedPorts.add(transport.httpPort ?? DEFAULT_SIGNAL_MANAGED_NATIVE_PORT);
+      reservedPorts.add(
+        preferredManagedNativeAllocationPort(transport) ?? DEFAULT_SIGNAL_MANAGED_NATIVE_PORT,
+      );
     }
   }
   return params.transports.map((transport, index) => {
@@ -467,7 +468,9 @@ function allocateMigratedManagedPorts(params: {
     }
     const rawPreferredPort = params.entries[index]?.httpPort;
     const preferredPort =
-      typeof rawPreferredPort === "number" ? rawPreferredPort : transport.httpPort;
+      typeof rawPreferredPort === "number"
+        ? rawPreferredPort
+        : preferredManagedNativeAllocationPort(transport);
     const httpPort = allocateSignalManagedNativePort({
       reservedPorts,
       ...(typeof preferredPort === "number" ? { preferredPort } : {}),
