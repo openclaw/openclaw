@@ -398,6 +398,11 @@ export type GetReplyOptions = {
   onQueuedFollowupAdmitted?: () => Promise<void> | void;
   /** Called after an admitted queued followup finishes, including failed attempts. */
   onQueuedFollowupSettled?: () => Promise<void> | void;
+  /**
+   * Called after an admitted queued followup's terminal reply is confirmed
+   * delivered through the origin route. Not called for failed attempts.
+   */
+  onQueuedFollowupFinalDelivered?: () => Promise<void> | void;
   /** Allow channel-owned progress UI while final/source reply delivery remains message-tool-only. */
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
   /** Called when a suppressed source reply mode observes visible delivery through another path. */

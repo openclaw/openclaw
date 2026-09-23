@@ -781,6 +781,46 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(draftStream.messageId()).toBeUndefined();
   });
 
+  // A message queued behind an active turn runs after its own dispatch has
+  // returned, and its final is routed outside deliverDiscordPayload (#149640).
+  it.each([
+    ["deletes", "confirmed", true],
+    ["keeps", "not confirmed", false],
+  ] as const)(
+    "%s a late queued turn's progress draft when its final delivery is %s",
+    async (_action, _outcome, finalDelivered) => {
+      const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+      const draftStream = createMockDraftStreamForTest();
+      let replyOptions: DispatchInboundParams["replyOptions"];
+
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        replyOptions = params?.replyOptions;
+        return createNoQueuedDispatchResult();
+      });
+
+      const ctx = await createAutomaticDraftContext({
+        discordConfig: {
+          streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+        },
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      await replyOptions?.onQueuedFollowupAdmitted?.();
+      await replyOptions?.onToolStart?.({ name: "view_image", phase: "start" });
+      await replyOptions?.onItemEvent?.({ progressText: "viewing image" });
+      await elapseProgressDraftStartDelay();
+      expect(draftStream.messageId()).toBeDefined();
+
+      if (finalDelivered) {
+        await replyOptions?.onQueuedFollowupFinalDelivered?.();
+      }
+      await replyOptions?.onQueuedFollowupSettled?.();
+
+      expect(draftStream.messageId() === undefined).toBe(finalDelivered);
+    },
+  );
+
   it("uses raw tool-progress detail in Discord progress drafts", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();

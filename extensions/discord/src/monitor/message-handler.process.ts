@@ -560,6 +560,9 @@ export async function processDiscordMessage(
             : undefined,
         ...progress.replyOptions,
         onObservedReplyDelivery: observeFinalDelivery,
+        // A queued followup's final is routed outside deliverDiscordPayload;
+        // retire its progress draft only after that final is confirmed sent.
+        onQueuedFollowupFinalDelivered: observeFinalDelivery,
         onModelSelected,
       },
     });
