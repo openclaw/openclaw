@@ -263,6 +263,7 @@ export function readTtsPrefsForUpdate(prefsPath: string): TtsUserPrefs | undefin
   }
   try {
     const parsed: unknown = JSON.parse(result.text);
+    // SAFETY: the prefs file is user-authored; unknown keys are ignored by every reader below.
     return asNonArrayRecord(parsed) as TtsUserPrefs;
   } catch {
     return {};
