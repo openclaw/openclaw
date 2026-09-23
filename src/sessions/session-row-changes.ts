@@ -35,13 +35,6 @@ export type SessionRowChange =
       factsInvalidated?: true;
       /** Omission is a metadata notification; storage owners publish their changed facts. */
       facts?: SessionRowFacts;
-      /** Private committed lifetime facts, consumed before public notifications. */
-      incognitoEntry?: {
-        sessionId: string;
-        createdAt?: number;
-        /** Exact process-held connection identity and liveness. */
-        source: Pick<DatabaseSync, "isOpen">;
-      };
     }
   | {
       all: true;
@@ -50,10 +43,7 @@ export type SessionRowChange =
     };
 
 type SessionRowNotification =
-  | Omit<
-      Extract<SessionRowChange, { sessionKey: string }>,
-      "facts" | "factsInvalidated" | "incognitoEntry"
-    >
+  | Omit<Extract<SessionRowChange, { sessionKey: string }>, "facts" | "factsInvalidated">
   | Omit<Extract<SessionRowChange, { all: true }>, "factsInvalidated">;
 
 const listeners = resolveGlobalSet<(change: SessionRowNotification) => void>(
@@ -113,12 +103,7 @@ export const sessionChanges = {
     const publish = () => {
       for (const change of changes) {
         if ("sessionKey" in change) {
-          const {
-            facts: _facts,
-            factsInvalidated: _invalidated,
-            incognitoEntry: _incognitoEntry,
-            ...notification
-          } = change;
+          const { facts: _facts, factsInvalidated: _invalidated, ...notification } = change;
           notifyListeners(listeners, notification);
         } else {
           const { factsInvalidated: _invalidated, ...notification } = change;

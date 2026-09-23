@@ -6,7 +6,7 @@ import {
   type ProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
 import {
-  INCOGNITO_SESSION_LIFETIME_MS,
+  resolveIncognitoSessionExpiresAt,
   isIncognitoSessionKey,
 } from "../../shared/incognito-session-key.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
@@ -42,7 +42,8 @@ type SessionWorkStartEntry = Pick<
   | "pendingWorktree"
   | "providerReview"
   | "lifecycleRevision"
->;
+> &
+  Partial<Pick<InternalSessionEntry, "updatedAt">>;
 
 type SessionWorkStartOptions = {
   /** Already-accepted transcript/delivery results settle without dispatching new model work. */
@@ -126,10 +127,11 @@ export function resolveSessionWorkStartError(
   if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
     return `Session "${sessionKey}" changed while starting work. Retry.`;
   }
+  const incognitoExpiresAt = entry ? resolveIncognitoSessionExpiresAt(entry) : undefined;
   if (
     (entry?.incognito || isIncognitoSessionKey(sessionKey)) &&
-    entry?.createdAt !== undefined &&
-    Date.now() >= entry.createdAt + INCOGNITO_SESSION_LIFETIME_MS
+    incognitoExpiresAt !== undefined &&
+    Date.now() >= incognitoExpiresAt
   ) {
     return `Incognito session "${sessionKey}" expired. Start a new Incognito session.`;
   }

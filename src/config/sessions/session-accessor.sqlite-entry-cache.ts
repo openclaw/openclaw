@@ -13,7 +13,6 @@ import {
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { invalidateOpenClawAgentWritableProjections } from "../../state/openclaw-agent-db-lifecycle.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
@@ -130,16 +129,12 @@ function emitPreparedSessionSharingChange(
   sessionKey: string,
   agentId = database.agentId,
   facts?: SessionRowFacts,
-  entry?: Pick<SessionEntry, "sessionId" | "createdAt">,
 ): void {
   const change: SessionRowChange = {
     agentId,
     storePath: database.path,
     sessionKey,
     ...(facts ? { facts } : { factsInvalidated: true }),
-    ...(entry && isIncognitoSessionKey(sessionKey)
-      ? { incognitoEntry: { ...entry, source: database.db } }
-      : {}),
   };
   preparedSharingChanges.add(change);
   sessionChanges.emit(change, database.db);
@@ -588,15 +583,7 @@ export function publishSessionEntryCacheInvalidation(
     // A cold write has no snapshot to patch; do not hydrate owner/participants or prompt JSON.
     publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
   }
-  emitPreparedSessionSharingChange(
-    database,
-    update.sessionKey,
-    database.agentId,
-    facts,
-    update.entry
-      ? { sessionId: update.entry.sessionId, createdAt: update.entry.createdAt }
-      : undefined,
-  );
+  emitPreparedSessionSharingChange(database, update.sessionKey, database.agentId, facts);
 }
 
 /** The category worker publishes only its changed field; native freshness tokens still expose other commits. */
