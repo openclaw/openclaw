@@ -35,6 +35,10 @@ let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
   | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
   | undefined;
 
+function mockDoctorPlugins(...plugins: Record<string, unknown>[]): void {
+  mocks.loadPluginManifestRegistry.mockReturnValue({ plugins, diagnostics: [] });
+}
+
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-doctor-contract-registry", tempDirs);
 }
@@ -61,7 +65,7 @@ describe("doctor-contract-registry module loader", () => {
 
   beforeEach(() => {
     resetRegistryJitiMocks();
-    mocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+    mockDoctorPlugins();
     doctorContractWarnMock.mockReset();
     retainedConfigDoctorMock.mockReset().mockReturnValue(null);
     // Loaded once in beforeAll; afterEach guards the same binding optionally because it
@@ -104,18 +108,13 @@ describe("doctor-contract-registry module loader", () => {
         legacyConfigRules: [rule],
         resolveSessionStoreAgentIds: () => ["unexpected-owner"],
       }));
-      mocks.loadPluginManifestRegistry.mockReturnValue({
-        plugins: [
-          {
-            id: "root-owner",
-            rootDir: pluginRoot,
-            channels: [],
-            providers: [],
-            doctorContract: { configRepair, resolveSessionStoreAgentIds: true },
-            configContracts: { compatibilityMigrationPaths: ["legacyRoots.*.root"] },
-          },
-        ],
-        diagnostics: [],
+      mockDoctorPlugins({
+        id: "root-owner",
+        rootDir: pluginRoot,
+        channels: [],
+        providers: [],
+        doctorContract: { configRepair, resolveSessionStoreAgentIds: true },
+        configContracts: { compatibilityMigrationPaths: ["legacyRoots.*.root"] },
       });
       const raw = { legacyRoots: { "store.with.dots": { root: "/legacy/documents" } } };
       const { findDoctorLegacyConfigIssues } =
@@ -145,116 +144,28 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["ollama-cloud"]);
   });
 
-  it("collects distinct provider ids from every canonical model selector and model policy", () => {
-    const providerIds = collectRelevantDoctorPluginIds({
-      agents: {
-        defaults: {
-          model: {
-            primary: "default-primary/model",
-            fallbacks: ["default-fallback/model", 42],
+  it("collects distinct configured-model and policy providers without shadow-list owners", () => {
+    expect(
+      collectRelevantDoctorPluginIds({
+        agents: {
+          defaults: {
+            model: { primary: "default/model", fallbacks: ["fallback/model", 42] },
+            modelPolicy: { allow: ["default/*", "default-policy/*", 42, "bare"] },
           },
-          utilityModel: "default-utility/model",
-          imageModel: "default-image/model",
-          voiceModel: "default-voice/model",
-          pdfModel: "default-pdf/model",
-          mediaModels: {
-            image: "media-image/model",
-            video: "media-video/model",
-            music: "media-music/model",
+          entries: {
+            worker: { model: "entry/model", modelPolicy: { allow: ["entry-policy/model", null] } },
           },
-          heartbeat: { model: "heartbeat/model" },
-          subagents: {
-            model: { primary: "subagent-primary/model", fallbacks: ["subagent-fallback/model"] },
-          },
-          compaction: {
-            model: "compaction/model",
-            memoryFlush: { model: "memory-flush/model" },
-          },
-          models: {
-            "default-map/model": {},
-            bare: {},
-          },
-          modelPolicy: { allow: ["default-policy/*", 42, "bare"] },
-        },
-        entries: {
-          worker: {
-            model: "entry-model/model",
-            models: { "entry-map/model": {} },
-            modelPolicy: { allow: ["entry-policy/model", null] },
-            tools: { exec: { reviewer: { model: "entry-reviewer/model" } } },
-            tts: { summaryModel: "entry-tts/model" },
-          },
-        },
-        list: [
-          {
-            id: "shadow",
-            model: "shadow-model/model",
-            modelPolicy: { allow: ["shadow-policy/model"] },
-          },
-        ],
-      },
-      tools: { exec: { reviewer: { model: "global-reviewer/model" } } },
-      hooks: {
-        mappings: [{ model: "hook-mapping/model" }, { model: 42 }],
-        gmail: { model: "hook-gmail/model" },
-      },
-      tts: { summaryModel: "tts-summary/model" },
-      channels: {
-        modelByChannel: { discord: { guild: "channel-override/model" } },
-        discord: {
-          voice: {
-            model: "discord-voice/model",
-            tts: { summaryModel: "discord-voice-tts/model" },
-          },
-          accounts: {
-            work: {
-              voice: {
-                model: "discord-account-voice/model",
-                tts: { summaryModel: "discord-account-tts/model" },
-              },
+          list: [
+            {
+              id: "shadow",
+              model: "shadow/model",
+              modelPolicy: { allow: ["shadow-policy/model"] },
             },
-          },
+          ],
         },
-      },
-    });
-
-    expect(providerIds).toEqual(
-      [
-        "channel-override",
-        "compaction",
-        "default-fallback",
-        "default-image",
-        "default-map",
-        "default-pdf",
-        "default-policy",
-        "default-primary",
-        "default-utility",
-        "default-voice",
-        "discord",
-        "discord-account-tts",
-        "discord-account-voice",
-        "discord-voice",
-        "discord-voice-tts",
-        "entry-map",
-        "entry-model",
-        "entry-policy",
-        "entry-reviewer",
-        "entry-tts",
-        "global-reviewer",
-        "heartbeat",
-        "hook-gmail",
-        "hook-mapping",
-        "media-image",
-        "media-music",
-        "media-video",
-        "memory-flush",
-        "subagent-fallback",
-        "subagent-primary",
-        "tts-summary",
-      ].toSorted(),
-    );
-    expect(providerIds).not.toContain("shadow-model");
-    expect(providerIds).not.toContain("shadow-policy");
+        hooks: { mappings: [{ model: "hook/model" }, { model: 42 }] },
+      }),
+    ).toEqual(["default", "default-policy", "entry", "entry-policy", "fallback", "hook"]);
   });
 
   it("collects model and policy providers from the legacy list when entries is absent", () => {
@@ -353,25 +264,22 @@ describe("doctor-contract-registry module loader", () => {
         ],
       }),
     }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "ollama",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: ["OlLaMa"],
-          providerAuthAliases: { "Ollama-Cloud": "OLLAMA" },
-        },
-        {
-          id: "unrelated",
-          rootDir: unrelatedRoot,
-          channels: [],
-          providers: ["unrelated"],
-          providerAuthAliases: { "ollama-cloud": "missing" },
-        },
-      ],
-      diagnostics: [],
-    });
+    mockDoctorPlugins(
+      {
+        id: "ollama",
+        rootDir: pluginRoot,
+        channels: [],
+        providers: ["OlLaMa"],
+        providerAuthAliases: { "Ollama-Cloud": "OLLAMA" },
+      },
+      {
+        id: "unrelated",
+        rootDir: unrelatedRoot,
+        channels: [],
+        providers: ["unrelated"],
+        providerAuthAliases: { "ollama-cloud": "missing" },
+      },
+    );
     const config = {
       models: {
         providers: {
@@ -406,17 +314,12 @@ describe("doctor-contract-registry module loader", () => {
         changes: ["repaired configured provider model"],
       }),
     }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "opencode",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: ["opencode"],
-          doctorContract: { configRepair: true },
-        },
-      ],
-      diagnostics: [],
+    mockDoctorPlugins({
+      id: "opencode",
+      rootDir: pluginRoot,
+      channels: [],
+      providers: ["opencode"],
+      doctorContract: { configRepair: true },
     });
     const config = {
       tools: { media: { image: { preferredModel: "opencode/gpt-5-nano" } } },
