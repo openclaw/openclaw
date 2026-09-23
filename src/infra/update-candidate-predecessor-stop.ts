@@ -3,6 +3,7 @@ import type { PreManagedServiceStop } from "../cli/update-cli/update-command-ser
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
@@ -125,7 +126,10 @@ export async function stopSupervisedPredecessorGateway(
       shouldRestart: true,
       jsonMode: true,
       phase: "prepare",
-      timeoutMs: params.timeoutMs,
+      // The delegated Doctor input carries no step budget; bound the drain and
+      // stop by the service stop budget so a stuck predecessor cannot outlive
+      // the parent's Doctor allowance.
+      timeoutMs: params.timeoutMs ?? GATEWAY_SERVICE_STOP_TIMEOUT_MS,
       onStopped: record,
       assertCurrent: params.assertCurrent,
       warn: params.warn,

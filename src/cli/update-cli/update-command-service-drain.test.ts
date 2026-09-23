@@ -8,6 +8,7 @@ import type { HelloOk } from "../../../packages/gateway-protocol/src/schema/fram
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import type { CallGatewayCliOptions } from "../../gateway/call.js";
+import { GATEWAY_STALE_INSTALL_CLOSE_REASON } from "../../gateway/stale-install.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 
 const mocks = vi.hoisted(() => ({ call: vi.fn(), managerTimeout: vi.fn() }));
@@ -364,4 +365,33 @@ it("rejects a replacement boot before sending suspension or stopping", async () 
   );
   expect(f.events).toEqual(["status"]);
   expect(f.stop).not.toHaveBeenCalled();
+});
+
+it("stops a resident whose installation was replaced without draining it", async () => {
+  const f = fixture();
+  mocks.call.mockImplementation(async () => {
+    throw new Error(`status (1011): ${GATEWAY_STALE_INSTALL_CLOSE_REASON}`);
+  });
+  const { timeoutMs: _timeoutMs, ...params } = f.params;
+  await expect(withGatewayMaintenanceDrain(params, f.stop)).resolves.toBe("stopped");
+  expect(f.events).toEqual([expect.stringMatching(/^warning:.*replaced before this stop/), "stop"]);
+});
+
+it("stops when the resident's installation is replaced during the drain", async () => {
+  const f = fixture({ observations: [draining("embedded-run", "1 active agent turn")] });
+  let calls = 0;
+  const base = mocks.call.getMockImplementation();
+  mocks.call.mockImplementation(async (request) => {
+    if (request.method === "gateway.suspend.prepare" && ++calls > 1) {
+      throw new Error(`gateway.suspend.prepare (1011): ${GATEWAY_STALE_INSTALL_CLOSE_REASON}`);
+    }
+    return base?.(request);
+  });
+  const running = withGatewayMaintenanceDrain(f.params, f.stop);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.events).toEqual(["status", "observe:draining"]);
+  await vi.advanceTimersByTimeAsync(100);
+  await expect(running).resolves.toBe("stopped");
+  expect(f.events.at(-1)).toBe("stop");
+  expect(f.events.at(-2)).toMatch(/^warning:.*replaced during this stop/);
 });

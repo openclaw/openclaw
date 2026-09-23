@@ -10,6 +10,7 @@ import { readSystemdGatewayStopTimeout } from "../../daemon/systemd-maintenance.
 import { callGatewayCli } from "../../gateway/call.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import type { GatewayShutdownStatus } from "../../gateway/server-public.js";
+import { GATEWAY_STALE_INSTALL_CLOSE_REASON } from "../../gateway/stale-install.js";
 import {
   GATEWAY_SERVICE_STOP_TIMEOUT_MS,
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
@@ -125,6 +126,17 @@ export async function withGatewayMaintenanceDrain<T>(
     observationError = String(error);
   }
   assertResidentCurrent();
+  // A resident whose installation was replaced underneath it refuses every
+  // connection; it can neither report readiness nor accept new work, so
+  // draining it is pointless and would only burn the deadline.
+  const staleResident = () =>
+    observationError !== undefined && observationError.includes(GATEWAY_STALE_INSTALL_CLOSE_REASON);
+  if (staleResident()) {
+    params.warn(
+      "WARNING: The running Gateway's installation was replaced before this stop; it refuses connections, so lifecycle drain is skipped and it is stopped directly.",
+    );
+    return await finish();
+  }
   if ((managerTimeout ?? 0) < GATEWAY_SERVICE_STOP_TIMEOUT_MS) {
     params.warn(
       `Gateway service stop timeout is ${managerTimeout === undefined ? "unverified" : `${managerTimeout}ms`} after policy refresh; preserving operator overrides and using lifecycle drain before stopping.`,
@@ -164,6 +176,12 @@ export async function withGatewayMaintenanceDrain<T>(
       }
       assertResidentCurrent();
       if (!observationError && lastObservation?.status === "ready") {
+        return await finish();
+      }
+      if (staleResident()) {
+        params.warn(
+          "WARNING: The running Gateway's installation was replaced during this stop; it refuses connections, so lifecycle drain is skipped and it is stopped directly.",
+        );
         return await finish();
       }
       if (performance.now() >= deadline) {
