@@ -42,7 +42,7 @@ async function withLifetime(
   run: (fixture: {
     owner: ReturnType<typeof createGatewaySidecarStopOwner>;
     context: ReturnType<typeof createDirectChatContext>;
-    logWarning: ReturnType<typeof vi.fn>;
+    logWarning: ReturnType<typeof vi.fn<(message: string) => void>>;
     scope: { agentId: string; sessionKey: string; sessionId: string; storePath: string };
     stateDir: string;
   }) => Promise<void>,
@@ -61,7 +61,7 @@ async function withLifetime(
       getRuntimeConfig: () => config,
       getSessionEventSubscriberConnIds: () => new Set(["observer"]),
     });
-    const logWarning = vi.fn();
+    const logWarning = vi.fn<(message: string) => void>();
     await attachInitialGatewayLifetimeSidecars({
       chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
       gatewayRequestContext: context,
