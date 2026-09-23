@@ -1,7 +1,9 @@
 // Unit test routing globs and boundary/bundled-plugin exclusions.
 import path from "node:path";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "../../scripts/lib/bundled-plugin-paths.mjs";
+import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
+import { isSharedVitestExcludedPath } from "./vitest.pattern-file.ts";
 
 export const unitTestIncludePatterns = [
   "src/**/*.test.ts",
@@ -18,6 +20,7 @@ export const boundaryTestFiles = [
   "src/infra/package-json.test.ts",
   "src/infra/path-env.test.ts",
   "src/infra/stable-node-path.test.ts",
+  "test/control-ui-import-boundary.test.ts",
   "test/extension-import-boundaries.test.ts",
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
@@ -30,7 +33,6 @@ export const bundledPluginDependentUnitTestFiles = [
 ];
 
 export const unitTestAdditionalExcludePatterns = [
-  ...databaseWorkerCoreTestFiles,
   "src/gateway/**",
   "packages/gateway-client/**",
   "packages/gateway-protocol/**",
@@ -61,6 +63,9 @@ export const unitTestAdditionalExcludePatterns = [
   "src/wizard/**",
   "src/plugins/contracts/**",
   "src/scripts/**",
+  "test/**",
+  ...databaseWorkerCoreTestFiles,
+  ...cliProcessTestFiles,
   "src/infra/boundary-path.test.ts",
   "src/infra/git-root.test.ts",
   "src/infra/home-dir.test.ts",
@@ -73,18 +78,6 @@ export const unitTestAdditionalExcludePatterns = [
   "src/config/doc-baseline.integration.test.ts",
   "src/config/schema.base.generated.test.ts",
   "src/config/schema.help.quality.test.ts",
-  "test/**",
-];
-
-const sharedBaseExcludePatterns = [
-  "dist/**",
-  "apps/macos/**",
-  "apps/macos/.build/**",
-  "**/node_modules/**",
-  "**/vendor/**",
-  "dist/OpenClaw.app/**",
-  "**/*.live.test.ts",
-  "**/*.e2e.test.ts",
 ];
 
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
@@ -95,7 +88,7 @@ export function isUnitConfigTestFile(file) {
   const normalizedFile = normalizeRepoPath(file);
   return (
     matchesAny(normalizedFile, unitTestIncludePatterns) &&
-    !matchesAny(normalizedFile, sharedBaseExcludePatterns) &&
+    !isSharedVitestExcludedPath(normalizedFile) &&
     !matchesAny(normalizedFile, unitTestAdditionalExcludePatterns)
   );
 }

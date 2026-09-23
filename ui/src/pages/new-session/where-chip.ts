@@ -1,10 +1,14 @@
 import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import { html, nothing, svg } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { repeat } from "lit/directives/repeat.js";
 import { deviceIcons } from "../../components/icons-devices.ts";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
+import { resolveCloudProfileIcon } from "../../components/provider-icon.ts";
+import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { resolveMacFormFactorFromName } from "../../lib/mac-form-factor.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
@@ -16,6 +20,7 @@ import {
 } from "./device-placement.ts";
 import {
   cloudMachinesForOs,
+  defaultCloudMachine,
   defaultCloudOs,
   type DraftCloudProfile,
   type DraftEnvironment,
@@ -23,6 +28,8 @@ import {
   type DraftOperatingSystem,
 } from "./discovery.ts";
 import { environmentCapabilityLabels } from "./place-facts.ts";
+
+registerNewSessionSetupEnglish();
 
 const devicePoolIcon = strokeIcon(svg`<rect x="2" y="7" width="14" height="11" />
   <path d="M6 7V3h16v12h-6M6 22h6M9 18v4" />`);
@@ -69,7 +76,7 @@ export function resolveWhereChip(params: {
     const selectedOsId = params.os || defaultOs;
     const operatingSystems = profile?.operatingSystems ?? [];
     const cloudMachines = profile ? cloudMachinesForOs(profile, selectedOsId) : [];
-    const defaultMachine = cloudMachines.find((machine) => machine.default === true);
+    const defaultMachine = profile ? defaultCloudMachine(profile, selectedOsId) : undefined;
     const selectedMachine = params.machineClass
       ? cloudMachines.find((machine) => machine.id === params.machineClass)
       : defaultMachine;
@@ -144,7 +151,21 @@ function environmentDeviceIcon(device?: DevicePlacementOption) {
   return html`<span class="new-session-page__device-icon" data-form=${form}>${icon}</span>`;
 }
 
+function renderEnvironmentSkeletons(section: "devices" | "cloud") {
+  return html`<div
+    class="new-session-page__environment-skeletons"
+    role="status"
+    aria-label=${t("common.loading")}
+    aria-busy="true"
+    data-section=${section}
+  >
+    <span class="skeleton new-session-page__environment-skeleton-row" aria-hidden="true"></span>
+    <span class="skeleton new-session-page__environment-skeleton-row" aria-hidden="true"></span>
+  </div>`;
+}
+
 export function renderWhereChip(params: {
+  idPrefix?: string;
   autoPlacementMode?: "least-busy" | "eligible-order";
   state: WhereChipState;
   gatewayName: string;
@@ -162,6 +183,7 @@ export function renderWhereChip(params: {
   popoverOpen: boolean;
   popoverHiding: boolean;
   isAdmin: boolean;
+  catalogLoading?: boolean;
   onGuardTransition: (event: MouseEvent) => void;
   onPopoverShow: () => void;
   onPopoverHide: () => void;
@@ -174,9 +196,12 @@ export function renderWhereChip(params: {
   onConnectMachine: () => void;
   onManageCloudWorkers: () => void;
 }) {
+  const cloudPresentation = resolveCloudProfileIcon(
+    params.state.cloudProfiles.find((profile) => profile.id === params.cloudProfileId),
+  );
   const icon =
     params.state.kind === "cloud"
-      ? icons.cloud
+      ? cloudPresentation.icon
       : params.state.kind === "local"
         ? icons.home
         : params.state.kind === "auto-device"
@@ -218,6 +243,8 @@ export function renderWhereChip(params: {
           t("newSession.cloud"),
           profile.id,
           profile.providerId,
+          profile.providerDisplayId,
+          resolveCloudProfileIcon(profile).label,
           profile.trust === "disposable"
             ? t("newSession.environmentDisposable")
             : profile.trust === "persistent"
@@ -243,6 +270,8 @@ export function renderWhereChip(params: {
     );
   const busy = params.submitting || params.pendingPlacement;
   const destinationDisabled = busy;
+  const showDeviceSkeletons = params.catalogLoading && devices.length === 0;
+  const showCloudSkeletons = params.isAdmin && params.catalogLoading && cloudProfiles.length === 0;
   let cleanupScrollFade: (() => void) | undefined;
   const bindScrollFade = (element: Element | undefined) => {
     cleanupScrollFade?.();
@@ -267,16 +296,19 @@ export function renderWhereChip(params: {
     update();
   };
   return html`
-    <span class="new-session-page__select">
+    <span class="new-session-page__select new-session-page__select--where">
       <button
-        id="new-session-where-trigger"
+        id=${(params.idPrefix ?? "new-session") + "-where-trigger"}
         type="button"
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
         }"
-        aria-label="${t("newSession.where")}: ${label}${
-          configurationSummary ? `, ${configurationSummary}` : ""
-        }"
+        aria-label="${t("newSession.where")}: ${label}${configurationSummary ? `, ${configurationSummary}` : ""}"
+        aria-description=${
+          params.state.kind === "cloud" && cloudPresentation.label
+            ? t("newSession.cloudWorkerProvider", { provider: cloudPresentation.label })
+            : nothing
+        }
         data-cloud-profile=${params.cloudProfileId || nothing}
         data-machine-class=${params.machineClass || nothing}
         data-os=${params.os || nothing}
@@ -289,6 +321,11 @@ export function renderWhereChip(params: {
       >
         <span class="new-session-page__target-icon" aria-hidden="true">${icon}</span>
         <span class="new-session-page__trigger-label">${label}</span>
+        ${
+          configurationSummary
+            ? html`<span class="new-session-page__trigger-summary">${configurationSummary}</span>`
+            : nothing
+        }
         <span
           class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
           aria-hidden="true"
@@ -302,8 +339,9 @@ export function renderWhereChip(params: {
       </button>
     </span>
     <wa-popover
+      ${ref(syncPopoverLabel)}
       class="new-session-page__select new-session-page__where-popover new-session-page__picker-popover"
-      for="new-session-where-trigger"
+      for=${(params.idPrefix ?? "new-session") + "-where-trigger"}
       placement="bottom-start"
       without-arrow
       @wa-show=${(event: Event) => {
@@ -423,41 +461,46 @@ export function renderWhereChip(params: {
                   )
                 : nothing
             }
-            ${devices.map((device) => {
-              return renderSessionMenuItem(
-                {
-                  value: `device:${device.deviceId}`,
-                  label: device.label,
-                  sub: device.subtitle,
-                  icon: environmentDeviceIcon(device),
-                  platform: device.platform ? prettifyPlatform(device.platform) : undefined,
-                  capabilityLabels: environmentCapabilityLabels(device.capabilities),
-                  hideDetails: device.hideDetails,
-                  remediation: device.remediation,
-                  capacityLabel:
-                    device.selectable && device.workerSlots
-                      ? t("newSession.concurrentSessionsValue", {
-                          used: String(device.workerSlots.total - device.workerSlots.available),
-                          total: String(device.workerSlots.total),
-                        })
-                      : undefined,
-                  compact: true,
-                  checked: params.state.kind === "device" && params.deviceId === device.deviceId,
-                  disabled: !device.selectable,
-                  title: device.disabledReason,
-                  onSelect: () => params.onSelectDevice(device.deviceId),
-                },
-                destinationDisabled,
-              );
-            })}
+            ${repeat(
+              devices,
+              (device) => device.deviceId,
+              (device) => {
+                return renderSessionMenuItem(
+                  {
+                    value: `device:${device.deviceId}`,
+                    label: device.label,
+                    sub: device.subtitle,
+                    icon: environmentDeviceIcon(device),
+                    platform: device.platform ? prettifyPlatform(device.platform) : undefined,
+                    capabilityLabels: environmentCapabilityLabels(device.capabilities),
+                    hideDetails: device.hideDetails,
+                    remediation: device.remediation,
+                    capacityLabel:
+                      device.selectable && device.workerSlots
+                        ? t("newSession.concurrentSessionsValue", {
+                            used: String(device.workerSlots.total - device.workerSlots.available),
+                            total: String(device.workerSlots.total),
+                          })
+                        : undefined,
+                    compact: true,
+                    checked: params.state.kind === "device" && params.deviceId === device.deviceId,
+                    disabled: !device.selectable,
+                    title: device.disabledReason,
+                    onSelect: () => params.onSelectDevice(device.deviceId),
+                  },
+                  destinationDisabled,
+                );
+              },
+            )}
+            ${showDeviceSkeletons ? renderEnvironmentSkeletons("devices") : nothing}
             ${
-              cloudProfiles.length || showMissingCloud
+              cloudProfiles.length || showMissingCloud || showCloudSkeletons
                 ? html`<div
                     class="new-session-page__environment-heading new-session-page__devices-heading"
                   >
                     <span>${t("newSession.cloud")}</span>
                     ${
-                      params.isAdmin
+                      params.isAdmin && !showCloudSkeletons
                         ? html`<button
                             type="button"
                             class="new-session-page__connect-device"
@@ -481,13 +524,13 @@ export function renderWhereChip(params: {
               onSelectOs: params.onSelectCloudOs,
               onSelectMachine: params.onSelectCloudMachine,
               submitting: destinationDisabled,
-              icon: icons.cloud,
               compact: true,
               disabled: Boolean(params.cloudDisabledReason),
               disabledReason: params.cloudDisabledReason,
               profileDisabledReason: params.cloudProfileDisabledReason,
               onSelect: params.onSelectCloudProfile,
             })}
+            ${showCloudSkeletons ? renderEnvironmentSkeletons("cloud") : nothing}
             ${
               showMissingCloud
                 ? renderSessionMenuItem(
@@ -507,7 +550,12 @@ export function renderWhereChip(params: {
                 : nothing
             }
             ${
-              !showLocal && devices.length === 0 && cloudProfiles.length === 0 && !showMissingCloud
+              !showLocal &&
+              devices.length === 0 &&
+              cloudProfiles.length === 0 &&
+              !showMissingCloud &&
+              !showDeviceSkeletons &&
+              !showCloudSkeletons
                 ? html`<div class="new-session-page__environment-empty" role="status">
                     ${t("newSession.environmentSearchEmpty")}
                   </div>`

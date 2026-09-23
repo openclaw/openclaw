@@ -17,10 +17,7 @@ import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcri
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SessionPendingInputs } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  ensureSessionPendingInputsSchema,
-  hasSessionPendingInputsSchema,
-} from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
@@ -156,7 +153,10 @@ export function withSessionPendingInputRelocation<T>(
 /** Registration owns disposition; execution and promotion check the private operational predicates. */
 export function readSessionPendingInputOwnerIds(
   database: PendingInputDatabase,
-  rows: readonly SessionPendingInputRow[],
+  rows: readonly Pick<
+    SessionPendingInputRow,
+    "input_id" | "session_key" | "session_id" | "lifecycle_generation"
+  >[],
 ): Set<string> {
   const candidates = rows.filter((row) => {
     const owner = owners.live.get(row.input_id);
@@ -375,16 +375,18 @@ export function resolveSessionPendingInputAppend(
   const idempotencyKey = record.idempotencyKey.trim();
   const row = readSessionPendingInputByKey(database, scope, idempotencyKey);
   const owner = owners.current.getStore();
-  const ownsInput = owner?.idempotencyKey === idempotencyKey;
+  // A bound-session mirror shares source correlation, never its pending custody.
+  const ownsInput =
+    owner?.idempotencyKey === idempotencyKey &&
+    owner.databasePath === database.path &&
+    owner.sessionId === scope.sessionId &&
+    owner.sessionKey === scope.sessionKey;
   if (!row && !ownsInput) {
     return undefined;
   }
   if (
     !owner ||
     !ownsInput ||
-    owner.databasePath !== database.path ||
-    owner.sessionId !== scope.sessionId ||
-    owner.sessionKey !== scope.sessionKey ||
     (row &&
       (row.input_id !== owner.inputId ||
         row.consumed_event_id != null ||
@@ -564,86 +566,6 @@ export function deleteSessionPendingInputs(
       getSessionKysely(database.db)
         .deleteFrom("session_pending_inputs")
         .where("session_key", "=", sessionKey),
-    );
-  }
-}
-
-/** Canonical repair preserves accepted text without transferring its old execution authority. */
-export function copySessionPendingInputsForRepair(
-  source: PendingInputDatabase,
-  destination: PendingInputDatabase,
-  sourceKeys: readonly string[],
-  canonicalKey: string,
-): void {
-  if (!hasSessionPendingInputsSchema(source.db)) {
-    return;
-  }
-  const rows = executeSqliteQuerySync(
-    source.db,
-    getSessionKysely(source.db)
-      .selectFrom("session_pending_inputs")
-      .selectAll()
-      .where("session_key", "in", sourceKeys)
-      .orderBy("seq", "asc"),
-  ).rows;
-  if (!rows.length) {
-    return;
-  }
-  ensureSessionPendingInputsSchema(destination.db);
-  const db = getSessionKysely(destination.db);
-  for (const row of rows) {
-    if (source.db === destination.db) {
-      executeSqliteQuerySync(
-        destination.db,
-        db
-          .updateTable("session_pending_inputs")
-          .set({
-            session_key: canonicalKey,
-            state: row.state === "cancelled" ? "cancelled" : "interrupted",
-          })
-          .where("input_id", "=", row.input_id),
-      );
-      continue;
-    }
-    const existing = readSessionPendingInputByKey(
-      destination,
-      { sessionKey: canonicalKey, sessionId: row.session_id },
-      row.idempotency_key,
-    );
-    if (existing) {
-      if (
-        existing.request_hash !== row.request_hash ||
-        existing.message_json !== row.message_json ||
-        existing.run_id !== row.run_id ||
-        (existing.consumed_event_id != null &&
-          row.consumed_event_id != null &&
-          existing.consumed_event_id !== row.consumed_event_id)
-      ) {
-        throw new Error("Canonical repair found conflicting accepted inputs");
-      }
-      executeSqliteQuerySync(
-        destination.db,
-        db
-          .updateTable("session_pending_inputs")
-          .set({
-            consumed_event_id: existing.consumed_event_id ?? row.consumed_event_id ?? null,
-            state:
-              existing.state === "cancelled" || row.state === "cancelled"
-                ? "cancelled"
-                : "interrupted",
-          })
-          .where("input_id", "=", existing.input_id),
-      );
-      continue;
-    }
-    const { seq: _seq, ...record } = row;
-    executeSqliteQuerySync(
-      destination.db,
-      db.insertInto("session_pending_inputs").values({
-        ...record,
-        session_key: canonicalKey,
-        state: row.state === "cancelled" ? "cancelled" : "interrupted",
-      }),
     );
   }
 }

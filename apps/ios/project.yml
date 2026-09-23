@@ -18,7 +18,7 @@ packages:
     path: ../swabble
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
-    exactVersion: 152.0.0
+    exactVersion: 153.0.0
 
 schemes:
   OpenClaw:

@@ -1,5 +1,6 @@
-// Doctor restart-health tests cover transient ECONNREFUSED after an approved gateway restart.
+// Doctor delegates post-restart diagnostics to the health command readiness owner.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ExitError } from "../runtime.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const service = vi.hoisted(() => ({
@@ -11,9 +12,7 @@ const service = vi.hoisted(() => ({
   readCommand: vi.fn(),
 }));
 const note = vi.hoisted(() => vi.fn());
-const sleep = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
-const formatGatewayClosedDiagnostic = vi.hoisted(() => vi.fn((): string | undefined => undefined));
 const inspectPortConnections = vi.hoisted(() => vi.fn());
 const inspectPortUsage = vi.hoisted(() => vi.fn());
 const formatPortDiagnostics = vi.hoisted(() => vi.fn(() => ["Port 18789 is already in use."]));
@@ -80,20 +79,12 @@ vi.mock("../infra/restart-handoff.js", async () => {
 });
 vi.mock("../infra/wsl.js", () => ({ isWSL: vi.fn(async () => false) }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
-vi.mock("../utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
-  return { ...actual, sleep };
-});
 vi.mock("./daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: vi.fn(),
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
 vi.mock("./doctor-format.js", () => ({ buildGatewayRuntimeHints, formatGatewayRuntimeSummary }));
 vi.mock("./gateway-install-token.js", () => ({ resolveGatewayInstallToken: vi.fn() }));
-vi.mock("./health-format.js", () => ({
-  formatGatewayClosedDiagnostic,
-  formatHealthCheckFailure: vi.fn(() => "health failed"),
-}));
 vi.mock("./health.js", () => ({ healthCommandNonExiting: healthCommand }));
 
 describe("maybeRepairGatewayDaemon restart health", () => {
@@ -106,8 +97,9 @@ describe("maybeRepairGatewayDaemon restart health", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    formatGatewayClosedDiagnostic.mockReset();
-    formatGatewayClosedDiagnostic.mockReturnValue(undefined);
+    vi.useFakeTimers();
+    healthCommand.mockReset().mockResolvedValue(undefined);
+    setPlatform("linux");
     findInstalledSystemdGatewayScope.mockReset().mockResolvedValue(null);
     service.isLoaded.mockResolvedValue(true);
     service.readRuntime.mockResolvedValue({ status: "running" });
@@ -127,6 +119,7 @@ describe("maybeRepairGatewayDaemon restart health", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }
@@ -152,28 +145,39 @@ describe("maybeRepairGatewayDaemon restart health", () => {
     return runtime;
   }
 
-  it("retries ECONNREFUSED after an approved restart until the gateway is reachable", async () => {
-    setPlatform("linux");
-    healthCommand
-      .mockRejectedValueOnce(new Error("connect ECONNREFUSED 127.0.0.1:18789"))
-      .mockResolvedValueOnce(undefined);
-
+  it("returns on the first probe when the restarted Gateway is healthy", async () => {
+    const startedAt = performance.now();
     const runtime = await runAutoRepair();
 
-    expect(service.restart).toHaveBeenCalledTimes(1);
-    expect(healthCommand).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(500);
+    expect(healthCommand).toHaveBeenCalledOnce();
+    expect(healthCommand).toHaveBeenCalledWith(
+      { json: false, config: { gateway: {} } },
+      expect.any(Object),
+    );
+    expect(performance.now()).toBe(startedAt);
+    expect(vi.getTimerCount()).toBe(0);
     expect(runtime.error).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalledWith(expect.stringContaining("still starting"), "Gateway");
   });
 
   it("fails immediately after restart when the health probe is not a connection refusal", async () => {
-    setPlatform("linux");
+    const startedAt = performance.now();
     healthCommand.mockRejectedValueOnce(new Error("unexpected auth failure"));
 
     const runtime = await runAutoRepair();
 
     expect(healthCommand).toHaveBeenCalledOnce();
-    expect(sleep).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith("health failed");
+    expect(performance.now()).toBe(startedAt);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("unexpected auth failure"));
+  });
+
+  it("does not repeat a reachable Gateway diagnostic already printed by health", async () => {
+    healthCommand.mockRejectedValueOnce(new ExitError(1));
+
+    const runtime = await runAutoRepair();
+
+    expect(healthCommand).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 });

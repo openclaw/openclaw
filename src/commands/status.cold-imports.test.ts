@@ -20,7 +20,12 @@ describe("status cold imports", () => {
     }));
 
     const { resolveStatusRuntimeSnapshot } = await import("./status-runtime-shared.js");
-    const params = { config: {}, sourceConfig: {}, gatewayReachable: false };
+    const params = {
+      config: {},
+      sourceConfig: {},
+      gatewayReachable: false,
+      gatewayProbeDeadlineMs: performance.now() + 60_000,
+    };
     const snapshot = await resolveStatusRuntimeSnapshot(params);
 
     expect(snapshot).toEqual({

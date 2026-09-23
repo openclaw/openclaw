@@ -176,11 +176,14 @@ export function resolveExecutableFromPathEnv(
     options?.includeExtensionless,
   );
   for (const entry of entries) {
+    const hasParentTraversal = process.platform !== "win32" && entry.split("/").includes("..");
+    const rawDirectory =
+      cwd !== undefined && !path.isAbsolute(entry) ? `${cwd}${path.sep}${entry}` : entry;
     for (const ext of extensions) {
-      const candidate = path.join(
-        cwd === undefined ? entry : path.resolve(cwd, entry),
-        executable + ext,
-      );
+      // Folding ".." can replace the filesystem parent of a symlink with a different directory.
+      const candidate = hasParentTraversal
+        ? `${rawDirectory}${path.sep}${executable}${ext}`
+        : path.join(cwd === undefined ? entry : path.resolve(cwd, entry), executable + ext);
       if (isExecutableFile(candidate, { env })) {
         if (useCache) {
           cacheExecutablePath(cacheKey, candidate);

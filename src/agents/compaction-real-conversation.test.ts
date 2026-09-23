@@ -67,6 +67,7 @@ describe("compaction real conversation classification", () => {
   it.each([
     ["thinking-only blocks", [{ type: "thinking", thinking: "checking" }]],
     ["reasoning-only blocks", [{ type: "reasoning", summary: [] }]],
+    ["snake-case tool-call blocks", [{ type: "tool_call", name: "exec", arguments: {} }]],
     ["markup-wrapped heartbeat tokens", "<b>HEARTBEAT_OK</b>"],
   ])("rejects assistant %s as conversation", (_name, content) => {
     const message = { role: "assistant", content } as AgentMessage;

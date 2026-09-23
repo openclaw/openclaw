@@ -3,6 +3,7 @@ import { globSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveCiTestRuntimeSelections } from "../scripts/lib/ci-test-runtime.mts";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import uiConfig from "../ui/vitest.config.ts";
 import uiNodeConfig from "../ui/vitest.node.config.ts";
@@ -12,6 +13,8 @@ import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.js";
 import { loadVitestPerformanceConfig } from "./vitest/vitest.performance-config.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 import { createUiIsolatedVitestConfig } from "./vitest/vitest.ui-isolated.config.ts";
+import { uiTimingTestFiles } from "./vitest/vitest.ui-paths.mjs";
+import { createUiTimingVitestConfig } from "./vitest/vitest.ui-timing.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 
 type ExpectedTestConfig = ReturnType<typeof loadVitestPerformanceConfig> & {
@@ -25,6 +28,8 @@ type ExpectedTestConfig = ReturnType<typeof loadVitestPerformanceConfig> & {
   pool?: string;
   projects?: unknown[];
   runner?: string;
+  setupFiles?: string[];
+  sequence?: { groupOrder?: number };
 };
 
 function requireTestConfig(config: unknown): ExpectedTestConfig {
@@ -71,6 +76,68 @@ describe("ui package vitest config", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("partitions runtimes after native UI sharding without changing ownership or dropping files", async ({
+    signal,
+  }) => {
+    const root = tempDirs.make("ui-runtime-partition-");
+    const output = path.join(root, "report.json");
+    const selectionsPath = path.join(root, "selections.json");
+    const selections = Object.fromEntries(
+      (["bun-compatible", "dual"] as const).map((policy) => [
+        policy,
+        resolveCiTestRuntimeSelections({ configs: ["ui/vitest.config.ts"] }, policy),
+      ]),
+    );
+    writeFileSync(selectionsPath, JSON.stringify(selections));
+    const result = await runVitestShutdownCommand({
+      args: [
+        fileURLToPath(new URL("./fixtures/vitest-ui-runtime-partition.mjs", import.meta.url)),
+        output,
+        selectionsPath,
+        path.join(root, "include.json"),
+      ],
+      signal,
+      timeoutMs: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+      env: {
+        PATH: process.env.PATH,
+        CI: "1",
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "transforms"),
+      },
+    });
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    const report = JSON.parse(readFileSync(output, "utf8")) as {
+      discovered: string[];
+      rows: Array<{
+        original: string[];
+        selected: Record<string, Array<{ runtime: string; files: string[] }>>;
+      }>;
+      empty: { modules: number; errors: number };
+      emptyDiscoveryAllowed: boolean;
+    };
+    const nodeFiles = new Set([
+      "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
+      "ui/src/pages/usage/usage-page-details.test.ts",
+    ]);
+    expect(report.discovered.length).toBeGreaterThan(1000);
+    expect(report.rows).toHaveLength(4);
+    expect(report.empty).toEqual({ modules: 0, errors: 0 });
+    expect(report.emptyDiscoveryAllowed).toBe(false);
+    expect(
+      report.rows
+        .slice(1)
+        .flatMap((row) => row.original)
+        .toSorted(),
+    ).toEqual(report.discovered);
+    for (const row of report.rows) {
+      const compatible = row.selected["bun-compatible"]!;
+      expect(compatible.map((selection) => selection.runtime)).toEqual(["node", "bun"]);
+      expect(compatible[0]!.files).toEqual(row.original.filter((file) => nodeFiles.has(file)));
+      expect(compatible[1]!.files).toEqual(row.original.filter((file) => !nodeFiles.has(file)));
+      expect(compatible.flatMap((selection) => selection.files).toSorted()).toEqual(row.original);
+      expect(row.selected.dual).toEqual([{ runtime: "node", files: row.original }, compatible[1]]);
+    }
   });
 
   it("gives module-mock fixtures the same isolated ownership in both entry points", async () => {
@@ -167,6 +234,44 @@ describe("ui package vitest config", () => {
     ]);
   });
 
+  it("runs full-render timing budgets after ordinary UI work with one owner per entry point", async () => {
+    vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", "");
+    vi.resetModules();
+    const config = (await import("../ui/vitest.config.ts")).default;
+    const projects = (requireTestConfig(config).projects ?? []).map(requireTestConfig);
+    const timing = projects.find((project) => project.name === "unit-timing");
+    expect(timing).toBeDefined();
+    expect(timing?.isolate).toBe(true);
+    for (const project of projects.filter((candidate) => candidate !== timing)) {
+      expect(timing?.sequence?.groupOrder).toBeGreaterThan(project.sequence?.groupOrder ?? 0);
+    }
+    const selected = projects.flatMap((project) =>
+      globSync(project.include ?? [], {
+        cwd: path.join(process.cwd(), "ui"),
+        exclude: project.exclude,
+      }).map((file) => `ui/${file.replaceAll("\\", "/")}`),
+    );
+    const rootTiming = requireTestConfig(createUiTimingVitestConfig({}));
+    const rootShared = requireTestConfig(createUiVitestConfig({}));
+    const rootFiles = globSync(rootShared.include ?? [], { exclude: rootShared.exclude });
+    for (const project of [rootShared, requireTestConfig(createUiIsolatedVitestConfig({}))]) {
+      expect(rootTiming.sequence?.groupOrder).toBeGreaterThan(project.sequence?.groupOrder ?? 0);
+    }
+    expect(globSync(rootTiming.include ?? [], { exclude: rootTiming.exclude })).toEqual(
+      uiTimingTestFiles,
+    );
+    for (const file of uiTimingTestFiles) {
+      expect(selected.filter((candidate) => candidate === file)).toHaveLength(1);
+      expect(rootFiles).not.toContain(file);
+      for (const target of [file, "ui/src/components"]) {
+        const plans = buildVitestRunPlans([target]);
+        expect(
+          plans.filter((plan) => plan.config === "test/vitest/vitest.ui-timing.config.ts"),
+        ).toHaveLength(1);
+      }
+    }
+  });
+
   it("keeps native Chromium files out of root jsdom without dropping Node-driven Playwright files", async () => {
     const includeFile = path.join(tempDirs.make("ui-node-selection-"), "include.json");
     writeFileSync(includeFile, JSON.stringify(["ui/src/**/*.test.ts"]));
@@ -226,6 +331,10 @@ describe("ui package vitest config", () => {
       ["extensions/workboard/browser/catalog.test.ts"],
     ],
     [[], []],
+    [
+      ["ui/src/components/markdown.progress.node.test.ts"],
+      ["ui/src/components/markdown.progress.node.test.ts"],
+    ],
   ])("intersects a repository include list with every project: %j", async (requested, expected) => {
     const includeFile = path.join(tempDirs.make("ui-package-selection-"), "include.json");
     writeFileSync(includeFile, JSON.stringify(requested));
@@ -244,12 +353,12 @@ describe("ui package vitest config", () => {
     expect(selected.toSorted()).toEqual(expected);
   });
 
-  it("keeps the standalone ui package on thread workers without broad isolation", () => {
+  it("keeps the standalone ui package on thread workers without broad isolation", async () => {
     const testConfig = requireTestConfig(uiConfig);
 
     expect(testConfig.pool).toBe("threads");
     expect(testConfig.isolate).toBe(false);
-    expect(testConfig.projects).toHaveLength(4);
+    expect(testConfig.projects).toHaveLength(5);
     expect(testConfig.maxWorkers).toBeGreaterThan(0);
     expect(testConfig.clearMocks).toBe(false);
 
@@ -260,8 +369,19 @@ describe("ui package vitest config", () => {
       expect(projectTestConfig.pool).toBe("threads");
       // Project overrides would defeat CI's explicit --maxWorkers limit.
       expect(projectTestConfig.maxWorkers).toBeUndefined();
-      expect(projectTestConfig.isolate).toBe(projectTestConfig.name === "unit-mock-registry");
+      expect(projectTestConfig.setupFiles).toEqual(
+        projectTestConfig.browser?.enabled
+          ? ["./src/test-helpers/lit-warnings.setup.ts"]
+          : [
+              "./src/test-helpers/bun-css-tokenizer.setup.ts",
+              "./src/test-helpers/lit-warnings.setup.ts",
+            ],
+      );
+      expect(projectTestConfig.isolate).toBe(
+        projectTestConfig.name === "unit-mock-registry" || projectTestConfig.name === "unit-timing",
+      );
     }
+    await import("../ui/src/test-helpers/bun-css-tokenizer.setup.ts");
   });
 
   // The invariant, not a snapshot: `unit` shares one module graph and jsdom
@@ -289,6 +409,7 @@ describe("ui package vitest config", () => {
       { name: "unit-mock-registry", runner: undefined },
       { name: "unit-node", runner: undefined },
       { name: "browser", runner: undefined },
+      { name: "unit-timing", runner: undefined },
     ]);
   });
 

@@ -358,9 +358,15 @@ export function acknowledgeNotifyOnExit(record: {
   record.notifyOnExitRemoval = undefined;
 }
 
+/** Returns the promoted process owner even after its presentation record is removed. */
+export function getActiveBackgroundExecSession(sessionId: string): ProcessSession | undefined {
+  const active = activeExecSessions.get(sessionId);
+  return active?.promoted ? active.session : undefined;
+}
+
 /** Reports owner-tracked process liveness even after visibility is removed. */
 export function hasActiveBackgroundExecSession(sessionId: string): boolean {
-  return activeExecSessions.get(sessionId)?.promoted === true;
+  return getActiveBackgroundExecSession(sessionId) !== undefined;
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */
@@ -443,16 +449,20 @@ function capPendingStream(
 ) {
   let pendingChars = pendingCharsInput;
   let overflow = pendingChars - cap;
-  for (let index = 0; index < output.length && overflow > 0;) {
+  let writeIndex = 0;
+  let index = 0;
+  for (; index < output.length && overflow > 0; index += 1) {
     const chunk = output[index];
     if (!chunk || chunk.stream !== stream) {
-      index += 1;
+      if (writeIndex !== index) {
+        output.copyWithin(writeIndex, index, index + 1);
+      }
+      writeIndex += 1;
       continue;
     }
     if (chunk.text.length <= overflow) {
       overflow -= chunk.text.length;
       pendingChars -= chunk.text.length;
-      output.splice(index, 1);
       continue;
     }
     const trimmed = sliceUtf16Safe(chunk.text, overflow);
@@ -460,6 +470,9 @@ function capPendingStream(
     pendingChars -= removedChars;
     chunk.text = trimmed;
     break;
+  }
+  if (writeIndex !== index) {
+    output.splice(writeIndex, index - writeIndex);
   }
   return pendingChars;
 }

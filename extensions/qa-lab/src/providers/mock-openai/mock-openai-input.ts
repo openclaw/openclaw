@@ -1,6 +1,8 @@
 // QA Lab mock provider input and tool-output extraction.
 import {
   type ResponsesInputItem,
+  type MockOpenAiRequestKind,
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE,
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE,
   QA_SUBAGENT_PRIVATE_WORKER_RE,
@@ -17,6 +19,44 @@ import {
   QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE,
   QA_WHATSAPP_BATCHED_FINAL_MARKER_RE,
 } from "./mock-openai-contracts.js";
+const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
+  /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
+const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
+  /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
+
+function isStreamingToolProgressContinuationText(text: string) {
+  const trimmed = text.trim();
+  return (
+    QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE.test(trimmed) ||
+    trimmed.startsWith(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)
+  );
+}
+
+export function extractLatestScenarioFamilyPrompt(
+  texts: string[],
+  familyPattern = QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE,
+) {
+  let envelope = "";
+  for (const text of texts.toReversed()) {
+    if (familyPattern.test(text)) {
+      envelope = text;
+      break;
+    }
+    if (!isStreamingToolProgressContinuationText(text)) {
+      return "";
+    }
+  }
+  if (!envelope) {
+    return "";
+  }
+  const pattern = new RegExp(familyPattern.source, `${familyPattern.flags}g`);
+  let latestIndex = -1;
+  for (const match of envelope.matchAll(pattern)) {
+    latestIndex = match.index;
+  }
+  return latestIndex < 0 ? "" : envelope.slice(latestIndex);
+}
+
 export function extractLastUserText(input: ResponsesInputItem[]) {
   return extractLastMatchingUserTurn(input)?.text ?? "";
 }
@@ -432,6 +472,27 @@ function extractAllInputTexts(input: ResponsesInputItem[]) {
     ])
     .filter(Boolean)
     .join("\n");
+}
+
+export function classifyMockOpenAiRequest(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+): MockOpenAiRequestKind {
+  const instructionText = extractAllRequestTexts(
+    input.filter((item) => item.role === "developer" || item.role === "system"),
+    body,
+  );
+  if (instructionText.startsWith("Write an Activity recap for someone scanning their tasks:")) {
+    return "activity-summary";
+  }
+  if (
+    /context summarization assistant[\s\S]*structured summary[\s\S]*do not continue/i.test(
+      instructionText,
+    )
+  ) {
+    return "compaction-summary";
+  }
+  return hasToolOutput(input) ? "tool-continuation" : "agent-initial";
 }
 
 export function extractInstructionsText(body: Record<string, unknown>) {

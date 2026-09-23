@@ -7,6 +7,11 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { buildSync } from "esbuild";
+import {
+  readRuntimeDependencyOwnership,
+  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
+  type RuntimeDependencyOwnership,
+} from "../src/infra/runtime-dependency-ownership.ts";
 import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-control-plane-modules.mts";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
 import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.ts";
@@ -14,11 +19,6 @@ import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import {
-  readRuntimeDependencyOwnership,
-  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
-  type RuntimeDependencyOwnership,
-} from "./lib/runtime-dependency-ownership-contract.mts";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -32,6 +32,7 @@ import {
   UPDATE_COMPATIBILITY_INVENTORY_FILE,
   writeUpdateCompatibilityChunks,
 } from "./lib/update-compat-chunks.mts";
+import { buildUpdateConfigRuntimeAlias } from "./lib/update-config-runtime-compat.mts";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
 import { writeBuildInfo } from "./write-build-info.ts";
@@ -530,7 +531,13 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
       }
       continue;
     }
-    const source = buildRuntimeAliasSource(candidate, distDir, fsImpl);
+    const source =
+      aliasFileName === "io.runtime.js"
+        ? buildUpdateConfigRuntimeAlias(
+            candidate,
+            fsImpl.readFileSync(path.join(distDir, candidate), "utf8"),
+          )
+        : buildRuntimeAliasSource(candidate, distDir, fsImpl);
     const owner = ownership?.chunks[candidate];
     if (ownership && owner) {
       const targetSource = fsImpl.readFileSync(path.join(distDir, candidate));

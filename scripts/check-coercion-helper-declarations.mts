@@ -159,6 +159,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "collectErrorGraphCandidates",
       "collectNestedErrorCandidates",
       "extractErrorCodeOrErrno",
+      "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",
       "toStringifiedError",
@@ -684,7 +685,7 @@ function auditDefaultCanonicalExports(repoRoot: string): CanonicalCoercionExport
 }
 
 /** Runs the full tracked-source declaration guard. */
-export function runCoercionHelperDeclarationGuard(
+export async function runCoercionHelperDeclarationGuard(
   options: {
     carveOuts?: readonly CoercionHelperCarveOut[];
     io?: ScriptIo;
@@ -698,13 +699,32 @@ export function runCoercionHelperDeclarationGuard(
     roots: SCAN_ROOTS,
     includeFile: isGovernedCoercionHelperPath,
   });
-  const declarations = relativeFiles.flatMap((file) => {
-    const absolutePath = path.join(repoRoot, file);
-    if (!fs.existsSync(absolutePath)) {
-      return [];
+  const declarations: CoercionHelperDeclaration[] = [];
+  const readBatchSize = 32;
+  for (let offset = 0; offset < relativeFiles.length; offset += readBatchSize) {
+    const files = relativeFiles.slice(offset, offset + readBatchSize);
+    // Retain only one batch of source text and join every read before reporting an error.
+    const sources = await Promise.allSettled(
+      files.map(async (file) => {
+        const absolutePath = path.join(repoRoot, file);
+        if (!fs.existsSync(absolutePath)) {
+          return undefined;
+        }
+        return { file, source: await fs.promises.readFile(absolutePath, "utf8") };
+      }),
+    );
+    for (const result of sources) {
+      // Consume in path order so an earlier parse error also precedes later read errors.
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      if (result.value) {
+        declarations.push(
+          ...findBannedCoercionHelperDeclarations(result.value.source, result.value.file),
+        );
+      }
     }
-    return findBannedCoercionHelperDeclarations(fs.readFileSync(absolutePath, "utf8"), file);
-  });
+  }
   const audit = auditCoercionHelperDeclarations(declarations, carveOuts);
   const exportAudit =
     options.carveOuts === undefined
@@ -783,7 +803,7 @@ export function runCoercionHelperDeclarationGuard(
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  await runWithFailedTrailer("check:coercion-helpers", () => {
-    process.exitCode = runCoercionHelperDeclarationGuard();
+  await runWithFailedTrailer("check:coercion-helpers", async () => {
+    process.exitCode = await runCoercionHelperDeclarationGuard();
   });
 }

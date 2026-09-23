@@ -3,12 +3,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { recoverPendingSessionDeliveries } from "../session-delivery-queue-recovery.js";
-import {
-  enqueueSessionDelivery,
-  type QueuedSessionDelivery,
-} from "../session-delivery-queue-storage.js";
+import { enqueueSessionDelivery } from "../session-delivery-queue-storage.js";
+import type { QueuedSessionDelivery } from "../session-delivery-queue.records.js";
 import { migrateLegacyDeliveryQueues } from "../state-migrations.storage.js";
 import { deliverOutboundPayloadsInternal } from "./deliver.js";
 import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
@@ -30,7 +30,11 @@ const outbound: ChannelOutboundAdapter = {
 
 describe("legacy file queue migration to recovery", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
+  let queueContext: OpenClawStateWorkerContext;
   beforeEach(() => {
+    queueContext = captureOpenClawStateWorkerContext({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+    });
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     send.mockClear();
     setActivePluginRegistry(
@@ -93,7 +97,7 @@ describe("legacy file queue migration to recovery", () => {
         deliver: deliverOutboundPayloadsInternal,
       });
       await recoverPendingSessionDeliveries({
-        stateDir: tmpDir(),
+        queueContext,
         log: createRecoveryLog(),
         deliver: deliverSession,
       });
@@ -163,7 +167,7 @@ describe("legacy file queue migration to recovery", () => {
         message: "normal-old",
         messageId: "normal-old",
       },
-      tmpDir(),
+      queueContext,
     );
     vi.mocked(Date.now).mockReturnValue(NOW);
     await migrateLegacyDeliveryQueues({ stateDir: tmpDir() });
@@ -175,7 +179,7 @@ describe("legacy file queue migration to recovery", () => {
       deliver: deliverOutboundPayloadsInternal,
     });
     await recoverPendingSessionDeliveries({
-      stateDir: tmpDir(),
+      queueContext,
       log: createRecoveryLog(),
       deliver: session,
     });

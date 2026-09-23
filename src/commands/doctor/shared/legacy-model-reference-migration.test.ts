@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveModelEntries } from "../../../media-understanding/resolve.js";
+import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
+import { normalizeCompatibilityConfigValues } from "./legacy-config-core-migrate.js";
 import { normalizeLegacyRuntimeModelRefs } from "./legacy-config-core-normalizers.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
@@ -141,7 +143,7 @@ describe("canonical model-reference migration", () => {
   });
 
   it("repairs a retired preferred audio model without discarding the preference", () => {
-    const result = migrateLegacyConfig({
+    const raw = {
       plugins: { enabled: false },
       tools: {
         media: {
@@ -151,7 +153,8 @@ describe("canonical model-reference migration", () => {
           ],
         },
       },
-    });
+    };
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
     expect(result.config?.tools?.media?.audio?.preferredModel).toBe(
       "google/gemini-3.1-pro-preview",
@@ -160,17 +163,21 @@ describe("canonical model-reference migration", () => {
     expect(result.config?.tools?.media?.models).toEqual([
       { provider: "google", model: "gemini-3.1-pro-preview", capabilities: ["audio"] },
     ]);
-    expect(migrateLegacyConfig(result.sourceConfig ?? result.config).changes).toEqual([]);
+    const migrated = result.sourceConfig ?? result.config;
+    expect(
+      migrateLegacyConfig(migrated, { sourceConfigBeforeMigrations: migrated }).changes,
+    ).toEqual([]);
   });
 
   it.each(["cli:fixture-transcriber", "custom/team/model@account"])(
     "preserves the authored preferred model %s while repairing another slot",
     (preferredModel) => {
-      const result = migrateLegacyConfig({
+      const raw = {
         plugins: { enabled: false },
         agents: { defaults: { model: "google/gemini-3-pro-preview" } },
         tools: { media: { audio: { preferredModel } } },
-      });
+      };
+      const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
       expect(result.config?.tools?.media?.audio?.preferredModel).toBe(preferredModel);
       expect(result.config?.agents?.defaults?.model).toBe("google/gemini-3.1-pro-preview");
@@ -320,5 +327,38 @@ describe("canonical model-reference migration", () => {
       },
     });
     expect(Reflect.get(Object.prototype, "polluted")).toBeUndefined();
+  });
+
+  it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", () => {
+    // Reporter path (#124952): the doctor spec migration copies an unmarked legacy
+    // model map into modelPolicy.allow first, so the normalizer must rewrite the
+    // allowlist and the model map in the same pass, not on a later run.
+    const raw = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "claude-cli/claude-opus-4-7": {},
+            "claude-cli/claude-sonnet-4-6": {},
+          },
+        },
+      },
+    };
+    const seeded = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
+    expect(seeded.next?.agents).toMatchObject({
+      defaults: {
+        modelPolicy: { allow: ["claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6"] },
+      },
+    });
+
+    const res = normalizeCompatibilityConfigValues(seeded.next as OpenClawConfig);
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+      "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+    });
+    expect(res.config.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
+    });
+    expect(normalizeCompatibilityConfigValues(res.config).changes).toEqual([]);
   });
 });

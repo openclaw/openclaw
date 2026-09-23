@@ -23,7 +23,9 @@ import {
   redactForDevToolLog,
 } from "./lib/dev-tooling-safety.ts";
 import {
+  hasUnjoinedWork,
   inspectManagedProcessGroup,
+  runManagedCommand,
   signalExitCode,
   terminateManagedChild,
 } from "./lib/managed-child-process.mts";
@@ -535,94 +537,106 @@ async function runDirectPrompt(
   } = {},
 ): Promise<PromptResult> {
   const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-probe-"));
-  const proxyPort = ENABLE_CAPTURE ? await getFreePort() : undefined;
-  const proxy =
-    ENABLE_CAPTURE && proxyPort
-      ? await startAnthropicProxy({
-          port: proxyPort,
-          upstreamBaseUrl: "https://api.anthropic.com",
+  const cancellation = new AbortController();
+  let cleanupConfirmed = true;
+  const parentSignalController = createPromptProbeParentSignalController((exitCode) => {
+    if (cleanupConfirmed) {
+      process.exit(exitCode);
+    } else {
+      process.exitCode = 1;
+    }
+  });
+  const operation = (async (): Promise<PromptResult> => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-probe-"));
+    let proxy: Awaited<ReturnType<typeof startAnthropicProxy>> | undefined;
+    try {
+      cancellation.signal.throwIfAborted();
+      const proxyPort = ENABLE_CAPTURE ? await getFreePort() : undefined;
+      proxy =
+        ENABLE_CAPTURE && proxyPort
+          ? await startAnthropicProxy({
+              port: proxyPort,
+              upstreamBaseUrl: "https://api.anthropic.com",
+              timeoutMs,
+            })
+          : undefined;
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      let exit: { code: number | null; signal: NodeJS.Signals | null } = {
+        code: null,
+        signal: null,
+      };
+      try {
+        await runManagedCommand({
+          bin: options.claudeBin ?? CLAUDE_BIN,
+          args: [...DIRECT_CLAUDE_ARGS, prompt, USER_PROMPT],
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            ...(proxyPort ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxyPort}` } : {}),
+            ANTHROPIC_API_KEY: "",
+            ANTHROPIC_API_KEY_OLD: "",
+          },
+          shell: false,
+          stdio: ["ignore", "pipe", "pipe"],
+          requireProcessTreeExit: process.platform !== "win32",
+          signal: cancellation.signal,
           timeoutMs,
-        })
-      : undefined;
-  const parentSignalController = createPromptProbeParentSignalController();
-
+          timeoutKillGraceMs: 0,
+          signalKillGraceMs: 0,
+          abortKillGraceMs: 0,
+          cleanupDrainTimeoutMs: options.shutdownWaitMs ?? 1_500,
+          onReady(child) {
+            child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
+            child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
+            child.once("exit", (code, signal) => {
+              exit = { code, signal };
+            });
+          },
+        });
+      } catch (error) {
+        if (!(error instanceof Error) || !("code" in error) || error.code !== "ETIMEDOUT") {
+          throw error;
+        }
+        exit = { code: null, signal: "SIGKILL" };
+      }
+      const joinedStdout = stdout.join("");
+      const joinedStderr = stderr.join("");
+      return {
+        prompt,
+        ok: exit.code === 0 && !matchesExtraUsage400(joinedStdout, joinedStderr),
+        transport: "direct",
+        exitCode: exit.code,
+        signal: exit.signal,
+        stdout: redactForDevToolLog(joinedStdout.trim()) || undefined,
+        stderr: redactForDevToolLog(joinedStderr.trim()) || undefined,
+        matchedExtraUsage400: matchesExtraUsage400(joinedStdout, joinedStderr),
+        capture: summarizeCapture(proxy?.getLastCapture(), prompt),
+        ...promptProbeTmpResult(tmpDir),
+      };
+    } catch (error) {
+      cleanupConfirmed = !hasUnjoinedWork(error);
+      throw error;
+    } finally {
+      await proxy?.stop().catch(() => {});
+      await cleanupPromptProbeTmpDir(tmpDir).catch(() => {});
+    }
+  })();
+  parentSignalController.attach({
+    async stop() {
+      cancellation.abort();
+      await operation;
+    },
+    forceKill() {
+      cancellation.abort();
+    },
+  });
   try {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    const child = spawn(
-      options.claudeBin ?? CLAUDE_BIN,
-      [...DIRECT_CLAUDE_ARGS, prompt, USER_PROMPT],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          ...(proxyPort ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxyPort}` } : {}),
-          ANTHROPIC_API_KEY: "",
-          ANTHROPIC_API_KEY_OLD: "",
-        },
-        detached: process.platform !== "win32",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
-    child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
-    const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-      (resolve, reject) => {
-        child.once("error", reject);
-        child.once("exit", (code, signal) => resolve({ code, signal }));
-      },
-    );
-    let stopPromise: Promise<void> | undefined;
-    const stopDirectChild = (signal: NodeJS.Signals = "SIGKILL") => {
-      if (!stopPromise) {
-        terminateManagedChild(child, signal, { useWindowsTaskkill: false });
-        stopPromise = waitForGatewayPromptChildTreeExit(
-          child,
-          options.shutdownWaitMs ?? 1_500,
-        ).then(() => undefined);
-      }
-      return stopPromise;
-    };
-    parentSignalController.attach({
-      stop: stopDirectChild,
-      forceKill: () => {
-        terminateManagedChild(child, "SIGKILL", { useWindowsTaskkill: false });
-      },
-    });
-    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-    const exit = await Promise.race([
-      exitPromise,
-      new Promise<{ code: null; signal: NodeJS.Signals }>((resolve) => {
-        timeoutTimer = setTimeout(() => {
-          void stopDirectChild("SIGKILL").finally(() => {
-            resolve({ code: null, signal: "SIGKILL" });
-          });
-        }, timeoutMs);
-      }),
-    ]).finally(() => {
-      if (timeoutTimer) {
-        clearTimeout(timeoutTimer);
-      }
-    });
-    const joinedStdout = stdout.join("");
-    const joinedStderr = stderr.join("");
-    return {
-      prompt,
-      ok: exit.code === 0 && !matchesExtraUsage400(joinedStdout, joinedStderr),
-      transport: "direct",
-      exitCode: exit.code,
-      signal: exit.signal,
-      stdout: redactForDevToolLog(joinedStdout.trim()) || undefined,
-      stderr: redactForDevToolLog(joinedStderr.trim()) || undefined,
-      matchedExtraUsage400: matchesExtraUsage400(joinedStdout, joinedStderr),
-      capture: summarizeCapture(proxy?.getLastCapture(), prompt),
-      ...promptProbeTmpResult(tmpDir),
-    };
+    const result = await operation;
+    cancellation.signal.throwIfAborted();
+    return result;
   } finally {
     parentSignalController.dispose();
-    await proxy?.stop().catch(() => {});
-    await cleanupPromptProbeTmpDir(tmpDir).catch(() => {});
   }
 }
 
@@ -741,7 +755,9 @@ async function stopGatewayPromptChild(
 
 // Arm before spawn so a parent signal is retained until child cleanup can attach.
 // The first signal owns the exit code; later signals only escalate cleanup.
-function createPromptProbeParentSignalController() {
+function createPromptProbeParentSignalController(
+  onComplete: (exitCode: number) => void = (exitCode) => process.exit(exitCode),
+) {
   let attachment: { forceKill(): void; stop(): Promise<unknown> } | undefined;
   let forceKillPending = false;
   let receivedSignal: NodeJS.Signals | undefined;
@@ -773,7 +789,7 @@ function createPromptProbeParentSignalController() {
       .catch(() => undefined)
       .finally(() => {
         dispose();
-        process.exit(exitCode);
+        onComplete(exitCode);
       });
   };
   for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] satisfies NodeJS.Signals[]) {

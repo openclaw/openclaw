@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildTelegramSendParams,
   buildTelegramThreadReplyParams,
-  removeTelegramNativeQuoteParam,
   resolveTelegramSendThreadSpec,
 } from "./reply-parameters.js";
 
@@ -67,23 +66,6 @@ describe("telegram reply parameters", () => {
       }),
     ).toEqual({
       reply_to_message_id: 77,
-      allow_sending_without_reply: true,
-    });
-  });
-
-  it("converts rejected native quote params to legacy reply params for retry", () => {
-    expect(
-      removeTelegramNativeQuoteParam({
-        parse_mode: "HTML",
-        reply_parameters: {
-          message_id: 42,
-          quote: "quoted",
-          allow_sending_without_reply: true,
-        },
-      }),
-    ).toEqual({
-      parse_mode: "HTML",
-      reply_to_message_id: 42,
       allow_sending_without_reply: true,
     });
   });

@@ -1,7 +1,7 @@
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createStubChild } from "./child.test-support.js";
+import { createStubChild, readyChildAdapter } from "./child.test-support.js";
 
 const { spawnWithFallbackMock, signalProcessTreeMock } = vi.hoisted(() => ({
   spawnWithFallbackMock: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock("../service-child-relay-host.js", () => ({
 
 describe("createChildAdapter secret-delivery abort", () => {
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-  let createChildAdapter: typeof import("./child.js").createChildAdapter;
+  let startChildAdapter: ReturnType<typeof readyChildAdapter>;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -30,7 +30,7 @@ describe("createChildAdapter secret-delivery abort", () => {
       configurable: true,
       value: "win32",
     });
-    ({ createChildAdapter } = await import("./child.js"));
+    startChildAdapter = readyChildAdapter((await import("./child.js")).createChildAdapter);
     spawnWithFallbackMock.mockReset();
     signalProcessTreeMock.mockReset().mockImplementation((_pid, _signal, options) => {
       options?.onComplete?.();
@@ -65,7 +65,7 @@ describe("createChildAdapter secret-delivery abort", () => {
     const transient = Buffer.from("synthetic-secret");
 
     await expect(
-      createChildAdapter({
+      startChildAdapter({
         argv: ["node", "worker"],
         ownedWorker: true,
         secretInput: { fd: 3, createData: () => transient },
@@ -75,51 +75,55 @@ describe("createChildAdapter secret-delivery abort", () => {
     expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
   });
 
-  it("withholds input and secret bytes when request authority retires during spawn", async () => {
-    const { child, killMock, emitClose } = createStubChild();
-    const startup = createDeferred<{ child: typeof child; usedFallback: boolean }>();
-    const secretStream = new PassThrough();
-    const secretBytes = vi.fn();
-    secretStream.on("data", secretBytes);
-    Object.defineProperty(child, "stdio", {
-      value: [child.stdin, child.stdout, child.stderr, secretStream],
-      configurable: true,
-    });
-    const input = vi.spyOn(child.stdin!, "write");
-    const createData = vi.fn(() => Buffer.from("synthetic-selected-secret"));
-    spawnWithFallbackMock.mockReturnValueOnce(startup.promise);
-    const retired = new Error("request authority retired during spawn");
-    let current = true;
-    const run = createChildAdapter({
-      argv: ["agent-cli", "--prompt"],
-      input: "private prompt",
-      secretInput: { fd: 3, createData },
-      assertCurrent: () => {
-        if (!current) {
-          throw retired;
-        }
-      },
-    });
-    const outcome = Promise.allSettled([run]);
-    expect(spawnWithFallbackMock).toHaveBeenCalledOnce();
-    current = false;
-    startup.resolve({ child, usedFallback: false });
-    try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
+  it.each(["darwin", "win32"] as const)(
+    "withholds input and secret bytes when request authority retires during spawn on %s",
+    async (platform) => {
+      Object.defineProperty(process, "platform", { configurable: true, value: platform });
+      const { child, killMock, emitClose } = createStubChild();
+      const startup = createDeferred<{ child: typeof child; usedFallback: boolean }>();
+      const secretStream = new PassThrough();
+      const secretBytes = vi.fn();
+      secretStream.on("data", secretBytes);
+      Object.defineProperty(child, "stdio", {
+        value: [child.stdin, child.stdout, child.stderr, secretStream],
+        configurable: true,
       });
-      expect(killMock).toHaveBeenCalledWith("SIGKILL");
-      emitClose(null, "SIGKILL");
-      expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
-      expect(createData).not.toHaveBeenCalled();
-      expect(secretBytes).not.toHaveBeenCalled();
-      expect(input).not.toHaveBeenCalled();
-    } finally {
-      emitClose(0);
-      secretStream.destroy();
-      child.removeAllListeners();
-    }
-  });
+      const input = vi.spyOn(child.stdin!, "write");
+      const createData = vi.fn(() => Buffer.from("synthetic-selected-secret"));
+      spawnWithFallbackMock.mockReturnValueOnce(startup.promise);
+      const retired = new Error("request authority retired during spawn");
+      let current = true;
+      const run = startChildAdapter({
+        argv: ["agent-cli", "--prompt"],
+        input: "private prompt",
+        secretInput: { fd: 3, createData },
+        assertCurrent: () => {
+          if (!current) {
+            throw retired;
+          }
+        },
+      });
+      const outcome = Promise.allSettled([run]);
+      expect(spawnWithFallbackMock).toHaveBeenCalledOnce();
+      current = false;
+      startup.resolve({ child, usedFallback: false });
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(killMock).toHaveBeenCalledWith("SIGKILL");
+        emitClose(null, "SIGKILL");
+        expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
+        expect(createData).not.toHaveBeenCalled();
+        expect(secretBytes).not.toHaveBeenCalled();
+        expect(input).not.toHaveBeenCalled();
+      } finally {
+        emitClose(0);
+        secretStream.destroy();
+        child.removeAllListeners();
+      }
+    },
+  );
 
   it("does not signal a retired child when secret delivery fails after close", async () => {
     const { child, emitClose, killMock } = createStubChild();
@@ -137,7 +141,7 @@ describe("createChildAdapter secret-delivery abort", () => {
     spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
 
     await expect(
-      createChildAdapter({
+      startChildAdapter({
         argv: ["synthetic-command"],
         secretInput: { fd: 3, createData: () => Buffer.from("synthetic-secret") },
       }),
@@ -163,7 +167,7 @@ describe("createChildAdapter secret-delivery abort", () => {
       usedFallback: false,
     });
     const abort = new AbortController();
-    const starting = createChildAdapter({
+    const starting = startChildAdapter({
       argv: ["claude", "-p"],
       stdinMode: "pipe-open",
       secretInput: {

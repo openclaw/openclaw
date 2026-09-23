@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { isValidEnvSecretRefId, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -53,7 +53,7 @@ function resolveDefaultProviderEnvVar(
   provider: string,
   config?: OpenClawConfig,
 ): string | undefined {
-  const envVars = getProviderEnvVars(provider, {
+  const envVars = getProviderEnvVarsCore(provider, {
     ...(config ? { config } : {}),
     includeUntrustedWorkspacePlugins: false,
   });
@@ -72,7 +72,7 @@ export function resolveRefFallbackInput(params: {
 }): { ref: SecretRef; resolvedValue: string } {
   const fallbackEnvVar =
     params.preferredEnvVar ??
-    getProviderEnvVars(params.provider, {
+    getProviderEnvVarsCore(params.provider, {
       config: params.config,
       includeUntrustedWorkspacePlugins: false,
     }).find((candidate) => normalizeOptionalString(candidate) !== undefined);

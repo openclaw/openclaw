@@ -219,8 +219,8 @@ describe("Crabbox idle image maintenance", () => {
       if (boundary !== "authority") {
         expect(stopped).toBe(true);
         expect(() => provider.maintain!(context())).toThrow();
-        expect(() => provider.images.pin("chk_expired", true)).toThrow();
-        expect(() => provider.images.rollback("chk_expired")).toThrow();
+        await expect(provider.images.pin("chk_expired", true)).rejects.toThrow();
+        await expect(provider.images.rollback("chk_expired")).rejects.toThrow();
         await expect(provider.images.delete("chk_expired", context().profiles)).rejects.toThrow();
       }
     },

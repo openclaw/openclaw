@@ -3,6 +3,9 @@ import path from "node:path";
 import { root as fsRoot, sanitizeUntrustedFileName, type Root } from "../infra/fs-safe.js";
 import type { MediaFact } from "./media-facts.js";
 
+/** Existing per-file allowance for staging task inputs. */
+export const STAGED_INPUT_MAX_BYTES = 50 * 1024 * 1024;
+
 const STAGED_INPUT_DIRECTORY_PREFIX = "media/inbound/openclaw-staged-";
 export const STAGED_INPUT_GIT_PATHSPEC = `:(glob)${STAGED_INPUT_DIRECTORY_PREFIX}*/**`;
 const STAGED_INPUT_GITIGNORE =
@@ -129,12 +132,22 @@ export function resolveStagedInputMediaPaths(
   return paths;
 }
 
+type StagedInputFileSystem = {
+  exists: (filePath: string) => Promise<boolean>;
+  readText: (filePath: string, options: { maxBytes: number }) => Promise<string>;
+  create: (
+    filePath: string,
+    data: string,
+    options: { mode: number; assertBeforeMutation: () => void },
+  ) => Promise<unknown>;
+};
+
 export async function ensureStagedInputDirectory(
-  rootDir: string,
+  rootDir: string | StagedInputFileSystem,
   directory: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const root = await fsRoot(rootDir);
+  const root = typeof rootDir === "string" ? await fsRoot(rootDir) : rootDir;
   const ignorePath = `${directory}/.gitignore`;
   if (await root.exists(directory)) {
     if ((await root.readText(ignorePath, { maxBytes: 1024 })) !== STAGED_INPUT_GITIGNORE) {

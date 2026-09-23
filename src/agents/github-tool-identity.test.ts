@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveCommandEnv } from "../process/exec-spawn.js";
+import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
 
 const processMocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
 const oauthMocks = vi.hoisted(() => ({ inspect: vi.fn() }));
@@ -43,6 +44,7 @@ afterEach(() => {
 
 describe("GitHub tool identity", () => {
   beforeEach(() => {
+    clearGitHubCredentialVerificationCache();
     vi.stubEnv("GH_TOKEN", undefined);
     vi.stubEnv("GITHUB_TOKEN", undefined);
     processMocks.runCommandBuffered.mockReset();

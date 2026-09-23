@@ -11,14 +11,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
+  readTranscriptStatsSync,
   replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
 import { WorkerTaskPool } from "../../../../src/infra/worker-task-pool.js";
 import { registerSecretValueForRedaction } from "../../../../src/logging/secret-redaction-registry.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../../src/state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../../../src/state/openclaw-state-db.js";
 import {
   buildSessionEntry,
   matchesSessionEntryPrefixHash,
@@ -45,7 +52,9 @@ beforeEach(() => {
   clearConfigCache();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   if (previousStateDir === undefined) {
@@ -154,6 +163,7 @@ describe("SQLite session snapshots and reset content revision", () => {
         ...archive,
         absPath: scope.sessionKey,
         path: "sessions/main/parity.jsonl",
+        revisionMs: readTranscriptStatsSync(scope).lastMutationAtMs,
       });
       expect(sqlite.content).toBe(
         kind === "interactive"

@@ -1,67 +1,8 @@
-// Qa Lab plugin module implements token efficiency report behavior.
 import { formatCacheMisses } from "./agentic-parity-cache-usage.js";
-import type { RuntimeParityCacheMiss } from "./runtime-parity-cache-diagnostics.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { normalizeRuntimePair, resolveRuntimeParityUsagePolicy } from "./runtime-parity.js";
 
 type ProcessedTokenEvidence = "measured" | "derived" | "unavailable";
-
-type TokenEfficiencyRuntimeUsage = {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  processedTokens: number;
-  processedTokenEvidence: ProcessedTokenEvidence;
-  cacheReadTokens: number | null;
-  cacheWriteTokens: number | null;
-  cacheMisses: RuntimeParityCacheMiss[] | null;
-  unmeasuredPostWarmTurns: number[] | null;
-  toolCallCount: number;
-};
-
-type TokenEfficiencyAggregateRuntimeUsage = {
-  totalTokens: number;
-  processedTokens: number;
-  processedTokenEvidence: ProcessedTokenEvidence;
-  cacheReadTokens: number | null;
-  cacheWriteTokens: number | null;
-  cacheMissCount: number | null;
-  cacheMissInputTokens: number | null;
-  p50PerScenario: number | null;
-  p90PerScenario: number | null;
-};
-
-type TokenEfficiencyRow = {
-  scenarioId: string;
-  usageSource: "live-usage" | "mock-estimate";
-  openclaw: TokenEfficiencyRuntimeUsage;
-  codex: TokenEfficiencyRuntimeUsage;
-  deltaPercent: number;
-  classification: "regression" | "savings" | "neutral";
-  flagged: boolean;
-  toolsUsed: string[];
-};
-
-type TokenEfficiencyReport = {
-  status: "evaluated" | "estimated" | "skipped";
-  runtimePair: [RuntimeId, RuntimeId];
-  generatedAt: string;
-  providerMode?: string;
-  thresholdPercent: number;
-  rows: TokenEfficiencyRow[];
-  notApplicableScenarios: Array<{ scenarioId: string; reason: string }>;
-  aggregate: {
-    openclaw: TokenEfficiencyAggregateRuntimeUsage;
-    codex: TokenEfficiencyAggregateRuntimeUsage;
-    deltaPercent: number;
-    flaggedScenarios: string[];
-    savingsScenarios: string[];
-  };
-  pass: boolean;
-  failures: string[];
-  skipReason?: string;
-  notes: string[];
-};
 
 export type TokenEfficiencySuiteSummary = {
   scenarios: Array<{
@@ -75,14 +16,8 @@ export type TokenEfficiencySuiteSummary = {
   };
 };
 
-type BuildTokenEfficiencyReportParams = {
-  summary: TokenEfficiencySuiteSummary;
-  generatedAt?: string;
-  thresholdPercent?: number;
-};
-
 const DEFAULT_THRESHOLD_PERCENT = 15;
-const ZERO_AGGREGATE_RUNTIME: TokenEfficiencyAggregateRuntimeUsage = {
+const ZERO_AGGREGATE_RUNTIME = {
   totalTokens: 0,
   processedTokens: 0,
   processedTokenEvidence: "unavailable",
@@ -92,8 +27,8 @@ const ZERO_AGGREGATE_RUNTIME: TokenEfficiencyAggregateRuntimeUsage = {
   cacheMissInputTokens: null,
   p50PerScenario: 0,
   p90PerScenario: 0,
-};
-const ZERO_AGGREGATE: TokenEfficiencyReport["aggregate"] = {
+} as const;
+const ZERO_AGGREGATE = {
   openclaw: { ...ZERO_AGGREGATE_RUNTIME },
   codex: { ...ZERO_AGGREGATE_RUNTIME },
   deltaPercent: 0,
@@ -151,7 +86,7 @@ function formatProcessedDelta(params: {
     : formatPercent(params.deltaPercent);
 }
 
-function runtimeUsage(cell: RuntimeParityCell): TokenEfficiencyRuntimeUsage {
+function runtimeUsage(cell: RuntimeParityCell) {
   const inputTokens = normalizeTokenCount(cell.usage.inputTokens);
   const outputTokens = normalizeTokenCount(cell.usage.outputTokens);
   const totalTokens = normalizeTokenCount(cell.usage.totalTokens);
@@ -205,6 +140,8 @@ function runtimeUsage(cell: RuntimeParityCell): TokenEfficiencyRuntimeUsage {
   };
 }
 
+type TokenEfficiencyRuntimeUsage = ReturnType<typeof runtimeUsage>;
+
 function toolNamesForCells(openclaw: RuntimeParityCell, codex: RuntimeParityCell): string[] {
   return [
     ...new Set([...openclaw.toolCalls, ...codex.toolCalls].map((call) => call.tool)),
@@ -214,8 +151,8 @@ function toolNamesForCells(openclaw: RuntimeParityCell, codex: RuntimeParityCell
 function buildRow(params: {
   result: RuntimeParityResult;
   thresholdPercent: number;
-  usageSource: TokenEfficiencyRow["usageSource"];
-}): TokenEfficiencyRow {
+  usageSource: "live-usage" | "mock-estimate";
+}) {
   const openclaw = runtimeUsage(params.result.cells.openclaw);
   const codex = runtimeUsage(params.result.cells.codex);
   const comparable =
@@ -241,6 +178,8 @@ function buildRow(params: {
   };
 }
 
+type TokenEfficiencyRow = ReturnType<typeof buildRow>;
+
 function sumKnownCounts(values: readonly (number | null)[]): number | null {
   let total = 0;
   for (const value of values) {
@@ -252,10 +191,7 @@ function sumKnownCounts(values: readonly (number | null)[]): number | null {
   return total;
 }
 
-function buildAggregateRuntime(
-  rows: readonly TokenEfficiencyRow[],
-  runtime: RuntimeId,
-): TokenEfficiencyAggregateRuntimeUsage {
+function buildAggregateRuntime(rows: readonly TokenEfficiencyRow[], runtime: RuntimeId) {
   const usages = rows.map((row) => row[runtime]);
   const processedTotals = usages.map((usage) => usage.processedTokens);
   const processedTokenEvidence: ProcessedTokenEvidence = usages.some(
@@ -290,7 +226,7 @@ function buildAggregateRuntime(
   };
 }
 
-function buildAggregate(rows: readonly TokenEfficiencyRow[]): TokenEfficiencyReport["aggregate"] {
+function buildAggregate(rows: readonly TokenEfficiencyRow[]) {
   const openclaw = buildAggregateRuntime(rows, "openclaw");
   const codex = buildAggregateRuntime(rows, "codex");
   const comparable =
@@ -345,9 +281,11 @@ function liveUsageShapeFailures(
   return failures;
 }
 
-export function buildTokenEfficiencyReport(
-  params: BuildTokenEfficiencyReportParams,
-): TokenEfficiencyReport {
+export function buildTokenEfficiencyReport(params: {
+  summary: TokenEfficiencySuiteSummary;
+  generatedAt?: string;
+  thresholdPercent?: number;
+}) {
   const providerMode = params.summary.run?.providerMode;
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
   const thresholdPercent = params.thresholdPercent ?? DEFAULT_THRESHOLD_PERCENT;
@@ -372,7 +310,7 @@ export function buildTokenEfficiencyReport(
       failures: liveUsage ? [noCapturesReason] : [],
       ...(liveUsage ? {} : { skipReason: noCapturesReason }),
       notes: ["Token efficiency requires runtime-pair summaries with RuntimeParityResult cells."],
-    };
+    } as const;
   }
 
   const notApplicableScenarios = parityResults.flatMap((result) => {
@@ -402,7 +340,7 @@ export function buildTokenEfficiencyReport(
       failures: liveUsage ? [noApplicableReason] : [],
       ...(liveUsage ? {} : { skipReason: noApplicableReason }),
       notes: ["Token efficiency requires at least one assistant-message usage capture."],
-    };
+    } as const;
   }
 
   const rows = usageApplicableResults.map((result) =>
@@ -442,6 +380,7 @@ export function buildTokenEfficiencyReport(
     aggregate,
     pass: failures.length === 0,
     failures,
+    skipReason: undefined,
     notes: [
       "Token totals are read from RuntimeParityCell.usage, which is captured from normalized AssistantMessage.usage.",
       "Efficiency deltas and percentiles compare newly processed uncached input, cache-write input, and output; reused cached input remains separately reported and never masks a regression.",
@@ -452,8 +391,10 @@ export function buildTokenEfficiencyReport(
         ? "Mock-provider token totals are labeled as estimates and do not block the token-efficiency gate."
         : "The report does not inspect provider transport payload token counters.",
     ],
-  };
+  } as const;
 }
+
+type TokenEfficiencyReport = ReturnType<typeof buildTokenEfficiencyReport>;
 
 export function renderTokenEfficiencyMarkdownReport(report: TokenEfficiencyReport): string {
   const lines = [

@@ -232,6 +232,7 @@ function resolveOxlintToolchainEnv(
 async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) {
   const status = await runManagedCommand({
     bin: process.execPath,
+    shell: false,
     args: PREPARE_EXTENSION_BOUNDARY_ARGS,
     env,
     requireProcessTreeExit: process.platform !== "win32",

@@ -76,6 +76,11 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./installed-plugin-index-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./installed-plugin-index-store.js")>()),
+  readPersistedInstalledPluginIndex: vi.fn(async () => null),
+}));
+
 vi.mock("./installed-plugin-index-store-write.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./installed-plugin-index-store-write.js")>();
   return {

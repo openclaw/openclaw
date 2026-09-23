@@ -7,7 +7,6 @@ import type {
   WizardNextResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WizardNextResultSchema } from "../../../packages/gateway-protocol/src/schema/wizard.js";
-import { createRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildPluginCapabilityConsentReview } from "../../plugins/capability-summary.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -520,15 +519,20 @@ describe("openclaw.setup provider resolution", () => {
     await whenAdmittedWizardSessionSettled(session);
     expect(authConfigMocks.writeProviderAuthConfig).not.toHaveBeenCalled();
   });
-  it.each([false, true])(
-    "returns verified provider auth through wizard transport (restart %s)",
-    async (restart) => {
+  it.each([
+    { restart: false, modelTarget: undefined },
+    { restart: true, modelTarget: undefined },
+    { restart: true, modelTarget: "utility" as const },
+  ])(
+    "returns verified provider auth through wizard transport (restart $restart, target $modelTarget)",
+    async ({ restart, modelTarget }) => {
       const { wizardSessions, context } = makeContext();
       setupInferenceMocks.activateSetupInference.mockImplementationOnce(async (params) => {
         await params.prompter.note("Open the browser and enter ABCD", "Pair GitHub");
         return {
           ok: true,
           modelRef: "github-copilot/test",
+          ...(modelTarget ? { modelTarget } : {}),
           latencyMs: 10,
           lines: ["ready"],
           ...(restart ? { gatewayRestartRequired: true } : {}),
@@ -537,7 +541,12 @@ describe("openclaw.setup provider resolution", () => {
       const { calls, respond } = makeRespond();
 
       await systemAgentHandler("openclaw.setup.auth.start")({
-        params: { sessionId: "auth-session-1", agentId: "research", authChoice: "github-copilot" },
+        params: {
+          sessionId: "auth-session-1",
+          agentId: "research",
+          authChoice: "github-copilot",
+          ...(modelTarget ? { modelTarget } : {}),
+        },
         respond,
         context,
       } as never);
@@ -550,7 +559,11 @@ describe("openclaw.setup provider resolution", () => {
       const session = expectDefined(wizardSessions.get("auth-session-1"), "auth wizard session");
       const first = await callWizardNext(context, { sessionId: "auth-session-1" });
       expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "provider-auth", authChoice: "github-copilot" }),
+        expect.objectContaining({
+          kind: "provider-auth",
+          authChoice: "github-copilot",
+          ...(modelTarget ? { modelTarget } : {}),
+        }),
       );
       expect(setupInferenceMocks.activateSetupInference.mock.calls[0]?.[0].agentId).toBe(
         "research",
@@ -573,6 +586,7 @@ describe("openclaw.setup provider resolution", () => {
         status: "done",
         modelActivation: {
           modelRef: "github-copilot/test",
+          ...(modelTarget ? { modelTarget } : {}),
           ...(restart ? { gatewayRestartRequired: true } : {}),
         },
       });
@@ -807,9 +821,9 @@ describe("openclaw.setup provider resolution", () => {
           }
           if (outcome === "application-error") {
             params.onCommitStarted?.(config);
-            const application = createRuntimeConfigWriteApplication();
-            expectDefined(application.claim(), "application claim").settle("failed");
-            params.onRuntimeApplication?.(application);
+            params.onActivationCompletion?.(async () => {
+              throw new Error("The Gateway did not complete activation (failed).");
+            });
             return { ok: true, modelRef: "example/model", latencyMs: 1, lines: [] };
           }
           return {
@@ -856,7 +870,7 @@ describe("openclaw.setup provider resolution", () => {
           status: "error",
           error:
             outcome === "application-error"
-              ? expect.stringContaining("AI access was saved, but the Gateway could not apply it")
+              ? "The Gateway did not complete activation (failed)."
               : outcome === "retention-indeterminate"
                 ? "Could not retain Codex safely"
                 : outcome === "thrown"

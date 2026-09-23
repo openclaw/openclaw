@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -48,6 +49,10 @@ describe("worker placement idle suspension", () => {
       destroyFails: options.destroyFails,
     });
     const suspendAfter = options.suspendAfter === undefined ? "1m" : options.suspendAfter;
+    const profile: CloudWorkerProfileConfig = {
+      provider: "fake",
+      ...(suspendAfter === null ? {} : { suspendAfter }),
+    };
     const info = vi.fn();
     const warn = vi.fn();
     const isPlacementOperationInFlight = vi.fn(
@@ -60,10 +65,7 @@ describe("worker placement idle suspension", () => {
       getConfig: () => ({
         cloudWorkers: {
           profiles: {
-            [REQUEST.profileId]: {
-              provider: "fake",
-              ...(suspendAfter === null ? {} : { suspendAfter }),
-            },
+            [REQUEST.profileId]: profile,
           },
         },
       }),
@@ -75,7 +77,7 @@ describe("worker placement idle suspension", () => {
       warn,
       now: () => nowMs,
     });
-    return { harness, idleSweep, info, warn, isPlacementOperationInFlight };
+    return { harness, idleSweep, profile, info, warn, isPlacementOperationInFlight };
   }
 
   function claimWorkerTurn(claimId = "busy-worker-claim") {
@@ -313,68 +315,76 @@ describe("worker placement idle suspension", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("keeps a recently used worker when automatic reclaim waited behind another dispatch", async () => {
-    const dispatchStarted = createDeferredCore();
-    const releaseDispatch = createDeferredCore();
-    const reclaimQueued = createDeferredCore();
-    const { harness, idleSweep, info, warn } = createIdleFixture({
-      reclaim: (request, authorize, beforeDrain) => {
-        const pending = coordinated.reclaim(request, authorize, beforeDrain);
-        reclaimQueued.resolve();
-        return pending;
-      },
-      isPlacementOperationInFlight: (sessionId) =>
-        coordinated.isPlacementOperationInFlight(sessionId),
-      getSessionWorkAdmissionCheck: async () => () => false,
-    });
-    const active = await harness.service.dispatch(REQUEST);
-    const coordinated = coordinateWorkerPlacementDispatch(
-      {
-        ...harness.service,
-        dispatch: async () => {
-          dispatchStarted.resolve();
-          await releaseDispatch.promise;
-          return active;
+  it.each(["activity", "disabled policy", "longer timeout"])(
+    "rechecks %s when automatic reclaim waited behind another dispatch",
+    async (change) => {
+      const dispatchStarted = createDeferredCore();
+      const releaseDispatch = createDeferredCore();
+      const reclaimQueued = createDeferredCore();
+      const { harness, idleSweep, profile, info, warn } = createIdleFixture({
+        reclaim: (request, authorize, beforeDrain) => {
+          const pending = coordinated.reclaim(request, authorize, beforeDrain);
+          reclaimQueued.resolve();
+          return pending;
         },
-      },
-      (_request, run) => run(),
-    );
-    const unrelatedDispatch = coordinated.dispatch({
-      ...REQUEST,
-      sessionId: "another-session",
-      sessionKey: "agent:main:another-session",
-    });
-    let sweeping: Promise<void> | undefined;
-    try {
-      await dispatchStarted.promise;
-      nowMs += 60_000;
-      sweeping = idleSweep.sweep();
-      await reclaimQueued.promise;
-
-      const claim = claimWorkerTurn("turn-during-idle-reclaim-wait");
-      nowMs += 1_000;
-      placements.releaseTurn(claim);
-      releaseDispatch.resolve();
-      await Promise.all([unrelatedDispatch, sweeping]);
-
-      expect(placements.get(REQUEST.sessionId)).toMatchObject({
-        state: "active",
-        turnClaim: null,
-        updatedAtMs: nowMs,
+        isPlacementOperationInFlight: (sessionId) =>
+          coordinated.isPlacementOperationInFlight(sessionId),
+        getSessionWorkAdmissionCheck: async () => () => false,
       });
-      expect(harness.environments.destroy).not.toHaveBeenCalled();
-      expect(info).not.toHaveBeenCalled();
-      expect(warn).not.toHaveBeenCalled();
+      const active = await harness.service.dispatch(REQUEST);
+      const coordinated = coordinateWorkerPlacementDispatch(
+        {
+          ...harness.service,
+          dispatch: async () => {
+            dispatchStarted.resolve();
+            await releaseDispatch.promise;
+            return active;
+          },
+        },
+        (_request, run) => run(),
+      );
+      const unrelatedDispatch = coordinated.dispatch({
+        ...REQUEST,
+        sessionId: "another-session",
+        sessionKey: "agent:main:another-session",
+      });
+      let sweeping: Promise<void> | undefined;
+      try {
+        await dispatchStarted.promise;
+        nowMs += 60_000;
+        sweeping = idleSweep.sweep();
+        await reclaimQueued.promise;
 
-      nowMs += 60_000;
-      await idleSweep.sweep();
-      expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
-      expect(harness.environments.destroy).toHaveBeenCalledOnce();
-    } finally {
-      releaseDispatch.resolve();
-      await Promise.allSettled([unrelatedDispatch, sweeping]);
-    }
-  });
+        if (change === "activity") {
+          const claim = claimWorkerTurn("turn-during-idle-reclaim-wait");
+          nowMs += 1_000;
+          placements.releaseTurn(claim);
+        } else {
+          profile.suspendAfter = change === "disabled policy" ? undefined : "2m";
+        }
+        releaseDispatch.resolve();
+        await Promise.all([unrelatedDispatch, sweeping]);
+
+        expect(placements.get(REQUEST.sessionId)).toMatchObject({
+          state: "active",
+          turnClaim: null,
+          updatedAtMs: change === "activity" ? nowMs : active.updatedAtMs,
+        });
+        expect(harness.environments.destroy).not.toHaveBeenCalled();
+        expect(info).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalled();
+
+        profile.suspendAfter = "1m";
+        nowMs += 60_000;
+        await idleSweep.sweep();
+        expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+        expect(harness.environments.destroy).toHaveBeenCalledOnce();
+      } finally {
+        releaseDispatch.resolve();
+        await Promise.allSettled([unrelatedDispatch, sweeping]);
+      }
+    },
+  );
 
   it("finishes its owned drain without rechecking idle eligibility during teardown", async () => {
     let hasSessionWork = false;

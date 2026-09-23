@@ -11,6 +11,7 @@ export {
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,
   createProviderHttpError,
+  ProviderHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
   formatProviderErrorPayload,

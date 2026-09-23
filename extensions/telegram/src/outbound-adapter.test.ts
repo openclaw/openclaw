@@ -961,6 +961,7 @@ describe("telegramOutbound", () => {
 
   it("passes delivery pin notify requests to Telegram pinning", async () => {
     pinMessageTelegramMock.mockResolvedValueOnce({ ok: true, messageId: "tg-1", chatId: "12345" });
+    const assertDirectAdapterHandoff = vi.fn();
 
     await telegramOutbound.pinDeliveredMessage?.({
       cfg: {} as never,
@@ -968,6 +969,7 @@ describe("telegramOutbound", () => {
       messageId: "tg-1",
       pin: { enabled: true, notify: true },
       gatewayClientScopes: ["operator.write"],
+      assertDirectAdapterHandoff,
     });
 
     const options = callOptionsAt(pinMessageTelegramMock, 0, "12345", "tg-1");
@@ -975,6 +977,7 @@ describe("telegramOutbound", () => {
     expect(options.notify).toBe(true);
     expect(options.verbose).toBe(false);
     expect(options.gatewayClientScopes).toEqual(["operator.write"]);
+    expect(options.assertPlatformSendAuthorized).toBe(assertDirectAdapterHandoff);
   });
 
   it("normalizes legacy durable group retry targets before Telegram pinning", async () => {

@@ -179,6 +179,23 @@ describe("Docker source namespace", () => {
 });
 
 describe("managed source translation", () => {
+  it("keeps literal backslashes in inspected sources and Gateway mount selection", () => {
+    const mounts = parseInspectedSandboxMounts([
+      { ...wireMount, Source: "/host/a\\b", Destination: "/gateway/a\\b" },
+      { ...wireMount, Source: "/host/a/b", Destination: "/gateway/a/b" },
+    ]);
+    for (const suffix of ["a\\b", "a/b"]) {
+      expect(
+        translateSandboxMountSource({
+          readOnly: false,
+          source: `/gateway/${suffix}/leaf`,
+          allowedRoots: [`/gateway/${suffix}`],
+          mounts,
+        }),
+      ).toBe(`/host/${suffix}/leaf`);
+    }
+  });
+
   it("uses the longest segment prefix and preserves spaces", () => {
     const mounts = parseInspectedSandboxMounts([
       wireMount,

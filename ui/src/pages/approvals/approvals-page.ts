@@ -373,18 +373,24 @@ class ApprovalsPage extends OpenClawLightDomElement {
   private renderGrants() {
     const nowMs = Date.now();
     return html`
-      <h2 class="settings-section-title">${t("standingGrants.title")}</h2>
+      <h2 id="standing-grants-title" class="settings-section-title">
+        ${t("standingGrants.title")}
+      </h2>
       <p class="settings-section-subtitle">${t("standingGrants.description")}</p>
-      ${this.grantsError ? html`<div class="callout danger">${this.grantsError}</div>` : nothing}
+      ${this.grantsError ? html`<div class="callout danger" role="alert">${this.grantsError}</div>` : nothing}
       <div class="data-table-container">
-        <table class="data-table standing-grants-table settings-table--stacked" role="table">
+        <table
+          class="data-table standing-grants-table settings-table--stacked"
+          role="table"
+          aria-labelledby="standing-grants-title"
+        >
           <thead>
             <tr>
               <th scope="col">${t("standingGrants.columns.automation")}</th>
               <th scope="col">${t("standingGrants.columns.command")}</th>
               <th scope="col">${t("standingGrants.columns.uses")}</th>
               <th scope="col">${t("standingGrants.columns.state")}</th>
-              <th scope="col"></th>
+              <th scope="col"><span class="sr-only">${t("standingGrants.revoke")}</span></th>
             </tr>
           </thead>
           <tbody>
@@ -409,7 +415,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
                           ${grant.command}
                         </td>
                         <td data-label=${t("standingGrants.columns.uses")}>${grant.useCount}</td>
-                        <td data-label=${t("standingGrants.columns.state")}>
+                        <td data-label=${t("standingGrants.columns.state")} aria-live="polite">
                           ${grantStateLabel(grant, nowMs)}
                         </td>
                         <td>
@@ -418,6 +424,11 @@ class ApprovalsPage extends OpenClawLightDomElement {
                               ? html`
                                   <button
                                     class="btn btn--sm"
+                                    aria-label=${`${
+                                      this.revokingGrantId === grant.grantId
+                                        ? t("standingGrants.revoking")
+                                        : t("standingGrants.revoke")
+                                    }: ${grant.cronJobName ?? grant.cronJobId} — ${grant.command}`}
                                     ?disabled=${this.revokingGrantId !== null}
                                     @click=${() => void this.revokeGrant(grant.grantId)}
                                   >
@@ -449,7 +460,12 @@ class ApprovalsPage extends OpenClawLightDomElement {
     }
     return html`
       <div class="data-table-container">
-        <table class="data-table approval-history-table settings-table--stacked" role="table">
+        <table
+          class="data-table approval-history-table settings-table--stacked"
+          role="table"
+          aria-labelledby="approval-history-title"
+          aria-busy=${this.loading || this.loadingMore ? "true" : "false"}
+        >
           <thead>
             <tr>
               <th scope="col">${t("approvalHistory.columns.resolved")}</th>
@@ -535,7 +551,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       html`
         ${
           !this.connected
-            ? html`<div class="callout warn">${t("approvalHistory.offline")}</div>`
+            ? html`<div class="callout warn" role="status">${t("approvalHistory.offline")}</div>`
             : nothing
         }
         ${
@@ -550,7 +566,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
         ${
           this.approvalsAccess && this.error
             ? html`
-                <div class="callout danger">
+                <div class="callout danger" role="alert">
                   ${this.error}
                   <button class="btn btn--sm" @click=${() => void this.loadPage(true)}>
                     ${t("common.retry")}
@@ -562,7 +578,9 @@ class ApprovalsPage extends OpenClawLightDomElement {
         ${this.approvalsAccess ? this.renderGrants() : nothing}
         ${
           this.approvalsAccess
-            ? html`<h2 class="settings-section-title">${t("standingGrants.historyTitle")}</h2>`
+            ? html`<h2 id="approval-history-title" class="settings-section-title">
+                ${t("standingGrants.historyTitle")}
+              </h2>`
             : nothing
         }
         ${this.approvalsAccess ? this.renderTable() : nothing}

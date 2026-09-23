@@ -51,6 +51,7 @@ export function createWebSocketTransport(
   const stdinDecoder = new StringDecoder("utf8");
   let pendingLine = "";
   let killed = false;
+  let exitCode: number | null = null;
   let pingTimeout: NodeJS.Timeout | undefined;
   let pongTimeout: NodeJS.Timeout | undefined;
   let expectedPong: Buffer | undefined;
@@ -152,14 +153,25 @@ export function createWebSocketTransport(
   socket.once("close", (code, reason) => {
     clearConnectionHealthTimers();
     killed = true;
+    exitCode = code;
     events.emit("exit", code, reason.toString("utf8"));
   });
   socket.on("message", (data) => {
     if (options.transport === "websocket") {
       recordConnectionActivity();
     }
-    const text = websocketFrameToText(data);
-    stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+    const frame = websocketFrameToBuffer(data);
+    const writable = stdout.write(frame);
+    const delimited = frame.at(-1) === 10 || stdout.write(Buffer.from("\n"));
+    if (!writable || !delimited) {
+      socket.pause();
+    }
+  });
+
+  stdout.on("drain", () => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.resume();
+    }
   });
 
   const stdin = new Writable({
@@ -199,12 +211,20 @@ export function createWebSocketTransport(
     get killed() {
       return killed;
     },
-    kill: () => {
+    get exitCode() {
+      return exitCode;
+    },
+    kill: (signal) => {
       killed = true;
       clearConnectionHealthTimers();
-      socket.close();
+      if (signal === "SIGKILL") {
+        socket.terminate();
+      } else {
+        socket.close();
+      }
     },
     once: (event, listener) => events.once(event, listener),
+    off: (event, listener) => events.off(event, listener),
   };
 }
 
@@ -238,15 +258,15 @@ function resolveCodexAppServerUnixSocketPath(
   );
 }
 
-function websocketFrameToText(data: RawData): string {
+function websocketFrameToBuffer(data: RawData): Buffer {
   if (typeof data === "string") {
-    return data;
+    return Buffer.from(data);
   }
   if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
+    return data;
   }
   if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
+    return Buffer.concat(data);
   }
-  return Buffer.from(data).toString("utf8");
+  return Buffer.from(data);
 }

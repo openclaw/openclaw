@@ -107,9 +107,9 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         current.destroyRequestedAtMs === null
       ) {
         if (current.state === "requested") {
-          options.move(current, "failed", { lastError: boundedError(error) });
+          await options.move(current, "failed", { lastError: boundedError(error) });
         } else if (current.state === "provisioning") {
-          options.saveError(current, error);
+          await options.saveError(current, error);
         }
       }
       throw options.serviceError(
@@ -293,19 +293,13 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       cancellation?.assertActive();
       beforeProvision?.();
       const current = options.store.get(record.environmentId);
-      if (current?.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now()) {
-        options.store.requestDestroy({
-          environmentId: current.environmentId,
-          state: current.state,
-          lastError: "Unused prepared worker expired before readiness",
-        });
-      }
       if (
         options.isStopping() ||
         !current ||
         current.state !== record.state ||
         current.provisionOperationId !== record.provisionOperationId ||
         current.ownerEpoch !== record.ownerEpoch ||
+        (current.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now()) ||
         (current.preparation !== null && current.preparation.consumedAtMs !== null) ||
         (preparation !== undefined &&
           (!enrollmentOwner?.nodeSetupId ||
@@ -327,12 +321,17 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       if (preparation && artifact.tarballSha256 !== preparation.artifacts.workerArchiveSha256) {
         throw new Error("Worker bundle differs from its admitted preparation");
       }
+      // Conversation attachments do not run the agent; only worker turns need its prewarm.
+      const prewarm =
+        record.profileSnapshot.executionMode !== "remote-exec" &&
+        !(await options.store.hasSessionAttachment(record.environmentId));
+      assertCurrent();
       nodeBuild = await options.ensureNodeWorkerBundle({
         deviceId: lease.node.deviceId,
         artifact,
-        // Remote execution uses its harness runtime; unspecified mode retains worker prewarming.
-        prewarm: record.profileSnapshot.executionMode !== "remote-exec",
+        prewarm,
         signal: cancellation?.signal,
+        assertCurrent,
       });
       assertCurrent();
       if (preparation) {
@@ -355,9 +354,15 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         assertCurrent();
       }
     } catch (error) {
+      await cancellation?.settleStopIntent();
       return await options.failBootstrap(record, lease.leaseId, provider, error, nodePatch);
     }
-    return options.commitReady(record, { ...nodeBuild, installKind: "bundle" }, nodePatch);
+    return options.commitReady(
+      record,
+      { ...nodeBuild, installKind: "bundle" },
+      nodePatch,
+      assertCurrent,
+    );
   };
 
   return { prepare, createEnrollmentOperation, finish };

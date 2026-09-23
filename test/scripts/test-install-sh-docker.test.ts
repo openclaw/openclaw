@@ -1234,27 +1234,6 @@ printf 'status=%s\\n' "$status"
     expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 
-  it("downloads the OpenShell installer completely before execution", () => {
-    const workflow = parse(readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8"));
-    const steps = workflow.jobs.validate_special_e2e.steps as Array<{
-      name?: string;
-      run?: string;
-    }>;
-    const installStep = expectDefined(
-      steps.find((step) => step.name === "Install OpenShell CLI"),
-      "OpenShell install step",
-    );
-    const run = expectDefined(installStep.run, "OpenShell install command");
-
-    expect(run).toContain('installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"');
-    expect(run).toContain("curl -LsSf --connect-timeout 10 --max-time 120 \\");
-    expect(run).toContain('-o "$installer_path"');
-    expect(run).toContain('sh "$installer_path"');
-    expect(run).toContain("trap 'rm -f \"$installer_path\"' EXIT");
-    expect(run.indexOf('-o "$installer_path"')).toBeLessThan(run.indexOf('sh "$installer_path"'));
-    expect(run).not.toContain("install.sh | sh");
-  });
-
   it("prints package size audits for release smoke tarballs", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -1270,8 +1249,8 @@ printf 'status=%s\\n' "$status"
 
   it.each([
     { label: "required native payload", unpackedSize: 243_066_603, exitCode: 0 },
-    { label: "exact budget", unpackedSize: 235 * 1024 * 1024, exitCode: 0 },
-    { label: "one byte over budget", unpackedSize: 235 * 1024 * 1024 + 1, exitCode: 1 },
+    { label: "exact budget", unpackedSize: 320 * 1024 * 1024, exitCode: 0 },
+    { label: "one byte over budget", unpackedSize: 320 * 1024 * 1024 + 1, exitCode: 1 },
   ])("enforces the default pack budget for $label", ({ unpackedSize, exitCode }) => {
     const { result } = runInstallSmokePackHelpers([{ filename: "candidate.tgz", unpackedSize }]);
 
@@ -1280,7 +1259,7 @@ printf 'status=%s\\n' "$status"
       expect(result.stderr).toBe("");
     } else {
       expect(result.stderr).toContain(
-        `candidate.tgz unpackedSize ${unpackedSize} bytes exceeds budget 246415360 bytes`,
+        `candidate.tgz unpackedSize ${unpackedSize} bytes exceeds budget 335544320 bytes`,
       );
     }
   });
@@ -1790,7 +1769,7 @@ if (args[0] === "--version") {
     ...(before === "2026.9.1" ? { reason: "already-current" } : {}),
     before: { version: before, buildId: "candidate-build" }, after: { version: "2026.9.1", buildId: "candidate-build" },
     steps: [
-      { name: "global update", exitCode: 0, command: "npm install " + args[args.indexOf("--tag") + 1] },
+      { name: before === "2026.9.1" ? "package-install" : "global update", exitCode: 0, command: "npm install " + args[args.indexOf("--tag") + 1] },
       ...(before === "2026.9.1" ? [] : [{ name: "openclaw doctor", exitCode: 0 }]),
     ],
   }));
@@ -2006,6 +1985,62 @@ run_update_smoke
 
   it.each([
     ["verified same-build no-op", {}, "already-current", 0],
+    [
+      "released-driver same-build no-op",
+      {
+        steps: [
+          {
+            name: "global update",
+            exitCode: 0,
+            command: "npm install http://candidate.invalid/openclaw.tgz",
+          },
+        ],
+      },
+      "already-current",
+      0,
+    ],
+    [
+      "wrong staging step identity",
+      {
+        steps: [
+          {
+            name: "package-pack",
+            exitCode: 0,
+            command: "npm pack http://candidate.invalid/openclaw.tgz",
+          },
+        ],
+      },
+      "already-current",
+      1,
+    ],
+    [
+      "failed staging step",
+      {
+        steps: [
+          {
+            name: "package-install",
+            exitCode: 1,
+            command: "npm install http://candidate.invalid/openclaw.tgz",
+          },
+        ],
+      },
+      "already-current",
+      1,
+    ],
+    [
+      "wrong staging target",
+      {
+        steps: [
+          {
+            name: "package-install",
+            exitCode: 0,
+            command: "npm install http://wrong.invalid/openclaw.tgz",
+          },
+        ],
+      },
+      "already-current",
+      1,
+    ],
     ["unrelated skip", { reason: "dirty" }, "already-current", 1],
     ["changed build", { after: { version: "2026.9.3", buildId: "other" } }, "already-current", 1],
     ["missing build identity", { before: { version: "2026.9.3" } }, "already-current", 1],
@@ -2014,7 +2049,7 @@ run_update_smoke
       {
         steps: [
           {
-            name: "global update",
+            name: "package-install",
             exitCode: 0,
             command: "npm install http://candidate.invalid/openclaw.tgz",
           },
@@ -2032,7 +2067,7 @@ run_update_smoke
       reason: "already-current",
       before: { version: "2026.9.3", buildId: "candidate-build" },
       after: { version: "2026.9.3", buildId: "candidate-build" },
-      steps: [{ name: "global update", exitCode: 0, command: `npm install ${url}` }],
+      steps: [{ name: "package-install", exitCode: 0, command: `npm install ${url}` }],
       ...overrides,
     };
     const result = spawnSync(testNodeExecPath, ["-"], {

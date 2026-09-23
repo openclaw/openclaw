@@ -1,8 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
 import readline from "node:readline";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
@@ -12,6 +15,7 @@ const dispatch = vi.hoisted(() => ({
   command: undefined as Promise<void> | undefined,
   memoryClosed: vi.fn(async () => {}),
 }));
+const temp = useAutoCleanupTempDirTracker(afterEach);
 const installUnhandledRejectionHandlerMock = vi.hoisted(() => vi.fn());
 // Only bootstrap/dispatch are replaced; process entry, registry scopes and cleanup are real.
 vi.mock("./route.js", () => ({
@@ -29,7 +33,10 @@ vi.mock("../entry.compile-cache.js", () => ({
   respawnWithoutOpenClawCompileCacheIfNeeded: async () => false,
 }));
 vi.mock("../entry.respawn.js", () => ({ buildCliRespawnPlan: () => null }));
-vi.mock("../infra/openclaw-exec-env.js", () => ({ ensureOpenClawExecMarkerOnProcess() {} }));
+vi.mock("../infra/openclaw-exec-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-exec-env.js")>()),
+  ensureOpenClawExecMarkerOnProcess() {},
+}));
 vi.mock("../infra/warning-filter.js", () => ({ installProcessWarningFilter() {} }));
 vi.mock("../infra/unhandled-rejections.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/unhandled-rejections.js")>()),
@@ -207,6 +214,61 @@ async function runProcessEntry() {
 }
 
 describe("CLI process harness cleanup", () => {
+  it.each(["success", "failure", "gateway-adopted"])(
+    "retires command captures unless their inventory is adopted (%s)",
+    async (mode) => {
+      const stateDir = temp.make("cli-capture-custody-");
+      const source = path.join(stateDir, "fixture");
+      fs.mkdirSync(source);
+      fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 'retained';");
+      const { getPluginCache, adoptProcessPluginCache, getProcessPluginCache } =
+        await import("../plugins/plugin-cache.js");
+      const { PluginInstance } = await import("../plugins/plugin-instance.js");
+      const { capturePluginGenerationArtifact } =
+        await import("../plugins/plugin-generation-artifact.js");
+      const { retainGatewayPluginMetadata } =
+        await import("../plugins/plugin-metadata-lifecycle.js");
+      const previous = getProcessPluginCache();
+      let gateway: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
+      let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+      const failure = new Error("fixture command failed");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      dispatch.run = async () => {
+        const cache = getPluginCache();
+        artifact = capturePluginGenerationArtifact(source);
+        const instance = new PluginInstance("capture-fixture");
+        instance.onModuleDispose(artifact.disposeAsync);
+        cache.instances.add(instance);
+        if (mode === "gateway-adopted") {
+          gateway = retainGatewayPluginMetadata();
+          adoptProcessPluginCache(cache);
+          gateway.publish(undefined);
+        }
+        if (mode === "failure") {
+          throw failure;
+        }
+      };
+      try {
+        const error = await runProcessEntry().catch((cause: unknown) => cause);
+        expect(error).toBe(mode === "failure" ? failure : undefined);
+        expect(artifact).toBeDefined();
+        expect(fs.existsSync(artifact!.boundaryRoot)).toBe(mode === "gateway-adopted");
+        if (gateway) {
+          expect(fs.readFileSync(artifact!.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
+            "module.exports = 'retained';",
+          );
+          await gateway.close();
+          expect(fs.existsSync(artifact!.boundaryRoot)).toBe(false);
+        }
+      } finally {
+        await gateway?.close();
+        await artifact?.disposeAsync();
+        adoptProcessPluginCache(previous);
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it.each(["process", "borrowed"])("keeps catalog discovery with its %s owner", async (mode) => {
     const registry = emptyRegistry.createEmptyPluginRegistry();
     const resource = resourceHarness("codex");

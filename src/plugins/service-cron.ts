@@ -1,11 +1,11 @@
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../cron/normalize.js";
 import type { GatewayCronServiceContract } from "../gateway/server-cron-contract.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
-import type { PluginHookGatewayCronService } from "./hook-types.js";
+import type { PluginHookGatewayCronService } from "./hook-gateway.types.js";
 
 export type PluginServiceCronHost = Pick<
   GatewayCronServiceContract,
-  keyof PluginHookGatewayCronService
+  Exclude<keyof PluginHookGatewayCronService, "isEnabled"> | "status"
 >;
 
 export function createPluginServiceCronGetter(params: {
@@ -38,6 +38,12 @@ export function createPluginServiceCronGetter(params: {
     // A retained handle owns one scheduler. Recheck at the store lock, not only
     // before awaiting it, so replacement cannot admit an old queued write.
     const service: PluginHookGatewayCronService = {
+      isEnabled: async () => {
+        commitGuard();
+        const { enabled } = await cron.status();
+        commitGuard();
+        return enabled;
+      },
       list: async (opts) => {
         commitGuard();
         const jobs = await cron.list(opts);

@@ -12,6 +12,8 @@ export type AgentRunTerminalReceipt = {
   requested: AgentRunTerminalModelRef;
   effective: AgentRunTerminalModelRef & { responseModel: string };
   successfulToolNames: string[];
+  /** Exact saved assistant occurrence, independent of attempt terminal ownership. */
+  assistantTranscriptIdempotencyKey?: string;
   /** A final reply was delivered to the external source conversation. */
   sourceReplyDelivered?: true;
   rerouted: boolean;

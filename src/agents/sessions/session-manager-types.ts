@@ -1,6 +1,6 @@
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
-import type { AgentMessage } from "../runtime/index.js";
 
 export interface SessionHeader {
   type: "session";
@@ -47,6 +47,8 @@ export interface CompactionEntry<T = unknown> extends SessionEntryBase {
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;
+  /** Context estimate after compaction, retained with its ordinary transcript marker. */
+  tokensAfter?: number;
   /** Extension-specific data, such as artifact indexes or version markers. */
   details?: T;
   /** True for extension-generated compaction entries. */

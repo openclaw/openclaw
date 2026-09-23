@@ -4,6 +4,7 @@ import { expectWindowRetiredAfterFinal } from "./bot-message-dispatch.progress-w
 import {
   allDeliveredReplyTexts,
   describeTelegramDispatch,
+  emitToolStart,
   createContext,
   createBot,
   createDirectSessionPayload,
@@ -346,7 +347,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({ text: "Site A shows X." });
         await dispatcherOptions.deliver({ text: "Site A shows X." }, { kind: "block" });
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
         return { queuedFinal: true };
       },
@@ -359,7 +360,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       ["Final answer", expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) })],
     ]);
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
+      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b> <i>running<\/i>$/) }),
     );
     // The tool-progress window repositions before the final (deferred delete),
     // never an immediate clear/delete.
@@ -396,7 +397,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await dispatcherOptions.deliver({ text: "Site A shows X." }, { kind: "block" });
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver({ text: "Site B shows Y." }, { kind: "block" });
         await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
         return { queuedFinal: true };
@@ -407,7 +408,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
+      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b> <i>running<\/i>$/) }),
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(
@@ -568,7 +569,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     answerDraftStream.hasConsumedReplyTarget.mockReturnValue(true);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await replyOptions?.onItemEvent?.({
           kind: "command",
           name: "exec",
@@ -590,7 +591,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     // #121600: default command progress is status-only — raw command text stays
     // out of chat previews (`/verbose full` / commandText: "raw" retain it).
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("Cracking\n\n🛠️ Exec", "<b>Cracking</b>\n<b>🛠️ Exec</b>"),
+      telegramProgressPreview(
+        "Cracking\n\n🛠️ Exec running",
+        "<b>Cracking</b>\n<b>🛠️ Exec</b> <i>running</i>",
+      ),
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
     expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
@@ -632,7 +636,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver(
           { text: "Terminal block after tool" },
           { kind: "block", assistantMessageIndex: 0 },
@@ -661,7 +665,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver({ text: "All done" }, { kind: "final" });
         return { queuedFinal: true };
       },
@@ -690,7 +694,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       );
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
         async ({ dispatcherOptions, replyOptions }) => {
-          await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+          await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
           await dispatcherOptions.deliver(
             { text: "Final survives cleanup", ...(isError ? { isError: true } : {}) },
             { kind: "final" },
@@ -718,7 +722,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     deliverReplies.mockResolvedValue({ delivered: false });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver({ text: "Answer that fails to send" }, { kind: "final" });
         return { queuedFinal: true };
       },
@@ -753,7 +757,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver(
           { text: "Something went wrong", isError: true },
           { kind: "final" },

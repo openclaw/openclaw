@@ -73,6 +73,61 @@ selection, including `openai/gpt-5.5`, unless you explicitly use
 only when you want API-key auth for an agent model.
 </Note>
 
+## Agents API MVP
+
+The separate Agents API plugin (`@openclaw/agentsapi`) registers the explicit
+`agentsapi` harness, alongside the Codex plugin. The OpenAI provider plugin
+continues to own model routes and API-key authentication.
+Select a model in `agents.defaults.model.primary` and set its
+`agents.defaults.models["openai/<model>"].agentRuntime.id` to `"agentsapi"`.
+Use OpenAI API-key authentication. The harness sends the configured model to the
+Agents API without a model allowlist; unsupported models return the API error.
+Reasoning remains `low`, and execution uses an OpenAI-hosted Linux VM.
+Automatic runtime selection is unchanged.
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-6-astra" },
+      models: {
+        "openai/gpt-6-astra": { agentRuntime: { id: "agentsapi" } },
+      },
+    },
+  },
+}
+```
+
+If `plugins.allow` is configured, include `agentsapi` alongside `openai`.
+The standalone plugin keeps native session identifiers in plugin state. It uses
+the shared harness runtime for leases, generation admission, deletion rollback,
+cancellation, deadlines, and lifecycle events. Agents API protocol events,
+native completion receipts, and transcript projection remain plugin-owned.
+Reset sessions created
+by the earlier in-provider prototype once when switching to this package.
+
+A restricted API key needs Agents and Responses read/write plus Models read
+permission so the service can retrieve the selected model when creating a session.
+
+Agents API owns the persistent agent session and workspace. OpenClaw stores
+the session binding in plugin SQLite state and mirrors text replies into its
+normal transcript. Follow-up messages reuse the agent session; input during
+a running turn steers it, and interruption cancels its remote turn. `/new`
+and `/reset` start a fresh session on the next message. Reset and local session
+deletion retire the binding; the Agents API retains the remote history and
+workspace, which can be managed through its API.
+
+If the event stream closes, the harness subscribes again and reconciles saved
+turns and input receipts before accepting completion. It does not resubmit the
+user's message. Native token usage is best effort; unavailable usage currently
+appears as zero in OpenClaw's usage totals.
+
+This MVP supports text and native hosted-workspace commands. Apps, connectors,
+OpenClaw dynamic tools, file transfer, image generation, custom context engines,
+and self-hosted executors are outside its scope. Admitted turns are marked
+unsafe for replay because hosted commands may already have run. OpenClaw can
+continue the existing session after a transient provider failure.
+
 ## Native Codex app-server auth
 
 The native Codex app-server harness uses `openai/*` model refs when an eligible
@@ -83,20 +138,31 @@ account-based. OpenClaw selects auth in this order:
 1. Ordered OpenAI auth profiles for the agent, preferably under
    `auth.order.openai`. Run `openclaw doctor --fix` to migrate older legacy
    Codex auth profile ids and auth order.
-2. The native Codex account, when no host credential or account selection owns
-   the route. This path uses the user Codex home. An explicit
-   `appServer.homeScope: "agent"` keeps the isolated home and does not borrow the
-   user login. Prepared OpenClaw credentials stay in the agent home; OpenClaw
-   never logs them into the native user home.
+2. The native Codex account, only with an explicit `appServer.homeScope: "user"`
+   opt-in and when no host credential or account selection owns the route.
+   Ordinary OpenClaw sessions default to the isolated agent home, even when
+   Codex is already signed in. Prepared OpenClaw credentials stay in that home;
+   OpenClaw never logs them into the native user home.
 3. For local stdio app-server launches only, and only when the app-server
    reports no account: `CODEX_API_KEY`, then `OPENAI_API_KEY`.
 
-Status and catalog reads ask Codex about its native login without importing
-credentials into an OpenClaw profile. A fresh auth refresh observes native login
+With the user-home opt-in, status and catalog reads ask Codex about its native
+login without importing credentials into an OpenClaw profile. A fresh auth refresh observes native login
 and logout. Native API-key and subscription accounts select their matching
 routes. Model runtime choices use the same route and account as thinking
 metadata; an unavailable runtime cannot be selected. Explicit auth import
 remains available when you want an OpenClaw-owned profile.
+
+If you previously relied on automatic use of a native Codex login, sign in with
+`openclaw models auth login --provider openai` and select the resulting OpenClaw
+profile. Selecting detected Codex in Model Setup reuses eligible OpenClaw credentials
+or opens the supported OpenAI sign-in flow before testing the connection. A cancelled
+or failed sign-in does not promote the route. If verification fails after sign-in,
+choose the saved sign-in to retry without logging in again. Setup no longer enables
+user-home sharing merely because a native login exists. Existing explicit `homeScope: "user"` settings remain opt-ins; remove that
+setting to use isolated sessions. Native session adoption and supervision are
+unchanged. Existing personal Codex history is not moved or deleted, and ordinary
+OpenClaw sessions remain durable in the per-agent Codex home.
 
 The default per-agent `codex-home/auth.json` is not a runtime auth store. If
 you copied or mounted Codex CLI credentials there, import them into the agent's

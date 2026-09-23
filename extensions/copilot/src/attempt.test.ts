@@ -2,7 +2,7 @@
 import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { CopilotClient, Tool as SdkTool } from "@github/copilot-sdk";
+import type { Tool as SdkTool } from "@github/copilot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as agentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -34,28 +34,22 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
+import {
+  makeAssistantMessageEvent,
+  makeFakePool,
+  makeFakeSdk,
+  projectAgentRunAttemptTerminal,
+  type FakeSdk,
+  type FakeSession,
+  type SessionEventShape,
+} from "./attempt.test-support.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
-import type { CopilotClientPool } from "./runtime.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
 
 type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { terminal: unknown }>;
 type SettledTurnFinalizationAttemptParams = Parameters<
   NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
 >[0]["attempt"];
-
-function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResult["terminal"]) {
-  return {
-    aborted: terminal.kind === "aborted" && terminal.source !== "yield_cleanup",
-    promptError:
-      terminal.kind === "failed"
-        ? terminal.error
-        : terminal.kind === "ok"
-          ? null
-          : (terminal.failure?.error ?? null),
-    timedOut: terminal.kind === "timeout" && terminal.source !== "observation",
-    timedOutDuringCompaction: terminal.kind === "timeout" && terminal.phase === "compaction",
-  };
-}
 
 const gatewayQuestionMock = vi.hoisted(() => ({
   waiters: new Map<string, (value: unknown) => void>(),
@@ -256,36 +250,6 @@ const workspaceBootstrapMock = vi.hoisted(() => ({
 }));
 vi.mock("./workspace-bootstrap.js", () => workspaceBootstrapMock);
 
-type SessionEventShape = {
-  data: Record<string, unknown>;
-  id: string;
-  parentId: string | null;
-  timestamp: string;
-  type: string;
-};
-type SendFn = (options?: unknown) => Promise<string>;
-type SendAndWaitFn = (options?: unknown) => Promise<SessionEventShape | undefined>;
-
-type FakeSession = {
-  abort: ReturnType<typeof vi.fn<() => Promise<void>>>;
-  cfg: Record<string, unknown>;
-  disconnect: ReturnType<typeof vi.fn<() => Promise<void>>>;
-  emit: (eventType: string, data: Record<string, unknown>) => void;
-  id: string;
-  off: ReturnType<typeof vi.fn>;
-  on: ReturnType<typeof vi.fn>;
-  rpc: {
-    history: {
-      cancelBackgroundCompaction: ReturnType<typeof vi.fn<() => Promise<{ cancelled: boolean }>>>;
-    };
-  };
-  send: ReturnType<typeof vi.fn<SendFn>>;
-  sendAndWait: ReturnType<typeof vi.fn<SendAndWaitFn>>;
-  sessionId: string;
-};
-
-type FakeSdk = ReturnType<typeof makeFakeSdk>;
-
 function requireSession(sdk: FakeSdk): FakeSession {
   return expectDefined(sdk.sessions[0], "first Copilot SDK session");
 }
@@ -323,131 +287,6 @@ function getPromptErrorCode(result: AgentHarnessAttemptResult): string | undefin
 
 function getSdkSessionId(result: AgentHarnessAttemptResult): string | undefined {
   return (result as AgentHarnessAttemptResult & { sdkSessionId?: string }).sdkSessionId;
-}
-
-function makeEvent(type: string, data: Record<string, unknown>): SessionEventShape {
-  return {
-    data,
-    id: `${type}-id`,
-    parentId: null,
-    timestamp: "2024-01-01T00:00:00.000Z",
-    type,
-  };
-}
-
-function makeAssistantMessageEvent(
-  content = "assistant text",
-  overrides: Partial<Record<string, unknown>> = {},
-): SessionEventShape {
-  return makeEvent("assistant.message", {
-    content,
-    messageId: "msg-1",
-    model: "gpt-4o",
-    ...overrides,
-  });
-}
-
-function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSession {
-  const listeners = new Map<string, Array<(event: SessionEventShape) => void>>();
-  return {
-    abort: vi.fn<() => Promise<void>>(async () => undefined),
-    cfg,
-    disconnect: vi.fn<() => Promise<void>>(async () => undefined),
-    emit: (eventType: string, data: Record<string, unknown>) => {
-      const { __eventId, ...eventData } = data;
-      const event = {
-        ...makeEvent(eventType, eventData),
-        ...(typeof __eventId === "string" ? { id: __eventId } : {}),
-      };
-      for (const listener of listeners.get(eventType) ?? []) {
-        listener(event);
-      }
-    },
-    id,
-    off: vi.fn((eventType: string, handler: (event: SessionEventShape) => void) => {
-      const handlers = listeners.get(eventType) ?? [];
-      listeners.set(
-        eventType,
-        handlers.filter((existing) => existing !== handler),
-      );
-    }),
-    on: vi.fn((eventType: string, handler: (event: SessionEventShape) => void) => {
-      const handlers = listeners.get(eventType) ?? [];
-      handlers.push(handler);
-      listeners.set(eventType, handlers);
-    }),
-    rpc: {
-      history: {
-        cancelBackgroundCompaction: vi.fn<() => Promise<{ cancelled: boolean }>>(async () => ({
-          cancelled: true,
-        })),
-      },
-    },
-    send: vi.fn<SendFn>(async () => "user-message-id"),
-    sendAndWait: vi.fn<SendAndWaitFn>(async () => makeAssistantMessageEvent()),
-    sessionId: id,
-  };
-}
-
-function makeFakePool(sdk: FakeSdk) {
-  const pool = {
-    acquire: vi.fn(async (key, _options) => ({
-      client: sdk.client as unknown as CopilotClient,
-      key,
-    })),
-    dispose: vi.fn(async () => []),
-    release: vi.fn(async () => undefined),
-    size: vi.fn(() => 0),
-  } satisfies CopilotClientPool;
-  return pool;
-}
-
-function makeFakeSdk(
-  options:
-    | ((session: FakeSession, cfg: Record<string, unknown>) => void | Promise<void>)
-    | {
-        onCreateSession?: (
-          session: FakeSession,
-          cfg: Record<string, unknown>,
-        ) => void | Promise<void>;
-        onResumeSession?: (
-          session: FakeSession,
-          sessionId: string,
-          cfg: Record<string, unknown>,
-        ) => void | Promise<void>;
-      } = {},
-) {
-  const sessions: FakeSession[] = [];
-  const sessionHooks =
-    typeof options === "function"
-      ? { onCreateSession: options, onResumeSession: undefined }
-      : options;
-
-  const createSession = vi.fn(async (cfg: Record<string, unknown>) => {
-    const session = createFakeSession(cfg, `sess-${sessions.length + 1}`);
-    await sessionHooks.onCreateSession?.(session, cfg);
-    sessions.push(session);
-    return session;
-  });
-
-  const resumeSession = vi.fn(async (sessionId: string, cfg: Record<string, unknown>) => {
-    const session = createFakeSession(cfg, sessionId);
-    await sessionHooks.onResumeSession?.(session, sessionId, cfg);
-    sessions.push(session);
-    return session;
-  });
-
-  return {
-    client: {
-      createSession,
-      deleteSession: vi.fn(async () => undefined),
-      resumeSession,
-      stop: vi.fn(async () => []),
-    },
-    createSession,
-    resumeSession,
-    sessions,
-  };
 }
 
 function makeUserTurnRecorder(
@@ -626,6 +465,7 @@ describe("runCopilotAttempt", () => {
   });
 
   it("reports code-mode engagement through the real tool bridge", async () => {
+    const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
     const sdk = makeFakeSdk((session) => {
       session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
@@ -637,6 +477,7 @@ describe("runCopilotAttempt", () => {
       makeParams({
         disableTools: false,
         config: { tools: { codeMode: true } },
+        hostCapabilities: createCopilotTestHostCapabilities(createOpenClawCodingTools),
       } as never),
       { pool: makeFakePool(sdk) },
     );
@@ -736,6 +577,7 @@ describe("runCopilotAttempt", () => {
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
       await input.onToolCompleted?.({
         args: { path: "README.md" },
+        isError: false,
         result: { content: [{ text: "read result", type: "text" }] },
         startedAt: Date.now(),
         toolCallId: "tool-call-1",
@@ -1106,27 +948,36 @@ describe("runCopilotAttempt", () => {
     expect(cfg.hooks?.onPreToolUse).toEqual(expect.any(Function));
   });
 
-  it("does not emit llm_output when cancellation happens before the SDK turn starts", async () => {
-    const llmOutput = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "llm_output", handler: llmOutput }]),
-    );
-    const controller = new AbortController();
-    const sdk = makeFakeSdk();
+  it.each(["sync", "async"] as const)(
+    "does not emit llm_output when cancellation happens during %s session establishment",
+    async (mode) => {
+      const llmOutput = vi.fn();
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "llm_output", handler: llmOutput }]),
+      );
+      const controller = new AbortController();
+      const sdk = makeFakeSdk();
 
-    const result = await runCopilotAttempt(
-      makeParams({ abortSignal: controller.signal } as never),
-      {
-        onSessionEstablished: () => controller.abort(),
-        pool: makeFakePool(sdk),
-      },
-    );
-    await waitForEventLoopTurn();
+      const result = await runCopilotAttempt(
+        makeParams({ abortSignal: controller.signal } as never),
+        {
+          onSessionEstablished:
+            mode === "sync"
+              ? () => controller.abort()
+              : async () => {
+                  await waitForEventLoopTurn();
+                  controller.abort();
+                },
+          pool: makeFakePool(sdk),
+        },
+      );
+      await waitForEventLoopTurn();
 
-    expect(projectAgentRunAttemptTerminal(result.terminal).aborted).toBe(true);
-    expect(sdk.sessions[0]?.sendAndWait).not.toHaveBeenCalled();
-    expect(llmOutput).not.toHaveBeenCalled();
-  });
+      expect(projectAgentRunAttemptTerminal(result.terminal).aborted).toBe(true);
+      expect(sdk.sessions[0]?.sendAndWait).not.toHaveBeenCalled();
+      expect(llmOutput).not.toHaveBeenCalled();
+    },
+  );
 
   it("waits for agent_end hooks before resolving one-shot attempts", async () => {
     let releaseAgentEnd: () => void = () => undefined;
@@ -1716,6 +1567,8 @@ describe("runCopilotAttempt", () => {
   it("tool bridge wiring: injected tools populate session config", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
+    const abortSignal = new AbortController().signal;
+    const sessionKey = "agent:agent-1:session-1";
     const sdkTools: SdkTool[] = [
       {
         description: "Fake SDK tool",
@@ -1726,18 +1579,16 @@ describe("runCopilotAttempt", () => {
     ];
     const createToolBridge = vi.fn(async () => createStubToolBridge(sdkTools));
 
-    await runCopilotAttempt(makeParams(), { createToolBridge, pool });
+    await runCopilotAttempt(makeParams({ abortSignal, sessionKey }), { createToolBridge, pool });
 
-    expect(createToolBridge).toHaveBeenCalledTimes(1);
-    expect(createToolBridge).toHaveBeenCalledWith(
+    expect(createToolBridge).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        abortSignal: undefined,
         agentDir: "C:\\copilot-home",
         agentId: "agent-1",
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
         sessionId: "session-1",
-        sessionKey: "agent:agent-1:session-1",
+        attemptParams: expect.objectContaining({ abortSignal, sessionKey }),
         workspaceDir: "C:\\workspace",
       }),
     );
@@ -1887,40 +1738,30 @@ describe("runCopilotAttempt", () => {
   it("F7: preserves an accepted session spawn when the tool bridge yields the attempt", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(
-      async (input: {
-        onToolCompleted?: (completion: {
-          args: Record<string, unknown>;
-          result: unknown;
-          startedAt: number;
-          toolCallId: string;
-          toolName: string;
-        }) => void | Promise<void>;
-        onYieldDetected?: (message?: string, acknowledgment?: string) => void;
-      }) => {
-        await input.onToolCompleted?.({
-          args: { task: "review" },
-          result: {
-            details: {
-              status: "accepted",
-              runId: "run-copilot-child",
-              childSessionKey: "agent:main:subagent:copilot-child",
-              expectsCompletionMessage: true,
-            },
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      await input.onToolCompleted?.({
+        args: { task: "review" },
+        isError: false,
+        result: {
+          details: {
+            status: "accepted",
+            runId: "run-copilot-child",
+            childSessionKey: "agent:main:subagent:copilot-child",
+            expectsCompletionMessage: true,
           },
-          startedAt: Date.now(),
-          toolCallId: "spawn-1",
-          toolName: "sessions_spawn",
-        });
-        // Simulate a wrapped tool invoking sessions_yield before the
-        // attempt settles. The bridge is responsible for notifying the
-        // caller via onYieldDetected so the final result can carry the
-        // flag (parent runner uses it to mark liveness paused /
-        // stop_reason end_turn). Mirrors PI/codex parity.
-        input.onYieldDetected?.("private continuation", "Research started; results will follow.");
-        return createStubToolBridge();
-      },
-    );
+        },
+        startedAt: Date.now(),
+        toolCallId: "spawn-1",
+        toolName: "sessions_spawn",
+      });
+      // Simulate a wrapped tool invoking sessions_yield before the
+      // attempt settles. The bridge is responsible for notifying the
+      // caller via onYieldDetected so the final result can carry the
+      // flag (parent runner uses it to mark liveness paused /
+      // stop_reason end_turn). Mirrors PI/codex parity.
+      input.onYieldDetected?.("private continuation", "Research started; results will follow.");
+      return createStubToolBridge();
+    });
 
     const result = await runCopilotAttempt(makeParams(), {
       createToolBridge,
@@ -2438,6 +2279,83 @@ describe("runCopilotAttempt", () => {
 
     const cfg = requireCreateSessionConfig(sdk);
     expect("infiniteSessions" in cfg).toBe(false);
+  });
+
+  describe("Tool Search prompt parity", () => {
+    it.each(
+      (["tools", "code", "directory"] as const).flatMap((mode) =>
+        [undefined, ["fixture_allowed"], []].map((toolsAllow) => ({ mode, toolsAllow })),
+      ),
+    )(
+      "submits catalog guidance for $mode after hook allowlist $toolsAllow",
+      async ({ mode, toolsAllow }) => {
+        const sdk = makeFakeSdk();
+        const llmInput = vi.fn();
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([
+            { hookName: "before_prompt_build", handler: () => ({ toolsAllow }) },
+            { hookName: "llm_input", handler: llmInput },
+          ]),
+        );
+        const makeTool = (name: string): AnyAgentTool => ({
+          name,
+          label: name,
+          description:
+            name === "fixture_allowed" ? "Allowed catalog capability." : "Other capability.",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({ content: [], details: {} }),
+        });
+        const config = {
+          agents: { defaults: { experimental: { localModelLean: false } } },
+          tools: { codeMode: false, toolSearch: { enabled: true, mode } },
+        };
+        const result = await runCopilotAttempt(
+          makeParams({
+            config,
+            disableTools: false,
+            hostCapabilities: createCopilotTestHostCapabilities(() => [
+              ...["tool_search_code", "tool_search", "tool_describe", "tool_call"].map(makeTool),
+              ...["read", "fixture_allowed", "fixture_denied"].map(makeTool),
+            ]),
+          }),
+          { pool: makeFakePool(sdk) },
+        );
+        expect(result.terminal).toEqual({ kind: "ok" });
+        const submitted = requireCreateSessionConfig(sdk) as {
+          tools?: SdkTool[];
+          systemMessage?: { content?: string };
+        };
+        const content = expectDefined(
+          submitted.systemMessage?.content,
+          "SDK developer instructions",
+        );
+        await waitForEventLoopTurn();
+        expect(llmInput).toHaveBeenCalledWith(
+          expect.objectContaining({ systemPrompt: content }),
+          expect.any(Object),
+        );
+        if (toolsAllow?.length === 0) {
+          expect(submitted.tools).toEqual([]);
+          expect(content).not.toContain("Available deferred-schema tools:");
+          expect(content).not.toContain("fixture_allowed");
+        } else {
+          expect(content).toContain("Available deferred-schema tools:");
+          expect(content).toContain("fixture_allowed");
+          expect(content).toContain("Allowed catalog capability.");
+          expect(submitted.tools?.map((tool) => tool.name)).not.toContain("fixture_allowed");
+          if (mode === "code") {
+            expect(content).toContain("openclaw.tools.call(id, args)");
+            expect(content).not.toContain("Call tool_call");
+          } else {
+            expect(content).toContain("Deferred names are not directly callable.");
+            expect(content).toContain("Call tool_call");
+            expect(content).not.toContain("Call a unique deferred tool name directly");
+          }
+          expect(content.includes("fixture_denied")).toBe(toolsAllow === undefined);
+        }
+        expect(config.tools.toolSearch.mode).toBe(mode);
+      },
+    );
   });
 
   describe("workspace bootstrap (systemMessage)", () => {

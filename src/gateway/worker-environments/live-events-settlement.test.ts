@@ -1,11 +1,11 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { drainStoreWriterQueuesForTest } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { drainStoreWriterQueuesForTest } from "../../shared/store-writer-queue.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   runOpenClawAgentWorkerWrite,
@@ -35,7 +35,7 @@ describe("worker live event write settlement", () => {
         startupBindings: [],
         startupOwners: new Map(),
       });
-      const { identity, placementStore, workerService } = support.placementHarness(
+      const { identity, placementStore, workerService } = await support.placementHarness(
         "worker-live-settlement",
         sessionId,
         { liveEvents: receiver },

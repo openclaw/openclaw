@@ -3,8 +3,10 @@ import {
   type TestProjectInlineConfiguration,
   type TestUserConfig,
 } from "vitest/config";
-import { intersectIncludePatterns } from "./vitest.pattern-file.ts";
-import { createUiE2eVitestConfig, uiE2eRealGatewayTestFiles } from "./vitest.ui-e2e.config.ts";
+import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
+import { matchesVitestGlob } from "./vitest.pattern-file.ts";
+import { createUiE2eVitestConfig } from "./vitest.ui-e2e.config.ts";
+import { uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
 
 // New real-Gateway files stay serial until their shared readers/writers are audited.
 // Listed fixtures own their HOME, state, ports, and cleanup; UI bytes are either
@@ -44,7 +46,11 @@ export function createPrebuiltUiE2eVitestConfig(
 ) {
   const base = createUiE2eVitestConfig(env, argv);
   const include =
-    intersectIncludePatterns(uiE2eRealGatewayTestFiles, base.test?.include ?? []) ?? [];
+    intersectIncludePatterns(
+      uiE2eRealGatewayTestFiles,
+      base.test?.include ?? [],
+      matchesVitestGlob,
+    ) ?? [];
   const project = (name: string) => {
     const selected = base.test?.projects?.find(
       (candidate): candidate is TestProjectInlineConfiguration & { test: TestUserConfig } =>
@@ -60,7 +66,8 @@ export function createPrebuiltUiE2eVitestConfig(
   };
   const projects = ["ui-e2e-serial", "ui-e2e-serial-standalone"].flatMap((name) => {
     const template = project(name);
-    const files = intersectIncludePatterns(include, template.test.include ?? []) ?? [];
+    const files =
+      intersectIncludePatterns(include, template.test.include ?? [], matchesVitestGlob) ?? [];
     const globalSetup = [
       "test/vitest/vitest.ui-e2e-prebuilt.global-setup.ts",
       ...[template.test.globalSetup ?? []].flat(),

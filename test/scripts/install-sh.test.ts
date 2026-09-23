@@ -220,6 +220,7 @@ describe("install.sh", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("curl=-fsSL --max-redirs 0");
+      expect(result.stdout).toContain("--connect-timeout 300");
       expect(result.stdout).toContain("wget=-q --max-redirect=0");
       expect(result.stdout).toContain("--timeout=300");
       expect(result.stdout).toContain("managed-mode=deny");
@@ -227,6 +228,31 @@ describe("install.sh", () => {
       rmSync(tmp, { force: true, recursive: true });
     }
   });
+
+  it.each([17, 43])(
+    "uses the configured %s-second budget for curl connection and transfer stalls",
+    (budget) => {
+      const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      UPDATE_NETWORK_TIMEOUT_SECONDS=${budget}
+      DOWNLOADER=curl
+      curl() { printf '%s\n' "$*"; return 28; }
+      set +e
+      download_file "https://example.invalid/archive.tgz" "/tmp/archive.tgz" deny
+      printf 'status=%s\n' "$?"
+    `);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`--connect-timeout ${budget}`);
+      expect(result.stdout).toContain(`--speed-limit 1 --speed-time ${budget}`);
+      expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
+      expect(result.stdout).toContain("--proto =https");
+      expect(result.stdout).toContain("--tlsv1.2");
+      expect(result.stdout).not.toContain("--max-time");
+      expect(result.stdout).toContain("status=28");
+    },
+  );
 
   it("bounds stalled curl downloads and propagates timeout failures", () => {
     const result = runInstallShell(`
@@ -244,7 +270,7 @@ describe("install.sh", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("--speed-limit 1 --speed-time 300");
-    expect(result.stdout).not.toContain("--connect-timeout");
+    expect(result.stdout).toContain("--connect-timeout 300");
     expect(result.stdout).not.toContain("--max-time");
     expect(result.stdout).not.toContain("--max-redirs");
     expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");

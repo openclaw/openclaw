@@ -59,7 +59,7 @@ export function renderSessionLeadingState(
   const running = session.hasActiveRun || subagentsWorking;
   const ownRunQueued = session.hasActiveRun && session.status === "queued";
   const runState = {
-    running: running && !trailingState,
+    running: running && !trailingState && session.attention.kind !== "question",
     queued: ownRunQueued && !subagentsWorking,
     runningLabel:
       subagentsWorking && (!session.hasActiveRun || ownRunQueued)

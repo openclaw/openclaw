@@ -1,9 +1,10 @@
 ---
-summary: "Code Mode scope, terms, nested tool execution, snapshots, the QuickJS-WASI runtime, and the security boundary"
+summary: "Code Mode scope, nested tool execution, executor continuations, and security boundaries"
 title: "Code Mode internals"
+doc-schema-version: 1
 read_when:
   - You need the runtime status, scope, or vocabulary
-  - You are reviewing the QuickJS-WASI sandbox, TypeScript transform, or snapshot lifecycle
+  - You are reviewing the executor boundary, typed tool discovery, or continuation lifecycle
   - You are validating the security boundary for a high-risk deployment
 ---
 
@@ -11,11 +12,11 @@ read_when:
 
 | Aspect              | Value                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------- |
-| Runtime             | [`quickjs-wasi`](https://github.com/vercel-labs/quickjs-wasi)                               |
+| Executors           | Node (`node:vm`, default), QuickJS-WASI (bundled plugin)                                    |
 | Default state       | disabled                                                                                    |
 | Stability           | experimental OpenClaw surface (Codex Code Mode is a separate, stable Codex harness surface) |
 | Target surface      | generic OpenClaw agent runs                                                                 |
-| Security posture    | model code is hostile                                                                       |
+| Security posture    | Node is trusted host execution; QuickJS provides hardened guest isolation                   |
 | User-facing promise | enabling code mode never silently falls back to broad direct tool exposure                  |
 
 ## Scope
@@ -25,8 +26,7 @@ does not own model selection, channel behavior, auth, tool policy, or tool
 implementations.
 
 In scope: model-visible control/direct tool definitions, hidden tool catalog
-construction, JavaScript/TypeScript guest execution, the QuickJS-WASI worker
-runtime, host callbacks for search/describe/call, resumable state for
+construction, executor selection, host callbacks for search/describe/call, resumable state for
 suspended guest programs, output/timeout/memory/pending-call/snapshot limits,
 and telemetry/trajectory projection for nested tool calls.
 
@@ -42,7 +42,10 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 
 - **Code mode**: the OpenClaw runtime mode that hides catalog-compatible model
   tools and exposes `exec`, `wait`, plus required direct-only tools.
-- **Guest runtime**: the QuickJS-WASI JavaScript VM that evaluates model code.
+- **Executor**: the implementation that owns JavaScript evaluation and its
+  continuation. Node is built in; QuickJS is a bundled plugin. Core owns the
+  catalog, tool authorization, and run lifecycle.
+- **Guest runtime**: the Node VM context or QuickJS-WASI VM evaluating model code.
 - **Host bridge**: the narrow JSON-compatible callback surface from guest code
   back into OpenClaw.
 - **Catalog**: the run-scoped list of effective tools after normal tool
@@ -51,6 +54,8 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
   bridge.
 - **Snapshot**: serialized QuickJS-WASI VM state saved so `wait` can continue
   a suspended code-mode run.
+- **Continuation**: executor-owned state for a suspended cell. Node retains a
+  live worker context; QuickJS retains a snapshot.
 
 ## Nested tool execution
 
@@ -84,8 +89,8 @@ remain independent. Queued calls are canceled when their caller or catalog close
 [Swarm](/tools/swarm) requests. At most 128 ordinary requests can be queued,
 independently of the configured in-flight cap, using the existing accepted
 bridge-limit ceiling. Swarm launches, notes, and result waits do not consume this
-ordinary quota; their existing group, VM memory, and snapshot limits still apply.
-Queued inputs and request identities survive snapshot/resume; `clearTimeout`
+ordinary quota; their existing group, memory, and continuation limits still apply.
+Queued inputs and request identities survive `wait`; `clearTimeout`
 removes a queued timer without starting a host timer. A queued timer's delay begins
 when it gets a bridge slot. Guest continuations run before waiting requests refill
 available slots, and fast requests still drain within the same `exec` or `wait`.
@@ -104,7 +109,7 @@ Each code-mode run is tracked in an in-process map keyed by `runId` (not
 persisted to disk or a database). `exec`/`wait` return one of three result
 statuses: `completed`, `waiting`, or `failed`.
 
-- A `waiting` result stores the QuickJS snapshot, pending bridge requests, and
+- A `waiting` result retains an executor continuation, pending bridge requests, and
   scoping metadata (agent run id, session id/key) until `wait` resumes it or
   it expires.
 - Expiry, wrong-session, wrong-run, and unknown/already-resuming `runId`
@@ -112,18 +117,26 @@ statuses: `completed`, `waiting`, or `failed`.
   `failed` result (`code: "invalid_input"`) with a message such as `code mode
 run is unavailable or expired.` or `code mode run belongs to a different
 session.`.
-- A run's snapshot is removed from the map as soon as it settles to
+- A run's continuation is released as soon as it settles to
   `completed` or `failed`, or is dropped on Gateway shutdown (nothing
   survives a restart: this is transient runtime state).
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
 runs.`.
 
-Snapshot storage is bounded by `maxSnapshotBytes` per run, the per-process
-suspended-run cap above, and `snapshotTtlSeconds`. The worker checks the snapshot
-size, including QuickJS metadata, before handing pending work to the Gateway.
-These limits and `memoryLimitBytes` bound guest state, not total Gateway memory;
-warm worker threads and TypeScript compilers also retain memory.
+The selected executor stays fixed for the cell's lifetime. Suspended state is
+bounded by the per-process cap above and `snapshotTtlSeconds`. QuickJS also
+checks serialized VM size, including engine metadata, against
+`maxSnapshotBytes` before handing pending work to the Gateway. Node retains a
+live worker and has no serialized snapshot to measure. These limits and
+`memoryLimitBytes` are not total Gateway RSS limits; worker overhead and
+host-side tool values also consume memory. Node's `memoryLimitBytes` configures
+a best-effort V8 worker heap budget across the old and young generations,
+subject to engine minimums. It includes worker runtime allocations and excludes
+external buffers. The continuation's reported retained bytes are a diagnostic
+estimate, not an enforced reservation or aggregate memory quota. Node's live
+context can use more total host memory than a size-limited QuickJS snapshot. See
+[Code Mode executors](/tools/code-mode/executors#understand-waits-and-limits).
 
 Explicit `results.save(value)` references keep normalized JSON in the existing
 admitted catalog lifetime, independently of each cell's VM and output budget.
@@ -147,16 +160,17 @@ successful partial result with a precise non-retention reason. Headless and
 restart-safe execution do not allocate automatic references.
 
 Catalog teardown, replacement, restriction, and the admitted run's abort clear
-saved data. Appended client tools preserve the same catalog lifetime. Each cell
-captures its catalog identity and entries before execution, so stale cells
-cannot use a replacement catalog or retain references after a permission change.
+saved data. Appended client tools preserve the same result-store lifetime, including
+for cells already parked in `wait`. Each cell captures that store before execution,
+so stale cells cannot adopt a replacement store or retain references after a
+permission change.
 Saved references are data snapshots and never execution authority. They do not
 survive Gateway restart and cannot be used by another run or session.
 
 ## QuickJS-WASI runtime
 
-OpenClaw loads `quickjs-wasi` as a direct dependency in the owning package; it
-does not rely on a transitive copy installed for an unrelated dependency.
+The bundled `code-mode-quickjs` executor plugin owns its `quickjs-wasi` dependency and
+worker implementation. Selecting Node does not require loading the WASM runtime.
 
 Runtime responsibilities: compile/load the QuickJS-WASI WebAssembly module;
 create one isolated VM per code-mode run or resume; register host callbacks
@@ -171,53 +185,49 @@ event loop. A guest infinite loop must not block the Gateway process
 indefinitely; the worker's interrupt handler enforces the wall-clock timeout
 independent of guest code cooperating.
 
+## Node runtime
+
+The Node executor evaluates JavaScript in a fresh `node:vm` context outside the
+Gateway's main event loop. It uses the same guest controller and JSON tool
+bridge as QuickJS. Suspension retains the worker, context, and pending promises;
+`wait` continues that context without replaying the source. Cancellation,
+expiry, terminal results, and shutdown release the retained execution.
+
+Worker supervision keeps runaway computation out of the main event loop.
+Neither a worker thread nor `node:vm` supplies an operating-system security
+boundary. Use the [executor guide](/tools/code-mode/executors) to choose the
+appropriate trust model.
+
 ## TypeScript
 
-By default TypeScript is a source transform: one code string becomes JavaScript
-evaluated by QuickJS-WASI. Optional `exec({ code, language: "typescript",
-typecheck: true })` checks a bounded in-memory compiler program first, using the
-same effective tool declarations as `API.read` plus guest globals and the pinned
-TypeScript standard library. Unknown outputs stay unknown. Compiler input is
-bounded by the existing memory allowance and preparation shares the call deadline.
-No guest module resolution, filesystem access, or `import`/`require` is enabled.
-Preflight reports up to five errors together, with original `user.ts` coordinates.
-Each message retains at most 1024 UTF-8 bytes plus a truncation marker, and the
-response counts additional errors omitted from the batch. Diagnostics return
-`failed`/`invalid_input`;
-no guest or tool work has run when preflight rejects. This opt-in does not change
-JavaScript defaults or replace runtime JSON Schema validation.
+TypeScript-style signatures describe tool inputs and outputs to the model through
+the quick index, catalog handles, and `API.read` declaration files. Unknown
+outputs stay `unknown`, and declarations do not grant access to additional tools.
 
-Repeated checked cells reuse one bounded declaration string per catalog when
-current tool schemas, callable names, namespace globals, and API declarations
-still match. Mutable trusted schemas are fingerprinted again on each check;
-client schemas remain opaque. Custom JSON serialization cannot hide contract
-changes, and uncloneable metadata bypasses reuse. Catalog changes replace the prepared text. Each
-warm compiler worker also reuses the pinned standard-library text and its
-reference graph. Guest programs, syntax trees, and diagnostics remain per-cell,
-and cached declaration and library bytes still count against each check's
-existing input allowance.
-
-The TypeScript compiler is loaded lazily only for TypeScript cells; plain
-JavaScript cells and disabled code mode never load it.
+Executable cells are plain JavaScript. Code Mode does not load a TypeScript
+compiler, strip annotations, or typecheck the program. The selected engine parses and runs
+the JavaScript directly. Tool calls still use the existing runtime input and
+output validation, policy, and approval owners. A later call can fail after
+earlier calls have produced effects, so follow the
+[recovery guidance](/tools/code-mode/quickstart#recover-from-tool-errors) before
+retrying a failed cell.
 
 ## Security boundary
 
-Model code is hostile. The runtime uses defense in depth:
+Node is the default executor for trusted execution. Its intended globals and
+module guards do not make `node:vm` a security boundary. Model output can be
+influenced by prompt injection; choose the bundled QuickJS executor when the
+guest must be isolated from the host.
 
-- runs QuickJS-WASI outside the main event loop, in a worker thread
-- loads `quickjs-wasi` as a direct dependency, not through Codex or a
-  transitive package
-- no filesystem, network, subprocess, module import, environment variables,
-  or host global objects in the guest
-- uses QuickJS memory and interrupt limits plus a parent-process wall-clock
-  timeout
-- enforces output, snapshot, log, and pending-call caps
-- serializes host bridge values through a narrow JSON adapter
-- converts host errors into plain guest errors, never host realm objects
-- drops snapshots on timeout, abort, session end, or expiry
-- rejects recursive access to `exec`, `wait`, and Tool Search control tools
-- reserves specialized globals and resolves callable-name collisions before the
-  worker starts
+QuickJS executes in a WASM guest with no ambient filesystem, networking,
+subprocess, environment, or module access. It uses engine memory and interrupt
+limits, a parent wall-clock deadline, and bounded serialized snapshots.
 
-The sandbox is one security layer; operators may still need OS-level
-hardening for high-risk deployments.
+Both executors run outside the main event loop, use the same JSON tool bridge,
+enforce output and pending-call caps, and release continuations on timeout,
+abort, session end, or expiry. Core retains tool policy, approvals, hooks, and
+session ownership. Recursive access to Code Mode and Tool Search control tools
+is excluded from the guest catalog. These shared tool checks do not contain a
+Node VM escape, and granting a powerful tool still grants its capabilities to a
+QuickJS guest. See [Code Mode executors](/tools/code-mode/executors) for the
+operator-facing choice and OS isolation guidance.

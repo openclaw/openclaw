@@ -10,6 +10,15 @@ export class CodexThreadStartRequestError extends Error {
   }
 }
 
+export class CodexThreadClientReplacementError extends AgentHarnessPreflightError {
+  constructor() {
+    super(
+      "Codex did not confirm unloading its previous configuration after a settled failure; a fresh client is required.",
+    );
+    this.name = "CodexThreadClientReplacementError";
+  }
+}
+
 export class CodexThreadBindingConflictError extends Error {
   constructor(threadId: string, operation: string) {
     super(`Codex thread binding changed while ${operation}: ${threadId}`);

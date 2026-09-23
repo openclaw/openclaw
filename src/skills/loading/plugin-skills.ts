@@ -19,6 +19,7 @@ import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-sna
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { iteratePluginRootContributions } from "../../plugins/plugin-root-contributions.js";
 import { isPathInside } from "../../security/scan-paths.js";
+import { readPluginSkillBundle } from "./plugin-skill-bundle.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { resolvePluginSkillsDir } from "./skill-paths.js";
 import { loadSkillRootRecords } from "./skill-root-loader.js";
@@ -152,14 +153,14 @@ function isPluginSkillPathInside(rootDir: string, candidate: string): boolean {
 }
 
 /** Resolve manifest skill roots to the names users and agents actually see. */
-export function resolvePluginSkillNames(
+function resolvePluginSkillRecords(
   record: Pick<PluginManifestRecord, "id" | "origin" | "rootDir" | "skills">,
-): string[] {
+) {
   const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
     origin: record.origin,
     rootDir: record.rootDir,
   });
-  const names = new Set<string>();
+  const records = new Map<string, ReturnType<typeof loadSkillRootRecords>[number]>();
   for (const raw of record.skills) {
     const candidate = path.resolve(record.rootDir, raw.trim());
     if (!raw.trim() || !pluginCacheExistsSync(candidate)) {
@@ -175,10 +176,53 @@ export function resolvePluginSkillNames(
       mode: "audit",
       rejectHardlinks,
     })) {
-      names.add(loaded.skill.name);
+      records.set(loaded.skill.filePath, loaded);
     }
   }
-  return [...names].toSorted();
+  return [...records.values()];
+}
+
+export function resolvePluginSkillDetails(
+  record: Pick<PluginManifestRecord, "id" | "origin" | "rootDir" | "skills">,
+): Array<{ name: string; description?: string }> {
+  return [
+    ...new Map(
+      resolvePluginSkillRecords(record).map(({ skill }) => [
+        skill.name,
+        {
+          name: skill.name,
+          ...(skill.description ? { description: skill.description } : {}),
+        },
+      ]),
+    ).values(),
+  ].toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+export async function readPluginSkill(
+  record: Pick<PluginManifestRecord, "id" | "origin" | "rootDir" | "skills" | "version">,
+  name: string,
+  selection?: { path?: string; version?: string },
+) {
+  if (selection?.version !== undefined && selection.version !== record.version) {
+    throw new Error("Installed plugin version changed. Reopen the skill preview.");
+  }
+  const matches = resolvePluginSkillRecords(record).filter(({ skill }) => skill.name === name);
+  if (matches.length !== 1) {
+    throw new Error(matches.length ? "Plugin skill name is ambiguous." : "Plugin skill not found.");
+  }
+  // Audit discovery returns real paths; relativize against the same root identity.
+  const pluginRoot = pluginCacheRealpathSync(record.rootDir);
+  if (!pluginRoot) {
+    throw new Error("Installed plugin root not found.");
+  }
+  const result = await readPluginSkillBundle({
+    pluginRoot,
+    rootPath: path.relative(pluginRoot, matches[0]!.skill.baseDir).split(path.sep).join("/") || ".",
+    name,
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles(record),
+    path: selection?.path,
+  });
+  return { ...result, ...(record.version ? { version: record.version } : {}) };
 }
 
 function listSkillChildDirectories(dir: string): Array<{ name: string; path: string }> {

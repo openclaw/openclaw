@@ -1,7 +1,7 @@
 // Lazy tree-sitter runtime caches the bash parser and enforces source-size/time
 // limits for command explanation.
 import { createRequire } from "node:module";
-import * as TreeSitter from "web-tree-sitter";
+import type * as TreeSitter from "web-tree-sitter";
 
 const require = createRequire(import.meta.url);
 
@@ -10,6 +10,7 @@ const MAX_COMMAND_EXPLANATION_SOURCE_CHARS = 128 * 1024;
 const MAX_COMMAND_EXPLANATION_PARSE_MS = 500;
 
 async function loadParser(): Promise<TreeSitter.Parser> {
+  const TreeSitter = await import("web-tree-sitter");
   await TreeSitter.Parser.init();
   const language = await TreeSitter.Language.load(
     require.resolve("tree-sitter-bash/tree-sitter-bash.wasm"),

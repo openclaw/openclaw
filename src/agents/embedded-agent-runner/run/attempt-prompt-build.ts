@@ -85,6 +85,7 @@ type PromptBuildHookContext = Parameters<typeof resolvePromptBuildHookResult>[0]
 type EmbeddedAttemptSteeringLease = {
   leaseId: string;
   runIds: string[];
+  isCurrent: () => boolean;
 };
 
 type EmbeddedAttemptPromptAssembly = {
@@ -113,6 +114,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   runtimeModel: string;
   systemPromptText: string;
   applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
+  prepareSystemPrompt?: (currentSystemPrompt: string) => Promise<string>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
 }): Promise<EmbeddedAttemptPromptAssembly> {
@@ -175,7 +177,15 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         hookRunner: input.hookRunner,
         bootstrapContextRunKind: attempt.bootstrapContextRunKind,
       });
-  const promptCacheToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
+  const callableToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
+  // Regenerate owned capability guidance before composing hook additions, without
+  // rerunning hooks or altering already-recorded conversation messages.
+  if (input.prepareSystemPrompt) {
+    const preparedSystemPrompt = await input.prepareSystemPrompt(systemPromptText);
+    if (preparedSystemPrompt !== systemPromptText) {
+      setSystemPrompt(preparedSystemPrompt);
+    }
+  }
   const hookRunner = input.hookRunner;
   const assertHostActive = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
@@ -186,13 +196,13 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       ? undefined
       : await hookRunner.runAuthorizedPromptBuild(promptEvent, hookCtx, {
           toolAuthorityFingerprint: attempt.toolAuthorityFingerprint,
-          activeToolNames: promptCacheToolNames,
+          activeToolNames: callableToolNames,
           assertHostActive,
         });
   const promptBeforeResolvedToolFinalization = effectivePrompt;
   effectivePrompt = applyResolvedToolPromptFinalizer({
     prompt: effectivePrompt,
-    activeToolNames: promptCacheToolNames,
+    activeToolNames: callableToolNames,
     finalize: attempt.finalizePromptForResolvedTools,
   });
   let effectiveTranscriptPrompt = attempt.transcriptPrompt ?? promptBeforeResolvedToolFinalization;
@@ -295,14 +305,19 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   let leasedSteering: EmbeddedAttemptSteeringLease | undefined;
   if (attempt.sessionKey && !preserveExactPrompt) {
     const leaseId = `${attempt.runId}:agent-steering`;
-    const leased = leasePendingAgentSteeringItems({
+    const leased = await leasePendingAgentSteeringItems({
       requesterSessionKey: attempt.sessionKey,
       leaseId,
     });
     if (leased) {
-      leasedSteering = { leaseId, runIds: leased.runIds };
+      leasedSteering = { leaseId, runIds: leased.runIds, isCurrent: leased.isCurrent };
       // Transfer cleanup ownership before any prompt mutation can throw.
       input.setLeasedSteering(leasedSteering);
+      if (!leased.isCurrent()) {
+        throw new Error(
+          "The queued child results lost authority before requester prompt injection.",
+        );
+      }
       effectivePrompt = prependAgentSteeringPrompt({
         steeringPrompt: leased.prompt,
         prompt: effectivePrompt,

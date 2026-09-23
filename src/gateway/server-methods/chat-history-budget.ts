@@ -7,6 +7,7 @@ import {
   readToolErrorFlag,
 } from "../../chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
+import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
 import {
@@ -18,6 +19,7 @@ import {
   isAssistantInternalReasoningContentType,
   isAssistantTextContentType,
 } from "../chat-display-projection.helpers.js";
+import { readChatHistoryMessageId } from "../session-history-tail.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
@@ -25,24 +27,58 @@ const CHAT_HISTORY_UNAVAILABLE_SENTINEL =
   "[chat.history unavailable: transcript too large to display; the full history is preserved on disk]";
 let chatHistoryOmittedEmitCount = 0;
 
-export function createChatHistoryByteCounter() {
+export function createChatHistoryActivityProjection(
+  messages: unknown[],
+  activity: readonly AgentHistoryActivity[] = [],
+) {
+  const byId = new Map(activity.map((entry) => [entry.messageId, entry]));
+  return new Map(
+    messages.flatMap((message) => {
+      const messageId = readChatHistoryMessageId(message);
+      const entry = messageId ? byId.get(messageId) : undefined;
+      const record = asOptionalRecord(message);
+      const toolBearing =
+        record &&
+        (isToolResultContentType(record.role) ||
+          record.role === "tool" ||
+          record.role === "function" ||
+          (Array.isArray(record.content) &&
+            record.content.some((block) => {
+              const type = asOptionalRecord(block)?.type;
+              return isToolCallContentType(type) || isToolResultContentType(type);
+            })));
+      return entry && toolBearing ? [[message, entry] as const] : [];
+    }),
+  );
+}
+
+export function createChatHistoryByteCounter(
+  activity?: ReadonlyMap<unknown, AgentHistoryActivity>,
+) {
   const sizes = new Map<unknown, number>();
   const messageBytes = (message: unknown): number => {
     const cached = sizes.get(message);
     if (cached !== undefined) {
       return cached;
     }
-    const bytes = jsonUtf8Bytes(message);
+    const descriptor = activity?.get(message);
+    const bytes = jsonUtf8Bytes(message) + (descriptor ? jsonUtf8Bytes(descriptor) + 1 : 0);
     sizes.set(message, bytes);
     return bytes;
   };
   return {
     messageBytes,
+    framingBytes: (messages: unknown[]) =>
+      messages.some((message) => activity?.has(message)) ? 13 : 0,
     messagesBytes: (messages: unknown[]) =>
-      2 +
+      (messages.some((message) => activity?.has(message)) ? 15 : 2) +
       messages.reduce<number>((bytes, message) => bytes + messageBytes(message), 0) +
       Math.max(0, messages.length - 1),
   };
+}
+
+export function chatHistoryActivityBytes(activity: readonly AgentHistoryActivity[]): number {
+  return activity.length > 0 ? jsonUtf8Bytes({ activity }) - 1 : 0;
 }
 
 function hasHistoryToolPresentation(
@@ -153,26 +189,18 @@ function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
 }
 
 function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
-  const role =
-    message &&
-    typeof message === "object" &&
-    typeof (message as { role?: unknown }).role === "string"
-      ? (message as { role: string }).role
-      : "assistant";
-  const timestamp =
-    message &&
-    typeof message === "object" &&
-    typeof (message as { timestamp?: unknown }).timestamp === "number"
-      ? (message as { timestamp: number }).timestamp
-      : Date.now();
-  const rawMetadata =
-    message && typeof message === "object"
-      ? (message as Record<string, unknown>)["__openclaw"]
-      : undefined;
-  const metadata =
-    rawMetadata && typeof rawMetadata === "object" && !Array.isArray(rawMetadata)
-      ? (rawMetadata as Record<string, unknown>)
-      : {};
+  const entry = asOptionalRecord(message) ?? {};
+  const role = typeof entry.role === "string" ? entry.role : "assistant";
+  const timestamp = typeof entry.timestamp === "number" ? entry.timestamp : Date.now();
+  const metadata = asOptionalRecord(entry["__openclaw"]) ?? {};
+  // A bounded placeholder still identifies the tool so callers can reopen its
+  // durable row. The caller checks this envelope against the byte cap as well.
+  const toolIdentity = Object.fromEntries(
+    ["toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "toolName", "tool_name", "name"]
+      .filter((key) => typeof entry[key] === "string")
+      .map((key) => [key, entry[key]]),
+  );
+  const isError = readToolErrorFlag(entry);
   const metadataId = typeof metadata.id === "string" ? metadata.id : undefined;
   const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
   const metadataIdempotencyKey =
@@ -183,7 +211,10 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
     role,
     timestamp,
     content: [{ type: "text", text: CHAT_HISTORY_OVERSIZED_PLACEHOLDER }],
+    ...toolIdentity,
+    ...(isError !== undefined ? { isError } : {}),
     __openclaw: {
+      ...(metadata.toolOutput ? { toolOutput: metadata.toolOutput } : {}),
       ...(metadataId ? { id: metadataId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),

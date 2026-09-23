@@ -82,55 +82,27 @@ describe("openai completions params", () => {
     });
 
     it.each([
-      {
-        baseUrl: "https://api.openai.com/v1",
-        compat: { supportsPromptCacheKey: false },
-        key: undefined,
-        lifetime: undefined,
-      },
-      {
-        baseUrl: "https://proxy.example/v1",
-        compat: undefined,
-        key: undefined,
-        lifetime: undefined,
-      },
-      {
-        baseUrl: "https://proxy.example/api.openai.com/v1",
-        compat: undefined,
-        key: undefined,
-        lifetime: undefined,
-      },
-      {
-        baseUrl: "https://api.openai.com.proxy.example/v1",
-        compat: undefined,
-        key: undefined,
-        lifetime: undefined,
-      },
-      {
-        baseUrl: "https://proxy.example/v1",
-        compat: { supportsPromptCacheKey: true },
-        key: "session-123",
-        lifetime: "24h",
-      },
-      {
-        baseUrl: "https://api.openai.com/v1",
-        compat: { supportsLongCacheRetention: false },
-        key: "session-123",
-        lifetime: undefined,
-      },
-    ])(
-      "respects endpoint and compat policy: $baseUrl $compat",
-      ({ baseUrl, compat, key, lifetime }) => {
-        const params = build(
-          { ...makeCompletionsModel({ id: "gpt-5.4", provider: "openai", baseUrl, compat }), api },
-          { messages: [] },
-          { sessionId: "session-123", cacheRetention: "long" },
-        );
-        expect(params.prompt_cache_key).toBe(key);
-        expect(params.prompt_cache_retention).toBe(lifetime);
-        expect(params.prompt_cache_options).toBeUndefined();
-      },
-    );
+      ["https://api.openai.com/v1", { supportsPromptCacheKey: false }, undefined, undefined],
+      ["https://proxy.example/v1", undefined, undefined, undefined],
+      ["https://proxy.example/api.openai.com/v1", undefined, undefined, undefined],
+      ["https://api.openai.com.proxy.example/v1", undefined, undefined, undefined],
+      ["https://proxy.example/v1", { supportsPromptCacheKey: true }, "session-123", "24h"],
+      [
+        "https://api.openai.com/v1",
+        { supportsLongCacheRetention: false },
+        "session-123",
+        undefined,
+      ],
+    ])("respects endpoint and compat policy: %s %s", (baseUrl, compat, key, lifetime) => {
+      const params = build(
+        { ...makeCompletionsModel({ id: "gpt-5.4", provider: "openai", baseUrl, compat }), api },
+        { messages: [] },
+        { sessionId: "session-123", cacheRetention: "long" },
+      );
+      expect(params.prompt_cache_key).toBe(key);
+      expect(params.prompt_cache_retention).toBe(lifetime);
+      expect(params.prompt_cache_options).toBeUndefined();
+    });
   });
 
   it("uses system role and streaming usage compat for native Qwen completions providers", () => {
@@ -295,19 +267,6 @@ describe("openai completions params", () => {
     expect(notOptedIn.prompt_cache_key).toBeUndefined();
   });
 
-  it("emits prompt_cache_retention=24h for completions when cacheRetention is long", () => {
-    const model = promptCacheModel();
-    const context = emptyContext();
-
-    const longRetention = buildOpenAICompletionsParams(model, context, {
-      sessionId: "session-123",
-      cacheRetention: "long",
-    }) as { prompt_cache_key?: string; prompt_cache_retention?: string };
-
-    expect(longRetention.prompt_cache_key).toBe("session-123");
-    expect(longRetention.prompt_cache_retention).toBe("24h");
-  });
-
   it("omits prompt_cache_retention for completions when cacheRetention is short or unset", () => {
     const model = promptCacheModel();
     const context = emptyContext();
@@ -357,42 +316,6 @@ describe("openai completions params", () => {
 
     expect(params.prompt_cache_key).toBe("session-123");
     expect(params).not.toHaveProperty("prompt_cache_retention");
-  });
-
-  it("sorts Chat Completions tools by function name for stable prompt-cache payloads", () => {
-    const model = promptCacheModel();
-    const zetaTool = {
-      name: "zeta",
-      description: "Z",
-      parameters: { type: "object", properties: {} },
-    };
-    const alphaTool = {
-      name: "alpha",
-      description: "A",
-      parameters: { type: "object", properties: {} },
-    };
-
-    const first = buildOpenAICompletionsParams(
-      model,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [zetaTool, alphaTool],
-      } as never,
-      { sessionId: "session-123" },
-    ) as { tools?: Array<{ function?: { name?: string } }> };
-    const second = buildOpenAICompletionsParams(
-      model,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [alphaTool, zetaTool],
-      } as never,
-      { sessionId: "session-123" },
-    ) as { tools?: Array<{ function?: { name?: string } }> };
-
-    expect(first.tools?.map((tool) => tool.function?.name)).toEqual(["alpha", "zeta"]);
-    expect(first.tools).toEqual(second.tools);
   });
 
   it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {

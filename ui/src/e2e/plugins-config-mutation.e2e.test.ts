@@ -1,6 +1,7 @@
 // Control UI tests cover plugin mutations serialized behind pending config drafts.
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import type { PluginsInspectResult } from "../lib/plugins/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -66,6 +67,47 @@ const workboardEnabled = {
   state: "enabled",
 };
 
+function workboardInspection(enabled: boolean): PluginsInspectResult {
+  return {
+    ok: true,
+    reviewToken: "a".repeat(64),
+    plugin: {
+      id: workboardDisabled.id,
+      name: workboardDisabled.name,
+      origin: workboardDisabled.origin,
+      installed: true,
+      enabled,
+    },
+    declared: {
+      channels: [],
+      providers: [],
+      tools: [],
+      contracts: [],
+      hooks: [],
+      mcpServers: [],
+      cliCommands: [],
+      cliBackends: [],
+      skills: [],
+      dangerousConfigFlags: [],
+    },
+    components: {
+      mapped: [],
+      skills: [],
+      mcpServers: [],
+      commands: [],
+      hooks: [],
+      lspServers: [],
+      unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
+    },
+    grants: {
+      hooks: {
+        allowPromptInjection: { effective: true },
+        allowConversationAccess: { effective: false },
+      },
+    },
+  };
+}
+
 suite.define(() => {
   it("config.set drains a pending draft before re-enabling an accepted external plugin without review", async () => {
     await suite.withPage(
@@ -85,6 +127,7 @@ suite.define(() => {
               agents: [{ id: "main", identity: { name: "Main" }, name: "Main" }],
             },
             "config.get": configResponse(undefined, false, "config-hash-1"),
+            "plugins.inspect": workboardInspection(false),
             "plugins.list": {
               plugins: [workboardDisabled],
               diagnostics: [],
@@ -112,6 +155,7 @@ suite.define(() => {
 
         const workboardRow = page.locator('[data-plugin-id="workboard"]');
         await workboardRow.waitFor();
+        const connects = (await gateway.getRequests("connect")).length;
         if (captureUiProofEnabled) {
           await workboardRow.screenshot({
             animations: "disabled",
@@ -124,14 +168,9 @@ suite.define(() => {
           pathname: "/settings/plugins/workboard",
           routeId: "plugin-settings",
         });
-        await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
 
         await gateway.deferNext("plugins.setEnabled");
-        const enabledSwitch = page.getByRole("switch", {
-          name: "Enable or disable Workboard",
-          exact: true,
-        });
-        await page.locator("wa-switch").click();
+        await page.getByRole("button", { name: "Enable Workboard", exact: true }).click();
         expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
         const pendingDraft = await gateway.waitForRequest("config.set");
@@ -149,18 +188,22 @@ suite.define(() => {
           diagnostics: [],
           mutationAllowed: true,
         });
+        await gateway.setMethodResponse("plugins.inspect", workboardInspection(true));
         await gateway.resolveDeferred("plugins.setEnabled", {
           ok: true,
           plugin: workboardEnabled,
-          restartRequired: true,
+          restartRequired: false,
+          runtime: { operationId: "enable-workboard", generation: 1, pluginIds: ["workboard"] },
         });
 
-        await expect.poll(() => enabledSwitch.isChecked()).toBe(true);
+        await page.getByRole("button", { name: "Disable Workboard", exact: true }).waitFor();
         expect((await gateway.getRequests("plugins.inspect")).length).toBeGreaterThan(0);
         expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBeGreaterThanOrEqual(2);
+        expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
+        expect(await gateway.getRequests("connect")).toHaveLength(connects);
         if (captureUiProofEnabled) {
           await page.locator(".content").screenshot({
             animations: "disabled",

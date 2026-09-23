@@ -178,6 +178,28 @@ const focusedCases = [
   },
 ];
 
+const systemBusyness = {
+  name: "System busyness",
+  label: "System busyness",
+  tag: "openclaw-debug-overlay-content",
+  chunk: /\/assets\/debug-overlay-content-[^/?]+\.js(?:\?.*)?$/u,
+  proofName: "system-busyness",
+  dock: undefined,
+  frame: (page: Page) => page.locator(".debug-overlay"),
+  close: (page: Page) =>
+    page.locator(".debug-overlay__header").getByRole("button", { name: "Close", exact: true }),
+  open: async (page: Page) => {
+    await page.locator(".sidebar-identity-card").click();
+    await page
+      .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:debug-overlay"]')
+      .click();
+  },
+  ready: (page: Page) =>
+    page
+      .locator('openclaw-debug-overlay-content .debug-overlay__section[aria-busy="false"]')
+      .first(),
+};
+
 const dockedCases = [
   ...(["right", "bottom"] as const).map((dock) => ({
     name: `Home ${dock}`,
@@ -195,28 +217,13 @@ const dockedCases = [
     ready: (page: Page) =>
       page.locator("openclaw-assistant-panel .agent-chat__composer-combobox textarea"),
   })),
+  systemBusyness,
   {
-    name: "System busyness",
-    label: "System busyness",
-    tag: "openclaw-debug-overlay-content",
-    chunk: /\/assets\/debug-overlay-content-[^/?]+\.js(?:\?.*)?$/u,
-    proofName: "system-busyness",
-    dock: undefined,
-    frame: (page: Page) => page.locator(".debug-overlay"),
-    close: (page: Page) =>
-      page.locator(".debug-overlay__header").getByRole("button", { name: "Close", exact: true }),
-    open: async (page: Page) => {
-      await page.locator(".sidebar-identity-card").click();
-      await page
-        .locator(
-          'wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:debug-overlay"]',
-        )
-        .click();
-    },
-    ready: (page: Page) =>
-      page
-        .locator('openclaw-debug-overlay-content .debug-overlay__section[aria-busy="false"]')
-        .first(),
+    ...systemBusyness,
+    name: "System busyness frame",
+    tag: "openclaw-debug-overlay",
+    chunk: /\/assets\/debug-overlay-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
+    proofName: "system-busyness-frame",
   },
 ];
 
@@ -247,6 +254,21 @@ async function installDockedScenario(
     })),
     featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
     historyMessages: [{ role: "assistant", content: "The workspace is ready." }],
+    methodResponses: {
+      "diagnostics.lanes": {
+        lanes: [
+          {
+            lane: "main",
+            queuedCount: 0,
+            activeCount: 0,
+            maxConcurrent: 16,
+            draining: false,
+            generation: 1,
+          },
+        ],
+        dynamic: null,
+      },
+    },
   });
   await page.goto(
     route === "new"
@@ -470,7 +492,10 @@ suite.define(() => {
       }
 
       await retryThroughReload(page, error);
-      await page.getByRole("combobox", { name: "Search chats and commands…" }).waitFor();
+      await page
+        .locator("openclaw-command-palette")
+        .getByRole("textbox", { name: "Search or start a task…" })
+        .waitFor();
 
       await expect.poll(failure.chunkRequestCount).toBe(2);
       expect(await page.locator("openclaw-command-palette").count()).toBe(1);
@@ -478,7 +503,9 @@ suite.define(() => {
         await writeFile(
           path.join(artifactDir, "recovered.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".cmd-palette"), [
-            page.getByRole("combobox", { name: "Search chats and commands…" }),
+            page
+              .locator("openclaw-command-palette")
+              .getByRole("textbox", { name: "Search or start a task…" }),
           ]),
         );
       }
@@ -489,6 +516,94 @@ suite.define(() => {
       }
     }
   });
+
+  it.each(["new", "chat"] as const)(
+    "keeps the outer System busyness frame nonmodal and transfers its current mode on %s",
+    async (route) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport },
+        async ({ page }) => {
+          const held = await holdModuleResponse(
+            page,
+            /\/assets\/debug-overlay-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
+          );
+          try {
+            const composer = await installDockedScenario(page, undefined, route);
+            expect(
+              await page.evaluate(() => customElements.get("openclaw-debug-overlay") === undefined),
+            ).toBe(true);
+            expect(held.requests()).toBe(0);
+            await systemBusyness.open(page);
+            await held.request;
+            const frame = page.locator(".debug-overlay");
+            await frame.waitFor();
+            expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+            let expanded = await frame.boundingBox();
+            expect(expanded).not.toBeNull();
+            const handle = (await frame.locator("header").boundingBox())!;
+            await page.mouse.move(handle.x + 30, handle.y + 20);
+            await page.mouse.down();
+            await page.mouse.move(handle.x - 30, handle.y, { steps: 3 });
+            await page.mouse.up();
+            expanded = await frame.boundingBox();
+            await composer.fill("Still editable during the outer load");
+            await frame
+              .getByRole("button", { name: "Minimize system busyness", exact: true })
+              .click();
+            await expect
+              .poll(() => frame.getAttribute("class"))
+              .toContain("debug-overlay--minimized");
+            await frame.evaluate(async (element) => {
+              await new Promise(requestAnimationFrame);
+              await new Promise(requestAnimationFrame);
+              await Promise.all(element.getAnimations().map((animation) => animation.finished));
+            });
+            const minimized = await frame.boundingBox();
+            expect(minimized).not.toBeNull();
+            expect(minimized!.height).toBeLessThan(expanded!.height);
+            await composer.press("Escape");
+            expect(await frame.isVisible()).toBe(true);
+            await frame
+              .getByRole("button", { name: "Expand system busyness", exact: true })
+              .click();
+            await expect.poll(() => frame.boundingBox()).toEqual(expanded);
+            await frame
+              .getByRole("button", { name: "Minimize system busyness", exact: true })
+              .click();
+            if (captureUiProof) {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(artifactDir, `system-busyness-${route}-outer-loading.png`),
+              });
+            }
+            held.release();
+            await page.locator("openclaw-debug-overlay .debug-overlay--minimized").waitFor();
+            await expect.poll(() => frame.boundingBox()).toEqual(minimized);
+            expect(await composer.inputValue()).toBe("Still editable during the outer load");
+            await frame
+              .getByRole("button", { name: "Expand system busyness", exact: true })
+              .click();
+            await systemBusyness.ready(page).waitFor();
+            await expect.poll(() => frame.boundingBox()).toEqual(expanded);
+            if (captureUiProof) {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(artifactDir, `system-busyness-${route}-outer-ready.png`),
+              });
+            }
+            await frame
+              .getByRole("button", { name: "Minimize system busyness", exact: true })
+              .click();
+            await frame.getByRole("button", { name: "Close", exact: true }).press("Escape");
+            await frame.waitFor({ state: "hidden" });
+            expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+          } finally {
+            held.release();
+          }
+        },
+      );
+    },
+  );
 
   it("keeps Home header controls aligned on a cold New session while its body loads", async () => {
     await suite.withPage(
@@ -740,28 +855,7 @@ suite.define(() => {
     );
   });
 
-  it.each([
-    {
-      name: "native titlebar",
-      chunk: nativeTitlebarChunk,
-      label: "openclaw-macos-titlebar-controls",
-      webChrome: true,
-      pathname: "",
-      readySelector: ".sidebar-brand",
-      preserveCollapsedNavigation: false,
-      proofName: "native-titlebar",
-    },
-    {
-      name: "floating sidebar attention",
-      chunk: /\/assets\/sidebar-attention-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
-      label: "sidebar-attention",
-      webChrome: false,
-      pathname: "chat/main?nav=collapsed",
-      readySelector: ".shell--nav-collapsed",
-      preserveCollapsedNavigation: true,
-      proofName: "sidebar-attention",
-    },
-  ])("recovers $name visibly after its chunk fails", async (testCase) => {
+  it("recovers the native titlebar visibly after its chunk fails", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -770,53 +864,37 @@ suite.define(() => {
         ...(railProofDir ? { recordVideo: { dir: railProofDir, size: viewport } } : {}),
       },
       async ({ page }) => {
-        if (testCase.webChrome) {
-          await installNativeWebChrome(page);
-        }
-        if (testCase.preserveCollapsedNavigation) {
-          // Bootstrap consumes this one-shot intent; seed each recovered document
-          // before its router can canonicalize the URL during the retry probe.
-          await page.addInitScript(() => {
-            const url = new URL(window.location.href);
-            url.searchParams.set("nav", "collapsed");
-            window.history.replaceState(window.history.state, "", url);
-          });
-        }
-        const failure = await installChunkFailure(page, testCase.chunk);
+        await installNativeWebChrome(page);
+        const failure = await installChunkFailure(page, nativeTitlebarChunk);
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
         });
-        const response = await page.goto(`${suite.server.baseUrl}${testCase.pathname}`, {
+        const response = await page.goto(suite.server.baseUrl, {
           waitUntil: "domcontentloaded",
         });
         expect(response?.status()).toBe(200);
-        await page.locator(testCase.readySelector).waitFor({ state: "attached" });
-        const error = await expectRealChunkFailure(page, testCase.label);
+        await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+        const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
         await expect.poll(failure.headCount).toBe(1);
         expect(failure.chunkRequestCount()).toBe(1);
         if (railProofDir) {
           await page.screenshot({
-            path: path.join(railProofDir, `${testCase.proofName}-failed.png`),
+            path: path.join(railProofDir, "native-titlebar-failed.png"),
           });
         }
 
         await retryThroughReload(page, error);
-        if (testCase.webChrome) {
-          const toolbar = page.locator(".macos-titlebar-controls");
-          await toolbar.waitFor({ state: "visible" });
-          await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
-          await toolbar.getByRole("button", { name: "New session", exact: true }).click();
-          await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-          await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-        } else {
-          await page.locator(".sidebar-attention--floating .sidebar-issues-button").click();
-          await page.locator("#sidebar-issues-panel").waitFor({ state: "visible" });
-        }
+        const toolbar = page.locator(".macos-titlebar-controls");
+        await toolbar.waitFor({ state: "visible" });
+        await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
+        await toolbar.getByRole("button", { name: "New session", exact: true }).click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+        await page.locator(".new-session-page__message").waitFor({ state: "visible" });
         expect(await error.count()).toBe(0);
         expect(failure.chunkRequestCount()).toBe(2);
         if (railProofDir) {
           await page.screenshot({
-            path: path.join(railProofDir, `${testCase.proofName}-recovered.png`),
+            path: path.join(railProofDir, "native-titlebar-recovered.png"),
           });
         }
       },

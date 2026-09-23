@@ -67,11 +67,22 @@ function formatForbiddenPairingRequirement(approved: ForbiddenPairingEntry): str
 export async function approvePendingPairingRequest(params: {
   requestId: string;
   callerScopes?: readonly string[];
+  assertCurrent?: () => void;
 }): Promise<{ text: string }> {
+  const assertCurrent = params.assertCurrent;
+  const isApprovalCurrent = assertCurrent
+    ? () => {
+        assertCurrent();
+        return true;
+      }
+    : undefined;
   const approved =
-    params.callerScopes === undefined
+    params.callerScopes === undefined && !isApprovalCurrent
       ? await approveDevicePairing(params.requestId)
-      : await approveDevicePairing(params.requestId, { callerScopes: params.callerScopes });
+      : await approveDevicePairing(params.requestId, {
+          callerScopes: params.callerScopes,
+          ...(isApprovalCurrent ? { isApprovalCurrent } : {}),
+        });
   if (!approved) {
     return { text: "Pairing request not found." };
   }

@@ -24,6 +24,8 @@ import {
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
+import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -125,6 +127,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
     const { gateway, emitEvent } = createGatewayHarness(gatewayClient);
     const sessions = createTestSessionCapability(gateway);
     try {
+      await initializeSessionReadContext(context);
       await sessions.refresh({ agentId: "main", force: true });
       expect(sessions.state.result?.sessions.some((row) => row.key === key)).toBe(false);
       const created = await withTimeout(
@@ -141,7 +144,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         15_000,
         "created-claim create response",
       );
-      expect(created).toMatchObject({
+      expect(created, sessions.state.error ?? undefined).toMatchObject({
         key,
         initialRun: { status: "started" },
         entry: { thinkingLevel: "high", updatedAt: Date.now() },
@@ -172,6 +175,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
           { context: { ...context }, client, isWebchatConnect: () => true },
         );
         expect(changed.ok).toBe(true);
+        await flushPendingSessionsChangedEvents();
         expect(deliveredEvents).toContainEqual({
           event: "sessions.changed",
           payload: expect.objectContaining({

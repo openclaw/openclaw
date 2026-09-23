@@ -68,11 +68,15 @@ export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
     <a
       href=${params.href}
       class="nav-item ${params.active ? "nav-item--active" : ""}"
+      aria-current=${params.active ? "page" : nothing}
       @focus=${(event: Event) => params.onPreload(event)}
       @blur=${params.onCancelPreload}
       @pointerenter=${(event: Event) => params.onPreload(event)}
       @pointerleave=${params.onCancelPreload}
-      @touchstart=${(event: TouchEvent) => params.onPreload(event, true)}
+      @touchstart=${{
+        handleEvent: (event: TouchEvent) => params.onPreload(event, true),
+        passive: true,
+      }}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           return;

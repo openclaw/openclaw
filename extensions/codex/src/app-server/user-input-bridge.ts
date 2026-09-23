@@ -9,12 +9,8 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
-import {
-  isJsonObject,
-  type CodexServerNotification,
-  type JsonObject,
-  type JsonValue,
-} from "./protocol.js";
+import type { JsonObject, JsonValue } from "./protocol.js";
+import { CodexServerRequestResolvedError } from "./server-requests.js";
 
 const DEFAULT_USER_INPUT_TIMEOUT_MS = 15 * 60_000;
 // Codex omits a deadline for nonblocking requests, so bound gateway and secret paths alike.
@@ -27,12 +23,9 @@ const MAX_USER_INPUT_TEXT = 4_096;
 type StructuredInputCompileResult = ReturnType<typeof structuredInput.compileForm>;
 
 type InteractiveJob = {
-  requestId: number | string;
-  abort: AbortController;
   cancelValue: JsonValue;
   failureValue: JsonValue;
   run: (signal: AbortSignal) => Promise<JsonValue | undefined>;
-  resolve: (value: JsonValue) => void;
   onResponse?: (value: JsonValue) => void;
 };
 
@@ -51,68 +44,43 @@ export function createCodexUserInputBridge(params: {
     response: JsonValue;
   }) => void;
 }) {
-  const jobs: InteractiveJob[] = [];
-  let activeCompletion: Promise<void> | undefined;
+  const cleanup = new AbortController();
+  const bridgeSignal = params.signal
+    ? AbortSignal.any([params.signal, cleanup.signal])
+    : cleanup.signal;
+  let completion = Promise.resolve();
   const inputSessionKey = params.paramsForRun.sessionKey ?? params.paramsForRun.sessionId;
 
-  const pump = () => {
-    const job = jobs[0];
-    if (activeCompletion || !job) {
-      return;
+  const enqueue = (job: InteractiveJob, requestSignal?: AbortSignal) => {
+    const signal = requestSignal ? AbortSignal.any([bridgeSignal, requestSignal]) : bridgeSignal;
+    if (signal.aborted) {
+      return Promise.resolve(job.cancelValue);
     }
-    activeCompletion = job
-      .run(job.abort.signal)
-      .catch((error: unknown) => {
-        embeddedAgentLog.warn("failed to bridge codex operator input", { error });
-        return job.abort.signal.aborted ? job.cancelValue : job.failureValue;
-      })
-      .then((value) => {
-        // Lifecycle cancellation owns the request once observed, so a late
-        // answer cannot cross into the queued replacement.
-        const response = job.abort.signal.aborted ? job.cancelValue : (value ?? job.failureValue);
-        job.onResponse?.(response);
-        job.resolve(response);
-      })
-      .finally(() => {
-        if (jobs[0] === job) {
-          jobs.shift();
-        }
-        activeCompletion = undefined;
-        pump();
-      });
-  };
-
-  const enqueue = (definition: Omit<InteractiveJob, "resolve">) => {
-    if (params.signal?.aborted) {
-      return Promise.resolve(definition.cancelValue);
-    }
-    return new Promise<JsonValue>((resolve) => {
-      jobs.push({ ...definition, resolve });
-      pump();
+    return new Promise<JsonValue>((resolve, reject) => {
+      const onAbort = () => resolve(job.cancelValue);
+      signal.addEventListener("abort", onAbort, { once: true });
+      completion = completion
+        .then(async () => {
+          signal.removeEventListener("abort", onAbort);
+          if (signal.aborted) {
+            return;
+          }
+          let value: JsonValue | undefined;
+          try {
+            value = await job.run(signal);
+          } catch (error) {
+            if (!signal.aborted) {
+              embeddedAgentLog.warn("failed to bridge codex operator input", { error });
+            }
+          }
+          const response = signal.aborted ? job.cancelValue : (value ?? job.failureValue);
+          if (!(signal.reason instanceof CodexServerRequestResolvedError)) {
+            job.onResponse?.(response);
+          }
+          resolve(response);
+        })
+        .catch(reject);
     });
-  };
-
-  const cancelJob = (job: InteractiveJob) => {
-    const index = jobs.indexOf(job);
-    if (index < 0) {
-      return;
-    }
-    if (index === 0) {
-      job.abort.abort(new Error("Codex operator input request cancelled"));
-      return;
-    }
-    jobs.splice(index, 1);
-    job.resolve(job.cancelValue);
-  };
-
-  const cancelPending = async () => {
-    const pendingCompletion = activeCompletion;
-    const queuedJobs = jobs.splice(1);
-    for (const job of queuedJobs) {
-      job.resolve(job.cancelValue);
-    }
-    jobs[0]?.abort.abort(new Error("Codex operator input request cancelled"));
-    await pendingCompletion;
   };
 
   const execute = (input: StructuredInputCompileResult, timeoutMs: number, signal: AbortSignal) =>
@@ -132,10 +100,8 @@ export function createCodexUserInputBridge(params: {
       },
     });
 
-  params.signal?.addEventListener("abort", () => void cancelPending(), { once: true });
-
   return {
-    async handleRequest(request: CodexInputRequest) {
+    async handleRequest(request: CodexInputRequest, requestSignal?: AbortSignal) {
       const requestParams = readUserInputParams(request.params);
       if (
         !requestParams ||
@@ -152,112 +118,81 @@ export function createCodexUserInputBridge(params: {
         : NONBLOCKING_USER_INPUT_TIMEOUT_MS;
       const input = compileUserInputQuestions(requestParams.questions);
       const cancelValue = emptyUserInputResponse();
-      return await enqueue({
-        requestId: request.id,
-        abort: new AbortController(),
-        cancelValue,
-        failureValue: cancelValue,
-        // Secret requests never enter the transcript, including cancelled or mixed forms.
-        onResponse: requestParams.questions.some((question) => question.isSecret)
-          ? undefined
-          : (response) =>
-              params.onOrdinaryResponse?.({
-                itemId: requestParams.itemId,
-                questions: requestParams.questions,
-                response,
-              }),
-        run: async (signal) => {
-          const result = await execute(input, timeoutMs, signal);
-          return result.status === "answered"
-            ? gatewayAnswersToCodexResponse(result.answers)
-            : cancelValue;
+      return await enqueue(
+        {
+          cancelValue,
+          failureValue: cancelValue,
+          // Secret requests never enter the transcript, including cancelled or mixed forms.
+          onResponse: requestParams.questions.some((question) => question.isSecret)
+            ? undefined
+            : (response) =>
+                params.onOrdinaryResponse?.({
+                  itemId: requestParams.itemId,
+                  questions: requestParams.questions,
+                  response,
+                }),
+          run: async (signal) => {
+            const result = await execute(input, timeoutMs, signal);
+            return result.status === "answered"
+              ? gatewayAnswersToCodexResponse(result.answers)
+              : cancelValue;
+          },
         },
-      });
+        requestSignal,
+      );
     },
-    async handleElicitationRequest(request: CodexInputRequest) {
+    async handleElicitationRequest(request: CodexInputRequest, requestSignal?: AbortSignal) {
       if (readOwnDataString(request.params, "threadId") !== params.threadId) {
         return undefined;
       }
       const requestSnapshot = structuredInput.snapshot(request.params);
-      if (!structuredInput.isRecord(requestSnapshot)) {
-        const cancelValue = createCodexElicitationResponse("cancel");
-        return await enqueue({
-          requestId: request.id,
-          abort: new AbortController(),
-          cancelValue,
-          failureValue: declineElicitation("OpenClaw could not handle this elicitation."),
-          run: async (signal) => {
-            const result = await execute(
-              {
-                kind: "unsupported",
-                message: "OpenClaw declined a malformed or over-limit MCP elicitation request.",
-              },
-              params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS,
-              signal,
-            );
-            return result.status === "unsupported"
-              ? declineElicitation(result.message)
-              : cancelValue;
-          },
-        });
-      }
-      if (readOwnDataString(requestSnapshot, "threadId") !== params.threadId) {
+      if (
+        structuredInput.isRecord(requestSnapshot) &&
+        readOwnDataString(requestSnapshot, "threadId") !== params.threadId
+      ) {
         return undefined;
       }
       const { compileCodexOrdinaryElicitation } = await import("./elicitation-input.js");
-      const compiled = compileCodexOrdinaryElicitation({
-        snapshot: requestSnapshot,
-        turnId: params.turnId,
-      });
+      const compiled = structuredInput.isRecord(requestSnapshot)
+        ? compileCodexOrdinaryElicitation({ snapshot: requestSnapshot, turnId: params.turnId })
+        : {
+            kind: "compiled" as const,
+            input: {
+              kind: "unsupported" as const,
+              message: "OpenClaw declined a malformed or over-limit MCP elicitation request.",
+            },
+          };
       if (compiled.kind === "ignored") {
         return undefined;
       }
       const cancelValue = createCodexElicitationResponse("cancel");
       const timeoutMs = params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS;
-      return await enqueue({
-        requestId: request.id,
-        abort: new AbortController(),
-        cancelValue,
-        failureValue: declineElicitation("OpenClaw could not handle this elicitation."),
-        run: async (signal) => {
-          const result = await execute(compiled.input, timeoutMs, signal);
-          if (result.status === "answered") {
-            const content =
-              compiled.input.kind === "ready" && compiled.input.plan.kind === "url"
-                ? null
-                : result.content;
-            return createCodexElicitationResponse("accept", content);
-          }
-          if (result.status === "declined") {
-            return declineElicitation(result.message);
-          }
-          if (result.status === "unsupported") {
-            return declineElicitation(result.message);
-          }
-          return cancelValue;
+      return await enqueue(
+        {
+          cancelValue,
+          failureValue: declineElicitation("OpenClaw could not handle this elicitation."),
+          run: async (signal) => {
+            const result = await execute(compiled.input, timeoutMs, signal);
+            if (result.status === "answered") {
+              const content =
+                compiled.input.kind === "ready" && compiled.input.plan.kind === "url"
+                  ? null
+                  : result.content;
+              return createCodexElicitationResponse("accept", content);
+            }
+            if (result.status === "declined" || result.status === "unsupported") {
+              return declineElicitation(result.message);
+            }
+            return cancelValue;
+          },
         },
-      });
-    },
-    handleNotification(notification: CodexServerNotification) {
-      if (notification.method !== "serverRequest/resolved" || !isJsonObject(notification.params)) {
-        return;
-      }
-      const requestId = readRequestId(notification.params);
-      if (
-        requestId === undefined ||
-        readOwnDataString(notification.params, "threadId") !== params.threadId
-      ) {
-        return;
-      }
-      const job = jobs.find(
-        (candidate) =>
-          typeof candidate.requestId === typeof requestId && candidate.requestId === requestId,
+        requestSignal,
       );
-      if (job) {
-        cancelJob(job);
-      }
     },
-    cancelPending,
+    async cancelPending() {
+      cleanup.abort(new Error("Codex operator input request cancelled"));
+      await completion;
+    },
   };
 }
 
@@ -384,12 +319,6 @@ function readOwnDataString(value: unknown, key: string): string | undefined {
   return descriptor && "value" in descriptor && typeof descriptor.value === "string"
     ? descriptor.value
     : undefined;
-}
-
-function readRequestId(record: JsonObject): string | number | undefined {
-  const descriptor = Object.getOwnPropertyDescriptor(record, "requestId");
-  const value = descriptor && "value" in descriptor ? descriptor.value : undefined;
-  return typeof value === "string" || typeof value === "number" ? value : undefined;
 }
 
 function gatewayAnswersToCodexResponse(answers: Record<string, string[]>): JsonObject {

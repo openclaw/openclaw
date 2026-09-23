@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { isStateDatabaseReadAdmissionInvalidatedError as retainedReadAdmissionInvalidated } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -11,6 +13,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
 import {
   captureConfigHealthStateStore,
   readConfigHealthStateFromStore,
@@ -122,11 +125,7 @@ describe("config health-state warnings", () => {
     const snapshot = await createConfigIO({ ...options, observe: false }).readConfigFileSnapshot();
     const observationDeps = normalizeConfigIoDeps(options);
     await closeOpenClawStateDatabaseAsync();
-    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-    const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    );
+    const mainSql = observeMainThreadSql();
     try {
       using store = captureConfigHealthStateStore(deps, configPath);
       expect((await store.read())?.state).toEqual({});
@@ -141,21 +140,67 @@ describe("config health-state warnings", () => {
       await closeOpenClawStateDatabaseAsync();
       using reopened = captureConfigHealthStateStore(deps, configPath);
       expect(await reopened.read()).toEqual(observed);
-      expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
-      for (const statement of statements) {
-        expect(statement).not.toHaveBeenCalled();
-      }
+      mainSql.expectIdle();
     } finally {
-      prepare.mockRestore();
-      exec.mockRestore();
-      for (const statement of statements) {
-        statement.mockRestore();
-      }
+      mainSql.restore();
     }
     expect(readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood?.hash).toBe(
       hashConfigRaw(raw),
     );
+  });
+
+  it("keeps a valid config snapshot when health observation admission retires", async () => {
+    const deps = createHealthDeps();
+    const configPath = path.join(deps.env.HOME, "openclaw.json");
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+    patchConfigHealthEntryToStore(deps, configPath, {
+      lastObservedSuspiciousSignature: "seed",
+    });
+    const seeded = readConfigHealthStateFromStore(deps);
+    {
+      using retained = captureConfigHealthStateStore(deps, configPath);
+      expect(await retained.read()).not.toBeNull();
+    }
+    vi.resetModules();
+    const [freshConfig, freshHealth, freshLifecycle, freshReadHelpers] = await Promise.all([
+      import("./io.js"),
+      import("./io.health-state.js"),
+      import("../state/openclaw-state-db-async-lifecycle.js"),
+      import("./io.read-helpers.js"),
+    ]);
+    expect(freshLifecycle.isStateDatabaseReadAdmissionInvalidatedError).not.toBe(
+      retainedReadAdmissionInvalidated,
+    );
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const options = {
+      ...deps,
+      configPath,
+      env: { ...deps.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+    };
+    const normalized = freshReadHelpers.normalizeConfigIoDeps(options);
+    const realStat = normalized.fs.promises.stat.bind(normalized.fs.promises);
+    const stat = vi.spyOn(normalized.fs.promises, "stat").mockImplementation(async (...args) => {
+      if (path.resolve(String(args[0])) === configPath) {
+        entered.resolve();
+        await release.promise;
+      }
+      return realStat(...args);
+    });
+    const pending = freshConfig
+      .createConfigIO({ ...options, fs: normalized.fs })
+      .readConfigFileSnapshot();
+    try {
+      await entered.promise;
+      await closeOpenClawStateDatabaseAsync();
+      release.resolve();
+      expect((await pending).valid).toBe(true);
+      expect(freshHealth.readConfigHealthStateFromStore(deps)).toEqual(seeded);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+      stat.mockRestore();
+    }
   });
 
   it.each(["sync", "async"] as const)(

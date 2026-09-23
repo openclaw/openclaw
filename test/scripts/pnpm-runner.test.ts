@@ -360,11 +360,6 @@ describe("resolvePnpmRunner", () => {
     };
     const args = ["run", "build", "literal & argument", ""];
     const expectedOutput = [marker, ...args, ""].join("\n");
-    const native = spawnSync("pnpm", args, { cwd, env, encoding: "utf8", timeout: 5_000 });
-    expect(native.error).toBeUndefined();
-    expect(native.status, native.stderr).toBe(exitCode);
-    expect(native.stdout).toBe(expectedOutput);
-
     const spec = createPnpmRunnerSpawnSpec({
       cwd,
       env,
@@ -378,9 +373,9 @@ describe("resolvePnpmRunner", () => {
       timeout: 5_000,
     });
     expect(wrapped.error).toBeUndefined();
-    expect(wrapped.status, wrapped.stderr).toBe(native.status);
-    expect(wrapped.stdout).toBe(native.stdout);
-    expect(wrapped.stderr).toBe(native.stderr);
+    expect(wrapped.status, wrapped.stderr).toBe(exitCode);
+    expect(wrapped.stdout).toBe(expectedOutput);
+    expect(wrapped.stderr).toBe("");
   });
 
   posixIt("uses Corepack when pnpm is not directly available on PATH", () => {

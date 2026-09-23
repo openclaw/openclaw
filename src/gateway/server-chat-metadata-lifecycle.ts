@@ -55,18 +55,18 @@ export async function createGatewayChatMetadataLifecycle(params: {
     },
     log: params.log,
   });
-  const refreshLogged = () => {
-    void runtime.refresh().catch((error: unknown) => {
+  const refreshLogged = (notifyIfUnchanged = false) => {
+    void runtime.refresh({ notifyIfUnchanged }).catch((error: unknown) => {
       params.log.warn(`chat metadata refresh failed: ${String(error)}`);
     });
   };
-  const refreshForSubordinateChange = () => {
+  const refreshForSubordinateChange = (notifyIfUnchanged = false) => {
     // Auth and skill facts are subordinate to the prepared model owner. During replacement the
     // publication event owns the one catch-up refresh after every related fact is committed.
     if (preparedModelRuntimeState === "available") {
       // The metadata owner compares captured facts before fencing changed generations.
       // Unrelated workspace events and repeated catalog statuses must not discard its cache.
-      refreshLogged();
+      refreshLogged(notifyIfUnchanged);
     }
   };
   const registerRefreshListeners = async (): Promise<(() => void) | undefined> => {
@@ -85,7 +85,16 @@ export async function createGatewayChatMetadataLifecycle(params: {
     const unregisterPreparedModelRuntimePublication =
       registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "catalog-published" || event.phase === "catalog-failed") {
-          refreshForSubordinateChange();
+          if (
+            event.phase === "catalog-published" &&
+            event.modelFactsChanged === false &&
+            !event.refreshStatusChanged
+          ) {
+            return;
+          }
+          refreshForSubordinateChange(
+            event.phase === "catalog-published" && event.refreshStatusChanged === true,
+          );
           return;
         }
         preparedModelRuntimeEventVersion += 1;

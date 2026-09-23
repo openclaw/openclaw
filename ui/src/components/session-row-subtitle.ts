@@ -53,11 +53,8 @@ export function resolveSidebarSessionSubtitle(params: {
   const observer = running || finalDigestUnread ? projectedDigest?.headline : undefined;
   // Preview off hides ambient text only. Subtitle-owned attention and a critical
   // observer headline survive the toggle: errors, pending approvals, and the
-  // stuck / waiting-on-user
-  // health states are things the operator must act on. isCriticalObserverHealth owns
-  // that classification and the chat pane announces the same two states, so a display
-  // preference must not silence them here — that would turn a visible non-outcome into
-  // a silent one.
+  // stuck / waiting-on-user health states still belong beside their session, even
+  // when the operator hides routine activity previews.
   if (!params.showPreview) {
     const critical = isCriticalObserverHealth(projectedDigest?.health) ? observer : undefined;
     return { subtitle: attention ?? critical, narration: undefined };

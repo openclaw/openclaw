@@ -4,10 +4,8 @@
  * Loads local/web PDFs, extracts pages/text, and analyzes them with native or fallback media-understanding models.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
@@ -26,7 +24,6 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import { abortable } from "../embedded-agent-runner/run/abortable.js";
@@ -229,6 +226,7 @@ async function runPdfPrompt(params: {
     run: async (provider, modelId) => {
       // Static snapshots serve configured models through prepared facts; a fresh registry can be empty.
       const resolved = await resolveModelAsync(provider, modelId, runtimeAgentDir, effectiveCfg, {
+        abortSignal: params.signal,
         modelIdSource: "selected",
         allowBundledStaticCatalogFallback: true,
         ...preparedStores,
@@ -331,7 +329,7 @@ async function runPdfPrompt(params: {
         const completion = params.work.track(() =>
           providerStreamFn
             ? (async () => await (await providerStreamFn(model, context, streamOptions)).result())()
-            : complete(model, context, streamOptions),
+            : complete(model, context, streamOptions, params.assertResourcesOpen),
         );
         return params.signal ? await abortable(params.signal, completion) : await completion;
       };
@@ -383,6 +381,7 @@ export function createPdfTool(options?: {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
+  cwd?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: PdfSandboxConfig;
   fsPolicy?: ToolFsPolicy;
@@ -509,7 +508,7 @@ export function createPdfTool(options?: {
       // aborted, so a dead run cannot keep pulling remote PDFs.
       signal?.throwIfAborted();
       const trimmed = normalizeMediaReferenceSource(pdfRaw);
-      const refInfo = classifyMediaReferenceSource(trimmed);
+      const refInfo = classifyMediaReferenceSource(trimmed, { allowDataUrl: false });
       const { isHttpUrl } = refInfo;
 
       if (refInfo.hasUnsupportedScheme) {
@@ -528,24 +527,13 @@ export function createPdfTool(options?: {
         throw new Error("Sandboxed PDF tool does not allow remote URLs.");
       }
 
-      const resolvedPdf = (() => {
-        if (sandboxConfig) {
-          return trimmed;
-        }
-        if (trimmed.startsWith("~")) {
-          return resolveUserPath(trimmed);
-        }
-        return trimmed;
-      })();
-
       const { resolvedPath, localRoots, rewrittenFrom } = await resolveMediaToolReferenceAccess({
-        input: resolvedPdf,
+        input: trimmed,
         isDataUrl: false,
         workspaceDir: options?.workspaceDir,
+        cwd: options?.cwd,
+        fsPolicy: options?.fsPolicy,
         sandbox: sandboxConfig,
-        rootOptions: {
-          workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
-        },
       });
       if (resolvedPath === null) {
         throw new Error("PDF reference resolved without a path.");
@@ -568,12 +556,8 @@ export function createPdfTool(options?: {
             ...(signal ? { requestInit: { signal } } : {}),
           });
 
-      if (media.kind !== "document") {
-        // Check MIME type more specifically
-        const ct = normalizeLowercaseStringOrEmpty(media.contentType);
-        if (!ct.includes("pdf") && !ct.includes("application/pdf")) {
-          throw new Error(`Expected PDF but got ${media.contentType ?? media.kind}: ${pdfRaw}`);
-        }
+      if (normalizeMimeType(media.contentType) !== "application/pdf") {
+        throw new Error(`Expected PDF but got ${media.contentType ?? media.kind}: ${pdfRaw}`);
       }
 
       const filename =

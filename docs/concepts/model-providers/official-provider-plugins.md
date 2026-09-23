@@ -22,11 +22,13 @@ Official provider plugins publish their own model catalog rows. These providers 
 - CLI: `openclaw onboard --auth-choice openai-api-key`
 - Direct OpenAI API-key Responses requests default to `"sse"`.
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, `"websocket-cached"`, or `"auto"`). Cached WebSockets reuse the session connection and send only new input with `previous_response_id` when history still matches.
+- The `"sse"` transport also supports HTTP continuation for a native `openai/openai-responses` model at the exact public `https://api.openai.com/v1` base URL (ChatGPT/Codex `openai-chatgpt-responses` routes are excluded and deliberately stay `store: false`): OpenClaw caches the request per session+credential and, when the next turn's history is a strict extension, sends only the new input plus `previous_response_id` instead of the full growing history. A rejected/expired `previous_response_id` (Zero Data Retention, TTL eviction) retries once, same turn, with the full request.
+  - For a custom `openai-responses` model, set `models.providers.<provider>.models[].compat.supportsResponsesContinuation: true` after verifying that its endpoint supports stored responses and `previous_response_id`. This enables `store: true` for that model, allowing the backend to retain requests even when a turn cannot continue. Other custom models remain stateless. `compat.supportsStore: false` disables this opt-in. The `azure-openai-responses` and ChatGPT/Codex transports, plus the `azure-openai` and `azure-openai-responses` provider IDs, are excluded.
 - Set an explicit OpenAI API service tier with `params.serviceTier` or `params.service_tier`; Fast mode (formerly Priority processing) uses `service_tier=priority`.
 - On native public OpenAI and ChatGPT/Codex Responses requests, precedence is payload/transport `service_tier`, then a valid explicit model param, then the fast-mode default.
 - `/fast` and valid `params.fastMode` / `params.fast_mode` values are shared agent-runtime controls; on direct embedded `openai/*` Responses requests they supply `service_tier=priority` only when no higher-precedence tier exists.
 - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) apply only on native OpenAI traffic to `api.openai.com`, not generic OpenAI-compatible proxies
-- Native OpenAI routes also keep Responses `store`, prompt-cache hints, and OpenAI reasoning-compat payload shaping; proxy routes do not
+- Native OpenAI provider-managed storage, prompt-cache hints, and reasoning payload shaping are unchanged. Raw native transport calls retain `store: false` by default. The custom-model continuation opt-in enables storage only; it does not enable prompt-cache hints or server compaction.
 - `openai/gpt-5.3-codex-spark` is available only through ChatGPT/Codex OAuth; direct OpenAI API-key and Azure API-key routes reject it
 
 ```json5
@@ -183,36 +185,36 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 
 ### Other bundled provider plugins
 
-| Provider                                | Id                               | Auth env                                       | Example model                                          |
-| --------------------------------------- | -------------------------------- | ---------------------------------------------- | ------------------------------------------------------ |
-| [Arcee](/providers/arcee)               | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`      | `arcee/trinity-large-thinking`                         |
-| BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                             | `byteplus-plan/ark-code-latest`                        |
-| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                             | `cerebras/zai-glm-4.7`                                 |
-| Chutes                                  | `chutes`                         | `CHUTES_API_KEY` or `CHUTES_OAUTH_TOKEN`       | `chutes/zai-org/GLM-5-TEE`                             |
-| ClawRouter                              | `clawrouter`                     | `CLAWROUTER_API_KEY`                           | `clawrouter/anthropic/claude-sonnet-4-6`               |
-| Cohere                                  | `cohere`                         | `COHERE_API_KEY`                               | `cohere/command-a-plus-05-2026`                        |
-| DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                            | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`              |
-| DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                             | `deepseek/deepseek-v4-flash`                           |
-| Featherless AI                          | `featherless`                    | `FEATHERLESS_API_KEY`                          | `featherless/Qwen/Qwen3-32B`                           |
-| GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN`                         | -                                                      |
-| GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                  | `gmi/google/gemini-3.1-flash-lite`                     |
-| Groq                                    | `groq`                           | `GROQ_API_KEY`                                 | `groq/llama-3.3-70b-versatile`                         |
-| Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`          | `huggingface/deepseek-ai/DeepSeek-R1`                  |
-| MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`      | `minimax/MiniMax-M3`                                   |
-| Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                              | `mistral/mistral-large-latest`                         |
-| Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                             | `moonshot/kimi-k2.6`                                   |
-| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                               | `nvidia/nvidia/nemotron-3-ultra-550b-a55b`             |
-| NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                               | `novita/deepseek/deepseek-v3-0324`                     |
-| [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                               | `ollama-cloud/kimi-k2.6`                               |
-| OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`       | `openrouter/auto`                                      |
-| Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                              | `qianfan/deepseek-v3.2`                                |
-| Tencent TokenHub                        | `tencent-tokenhub`               | `TOKENHUB_API_KEY`                             | `tencent-tokenhub/hy3-preview`                         |
-| Together                                | `together`                       | `TOGETHER_API_KEY`                             | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`     |
-| Venice                                  | `venice`                         | `VENICE_API_KEY`                               | -                                                      |
-| Vercel AI Gateway                       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                           | `vercel-ai-gateway/anthropic/claude-opus-4.6`          |
-| Volcano Engine (Doubao)                 | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                       | `volcengine-plan/ark-code-latest`                      |
-| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`     | `xai/grok-4.6`                                         |
-| Xiaomi                                  | `xiaomi` / `xiaomi-token-plan`   | `XIAOMI_API_KEY` / `XIAOMI_TOKEN_PLAN_API_KEY` | `xiaomi/mimo-v2.5` / `xiaomi-token-plan/mimo-v2.5-pro` |
+| Provider                                | Id                               | Auth env                                       | Example model                                              |
+| --------------------------------------- | -------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
+| [Arcee](/providers/arcee)               | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`      | `arcee/trinity-large-thinking`                             |
+| BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                             | `byteplus-plan/ark-code-latest`                            |
+| Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                             | `cerebras/zai-glm-4.7`                                     |
+| Chutes                                  | `chutes`                         | `CHUTES_API_KEY` or `CHUTES_OAUTH_TOKEN`       | `chutes/zai-org/GLM-5-TEE`                                 |
+| ClawRouter                              | `clawrouter`                     | `CLAWROUTER_API_KEY`                           | `clawrouter/anthropic/claude-sonnet-4-6`                   |
+| Cohere                                  | `cohere`                         | `COHERE_API_KEY`                               | `cohere/command-a-plus-05-2026`                            |
+| DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                            | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`                  |
+| DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                             | `deepseek/deepseek-v4-flash`                               |
+| Featherless AI                          | `featherless`                    | `FEATHERLESS_API_KEY`                          | `featherless/Qwen/Qwen3-32B`                               |
+| GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN`                         | -                                                          |
+| GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                  | `gmi/google/gemini-3.1-flash-lite`                         |
+| Groq                                    | `groq`                           | `GROQ_API_KEY`                                 | `groq/llama-3.3-70b-versatile`                             |
+| Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`          | `huggingface/deepseek-ai/DeepSeek-R1`                      |
+| MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`      | `minimax/MiniMax-M3`                                       |
+| Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                              | `mistral/mistral-large-latest`                             |
+| Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                             | `moonshot/kimi-k2.6`                                       |
+| NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                               | `nvidia/nvidia/nemotron-3-ultra-550b-a55b`                 |
+| NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                               | `novita/deepseek/deepseek-v3-0324`                         |
+| [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                               | `ollama-cloud/kimi-k2.6`                                   |
+| OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`       | `openrouter/auto`                                          |
+| Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                              | `qianfan/deepseek-v3.2`                                    |
+| Tencent TokenHub                        | `tencent-tokenhub`               | `TOKENHUB_API_KEY`                             | `tencent-tokenhub/hy3-preview`                             |
+| Together                                | `together`                       | `TOGETHER_API_KEY`                             | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`         |
+| Venice                                  | `venice`                         | `VENICE_API_KEY`                               | -                                                          |
+| Vercel AI Gateway                       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                           | `vercel-ai-gateway/anthropic/claude-opus-4.6`              |
+| Volcano Engine (Doubao)                 | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                       | `volcengine-plan/ark-code-latest`                          |
+| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`     | `xai/grok-4.7`                                             |
+| Xiaomi                                  | `xiaomi` / `xiaomi-token-plan`   | `XIAOMI_API_KEY` / `XIAOMI_TOKEN_PLAN_API_KEY` | `xiaomi/mimo-v2.6-pro` / `xiaomi-token-plan/mimo-v2.6-pro` |
 
 #### Quirks worth knowing
 
@@ -230,6 +232,6 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
     Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
   </Accordion>
   <Accordion title="xAI">
-    Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; OAuth and API-key setup use the curated `xai/grok-4.6` default. Existing primary models stay pinned. Run `openclaw doctor --fix` to repair retired `xai/auto` selections on the subscription route. API keys still work via `XAI_API_KEY` or plugin config. Grok `web_search` reuses the same auth profile before API-key fallback. Older `/fast` and `params.fastMode: true` configurations still resolve through xAI's Grok 4.3 compatibility redirects, but new configurations should select a current model directly. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
+    Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; OAuth and API-key setup use the curated `xai/grok-4.7` default. Existing primary models stay pinned. Run `openclaw doctor --fix` to repair retired `xai/auto` selections on the native API and subscription routes. API keys still work via `XAI_API_KEY` or plugin config. Grok `web_search` reuses the same auth profile before API-key fallback. Older `/fast` and `params.fastMode: true` configurations still resolve through xAI's Grok 4.3 compatibility redirects, but new configurations should select a current model directly. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
   </Accordion>
 </AccordionGroup>

@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
+import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
 import { resolveAssistantAttachmentAuthToken } from "../chat-pane-state.ts";
-import { createTestChatPane } from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
   buildCachedChatItems,
@@ -16,13 +18,13 @@ import {
   getExpansionStateVersion,
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import {
-  isChatMediaResourceCurrent,
-  observeChatMediaResource,
-  releaseChatMediaResourceSubscriber,
-} from "./chat-message-media.ts";
+import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import * as chatMessage from "./chat-message.ts";
-import { resetTranscriptSession } from "./chat-thread-interactions.ts";
+import {
+  renderTranscriptSearch,
+  resetTranscriptSession,
+  toggleTranscriptSearch,
+} from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
@@ -35,6 +37,153 @@ import {
 describe("chat transcript invalidation", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it.each(["ready", "delayed"])(
+    "updates settled avatars when only the theme hat changes with a %s palette",
+    (palette) => {
+      const branding = { mascot: "claw" as const, critters: [], avatarHat: "fedora" as const };
+      const agentId = Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
+        resolveAvatarHat(id, branding),
+      )!;
+      const props = threadProps("pane-avatar-hat", `agent:${agentId}:main`, [
+        { role: "assistant", content: "Ready.", timestamp: 1_000 },
+      ]);
+      props.currentAgentId = agentId;
+      props.selectedSession = { key: props.sessionKey, kind: "group", updatedAt: 1 };
+      props.branding = { ...branding, avatarHat: undefined };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => render(renderChatThread(props, transcript), container);
+      const previousBranding = currentThemeBranding();
+      try {
+        setCurrentThemeBranding(props.branding);
+        rerender();
+        expect(container.querySelector(".identity-avatar--agent")).not.toBeNull();
+        expect(container.querySelector(".identity-avatar__hat")).toBeNull();
+        props.branding = branding;
+        setCurrentThemeBranding(branding);
+        rerender();
+        expect(container.querySelector(".identity-avatar__hat--fedora")).not.toBeNull();
+        props.branding = { ...branding, avatarHat: undefined };
+        if (palette === "delayed") {
+          rerender();
+          expect(container.querySelector(".identity-avatar__hat--fedora")).not.toBeNull();
+        }
+        setCurrentThemeBranding(props.branding);
+        rerender();
+        expect(container.querySelector(".identity-avatar__hat")).toBeNull();
+      } finally {
+        setCurrentThemeBranding(previousBranding);
+        render(nothing, container);
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
+  it.each(["session participants", "history", "pending input"] as const)(
+    "shows your name when a peer arrives through %s and keeps it while search hides the peer",
+    async (peerSource) => {
+      const paneId = `pane-sender-${peerSource}`;
+      const self = { identity: { type: "profile" as const, id: "viewer" }, label: "Alex" };
+      const peer = { identity: { type: "profile" as const, id: "peer" }, label: "Riley" };
+      const ownMessage = {
+        role: "user",
+        content: "Review my draft.",
+        timestamp: 1_000,
+        __openclaw: {
+          id: "own-message",
+          senderId: self.identity.id,
+          senderIdentity: self.identity,
+          senderName: self.label,
+          transport: { clients: [{ id: "openclaw-control-ui", mode: "webchat" }] },
+        },
+      };
+      const peerMessage = {
+        role: "user",
+        content: "Check the example too.",
+        timestamp: 3_000,
+        __openclaw: {
+          id: "peer-message",
+          senderId: peer.identity.id,
+          senderIdentity: peer.identity,
+          senderName: peer.label,
+        },
+      };
+      const props = threadProps(paneId, "agent:main:dashboard:sender-visibility", [
+        ownMessage,
+        { role: "assistant", content: "The draft looks good.", timestamp: 2_000 },
+      ]);
+      props.userId = self.identity.id;
+      props.userName = self.label;
+      props.selectedSession = {
+        key: props.sessionKey,
+        kind: "direct",
+        updatedAt: 1,
+        participants: [self, { identity: { type: "agent", id: "main" }, label: "Molty" }],
+        participantCount: 2,
+      };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const searchContainer = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderTranscriptSearch(paneId, rerender), searchContainer);
+        render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
+        transcript.hostUpdated();
+      };
+      const ownName = () =>
+        container.querySelector(".chat-group.user:not(.chat-group--peer) .chat-sender-name");
+      try {
+        rerender();
+        transcript.hostConnected();
+        await flushDeferredRowPrune();
+        expect(container.textContent).toContain(ownMessage.content);
+        expect(ownName()).toBeNull();
+        expect(container.querySelector(".chat-message-source")).toBeNull();
+
+        if (peerSource === "session participants") {
+          props.selectedSession = {
+            ...props.selectedSession,
+            expandedParticipants: [...props.selectedSession.participants!, peer],
+            participantCount: 3,
+          };
+        } else if (peerSource === "history") {
+          props.messages = [...props.messages, peerMessage];
+        } else {
+          props.pendingInputs = [
+            {
+              id: "queued-peer",
+              runId: "peer-run",
+              acceptedAt: 3_000,
+              state: "queued",
+              message: peerMessage,
+            },
+          ];
+        }
+        rerender();
+        await flushDeferredRowPrune();
+        expect(ownName()?.textContent).toBe("Alex");
+        if (peerSource !== "session participants") {
+          expect(container.querySelector(".chat-group--peer .chat-sender-name")?.textContent).toBe(
+            "Riley",
+          );
+        }
+
+        toggleTranscriptSearch(paneId, rerender);
+        const input = expectDefined(
+          searchContainer.querySelector<HTMLInputElement>("input"),
+          "transcript search",
+        );
+        input.value = ownMessage.content;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await flushDeferredRowPrune();
+        expect(container.textContent).toContain(ownMessage.content);
+        expect(container.textContent).not.toContain(peerMessage.content);
+        expect(ownName()?.textContent).toBe("Alex");
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
 
   describe("user video previews", () => {
     const videoUrl = "https://cdn.example/recording.mp4";
@@ -142,6 +291,30 @@ describe("chat transcript invalidation", () => {
     });
   });
 
+  it("updates persisted named references when the connection catalog changes without transcript edits", () => {
+    const props = threadProps("pane-named", "agent:main:named", [
+      { role: "assistant", content: "ClawSweeper PR **#1576 opened**", timestamp: 1_000 },
+    ]);
+    props.githubRepo = { owner: "openclaw", repo: "openclaw" };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => render(renderChatThread(props, transcript), container);
+    const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
+    rerender();
+    expect(chip()).toBeNull();
+    props.githubRepositories = [
+      { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] },
+    ];
+    rerender();
+    expect(chip()?.href).toBe("https://github.com/openclaw/clawsweeper/pull/1576");
+    props.githubRepositories = [{ aliases: ["ClawSweeper"] }];
+    rerender();
+    expect(chip()).toBeNull();
+    props.githubRepositories = [{ owner: "fork", repo: "clawsweeper", aliases: ["ClawSweeper"] }];
+    rerender();
+    expect(chip()?.href).toBe("https://github.com/fork/clawsweeper/pull/1576");
+  });
+
   it("updates settled GitHub reference chips when the session repository arrives or changes", () => {
     vi.spyOn(Date, "now").mockReturnValue(60_000);
     const props = threadProps("pane-github-repository", "agent:main:github-repository", [
@@ -174,16 +347,17 @@ describe("chat transcript invalidation", () => {
         timestamp: index + 1,
         __openclaw: { id: `message-${index}` },
       }));
-      const transcript = {
-        expandedAssistantMessages: new Map(),
-        setContentReady: vi.fn(),
-        syncMessageRows: vi.fn(),
-      } as unknown as Parameters<typeof projectChatTranscript>[1];
+      const transcript = createTestTranscript();
       const props = threadProps("pane-offscreen-history", sessionKey, messages);
-      projectChatTranscript(props, transcript);
+      const project = () =>
+        transcript.renderSession(props.paneId, sessionKey, (session) => {
+          projectChatTranscript(props, session);
+          return html``;
+        });
+      project();
 
       const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
-      projectChatTranscript(props, transcript);
+      project();
 
       const historicalMessages = new Set<unknown>(messages);
       expect(normalizeSpy.mock.calls.some(([message]) => historicalMessages.has(message))).toBe(
@@ -538,7 +712,7 @@ describe("chat transcript invalidation", () => {
     const client = {
       request: vi.fn(async () => null),
     } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
-    const sessions = {} as Parameters<typeof createTestChatPane>[0]["sessions"];
+    const sessions = createSessionCapabilityFixture();
     const { pane, state } = createTestChatPane({ client, sessions });
     state.hello = {
       auth: { deviceToken: "test-auth-token" },
@@ -571,13 +745,12 @@ describe("chat transcript invalidation", () => {
     transcript.hostUpdated();
     await flushDeferredRowPrune();
 
-    const thumbnailSource = source.replace(/\/full$/u, "/thumbnail");
-    const previousResource = observeChatMediaResource<string | null>(
-      "managed-image",
-      `${thumbnailSource}::test-auth-token::`,
-    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(previousResource.subscribers.size).toBe(1);
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+      "Bearer test-auth-token",
+    );
+    expect(previousSignal?.aborted).toBe(false);
+    expect(container.querySelector(".chat-message-image")).toBeNull();
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
@@ -589,19 +762,12 @@ describe("chat transcript invalidation", () => {
       } as typeof pane.context.gateway.snapshot.hello,
     });
     expect(previousSignal?.aborted).toBe(true);
-    expect(isChatMediaResourceCurrent(previousResource)).toBe(false);
     await flushDeferredRowPrune();
 
-    const nextResource = observeChatMediaResource<string | null>(
-      "managed-image",
-      `${thumbnailSource}::test-token::`,
-    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer test-token",
     );
-    expect(isChatMediaResourceCurrent(nextResource)).toBe(true);
-    expect(nextResource.subscribers.size).toBe(1);
     expect(container.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(blobUrl);
 
     releaseChatMediaResourceSubscriber(renderPane);

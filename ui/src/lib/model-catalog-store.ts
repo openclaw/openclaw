@@ -1,5 +1,6 @@
 import {
   GatewayProtocolRequestTimeoutError,
+  isGatewayProtocolResponseError,
   resolveSafeTimeoutDelayMs,
   type GatewayProtocolRequestOptions,
 } from "@openclaw/gateway-client/browser";
@@ -11,6 +12,7 @@ import { createDeferredCore } from "../../../src/shared/deferred.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.ts";
 import {
   invalidateModelCatalogCache,
   invalidateModelCatalogEntry,
@@ -29,6 +31,8 @@ import {
   type ModelCatalogRequestLane,
 } from "./model-catalog-cache.ts";
 import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
+
+registerModelControlsEnglish();
 
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
@@ -142,6 +146,14 @@ function createModelCatalogRequest(params: {
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let requestSent = false;
+  const canRetry = () =>
+    !pending.settled &&
+    !controller.signal.aborted &&
+    pending.subscribers.size > 0 &&
+    modelCatalogCache.get(client) === cache &&
+    cache.reads.has(pending.read) &&
+    lane.active === pending &&
+    !lane.queued;
   const retireCompletion = () => {
     clearTimeout(deadlineTimer);
     cache.reads.delete(pending.read);
@@ -209,33 +221,79 @@ function createModelCatalogRequest(params: {
       }
       const read = pending.read;
       const requestParams = { ...params.scope, ...(pending.refresh ? { refresh: true } : {}) };
-      try {
-        // Gateway aborts and timeouts discard correlation without cancelling server work.
-        // Keep explicit deadlines local so retries cannot overlap an unresolved transport.
-        const request =
-          timeoutMs === undefined
-            ? client.request<ModelCatalogResult>("models.list", requestParams)
-            : client.request<ModelCatalogResult>("models.list", requestParams, {
-                timeoutMs: duration === undefined ? timeoutMs : null,
-                ...(duration === undefined
-                  ? {}
-                  : {
-                      onSent: () => {
-                        requestSent = true;
-                      },
-                    }),
-              });
-        void request
-          .then((result) => {
+      void (async () => {
+        let retried = false;
+        for (;;) {
+          try {
+            // Only a received rejection can retry; local timeout still owns its transport.
+            // The existing numeric deadline covers every attempt and wait in this lane.
+            const result = await (timeoutMs === undefined
+              ? client.request<ModelCatalogResult>("models.list", requestParams)
+              : client.request<ModelCatalogResult>("models.list", requestParams, {
+                  timeoutMs: duration === undefined ? timeoutMs : null,
+                  ...(duration === undefined
+                    ? {}
+                    : {
+                        onSent: () => {
+                          requestSent = true;
+                        },
+                      }),
+                }));
             publishModelCatalogResult(read, requestParams, result);
             pending.resolve(result);
-          })
-          .catch(pending.reject)
-          .finally(finishTransport);
-      } catch (error) {
-        pending.reject(error);
-        finishTransport();
-      }
+            return;
+          } catch (error) {
+            if (
+              retried ||
+              !isGatewayProtocolResponseError(error) ||
+              error.gatewayCode !== "UNAVAILABLE" ||
+              !error.retryable ||
+              !canRetry()
+            ) {
+              pending.reject(error);
+              return;
+            }
+            // Retry one superseded snapshot without chasing an indefinitely busy Gateway.
+            retried = true;
+            const wake = createDeferredCore();
+            const timer = setTimeout(
+              wake.resolve,
+              resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 0, { minMs: 0 }),
+            );
+            const stopWatching = subscribeModelCatalogCache(client, () => {
+              if (!canRetry()) {
+                wake.resolve();
+              }
+            });
+            void completion.promise.then(
+              () => wake.resolve(),
+              () => wake.resolve(),
+            );
+            try {
+              await wake.promise;
+            } finally {
+              clearTimeout(timer);
+              stopWatching();
+            }
+            if (deadline !== undefined && duration !== undefined && deadline <= Date.now()) {
+              pending.reject(
+                new GatewayProtocolRequestTimeoutError({
+                  method: "models.list",
+                  timeoutMs: duration,
+                  requestSent,
+                }),
+              );
+              return;
+            }
+            if (!canRetry()) {
+              pending.reject(error);
+              return;
+            }
+          }
+        }
+      })()
+        .catch(pending.reject)
+        .finally(finishTransport);
     },
   };
   controller.signal.addEventListener("abort", () => pending.reject(controller.signal.reason), {

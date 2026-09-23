@@ -15,6 +15,7 @@ import {
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
+import type { ZaloFetch } from "./api.js";
 import { setZaloRuntime } from "./runtime.js";
 import {
   createLifecycleMonitorSetup,
@@ -171,122 +172,103 @@ describe("Zalo polling media replies", () => {
     await resetLifecycleTestState();
   });
 
-  it("hosts and sends media replies while polling when a webhook URL is configured", async () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
-    getUpdatesMock
-      .mockResolvedValueOnce({
-        ok: true,
-        result: createTextUpdate({
-          messageId: "polling-media-1",
-          userId: "user-1",
-          userName: "User One",
-          chatId: "dm-chat-1",
-          text: "send media",
-        }),
-      })
-      .mockImplementation(() => new Promise(() => {}));
-
-    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
-      "zalo-polling-media-reply",
-    );
-    const abort = new AbortController();
-    const runtime = createRuntimeEnv();
-    const { account, config } = createLifecycleMonitorSetup({
-      accountId: "acct-zalo-polling-media",
-      dmPolicy: "open",
-      webhookUrl: "https://example.com/hooks/zalo",
-    });
-    const run = monitorZaloProvider({
-      token: "zalo-token",
-      account,
-      config,
-      runtime,
-      abortSignal: abort.signal,
-    });
-
-    try {
-      await settleAsyncWork();
-      expect(sendPhotoMock).toHaveBeenCalledTimes(1);
-
-      expect(registry.httpRoutes).toHaveLength(1);
-      expect(prepareHostedZaloMediaUrlMock).toHaveBeenCalledWith({
-        mediaUrl: "https://example.com/reply-image.png",
-        webhookUrl: "https://example.com/hooks/zalo",
-        webhookPath: "/hooks/zalo",
-        maxBytes: 5 * 1024 * 1024,
-        proxyUrl: undefined,
+  it.each([true, false])(
+    "sends bounded photo captions while polling (hosted: %s)",
+    async (hosted) => {
+      const caption = `${"a".repeat(1999)}🐱tail`;
+      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+        async (params: {
+          dispatcherOptions: {
+            deliver: (payload: { text: string; mediaUrl: string }) => Promise<void>;
+          };
+        }) => {
+          await params.dispatcherOptions.deliver({
+            text: caption,
+            mediaUrl: "https://example.com/reply-image.png",
+          });
+        },
+      );
+      const api = await vi.importActual<typeof import("./api.js")>("./api.js");
+      vi.mocked((await import("./api.js")).sendPhoto).mockImplementationOnce(api.sendPhoto);
+      const ssrf = await import("openclaw/plugin-sdk/ssrf-runtime");
+      const pinnedHost = await ssrf.resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
       });
-      expect(sendPhotoMock).toHaveBeenCalledWith(
-        "zalo-token",
-        {
-          chat_id: "dm-chat-1",
-          photo: "https://example.com/hooks/zalo/media/abc123abc123abc123abc123?token=secret",
-          caption: "caption text",
-        },
-        undefined,
+      const resolvePhotoHost = vi
+        .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+        .mockResolvedValue(pinnedHost);
+      const fetcher = vi.fn<ZaloFetch>(async () =>
+        Response.json({ ok: true, result: { message_id: "zalo-photo-bounded" } }),
       );
-    } finally {
-      abort.abort();
-      await run;
-    }
+      const registry = createEmptyPluginRegistry();
+      setActivePluginRegistry(registry);
+      getUpdatesMock
+        .mockResolvedValueOnce({
+          ok: true,
+          result: createTextUpdate({
+            messageId: "polling-media-1",
+            userId: "user-1",
+            userName: "User One",
+            chatId: "dm-chat-1",
+            text: "send media",
+          }),
+        })
+        .mockImplementation(() => new Promise(() => {}));
 
-    expect(registry.httpRoutes).toHaveLength(0);
-  });
-
-  it("sends media replies directly when webhook hosting is not configured", async () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
-    getUpdatesMock
-      .mockResolvedValueOnce({
-        ok: true,
-        result: createTextUpdate({
-          messageId: "polling-media-2",
-          userId: "user-2",
-          userName: "User Two",
-          chatId: "dm-chat-2",
-          text: "send media directly",
-        }),
-      })
-      .mockImplementation(() => new Promise(() => {}));
-
-    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
-      "zalo-polling-media-reply",
-    );
-    const abort = new AbortController();
-    const runtime = createRuntimeEnv();
-    const { account, config } = createLifecycleMonitorSetup({
-      accountId: "acct-zalo-polling-direct-media",
-      dmPolicy: "open",
-      webhookUrl: "",
-    });
-    const run = monitorZaloProvider({
-      token: "zalo-token",
-      account,
-      config,
-      runtime,
-      abortSignal: abort.signal,
-    });
-
-    try {
-      await settleAsyncWork();
-      expect(sendPhotoMock).toHaveBeenCalledTimes(1);
-
-      expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
-      expect(sendPhotoMock).toHaveBeenCalledWith(
-        "zalo-token",
-        {
-          chat_id: "dm-chat-2",
-          photo: "https://example.com/reply-image.png",
-          caption: "caption text",
-        },
-        undefined,
+      const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
+        "zalo-polling-media-reply",
       );
-    } finally {
-      abort.abort();
-      await run;
-    }
-  });
+      const abort = new AbortController();
+      const runtime = createRuntimeEnv();
+      const { account, config } = createLifecycleMonitorSetup({
+        accountId: "acct-zalo-polling-media",
+        dmPolicy: "open",
+        webhookUrl: hosted ? "https://example.com/hooks/zalo" : "",
+      });
+      const run = monitorZaloProvider({
+        token: "zalo-token",
+        account,
+        config,
+        runtime,
+        abortSignal: abort.signal,
+        fetcher,
+      });
+
+      try {
+        await settleAsyncWork();
+        expect(sendPhotoMock).toHaveBeenCalledTimes(1);
+
+        expect(registry.httpRoutes).toHaveLength(hosted ? 1 : 0);
+        if (hosted) {
+          expect(prepareHostedZaloMediaUrlMock).toHaveBeenCalledWith({
+            mediaUrl: "https://example.com/reply-image.png",
+            webhookUrl: "https://example.com/hooks/zalo",
+            webhookPath: "/hooks/zalo",
+            maxBytes: 5 * 1024 * 1024,
+            proxyUrl: undefined,
+          });
+        } else {
+          expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
+        }
+        expect(fetcher).toHaveBeenCalledOnce();
+        expect(fetcher.mock.calls[0]?.[1]?.body).toBe(
+          JSON.stringify({
+            chat_id: "dm-chat-1",
+            photo: hosted
+              ? "https://example.com/hooks/zalo/media/abc123abc123abc123abc123?token=secret"
+              : "https://example.com/reply-image.png",
+            caption: "a".repeat(1999),
+          }),
+        );
+      } finally {
+        abort.abort();
+        await run;
+        resolvePhotoHost.mockRestore();
+      }
+
+      expect(registry.httpRoutes).toHaveLength(0);
+    },
+  );
 
   it.each<ZaloReplyFailureCase>([
     { name: "block text", kind: "block", payload: { text: "block reply" } },

@@ -245,9 +245,9 @@ android {
           "/META-INF/LICENSE*.txt",
           "DebugProbesKt.bin",
           "kotlin-tooling-metadata.json",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL1.bin.properties",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL3.bin.properties",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL5.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL1.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL3.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL5.bin.properties",
           "org/bouncycastle/x509/CertPathReviewerMessages*.properties",
         )
     }
@@ -379,11 +379,10 @@ dependencies {
 
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
-  testImplementation(libs.kotest.runner.junit5)
-  testImplementation(libs.kotest.assertions.core)
   testImplementation(libs.mockwebserver)
   testImplementation(libs.robolectric)
   testImplementation(libs.androidx.compose.ui.test.junit4)
+  testRuntimeOnly(libs.junit.platform.launcher)
   testRuntimeOnly(libs.junit.vintage.engine)
 
   androidTestImplementation(libs.androidx.test.ext.junit)

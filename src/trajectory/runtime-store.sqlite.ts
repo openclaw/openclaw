@@ -11,7 +11,9 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import { assertSqliteJsonlReadBudget } from "../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -44,7 +46,12 @@ export type SqliteTrajectoryRuntimeScope = {
 type SqliteTrajectoryRuntimeReadScope = Omit<
   SqliteTrajectoryRuntimeScope,
   "maxGlobalRuntimeBytes" | "maxRuntimeBytes"
->;
+> & {
+  /** Byte budget enforced via SQL before parsing rows; ignored for tail-bounded reads. */
+  maxEventBytes?: number;
+  /** Row-count budget enforced via SQL before parsing rows; ignored for tail-bounded reads. */
+  maxEventCount?: number;
+};
 
 type SqliteTrajectoryRuntimeEventRow = {
   event: TrajectoryEvent;
@@ -151,33 +158,89 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
         scope.tailEvents !== undefined && Number.isFinite(scope.tailEvents)
           ? Math.max(0, Math.floor(scope.tailEvents))
           : undefined;
-      let query = db
-        .selectFrom("trajectory_runtime_events")
-        .select(["seq", "event_json"])
-        .where("session_id", "=", scope.sessionId)
-        .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
       const afterSeq = scope.afterSeq;
-      if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
-        query = query.where("seq", ">", Math.floor(afterSeq));
-      }
-      const normalizedMaxEvents =
-        scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
-          ? Math.max(0, Math.floor(scope.maxEvents))
-          : undefined;
-      const maxEvents =
-        tailEvents === undefined
-          ? normalizedMaxEvents
-          : normalizedMaxEvents === undefined
-            ? tailEvents
-            : Math.min(tailEvents, normalizedMaxEvents);
-      if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
-        query = query.limit(Math.max(0, Math.floor(maxEvents)));
-      }
-      const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
-        event: JSON.parse(row.event_json) as TrajectoryEvent,
-        seq: row.seq,
-      }));
-      return tailEvents === undefined ? rows : rows.toReversed();
+      // Budget checks and payload reads must share one snapshot so a concurrent
+      // writer cannot cross the budget between admission and materialization.
+      return runSqliteDeferredTransactionSync(
+        database.db,
+        () => {
+          if (
+            tailEvents === undefined &&
+            scope.maxEventCount !== undefined &&
+            Number.isFinite(scope.maxEventCount) &&
+            scope.maxEventCount >= 0
+          ) {
+            const eventLimit = Math.floor(scope.maxEventCount);
+            const countRow: { event_count: number | null } | undefined =
+              executeSqliteQueryTakeFirstSync(
+                database.db,
+                db
+                  .selectFrom("trajectory_runtime_events")
+                  .select((eb) => [eb.fn.countAll<number>().as("event_count")])
+                  .where("session_id", "=", scope.sessionId)
+                  .$if(afterSeq !== undefined && Number.isFinite(afterSeq), (query) =>
+                    query.where("seq", ">", Math.floor(afterSeq!)),
+                  ),
+              );
+            const eventCount = countRow?.event_count ?? 0;
+            if (eventCount > eventLimit) {
+              throw new Error(
+                `Trajectory runtime store has too many events to export (${eventCount}; limit ${eventLimit})`,
+              );
+            }
+          }
+          if (
+            scope.maxEventBytes !== undefined &&
+            Number.isFinite(scope.maxEventBytes) &&
+            scope.maxEventBytes >= 0 &&
+            tailEvents === undefined
+          ) {
+            assertSqliteJsonlReadBudget(
+              database.db,
+              db
+                .selectFrom("trajectory_runtime_events")
+                .select("event_json")
+                .where("session_id", "=", scope.sessionId)
+                .$if(afterSeq !== undefined && Number.isFinite(afterSeq), (query) =>
+                  query.where("seq", ">", Math.floor(afterSeq!)),
+                )
+                .as("events"),
+              Math.floor(scope.maxEventBytes),
+              "Trajectory runtime store",
+            );
+          }
+          let query = db
+            .selectFrom("trajectory_runtime_events")
+            .select(["seq", "event_json"])
+            .where("session_id", "=", scope.sessionId)
+            .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
+          if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
+            query = query.where("seq", ">", Math.floor(afterSeq));
+          }
+          const normalizedMaxEvents =
+            scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
+              ? Math.max(0, Math.floor(scope.maxEvents))
+              : undefined;
+          const maxEvents =
+            tailEvents === undefined
+              ? normalizedMaxEvents
+              : normalizedMaxEvents === undefined
+                ? tailEvents
+                : Math.min(tailEvents, normalizedMaxEvents);
+          if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
+            query = query.limit(Math.max(0, Math.floor(maxEvents)));
+          }
+          const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
+            event: JSON.parse(row.event_json) as TrajectoryEvent,
+            seq: row.seq,
+          }));
+          return tailEvents === undefined ? rows : rows.toReversed();
+        },
+        {
+          databaseLabel: database.path,
+          operationLabel: "trajectory runtime budget read",
+        },
+      );
     },
     toDatabaseOptions(resolveSqliteReadScope(scope)),
   );

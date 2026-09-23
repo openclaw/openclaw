@@ -33,9 +33,10 @@ function reportDoctorRepairResult(
 function withDoctorHealthCheckFacts<T extends object>(
   ctx: DoctorHealthFlowContext,
   input: T,
-): T & Pick<DoctorHealthCheckContext, "runWithPluginMetadataSnapshot"> {
+): T & Pick<DoctorHealthCheckContext, "runWithPluginMetadataSnapshot" | "agentDatabaseRefusals"> {
   return {
     ...input,
+    agentDatabaseRefusals: ctx.agentDatabaseRefusals,
     ...(ctx.runWithPluginMetadataSnapshot
       ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
       : {}),
@@ -55,8 +56,12 @@ export async function runStructuredHealthRepairs(
   const { note } = await import("../../packages/terminal-core/src/note.js");
 
   const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
-  registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir, env: ctx.env });
-  const checks = listExtensionHealthChecksForDoctor(await resolveCoreChecks())
+  const availabilityFindings = registerBundledHealthChecks({
+    cfg: ctx.cfg,
+    cwd: workspaceDir,
+    env: ctx.env,
+  });
+  const checks = listExtensionHealthChecksForDoctor(await resolveCoreChecks(), availabilityFindings)
     .filter(isHealthCheckEnabledByDefault)
     .map(copyHealthCheck);
   const result = await runDoctorHealthRepairs(
@@ -70,7 +75,12 @@ export async function runStructuredHealthRepairs(
     }),
     { checks },
   );
-  reportDoctorRepairResult(ctx, result, result.remainingFindings, note);
+  reportDoctorRepairResult(
+    ctx,
+    result,
+    [...availabilityFindings, ...result.remainingFindings],
+    note,
+  );
 }
 
 export async function runCoreContributionHealth(

@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { type Data, type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { chromium } from "playwright-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import { pwAi } from "./pw-ai.js";
 import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
@@ -576,6 +576,58 @@ describe("pw-session Playwright CDP transport", () => {
         server.close(() => resolve());
       });
     }
+  });
+
+  it("retires a borrowed transport after rejected async delivery without inventing close acknowledgement", async () => {
+    const close = vi.fn<() => void>();
+    const closeRequested = new Promise<void>((resolve, reject) => {
+      const deadline = setTimeout(
+        () => reject(new Error("transport did not request closure")),
+        10000,
+      );
+      onTestFinished(() => clearTimeout(deadline));
+      close.mockImplementation(() => {
+        clearTimeout(deadline);
+        resolve();
+      });
+    });
+    const wire: import("playwright-core").ConnectOverCDPTransport = {
+      send: vi.fn(),
+      close,
+    };
+    const browser = makeBrowser("A", "https://example.com");
+    // Playwright types this callback as void, but CRConnection installs an async receiver.
+    const handler = vi
+      .fn<NonNullable<import("playwright-core").ConnectOverCDPTransport["onmessage"]>>()
+      .mockRejectedValue(new Error("async handler failed"));
+    const closed = vi.fn<(reason?: string) => void>();
+    const closeNotified = new Promise<void>((resolve) => {
+      closed.mockImplementation(() => resolve());
+    });
+    connectOverCdpSpy.mockImplementationOnce((async (transportArg: unknown) => {
+      const transport = transportArg as import("playwright-core").ConnectOverCDPTransport;
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's transport contract uses callback properties.
+      transport.onmessage = handler;
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's transport contract uses callback properties.
+      transport.onclose = closed;
+      return browser.browser;
+    }) as never);
+
+    await connectOverCdpTransport("ws://127.0.0.1/unused", {
+      timeout: 1000,
+      headers: {},
+      preparedTransport: wire,
+    });
+    wire.onmessage?.({ id: 1, result: {} });
+    wire.onmessage?.({ id: 2, result: {} });
+    await closeRequested;
+    expect(closed).not.toHaveBeenCalled();
+
+    wire.onclose?.("owner cleanup acknowledged");
+    await closeNotified;
+    expect(close).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledOnce();
+    expect(closed).toHaveBeenCalledExactlyOnceWith("async handler failed");
   });
 
   it("propagates pinned WebSocket protocol errors through transport closure", async () => {

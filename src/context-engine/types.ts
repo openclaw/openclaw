@@ -254,6 +254,7 @@ type ContextEnginePromptCacheObservationChangeCode =
   | "model"
   | "streamStrategy"
   | "systemPrompt"
+  | "systemPromptSuffix"
   | "tools"
   | "transport";
 

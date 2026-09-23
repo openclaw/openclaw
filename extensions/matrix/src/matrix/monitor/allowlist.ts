@@ -1,4 +1,3 @@
-// Matrix plugin module implements allowlist behavior.
 import {
   resolveAllowlistMatchByCandidates,
   type AllowlistMatch,

@@ -3,6 +3,7 @@ import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { moduleResolve } from "import-meta-resolve";
+import { walkDirectorySync } from "../infra/fs-safe.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import { createJiti } from "./jiti-factory.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
@@ -26,7 +27,7 @@ export function inspectPluginSourceDependencies(
     seenEntries.add(source);
     const root = fs.realpathSync(entry.rootDir);
     // This scope grants source acquisition only. No module evaluation or registration runs here.
-    const artifact = capturePluginGenerationArtifact(root, source, root, (run) => run());
+    const artifact = capturePluginGenerationArtifact(root, source, (run) => run());
     try {
       const pending = [artifact.resolve(source)];
       const visited = new Set<string>();
@@ -98,17 +99,19 @@ export function inspectPluginSourceDependencies(
           },
         );
       }
-      for (const captured of fs.readdirSync(artifact.boundaryRoot, {
-        recursive: true,
-        withFileTypes: true,
-      })) {
-        const original = artifact.sourceForCaptured(path.join(captured.parentPath, captured.name));
+      const scan = walkDirectorySync(artifact.boundaryRoot, { symlinks: "skip" });
+      const [failure] = scan.failedDirs;
+      if (failure) {
+        throw failure.error;
+      }
+      for (const captured of scan.entries) {
+        const original = artifact.sourceForCaptured(captured.path);
         if (!original) {
           continue;
         }
-        if (captured.isFile()) {
+        if (captured.kind === "file") {
           files.add(original);
-        } else if (captured.isDirectory()) {
+        } else if (captured.kind === "directory") {
           packageRoots.add(original);
         }
       }

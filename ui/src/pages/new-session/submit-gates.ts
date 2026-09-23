@@ -31,6 +31,7 @@ registerNewSessionSetupEnglish();
 // silently eat an Enter press again.
 type SilentSubmitGate = "submitting" | "empty-draft";
 type ReasonedSubmitGate =
+  | "initial-turn-rejected"
   | "preference-restore"
   | "model-setup"
   | "route-pending"

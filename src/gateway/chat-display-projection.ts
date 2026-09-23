@@ -6,7 +6,6 @@ export {
   projectChatDisplayMessage,
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
-  createChatHistoryRecoveryProjection,
 } from "./chat-display-projection.core.js";
 export {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
@@ -14,7 +13,6 @@ export {
 } from "./chat-display-projection.helpers.js";
 export {
   dropPreSessionStartAnnouncePairs,
-  createPreSessionStartAnnouncePairFilter,
-  isHeartbeatHistoryTurnBoundaryMessage,
+  isAssistantTtsSupplementMessage,
 } from "./chat-display-projection.history.js";
 export { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";

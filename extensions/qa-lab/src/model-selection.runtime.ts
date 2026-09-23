@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements model selection behavior.
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -6,10 +5,7 @@ import {
   type QaProviderModeInput,
 } from "./model-selection.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
-import {
-  resolveQaLiveFrontierAlternateModel,
-  resolveQaLiveFrontierPreferredModel,
-} from "./providers/live-frontier/model-selection.runtime.js";
+import { resolveQaLiveFrontierAlternateModel } from "./providers/live-frontier/model-selection.runtime.js";
 
 export function defaultQaRuntimeModelForMode(
   mode: QaProviderModeInput,
@@ -18,15 +14,7 @@ export function defaultQaRuntimeModelForMode(
     preferredLiveModel?: string;
   },
 ) {
-  const preferredLiveModel =
-    options?.preferredLiveModel ??
-    (normalizeQaProviderMode(mode) === DEFAULT_QA_LIVE_PROVIDER_MODE
-      ? resolveQaLiveFrontierPreferredModel()
-      : undefined);
-  return defaultQaModelForMode(mode, {
-    ...options,
-    preferredLiveModel,
-  });
+  return defaultQaModelForMode(mode, options);
 }
 
 export function resolveQaRuntimeModelPair(params: {

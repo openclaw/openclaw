@@ -792,8 +792,10 @@ describe("legacy workspace Doctor migration", () => {
         bootstrapSeededAt: seededAt,
         ...(completedAt ? { setupCompletedAt: completedAt } : {}),
       });
-      const receipt = db
-        .prepare("SELECT report_json, removed_source FROM migration_sources WHERE source_path = ?")
+      const receipt = openOpenClawStateDatabase({ env: context.env })
+        .db.prepare(
+          "SELECT report_json, removed_source FROM migration_sources WHERE source_path = ?",
+        )
         .get(setupPath) as { report_json: string; removed_source: number };
       const archivePath = JSON.parse(receipt.report_json).archivePath as string;
       expect(archivePath).toMatch(
@@ -822,8 +824,8 @@ describe("legacy workspace Doctor migration", () => {
       expect((await detect(context)).hasLegacy).toBe(false);
       expect(await migrate(context)).toEqual({ changes: [], warnings: [] });
       expect(
-        db
-          .prepare(
+        openOpenClawStateDatabase({ env: context.env })
+          .db.prepare(
             "SELECT report_json, removed_source FROM migration_sources WHERE source_path = ?",
           )
           .get(setupPath),
@@ -862,8 +864,6 @@ describe("legacy workspace Doctor migration", () => {
       expect(first.warnings[0]).toContain("legacy cleanup failed");
       expect(first.warnings[0]).toContain(setupPath);
       expect(fs.existsSync(claimPath)).toBe(true);
-      const db = openOpenClawStateDatabase({ env: context.env }).db;
-
       await fsp.writeFile(claimPath, "{invalid", "utf8");
       const unreadable = await migrate(context);
       expect(unreadable.warnings[0]).toContain(setupPath);
@@ -871,7 +871,8 @@ describe("legacy workspace Doctor migration", () => {
       expect(await fsp.readFile(claimPath, "utf8")).toBe("{invalid");
 
       await fsp.writeFile(claimPath, setupSource, "utf8");
-      const archiveReceipt = db
+      const receiptDb = openOpenClawStateDatabase({ env: context.env }).db;
+      const archiveReceipt = receiptDb
         .prepare("SELECT report_json FROM migration_sources WHERE source_path = ?")
         .get(setupPath) as { report_json: string };
       const archivePath = JSON.parse(archiveReceipt.report_json).archivePath as string;
@@ -880,10 +881,9 @@ describe("legacy workspace Doctor migration", () => {
         const oldReport = JSON.parse(archiveReceipt.report_json);
         delete oldReport.archivePath;
         delete oldReport.differences;
-        db.prepare("UPDATE migration_sources SET report_json = ? WHERE source_path = ?").run(
-          JSON.stringify(oldReport),
-          setupPath,
-        );
+        receiptDb
+          .prepare("UPDATE migration_sources SET report_json = ? WHERE source_path = ?")
+          .run(JSON.stringify(oldReport), setupPath);
       } else {
         await fsp.writeFile(archivePath, "partial backup", "utf8");
         const corruptBackup = await migrate(context);
@@ -894,6 +894,7 @@ describe("legacy workspace Doctor migration", () => {
       const retry = await migrate(context);
 
       expect(retry.warnings).toEqual([]);
+      const db = openOpenClawStateDatabase({ env: context.env }).db;
       const finalReceipt = db
         .prepare("SELECT report_json FROM migration_sources WHERE source_path = ?")
         .get(setupPath) as { report_json: string };

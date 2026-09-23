@@ -1,18 +1,12 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
+  usePreparedModelRuntimeHarness,
   getPreparedModelRuntimeTestApi,
-  resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -28,15 +22,10 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
+const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
+const { mocks } = fixture;
 
 describe("prepared model runtime snapshots", () => {
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    await resetPreparedModelRuntimeHarness(state);
-  });
-
   it("does not discover missing owners from a gateway request", async () => {
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
     const input = { config: {}, agentDir: "/tmp/prepared-model-runtime-gateway-missing" };
@@ -56,12 +45,9 @@ describe("prepared model runtime snapshots", () => {
     let publishedOwner: ReturnType<typeof getPreparedModelRuntimeSnapshot>;
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
       if (event.phase === "published") {
-        publishedOwner = getPreparedModelRuntimeSnapshot({
-          agentId: "default",
-          agentDir: state.agentDir("default"),
-          inheritedAuthDir: state.agentDir("default"),
-          config: replacementConfig,
-        });
+        publishedOwner = getPreparedModelRuntimeSnapshot(
+          fixture.agentInput("default", replacementConfig),
+        );
       }
     });
 
@@ -140,10 +126,7 @@ describe("prepared model runtime snapshots", () => {
     });
 
     const activated = await activateStandalonePreparedModelRuntime({
-      config: { agents: { defaults: { model: "openai/gpt-5.4" } } },
-      agentId: "default",
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
+      ...fixture.agentInput("default", { agents: { defaults: { model: "openai/gpt-5.4" } } }),
       workspaceDir: "/tmp/gateway-launch-workspace",
       readOnly: true,
     });
@@ -151,10 +134,7 @@ describe("prepared model runtime snapshots", () => {
     expect(activated).toBeUndefined();
     await expect(
       prepareModelRuntimeSnapshot({
-        config: configured,
-        agentId: "default",
-        agentDir: state.agentDir("default"),
-        inheritedAuthDir: state.agentDir("default"),
+        ...fixture.agentInput("default", configured),
         workspaceDir: "/tmp/gateway-launch-workspace",
       }),
     ).resolves.toMatchObject({ config: configured });
@@ -165,7 +145,7 @@ describe("prepared model runtime snapshots", () => {
     const input = {
       config: {},
       agentId: "default",
-      agentDir: state.agentDir("standalone-run-agent"),
+      agentDir: fixture.state.agentDir("standalone-run-agent"),
       workspaceDir: "/tmp/one-off-run-workspace",
     };
     const lease = await acquireAgentRunPreparedModelRuntime(input);
@@ -186,7 +166,7 @@ describe("prepared model runtime snapshots", () => {
       {
         config: {},
         agentId: "default",
-        agentDir: state.agentDir("static-run-agent"),
+        agentDir: fixture.state.agentDir("static-run-agent"),
         workspaceDir: "/tmp/static-run-workspace",
       },
       options,
@@ -201,7 +181,7 @@ describe("prepared model runtime snapshots", () => {
     const firstInput = {
       config: {},
       agentId: "default",
-      agentDir: state.agentDir("standalone-retained-run-agent"),
+      agentDir: fixture.state.agentDir("standalone-retained-run-agent"),
       workspaceDir: "/tmp/standalone-retained-run-workspace",
     };
     const firstLease = await acquireAgentRunPreparedModelRuntime(firstInput, {
@@ -244,10 +224,7 @@ describe("prepared model runtime snapshots", () => {
     });
     const acquireDynamicLease = () =>
       acquireAgentRunPreparedModelRuntime({
-        agentId: "default",
-        config,
-        agentDir: state.agentDir("default"),
-        inheritedAuthDir: state.agentDir("default"),
+        ...fixture.agentInput("default", config),
         workspaceDir,
       });
     const [firstLease, secondLease] = await Promise.all([
@@ -260,10 +237,7 @@ describe("prepared model runtime snapshots", () => {
     await firstLease[Symbol.asyncDispose]();
     await secondLease[Symbol.asyncDispose]();
     const retainedLease = await acquireAgentRunPreparedModelRuntime({
-      agentId: "default",
-      config,
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
+      ...fixture.agentInput("default", config),
       workspaceDir,
     });
     expect(retainedLease.snapshot).toBe(firstLease.snapshot);
@@ -284,10 +258,7 @@ describe("prepared model runtime snapshots", () => {
       return { entries: [] };
     });
     const input = {
-      agentId: "default",
-      config,
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
+      ...fixture.agentInput("default", config),
       workspaceDir: "/tmp/concurrent-dynamic-workspace",
     };
 
@@ -322,10 +293,7 @@ describe("prepared model runtime snapshots", () => {
     const config = {};
     await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
     const input = {
-      agentId: "default",
-      config,
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
+      ...fixture.agentInput("default", config),
       workspaceDir: "/tmp/stale-dynamic-workspace",
     };
     const firstLease = await acquireAgentRunPreparedModelRuntime(input);
@@ -337,37 +305,26 @@ describe("prepared model runtime snapshots", () => {
     await firstLease[Symbol.asyncDispose]();
   });
 
-  it("activates a standalone lease on a configless gateway with no configured owners", async () => {
-    mocks.configuredAgentIds = [];
-    const config = {};
-    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
-    const input = {
-      agentId: "openclaw",
-      config,
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
-      workspaceDir: "/tmp/configless-workspace",
-    };
-    const lease = await acquireAgentRunPreparedModelRuntime(input);
-    expect(lease.snapshot.agentDir).toBe(state.agentDir("default"));
-    await lease[Symbol.asyncDispose]();
-  });
-
-  it("activates a standalone lease for a configless runtime while another agent is configured", async () => {
-    mocks.configuredAgentIds = ["other"];
-    const config = {};
-    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
-    const input = {
-      agentId: "openclaw",
-      config,
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
-      workspaceDir: "/tmp/configless-mixed-workspace",
-    };
-    const lease = await acquireAgentRunPreparedModelRuntime(input);
-    expect(lease.snapshot.agentDir).toBe(state.agentDir("default"));
-    await lease[Symbol.asyncDispose]();
-  });
+  it.each([false, true])(
+    "activates a configless lease with another configured agent: %s",
+    async (hasOtherAgent) => {
+      mocks.configuredAgentIds = hasOtherAgent ? ["other"] : [];
+      const config = {};
+      await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+      const input = {
+        agentId: "openclaw",
+        config,
+        agentDir: fixture.state.agentDir("default"),
+        inheritedAuthDir: fixture.state.agentDir("default"),
+        workspaceDir: hasOtherAgent
+          ? "/tmp/configless-mixed-workspace"
+          : "/tmp/configless-workspace",
+      };
+      const lease = await acquireAgentRunPreparedModelRuntime(input);
+      expect(lease.snapshot.agentDir).toBe(fixture.state.agentDir("default"));
+      await lease[Symbol.asyncDispose]();
+    },
+  );
 
   it("rejects an ordinary unconfigured agent on an active gateway", async () => {
     mocks.configuredAgentIds = ["default"];
@@ -379,7 +336,7 @@ describe("prepared model runtime snapshots", () => {
         agentId: "missing",
         config,
         agentDir: "/tmp/configured-missing",
-        inheritedAuthDir: state.agentDir("default"),
+        inheritedAuthDir: fixture.state.agentDir("default"),
         workspaceDir: "/tmp/workspace-missing",
       }),
     ).rejects.toThrow("prepared model runtime owner was not committed");
@@ -391,10 +348,7 @@ describe("prepared model runtime snapshots", () => {
     const latestConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
     const dynamicInput = {
-      agentId: "default",
-      config: initialConfig,
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
+      ...fixture.agentInput("default", initialConfig),
       workspaceDir: "/tmp/rebased-dynamic-workspace",
     };
     const firstLease = await acquireAgentRunPreparedModelRuntime(dynamicInput);
@@ -415,45 +369,24 @@ describe("prepared model runtime snapshots", () => {
     await secondLease[Symbol.asyncDispose]();
   });
 
-  it("rebases a reserved run identity through its configured agent directory", async () => {
-    mocks.configuredAgentIds = ["default", "openclaw"];
+  it.each([
+    ["openclaw", "default", "/tmp/setup-probe-workspace"],
+    ["secondary", "secondary", "/tmp/secondary-probe-workspace"],
+  ])("binds %s runs to the %s directory", async (agentId, expectedDirectory, workspaceDir) => {
+    mocks.configuredAgentIds = ["default", agentId];
     const config = {};
     await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
-
     const lease = await acquireAgentRunPreparedModelRuntime({
-      agentId: "openclaw",
+      agentId,
       config,
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
-      workspaceDir: "/tmp/setup-probe-workspace",
+      agentDir: fixture.state.agentDir("default"),
+      inheritedAuthDir: fixture.state.agentDir("default"),
+      workspaceDir,
     });
-
     expect(lease.snapshot).toMatchObject({
-      agentId: "openclaw",
-      agentDir: state.agentDir("default"),
-      workspaceDir: "/tmp/setup-probe-workspace",
-      config,
-    });
-    await lease[Symbol.asyncDispose]();
-  });
-
-  it("keeps an ordinary run bound to its configured agent identity", async () => {
-    mocks.configuredAgentIds = ["default", "secondary"];
-    const config = {};
-    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
-
-    const lease = await acquireAgentRunPreparedModelRuntime({
-      agentId: "secondary",
-      config,
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
-      workspaceDir: "/tmp/secondary-probe-workspace",
-    });
-
-    expect(lease.snapshot).toMatchObject({
-      agentId: "secondary",
-      agentDir: state.agentDir("secondary"),
-      workspaceDir: "/tmp/secondary-probe-workspace",
+      agentId,
+      agentDir: fixture.state.agentDir(expectedDirectory),
+      workspaceDir,
       config,
     });
     await lease[Symbol.asyncDispose]();
@@ -463,10 +396,7 @@ describe("prepared model runtime snapshots", () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
     const input = {
-      agentId: "default",
-      config,
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
+      ...fixture.agentInput("default", config),
       workspaceDir: "/tmp/unused-workspace",
     };
     const dynamicLease = await acquireAgentRunPreparedModelRuntime(input);
@@ -499,10 +429,7 @@ describe("prepared model runtime snapshots", () => {
         waitForReplacement: true,
       });
       leasePending = acquireAgentRunPreparedModelRuntime({
-        agentId: "default",
-        config: initialConfig,
-        agentDir: state.agentDir("default"),
-        inheritedAuthDir: state.agentDir("default"),
+        ...fixture.agentInput("default", initialConfig),
         workspaceDir: "/tmp/dynamic-replacement-workspace",
       });
       await Promise.resolve();
@@ -544,7 +471,7 @@ describe("prepared model runtime snapshots", () => {
     });
 
     expect(lease.snapshot.config).toBe(latestConfig);
-    expect(lease.snapshot.agentDir).toBe(state.agentDir("default"));
+    expect(lease.snapshot.agentDir).toBe(fixture.state.agentDir("default"));
     expect(lease.snapshot.workspaceDir).toBe("/tmp/dynamic-post-reload-workspace");
     await lease[Symbol.asyncDispose]();
   });
@@ -571,7 +498,7 @@ describe("prepared model runtime snapshots", () => {
     const lease = await leasePending;
 
     expect(lease.snapshot.config).toBe(latestConfig);
-    expect(lease.snapshot.agentDir).toBe(state.agentDir("default"));
+    expect(lease.snapshot.agentDir).toBe(fixture.state.agentDir("default"));
     expect(lease.snapshot.workspaceDir).toBe("/tmp/unused-workspace");
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
     await lease[Symbol.asyncDispose]();
@@ -585,23 +512,13 @@ describe("prepared model runtime snapshots", () => {
       defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
     });
 
-    const lease = await acquireAgentRunPreparedModelRuntime({
-      agentId: "default",
-      config,
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
-    });
+    const lease = await acquireAgentRunPreparedModelRuntime(fixture.agentInput("default", config));
 
     expect(lease.snapshot.workspaceDir).toBe("/tmp/gateway-launch-workspace");
     await lease[Symbol.asyncDispose]();
-    await expect(
-      prepareModelRuntimeSnapshot({
-        agentId: "default",
-        config,
-        agentDir: state.agentDir("default"),
-        inheritedAuthDir: state.agentDir("default"),
-      }),
-    ).resolves.toBe(lease.snapshot);
+    await expect(prepareModelRuntimeSnapshot(fixture.agentInput("default", config))).resolves.toBe(
+      lease.snapshot,
+    );
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
   });
 
@@ -610,7 +527,7 @@ describe("prepared model runtime snapshots", () => {
     const input = {
       agentId: "default",
       config: {},
-      agentDir: state.agentDir("metadata-agent"),
+      agentDir: fixture.state.agentDir("metadata-agent"),
       workspaceDir: "/tmp/prepared-model-runtime-metadata-workspace",
     };
 
@@ -625,7 +542,7 @@ describe("prepared model runtime snapshots", () => {
 
   it("rebuilds stale owners with the newly published config", async () => {
     mocks.configuredAgentIds = ["default"];
-    const agentDir = state.agentDir("default");
+    const agentDir = fixture.state.agentDir("default");
     const firstConfig = {};
     const secondConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     const input = {
@@ -647,7 +564,7 @@ describe("prepared model runtime snapshots", () => {
 
   it("does not serve the old snapshot after lifecycle refresh fails", async () => {
     mocks.configuredAgentIds = ["default"];
-    const agentDir = state.agentDir("default");
+    const agentDir = fixture.state.agentDir("default");
     const firstConfig = {};
     const secondConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     const input = {
@@ -676,14 +593,14 @@ describe("prepared model runtime snapshots", () => {
 
     await expect(refreshPreparedModelRuntimeSnapshots({})).rejects.toBe(refreshError);
     mocks.mutationListener?.({
-      agentDir: state.agentDir("removed"),
+      agentDir: fixture.state.agentDir("removed"),
       affectsInheritedStores: false,
     });
     await expect(
       prepareModelRuntimeSnapshot({
         config: firstConfig,
-        agentDir: state.agentDir("removed"),
-        inheritedAuthDir: state.agentDir("default"),
+        agentDir: fixture.state.agentDir("removed"),
+        inheritedAuthDir: fixture.state.agentDir("default"),
         workspaceDir: "/tmp/workspace-removed",
       }),
     ).rejects.toThrow("owner was not published");
@@ -696,23 +613,23 @@ describe("prepared model runtime snapshots", () => {
     await refreshPreparedModelRuntimeSnapshots(firstConfig);
     const refreshError = new Error("secondary refresh failed");
     mocks.ensureOpenClawModelsJson
-      .mockResolvedValueOnce({ agentDir: state.agentDir("default"), wrote: false })
+      .mockResolvedValueOnce({ agentDir: fixture.state.agentDir("default"), wrote: false })
       .mockRejectedValueOnce(refreshError);
 
     await expect(refreshPreparedModelRuntimeSnapshots({})).rejects.toBe(refreshError);
     await expect(
       prepareModelRuntimeSnapshot({
         config: {},
-        agentDir: state.agentDir("default"),
-        inheritedAuthDir: state.agentDir("default"),
+        agentDir: fixture.state.agentDir("default"),
+        inheritedAuthDir: fixture.state.agentDir("default"),
         workspaceDir: "/tmp/unused-workspace",
       }),
     ).rejects.toBe(refreshError);
     await expect(
       prepareModelRuntimeSnapshot({
         config: {},
-        agentDir: state.agentDir("secondary"),
-        inheritedAuthDir: state.agentDir("default"),
+        agentDir: fixture.state.agentDir("secondary"),
+        inheritedAuthDir: fixture.state.agentDir("default"),
         workspaceDir: "/tmp/workspace-secondary",
       }),
     ).rejects.toBe(refreshError);
@@ -730,8 +647,8 @@ describe("prepared model runtime snapshots", () => {
         await finishConfigRefreshGate.promise;
         return { agentDir: String(targetDir), wrote: false };
       })
-      .mockResolvedValueOnce({ agentDir: state.agentDir("secondary"), wrote: false })
-      .mockResolvedValueOnce({ agentDir: state.agentDir("default"), wrote: false })
+      .mockResolvedValueOnce({ agentDir: fixture.state.agentDir("secondary"), wrote: false })
+      .mockResolvedValueOnce({ agentDir: fixture.state.agentDir("default"), wrote: false })
       .mockRejectedValueOnce(refreshError);
 
     let refresh: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
@@ -743,14 +660,14 @@ describe("prepared model runtime snapshots", () => {
 
       await expect(refresh).rejects.toBe(refreshError);
       for (const [agentDir, workspaceDir] of [
-        [state.agentDir("default"), "/tmp/unused-workspace"],
-        [state.agentDir("secondary"), "/tmp/workspace-secondary"],
+        [fixture.state.agentDir("default"), "/tmp/unused-workspace"],
+        [fixture.state.agentDir("secondary"), "/tmp/workspace-secondary"],
       ] as const) {
         await expect(
           prepareModelRuntimeSnapshot({
             config: {},
             agentDir,
-            inheritedAuthDir: state.agentDir("default"),
+            inheritedAuthDir: fixture.state.agentDir("default"),
             workspaceDir,
           }),
         ).rejects.toBe(refreshError);
@@ -769,7 +686,7 @@ describe("prepared model runtime snapshots", () => {
       return { entries: [] };
     });
     mocks.ensureOpenClawModelsJson
-      .mockResolvedValueOnce({ agentDir: state.agentDir("default"), wrote: false })
+      .mockResolvedValueOnce({ agentDir: fixture.state.agentDir("default"), wrote: false })
       .mockRejectedValueOnce(new Error("unexpected auth replay"));
 
     await expect(
@@ -831,12 +748,7 @@ describe("prepared model runtime snapshots", () => {
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
       if (event.phase === "published") {
         publishedSnapshots.push(
-          getPreparedModelRuntimeSnapshot({
-            agentId: "default",
-            agentDir: state.agentDir("default"),
-            inheritedAuthDir: state.agentDir("default"),
-            config: replacementConfig,
-          }),
+          getPreparedModelRuntimeSnapshot(fixture.agentInput("default", replacementConfig)),
         );
       }
     });
@@ -853,7 +765,7 @@ describe("prepared model runtime snapshots", () => {
 
   it("waits for the affected owner at auth publication", async () => {
     const config = {};
-    const agentDir = state.agentDir("auth");
+    const agentDir = fixture.state.agentDir("auth");
     const first = await publishPreparedModelRuntimeSnapshot({ config, agentDir });
 
     mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
@@ -867,7 +779,7 @@ describe("prepared model runtime snapshots", () => {
 
   it("treats an auth refresh superseded by a newer mutation as control flow", async () => {
     const config = {};
-    const agentDir = state.agentDir("auth-superseded");
+    const agentDir = fixture.state.agentDir("auth-superseded");
     await publishPreparedModelRuntimeSnapshot({ config, agentDir });
     const finishFirstRefreshGate = createDeferred();
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, targetDir) => {
@@ -897,7 +809,7 @@ describe("prepared model runtime snapshots", () => {
     async (sharedOwnerChanged) => {
       mocks.configuredAgentIds = ["default"];
       const config = {};
-      const agentDir = state.agentDir("default");
+      const agentDir = fixture.state.agentDir("default");
       await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
       const events: string[] = [];
       const unregister = registerPreparedModelRuntimePublicationListener((event) => {
@@ -964,8 +876,8 @@ describe("prepared model runtime snapshots", () => {
 
   it("does not let a superseded owner hide a genuine sibling refresh failure", async () => {
     const config = {};
-    const supersededDir = state.agentDir("auth-superseded-sibling");
-    const failingDir = state.agentDir("auth-failing-sibling");
+    const supersededDir = fixture.state.agentDir("auth-superseded-sibling");
+    const failingDir = fixture.state.agentDir("auth-failing-sibling");
     await publishPreparedModelRuntimeSnapshot({ config, agentDir: supersededDir });
     await publishPreparedModelRuntimeSnapshot({ config, agentDir: failingDir });
     const finishSupersededRefreshGate = createDeferred();
@@ -1004,48 +916,31 @@ describe("prepared model runtime snapshots", () => {
     }
   });
 
-  it("refreshes owners that inherit the mutated auth directory", async () => {
+  it.each(["explicit", "implicit"] as const)("refreshes %s auth inheritance", async (mode) => {
     const config = {};
-    const agentDir = state.agentDir("custom-agent");
-    const inheritedAuthDir = state.agentDir("main-agent");
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir, inheritedAuthDir });
-
+    const agentDir = fixture.state.agentDir(
+      mode === "explicit" ? "custom-agent" : "implicit-inheritance",
+    );
+    const inheritedAuthDir = fixture.state.agentDir(mode === "explicit" ? "main-agent" : "default");
+    const input = { config, agentDir, ...(mode === "explicit" ? { inheritedAuthDir } : {}) };
+    await publishPreparedModelRuntimeSnapshot(input);
     mocks.mutationListener?.({ agentDir: inheritedAuthDir, affectsInheritedStores: false });
-
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-    await prepareModelRuntimeSnapshot({ config, agentDir, inheritedAuthDir });
+    await prepareModelRuntimeSnapshot(input);
     expect(mocks.discoverAuthStorage).toHaveBeenLastCalledWith(
       agentDir,
       expect.objectContaining({ inheritedAuthDir }),
     );
   });
 
-  it("tracks default auth inheritance when the owner omits the directory", async () => {
-    const config = {};
-    const agentDir = state.agentDir("implicit-inheritance");
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir });
-
-    mocks.mutationListener?.({
-      agentDir: state.agentDir("default"),
-      affectsInheritedStores: false,
-    });
-
-    await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-    await prepareModelRuntimeSnapshot({ config, agentDir });
-    expect(mocks.discoverAuthStorage).toHaveBeenLastCalledWith(
-      agentDir,
-      expect.objectContaining({ inheritedAuthDir: state.agentDir("default") }),
-    );
-  });
-
   it("retains every owner until an explicit lifecycle invalidation", async () => {
     const config = {};
-    const firstAgentDir = state.agentDir("concurrent-0");
+    const firstAgentDir = fixture.state.agentDir("concurrent-0");
     await Promise.all(
       Array.from({ length: 70 }, async (_, index) =>
         publishPreparedModelRuntimeSnapshot({
           config,
-          agentDir: state.agentDir(`concurrent-${index}`),
+          agentDir: fixture.state.agentDir(`concurrent-${index}`),
         }),
       ),
     );
@@ -1059,7 +954,7 @@ describe("prepared model runtime snapshots", () => {
   it("preserves an authoritative workspace override across config refresh", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
-    const agentDir = state.agentDir("default");
+    const agentDir = fixture.state.agentDir("default");
     await publishPreparedModelRuntimeSnapshot(
       {
         agentId: "default",
@@ -1090,8 +985,4 @@ describe("prepared model runtime snapshots", () => {
       expect.objectContaining({ workspaceDir: "/tmp/explicit-workspace" }),
     );
   });
-});
-
-afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

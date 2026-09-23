@@ -25,12 +25,23 @@ export {
   type QaBusWaitMatch,
 } from "./src/bus-waiters.js";
 export { createQaRunnerRuntime } from "./src/harness-runtime.js";
+export { createQaEvidenceInvocation } from "./src/evidence-invocation.js";
 export {
+  buildQaOccurrenceEvidenceSummary,
   buildScriptEvidenceSummary,
+  getEffectiveQaEvidenceEntries,
+  projectQaEvidenceScenarioOutcomes,
   QA_EVIDENCE_FILENAME,
+  type QaEvidenceAssertion,
+  type QaEvidenceIdentity,
+  type QaEvidenceOccurrence,
   type QaEvidencePackageSource,
+  type QaEvidenceScenarioOutcome,
   type QaEvidenceStatus,
+  type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
+  type QaEvidenceSummaryV3Entry,
+  type QaEvidenceSummaryV3Json,
   validateQaEvidenceSummaryJson,
 } from "./src/evidence-summary.js";
 export { splitQaModelRef } from "./src/model-selection.js";
@@ -50,6 +61,7 @@ export {
 } from "./src/qa-agent-bootstrap.js";
 export { seedQaAgentWorkspace } from "./src/qa-agent-workspace.js";
 export { createQaChannelTransport } from "./src/qa-channel-transport.js";
+export { createQaCrablineTransportAdapter } from "./src/crabline-transport.js";
 export { createStaticSshWorkerProvider } from "./src/static-ssh-worker-provider.js";
 export {
   buildQaGatewayConfig,
@@ -119,3 +131,4 @@ export {
   runQaFlowSuite,
 } from "./src/suite.js";
 export { runQaSuite, type QaSuiteRuntimeResult } from "./src/suite-launch.runtime.js";
+export { captureQaEvidenceSourceIdentity } from "./src/evidence-environment.js";

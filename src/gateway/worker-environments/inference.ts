@@ -12,8 +12,6 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
   validateWorkerInferenceEventFrame,
-  validateWorkerInferenceTerminalFrame,
-  validateWorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
@@ -22,8 +20,15 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gat
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   WorkerInferenceSessionDrainBusyError,
+  type WorkerInferenceCancellation,
   type WorkerInferenceSessionDrain,
 } from "./inference-control-internal.js";
+import {
+  normalizeTerminalOutcome,
+  terminalError,
+  terminalFrame,
+  validFrameBytes,
+} from "./inference-frames.js";
 import {
   createWorkerInferenceStore,
   type WorkerInferenceStore,
@@ -33,6 +38,7 @@ import {
   serializeWorkerSessionTurnClaim,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
+import { formatWorkerInferenceError } from "./worker-error.js";
 
 const DEFAULT_REQUEST_MAX_BYTES = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
 // One active turn plus one provider that ignored abort. This prevents repeated
@@ -106,88 +112,6 @@ function trySend(
   } catch {
     return false;
   }
-}
-
-function terminalError(
-  reason: WorkerInferenceErrorReason,
-  outcome?: WorkerInferenceTerminalOutcome,
-): WorkerInferenceTerminalOutcome {
-  const usage =
-    outcome?.type === "done"
-      ? outcome.message.usage
-      : outcome?.type === "error"
-        ? outcome.usage
-        : undefined;
-  const message = (() => {
-    switch (reason) {
-      case "model-not-approved":
-        return "Model is not approved";
-      case "invalid-context":
-        return "Inference context is invalid";
-      case "epoch-mismatch":
-        return "Inference ownership changed";
-      case "session-not-attached":
-        return "Session is not attached";
-      case "provider-error":
-        return "Provider request failed";
-      case "cancelled":
-        return "Inference cancelled";
-    }
-    return "Provider request failed";
-  })();
-  return {
-    type: "error",
-    reason,
-    message,
-    ...(usage ? { usage } : {}),
-  };
-}
-
-function validFrameBytes(
-  frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame,
-  validate: (data: unknown) => boolean,
-): number | null {
-  const measured = boundedJsonUtf8Bytes(frame, WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES);
-  if (
-    measured.complete &&
-    measured.bytes <= WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES &&
-    validate(frame)
-  ) {
-    return measured.bytes;
-  }
-  return null;
-}
-
-function terminalFrame(
-  entry: ActiveInference,
-  outcome: WorkerInferenceTerminalOutcome,
-  seq = entry.seq + 1,
-): WorkerInferenceTerminalFrame {
-  return {
-    type: "event",
-    event: "worker.inference.terminal",
-    payload: {
-      runEpoch: entry.request.runEpoch,
-      sessionId: entry.request.sessionId,
-      runId: entry.request.runId,
-      turnId: entry.request.turnId,
-      seq,
-      outcome,
-    },
-  };
-}
-
-function normalizeTerminalOutcome(
-  entry: ActiveInference,
-  outcome: WorkerInferenceTerminalOutcome,
-): WorkerInferenceTerminalOutcome {
-  if (
-    !validateWorkerInferenceTerminalOutcome(outcome) ||
-    validFrameBytes(terminalFrame(entry, outcome), validateWorkerInferenceTerminalFrame) === null
-  ) {
-    return terminalError("provider-error");
-  }
-  return outcome;
 }
 
 function matchesIdentity(
@@ -364,8 +288,12 @@ export function createWorkerInferenceManager(options: {
         isCurrent: () => durableFence(entry) === null,
         ...(config ? { config } : {}),
       });
-    } catch {
-      outcome = terminalError(entry.abortReason ?? "provider-error");
+    } catch (error) {
+      outcome = terminalError(
+        entry.abortReason ?? "provider-error",
+        undefined,
+        entry.abortReason ? undefined : formatWorkerInferenceError(error),
+      );
     }
     finish(entry, outcome);
   };
@@ -378,8 +306,15 @@ export function createWorkerInferenceManager(options: {
     const operation = runWithGatewayIndependentRootWorkContinuation(
       () => executeEntry(entry),
       "worker:dispatch",
-    ).catch(() => {
-      finish(entry, terminalError(entry.abortReason ?? "provider-error"));
+    ).catch((error: unknown) => {
+      finish(
+        entry,
+        terminalError(
+          entry.abortReason ?? "provider-error",
+          undefined,
+          entry.abortReason ? undefined : formatWorkerInferenceError(error),
+        ),
+      );
     });
     operations.set(operation, entry.request.sessionId);
     void operation.then(
@@ -584,20 +519,44 @@ export function createWorkerInferenceManager(options: {
     return { ok: true, result: { status: "cancelled" } };
   };
 
-  const cancelWhere = (
-    predicate: (entry: ActiveInference) => boolean,
+  const captureCancellationEntries = (predicate: (entry: ActiveInference) => boolean) =>
+    [...active.values()].filter(predicate).map((entry) => ({
+      entry,
+      claimKey: entry.claimKey,
+      sessionId: entry.request.sessionId,
+      runId: entry.request.runId,
+      turnId: entry.request.turnId,
+    }));
+
+  const cancelCaptured = (
+    captured: ReturnType<typeof captureCancellationEntries>,
     reason: WorkerInferenceErrorReason,
-    onCancel?: (entry: ActiveInference) => void,
+    control?: Parameters<WorkerInferenceCancellation["cancel"]>[0],
   ): boolean => {
     let terminalPersistenceFailed = false;
-    for (const entry of active.values()) {
-      if (predicate(entry)) {
-        onCancel?.(entry);
-        terminalPersistenceFailed = !settleAbort(entry, reason) || terminalPersistenceFailed;
+    for (const { entry, claimKey, sessionId, runId, turnId } of captured) {
+      control?.assertCurrent?.();
+      if (
+        active.get(claimKey) !== entry ||
+        entry.claimKey !== claimKey ||
+        entry.request.sessionId !== sessionId ||
+        entry.request.runId !== runId ||
+        entry.request.turnId !== turnId
+      ) {
+        continue;
       }
+      // Terminal delivery can synchronously admit a successor with the same claim.
+      // Only this captured registration owns the accepted cancellation.
+      terminalPersistenceFailed = !settleAbort(entry, reason) || terminalPersistenceFailed;
+      control?.onCancelled?.(runId);
     }
     return terminalPersistenceFailed;
   };
+
+  const cancelWhere = (
+    predicate: (entry: ActiveInference) => boolean,
+    reason: WorkerInferenceErrorReason,
+  ) => cancelCaptured(captureCancellationEntries(predicate), reason);
 
   const cancelEnvironment = (
     environmentId: string,
@@ -611,17 +570,33 @@ export function createWorkerInferenceManager(options: {
     cancelWhere((entry) => entry.claimKey === claimKey, "session-not-attached");
   };
 
-  const cancelSession = (sessionId: string, runId?: string): string[] => {
-    const cancelledRunIds = new Set<string>();
-    cancelWhere(
+  const captureSessionCancellation = (
+    sessionId: string,
+    runId?: string,
+  ): WorkerInferenceCancellation => {
+    const captured = captureCancellationEntries(
       (entry) =>
         entry.request.sessionId === sessionId &&
         (runId === undefined || entry.request.runId === runId),
-      "cancelled",
-      (entry) => cancelledRunIds.add(entry.request.runId),
     );
-    return [...cancelledRunIds].toSorted();
+    return {
+      runIds: [...new Set(captured.map((entry) => entry.runId))].toSorted(),
+      cancel: (control) => {
+        const cancelledRunIds = new Set<string>();
+        cancelCaptured(captured, "cancelled", {
+          assertCurrent: control?.assertCurrent,
+          onCancelled: (cancelledRunId) => {
+            cancelledRunIds.add(cancelledRunId);
+            control?.onCancelled?.(cancelledRunId);
+          },
+        });
+        return [...cancelledRunIds].toSorted();
+      },
+    };
   };
+
+  const cancelSession = (sessionId: string, runId?: string): string[] =>
+    captureSessionCancellation(sessionId, runId).cancel();
 
   const hasSession = (sessionId: string, runId?: string): boolean => {
     for (const entry of active.values()) {
@@ -698,17 +673,16 @@ export function createWorkerInferenceManager(options: {
     ).catch(() => undefined);
   };
 
-  const manager = {
+  return {
     start,
     cancel,
     cancelEnvironment,
     cancelClaim,
     cancelSession,
+    captureSessionCancellation,
+    beginSessionDrain,
     hasSession,
     resolveSessionIdForRunId,
     stop,
   };
-  // Archive-only control stays non-enumerable so the manager's inferred contract remains stable.
-  Object.defineProperty(manager, "beginSessionDrain", { value: beginSessionDrain });
-  return manager;
 }

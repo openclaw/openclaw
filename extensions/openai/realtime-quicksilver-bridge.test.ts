@@ -1,18 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 
-const { captureWsEventMock, webSocketConstructorMock } = vi.hoisted(() => ({
+const { captureWsEventMock } = vi.hoisted(() => ({
   captureWsEventMock: vi.fn(),
-  webSocketConstructorMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>();
   return { ...actual, captureWsEvent: captureWsEventMock };
-});
-
-vi.mock("ws", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("ws")>();
-  return { ...actual, default: webSocketConstructorMock };
 });
 
 import { openAIRealtimeHost } from "./realtime-host.js";
@@ -514,10 +509,11 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     const audioEvents = sentEvents(harness.socket).filter(
       (event) => event.type === "input_audio.append",
     );
-    expect(audioEvents).toHaveLength(2);
-    expect(
-      audioEvents.map((event) => Buffer.from(String(event.audio), "base64").byteLength),
-    ).toEqual([512 * 1024, Buffer.byteLength("overflow")]);
+    expect(audioEvents).toHaveLength(1);
+    const retained = Buffer.from(String(audioEvents[0]?.audio), "base64");
+    expect(retained).toEqual(
+      Buffer.concat([Buffer.alloc(240_000 - 8, 0x02), Buffer.from("overflow")]),
+    );
     expect(harness.logger.warn).toHaveBeenCalledOnce();
     expect(harness.logger.warn).toHaveBeenCalledWith(
       "OpenAI GPT-Live input audio queue overflow; keeping newest audio",
@@ -555,12 +551,12 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
         model: "gpt-live-test-canary",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
         resolveAuth: async () => ({ type: "api-key", token: "test-key" }),
-        webSocketFactory: (_url, _options) => {
+        mediaSocketFactory: fakeQuicksilverMediaSocket((_url, _options) => {
           const socket = new FakeSocket(false);
           sockets.push(socket);
           queueMicrotask(() => socket.open());
           return socket;
-        },
+        }),
         onAudio: vi.fn(),
         onClearAudio: vi.fn(),
       },
@@ -802,7 +798,7 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     captureWsEventMock.mockClear();
     const model = "sensitive-model-marker";
     const transcript = "sensitive-frame-marker";
-    const harness = createHarness({ model, mockDefaultSocket: webSocketConstructorMock });
+    const harness = createHarness({ model });
 
     await harness.bridge.connect();
     harness.bridge.sendUserMessage(transcript);

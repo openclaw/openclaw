@@ -3,10 +3,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
-import {
-  projectSessionMessagePayload,
-  projectTranscriptEntryMessage,
-} from "./session-transcript-message.js";
+import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
+import { projectSessionMessagePayload } from "./session-transcript-message.js";
 
 const position = { source: "selected-snapshot", rawSeq: 4 };
 const message = {

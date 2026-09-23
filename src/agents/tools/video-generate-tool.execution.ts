@@ -32,6 +32,7 @@ import {
   normalizeMediaReferenceInputs,
   resolveMediaToolSandboxConfig,
 } from "./media-tool-shared.js";
+import type { ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const GENERATED_VIDEO_MEDIA_SUBDIR = "tool-video-generation";
 const GENERATED_VIDEO_PROBE_BUDGET_MS = 3000;
@@ -50,6 +51,7 @@ export function normalizeReferenceInputs(params: {
     pluralKey: params.pluralKey,
     maxCount: params.maxCount,
     label: `reference ${params.pluralKey}`,
+    dedupe: false,
   });
 }
 
@@ -108,6 +110,8 @@ export async function loadReferenceAssets(params: {
   expectedKind: "image" | "video" | "audio";
   maxBytes: number;
   workspaceDir?: string;
+  cwd?: string;
+  fsPolicy?: ToolFsPolicy;
   sandboxConfig: ReturnType<typeof resolveMediaToolSandboxConfig>;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
@@ -124,6 +128,8 @@ export async function loadReferenceAssets(params: {
     expectedKind: params.expectedKind,
     sandbox: params.sandboxConfig,
     workspaceDir: params.workspaceDir,
+    cwd: params.cwd,
+    fsPolicy: params.fsPolicy,
     maxBytes: params.maxBytes,
     ssrfPolicy: params.ssrfPolicy,
     signal: params.signal,

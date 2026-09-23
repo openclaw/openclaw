@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import {
   SESSION_NAVIGATION_INTENT_EVENT,
   type SessionNavigationIntent,
@@ -7,7 +8,9 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { clearPaneSessionHandoff, clearPaneSessionHandoffs } from "./chat-pane-shared.ts";
 import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
-import { findPane } from "./split-layout.ts";
+import { findPane, visiblePanesOf } from "./split-layout.ts";
+
+export const QUEUED_EDIT_RETENTION_CHANGE_EVENT = "openclaw:queued-edit-retention-change";
 
 const RETAINED_SESSIONS_PER_PANE = 3;
 const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
@@ -16,7 +19,9 @@ type RetentionHost = HTMLElement & { requestUpdate(): unknown };
 type RetentionBindings = {
   context: () => ApplicationContext | undefined;
   presented: () => boolean;
+  routeHref: () => string;
   layout: () => ChatSplitLayout;
+  narrow: () => boolean;
   selectReplacement: (paneId: string, sourceSessionKey: string, sessionKey: string) => void;
 };
 
@@ -32,6 +37,7 @@ export class ChatPageRetainedSessions {
   ) {}
 
   connect(): void {
+    this.host.addEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention);
     window.addEventListener("popstate", this.cancelPreview);
     window.addEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
   }
@@ -40,23 +46,22 @@ export class ChatPageRetainedSessions {
     // Pane disconnects stage their scoped composer packages for a later chat
     // remount. Only an explicit pane/session close is terminal.
     this.sessionsByPane.clear();
+    this.host.removeEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention);
     window.removeEventListener("popstate", this.cancelPreview);
     window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
     this.cancelPreview();
   }
 
+  private readonly refreshRetention = () => {
+    this.host.requestUpdate();
+  };
+
   suspend(): void {
     this.cancelPreview();
   }
 
-  settleRoute(sessionKey: string): void {
-    if (!this.preview) {
-      return;
-    }
-    if (areUiSessionKeysEquivalent(this.preview.sessionKey, sessionKey)) {
-      this.preview = null;
-      this.clearPreviewWork();
-    } else {
+  settleRoute(): void {
+    if (this.preview) {
       this.cancelPreview();
     }
   }
@@ -94,15 +99,39 @@ export class ChatPageRetainedSessions {
     if (slot === undefined) {
       slot = slots.indexOf(undefined);
       if (slot < 0) {
-        const [evictedKey, evictedSlot] = retained.entries().next().value!;
-        this.findPane(pane.id, evictedKey)?.prepareForEviction?.();
-        retained.delete(evictedKey);
-        slot = evictedSlot;
+        const candidate = [...retained].find(
+          ([key]) => !this.findPane(pane.id, key)?.hasQueuedMessageEdit,
+        );
+        if (candidate) {
+          const [evictedKey, evictedSlot] = candidate;
+          this.findPane(pane.id, evictedKey)?.prepareForEviction?.();
+          retained.delete(evictedKey);
+          slot = evictedSlot;
+        } else {
+          // Unsaved corrections keep custody; ordinary navigation can use an
+          // overflow slot until an edit resolves rather than discarding work.
+          slot = slots.length;
+        }
       }
       slots[slot] = retainedKey;
     }
     retained.delete(retainedKey);
     retained.set(retainedKey, slot);
+    for (const [key, retainedSlot] of retained) {
+      if (retained.size <= RETAINED_SESSIONS_PER_PANE) {
+        break;
+      }
+      if (key === retainedKey || this.findPane(pane.id, key)?.hasQueuedMessageEdit) {
+        continue;
+      }
+      this.findPane(pane.id, key)?.prepareForEviction?.();
+      retained.delete(key);
+      slots[retainedSlot] = undefined;
+    }
+    // Only trim empty tail slots: moving survivors would remount their panes.
+    while (slots.length > RETAINED_SESSIONS_PER_PANE && slots.at(-1) === undefined) {
+      slots.pop();
+    }
     return slots;
   }
 
@@ -121,6 +150,11 @@ export class ChatPageRetainedSessions {
     replacementSessionKey: string,
     preserveDraft = false,
   ): void => {
+    const context = this.bindings.context();
+    if (context && readDeletedSessionStartup(context, sessionKey)) {
+      this.host.requestUpdate();
+      return;
+    }
     const deletedPane = this.findPane(paneId, sessionKey);
     if (!preserveDraft) {
       deletedPane?.discardStagedAttachments?.();
@@ -131,7 +165,6 @@ export class ChatPageRetainedSessions {
     if (retainedKey !== undefined) {
       retained?.delete(retainedKey);
     }
-    const context = this.bindings.context();
     if (context && !preserveDraft) {
       clearPaneSessionHandoff(context, paneId, sessionKey);
     }
@@ -157,10 +190,16 @@ export class ChatPageRetainedSessions {
   }
 
   private readonly handleNavigationIntent = (event: Event) => {
-    if (!this.bindings.presented() || !(event instanceof CustomEvent)) {
+    if (!(event instanceof CustomEvent)) {
       return;
     }
+    // A committed preview can still be waiting for route data after history
+    // advances. New navigation retires it even when this page no longer owns
+    // the URL and cannot preview the replacement itself.
     this.cancelPreview();
+    if (!this.bindings.presented() || window.location.href !== this.bindings.routeHref()) {
+      return;
+    }
     const intent = event.detail as SessionNavigationIntent;
     const layout = this.bindings.layout();
     const activePane = findPane(layout, layout.activePaneId)?.pane;
@@ -207,12 +246,15 @@ export class ChatPageRetainedSessions {
   };
 
   private present(paneId: string, sessionKey: string, preview = false): void {
+    const visible = visiblePanesOf(this.bindings.layout(), this.bindings.narrow()).some(
+      (pane) => pane.id === paneId,
+    );
     for (const pane of this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
       if (pane.paneId !== paneId) {
         continue;
       }
       const selected = areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey);
-      const presented = this.bindings.presented() && selected;
+      const presented = this.bindings.presented() && visible && selected;
       pane.classList.toggle("chat-pane-cache__pane--visible", selected);
       pane.visuallyPresented = presented;
       if (preview) {
@@ -237,12 +279,15 @@ export class ChatPageRetainedSessions {
   }
 
   private readonly cancelPreview = () => {
+    const layout = this.bindings.layout();
+    const paneId = this.preview?.paneId ?? layout.activePaneId;
     this.clearPreviewWork();
     this.preview = null;
-    const layout = this.bindings.layout();
-    const activePane = findPane(layout, layout.activePaneId)?.pane;
-    if (activePane) {
-      this.present(activePane.id, activePane.sessionKey);
+    // A commit can focus another split. Restore the pane whose presentation
+    // this preview changed using its current authoritative selection.
+    const pane = findPane(layout, paneId)?.pane;
+    if (pane) {
+      this.present(pane.id, pane.sessionKey);
     }
   };
 }

@@ -1,4 +1,4 @@
-// Browser tests cover server context.hot reload profiles plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunningChrome } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -110,14 +110,6 @@ function requireValue<T>(value: T | null | undefined, message: string): T {
     throw new Error(message);
   }
   return value;
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function runtimeState(
@@ -396,8 +388,8 @@ describe("server-context hot-reload profiles", () => {
 
   it("never re-adopts a relay credential while an unexposed close is still pending", async () => {
     const { state, runtime, relay } = createExtensionRelayFixture();
-    const closeStarted = deferred();
-    const closeReleased = deferred();
+    const closeStarted = createDeferred<void>();
+    const closeReleased = createDeferred<void>();
     relay.close.mockImplementationOnce(async () => {
       closeStarted.resolve();
       await closeReleased.promise;
@@ -571,8 +563,8 @@ describe("server-context hot-reload profiles", () => {
       name: "work",
       config: { cdpPort: 18801, color: "#0066CC" },
     });
-    const launchA = deferred();
-    const launchAStarted = deferred();
+    const launchA = createDeferred<void>();
+    const launchAStarted = createDeferred<void>();
     const adopted: string[] = [];
     const revisionA = getProfileLifecycle(runtime).configRevision;
     const pendingA = enqueueCurrentProfileStart(state, runtime, async (signal, generation) => {
@@ -652,8 +644,8 @@ describe("server-context hot-reload profiles", () => {
     });
     expect(oldRuntime.running).toBeNull();
     const lateRunning = { pid: 321 } as RunningChrome;
-    const launch = deferred();
-    const launchStarted = deferred();
+    const launch = createDeferred<void>();
+    const launchStarted = createDeferred<void>();
     const pendingStart = enqueueCurrentProfileStart(state, oldRuntime, async () => {
       launchStarted.resolve();
       await launch.promise;

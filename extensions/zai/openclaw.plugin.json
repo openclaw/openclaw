@@ -9,7 +9,7 @@
   "providerEndpoints": [
     {
       "endpointClass": "zai-native",
-      "hosts": ["api.z.ai"]
+      "hosts": ["api.z.ai", "open.bigmodel.cn"]
     }
   ],
   "providerRequest": {

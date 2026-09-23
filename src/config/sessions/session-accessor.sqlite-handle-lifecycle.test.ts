@@ -1,11 +1,12 @@
 import path from "node:path";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -33,7 +34,13 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 
+vi.mock("node:worker_threads", async () =>
+  (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
+);
+
+const observer = useReconcileWorkerObserver();
 const archiveMaterializationHook = vi.hoisted(() => ({
   afterMaterialize: undefined as (() => void) | undefined,
 }));
@@ -306,7 +313,7 @@ describe("SQLite session handle lifecycle", () => {
       sessionKeys: [scope.sessionKey],
       includeLabelOwners: "Renamed",
       update: async ([snapshot]) => {
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         return {
           result: undefined,
           replacements: [
@@ -352,17 +359,14 @@ describe("SQLite session handle lifecycle", () => {
     const database = openOpenClawAgentDatabase(databaseOptions);
     database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
     let stalledWorker: Worker | undefined;
-    startSessionTranscriptIndexReconcile({
-      ...databaseOptions,
-      createWorker: (filename, options) => {
-        // Stall the planner only; let its recovery worker finish real cleanup.
-        if (stalledWorker) {
-          return new Worker(filename, options);
-        }
-        stalledWorker = new Worker("setInterval(() => {}, 1_000)", { eval: true });
-        return stalledWorker;
-      },
-    });
+    observer.beforeCreate = (filename, options) =>
+      stalledWorker
+        ? { filename, options }
+        : { filename: "setInterval(() => {}, 1_000)", options: { eval: true } };
+    observer.onTask = ({ worker }) => {
+      stalledWorker ??= worker;
+    };
+    startSessionTranscriptIndexReconcile(databaseOptions);
     const controller = new AbortController();
     const abortReason = new Error("cancel stalled projection wait");
 

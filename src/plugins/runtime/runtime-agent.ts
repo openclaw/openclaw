@@ -148,7 +148,7 @@ async function upsertSessionEntry(params: RuntimeUpsertSessionEntryParams): Prom
 async function createSessionEntry(
   params: Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0],
 ): Promise<Awaited<ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>>> {
-  const assertCreationOwner = captureSessionInitializationOwner(
+  const creationOwner = captureSessionInitializationOwner(
     "agentHarnessId" in params.initialEntry ? params.initialEntry.agentHarnessId : undefined,
   );
   // Session creation stays behind the canonical Gateway lifecycle boundary while
@@ -156,17 +156,17 @@ async function createSessionEntry(
   const [
     { createGatewaySession },
     { resolveGatewaySessionStoreTarget },
-    { readAcpSessionMetaForEntry, upsertAcpSessionMeta },
+    { readAcpSessionMetaForEntry },
+    { upsertAcpSessionMeta },
     { resolveSandboxedSessionCreation },
   ] = await Promise.all([
     import("../../gateway/session-create-service.js"),
     import("../../gateway/session-utils.js"),
-    // session-meta rides the same lazy boundary: session-utils already pulls it
-    // in transitively, so a separate import here would only duplicate the edge.
+    import("../../acp/runtime/session-meta-readonly.js"),
     import("../../acp/runtime/session-meta.js"),
     import("../../gateway/operator-role-policy.js"),
   ]);
-  assertCreationOwner();
+  creationOwner.assertCurrent();
   const requiredCreation = resolveSandboxedSessionCreation(
     getPluginRuntimeGatewayRequestScope()?.client,
     params.cfg,
@@ -239,7 +239,7 @@ async function createSessionEntry(
       }
     },
     run: async () => {
-      assertCreationOwner();
+      creationOwner.assertCurrent();
       const afterCreate = params.afterCreate;
       let initialization: ReturnType<typeof createSessionInitialization> | undefined;
       let callbackContext: CreatedContext | undefined;
@@ -278,8 +278,12 @@ async function createSessionEntry(
             sessionId: expected.sessionId,
             lifecycleRevision: expected.lifecycleRevision,
           },
-          (deleted) => {
-            assertCreationOwner();
+          (phase, deleted) => {
+            if (phase === "rollback") {
+              creationOwner.assertRollbackCurrent();
+            } else {
+              creationOwner.assertCurrent();
+            }
             const current = getSessionEntry({
               sessionKey: captured.key,
               storePath: captured.storePath,

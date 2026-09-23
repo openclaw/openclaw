@@ -11,7 +11,10 @@ import {
   isOpenClawAgentDatabaseOpen,
 } from "../state/openclaw-agent-db.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
-import { listExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
+import {
+  listExistingAgentDatabaseTargets,
+  type ExistingAgentDatabaseTarget,
+} from "./doctor-session-sqlite-readers.js";
 
 export type SessionDeliveryStateRepairReport = {
   found: number;
@@ -24,6 +27,7 @@ export function repairCanonicalSessionDeliveryStates(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  targets?: readonly ExistingAgentDatabaseTarget[];
 }): SessionDeliveryStateRepairReport {
   return repairCanonicalSessionEntries({
     ...params,
@@ -37,6 +41,7 @@ export function repairCanonicalSessionResolvedSkills(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  targets?: readonly ExistingAgentDatabaseTarget[];
 }): SessionDeliveryStateRepairReport {
   return repairCanonicalSessionEntries({
     ...params,
@@ -49,10 +54,11 @@ export function repairCanonicalSessionEntries(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  targets?: readonly ExistingAgentDatabaseTarget[];
   transform: (entry: SessionEntry, sessionKey: string, phase: "scan" | "repair") => SessionEntry;
   updateDeliveryProjection: boolean;
 }): SessionDeliveryStateRepairReport {
-  const targets = listExistingAgentDatabaseTargets(params.cfg, params.env);
+  const targets = params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env);
   let found = 0;
   let repaired = 0;
   for (const target of targets) {

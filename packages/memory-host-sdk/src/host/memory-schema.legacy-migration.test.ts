@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { encodeMemoryEmbedding } from "./embedding-vector.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
 describe("memory index same-file legacy migration", () => {
@@ -62,16 +63,20 @@ describe("memory index same-file legacy migration", () => {
         INSERT INTO memory_index_meta VALUES ('memory_index_meta_v1', 'canonical');
         INSERT INTO memory_index_sources (path, source, hash, mtime, size)
           VALUES ('doc.md', 'memory', 'new-hash', 200.0, 42);
+      `);
+      db.prepare(`
         INSERT INTO memory_index_chunks (
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         ) VALUES (
           'chunk-new-1', 'doc.md', 'memory', 1, 10, 'new-chunk-hash', 'model',
-          'current canonical body', '[1,2]', 200
+          'current canonical body', ?, 200
         );
+      `).run(encodeMemoryEmbedding([1, 2]));
+      db.prepare(`
         INSERT INTO memory_embedding_cache VALUES (
-          'openai', 'model', 'key', 'new-chunk-hash', '[1,2]', 2, 200
+          'openai', 'model', 'key', 'new-chunk-hash', ?, 2, 200
         );
-      `);
+      `).run(encodeMemoryEmbedding([1, 2]));
       // This is the partial migration state seen in affected databases: canonical
       // tables already contain current rows while the same file still has legacy tables.
       db.exec(`
@@ -161,14 +166,14 @@ describe("memory index same-file legacy migration", () => {
           {
             provider_key: "key",
             hash: "new-chunk-hash",
-            embedding: "[1,2]",
+            embedding: encodeMemoryEmbedding([1, 2]),
             dims: 2,
             updated_at: 200,
           },
           {
             provider_key: "legacy-key",
             hash: "legacy-hash",
-            embedding: "[3,4]",
+            embedding: encodeMemoryEmbedding([3, 4]),
             dims: 2,
             updated_at: 90,
           },
@@ -209,19 +214,14 @@ describe("memory index same-file legacy migration", () => {
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         ) VALUES (
           'chunk-canonical', 'canonical.md', 'memory', 1, 2, 'canonical-chunk-hash',
-          'fts-only', 'canonical nebula', '[]', 200
+          'fts-only', 'canonical nebula', X'', 200
         );
         INSERT INTO memory_index_chunks (
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         ) VALUES (
           'chunk-canonical-ownerless', 'deleted.md', 'memory', 1, 2, 'orphan-chunk-hash',
-          'fts-only', 'orphaned starlight', '[]', 190
+          'fts-only', 'orphaned starlight', X'', 190
         );
-        INSERT INTO memory_index_chunks_fts
-          (text, id, path, source, model, start_line, end_line)
-        VALUES
-          ('canonical nebula', 'chunk-canonical', 'canonical.md', 'memory', 'fts-only', 1, 2),
-          ('orphaned starlight', 'chunk-canonical-ownerless', 'deleted.md', 'memory', 'fts-only', 1, 2);
 
         CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE files (
@@ -319,7 +319,7 @@ describe("memory index same-file legacy migration", () => {
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         ) VALUES (
           'chunk-doc-canonical', 'doc.md', 'memory', 1, 10, 'doc-chunk-hash', 'model',
-          'canonical body', '[]', 200
+          'canonical body', X'', 200
         );
         -- partial.md has only the first canonical chunk. Seeing a second legacy
         -- identity makes completeness ambiguous, so the source must reindex.
@@ -329,7 +329,7 @@ describe("memory index same-file legacy migration", () => {
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         ) VALUES (
           'chunk-partial-1', 'partial.md', 'memory', 1, 5, 'partial-1-hash', 'model',
-          'canonical first half', '[]', 175
+          'canonical first half', X'', 175
         );
         -- pending.md has a canonical source row but no chunks yet (indexing
         -- interrupted before its chunks were written): its legacy chunk is the
@@ -439,7 +439,7 @@ describe("memory index same-file legacy migration", () => {
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         ) VALUES (
           'shared-id', 'canonical.md', 'memory', 1, 2, 'canonical-chunk-hash', 'model',
-          'canonical body', '[]', 200
+          'canonical body', X'', 200
         );
         CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE files (
@@ -594,59 +594,73 @@ describe("memory index same-file legacy migration", () => {
     }
   });
 
-  it("keeps legacy tables when legacy chunk rows cannot be copied", () => {
-    const db = new DatabaseSync(":memory:");
-    try {
-      db.exec(`
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE files (
-          path TEXT PRIMARY KEY,
-          source TEXT NOT NULL DEFAULT 'memory',
-          hash TEXT NOT NULL,
-          mtime INTEGER NOT NULL,
-          size INTEGER NOT NULL
-        );
-        CREATE TABLE chunks (
-          id TEXT PRIMARY KEY,
-          path TEXT NOT NULL,
-          source TEXT NOT NULL DEFAULT 'memory',
-          start_line INTEGER NOT NULL,
-          end_line INTEGER NOT NULL,
-          hash TEXT NOT NULL,
-          model TEXT NOT NULL,
-          text TEXT NOT NULL,
-          embedding TEXT,
-          updated_at INTEGER NOT NULL
-        );
-        INSERT INTO files VALUES ('note.md', 'memory', 'note-hash', 90, 10);
-        -- Legacy-only source (canonical owns no chunks for it), so this chunk
-        -- must copy; a NULL embedding makes it uncopyable under STRICT and the
-        -- whole migration must abort with legacy tables retained.
-        INSERT INTO chunks VALUES (
-          'chunk-broken', 'note.md', 'memory', 1, 5, 'chunk-hash', 'model',
-          'body', NULL, 90
-        );
-      `);
+  it.each([null, "not-json", "[1,null]", "[1e400]", "{}"])(
+    "preserves legacy text and records rebuild debt for unusable embedding %s",
+    (embedding) => {
+      const db = new DatabaseSync(":memory:");
+      try {
+        db.exec(`
+          CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+          CREATE TABLE files (
+            path TEXT PRIMARY KEY,
+            source TEXT NOT NULL DEFAULT 'memory',
+            hash TEXT NOT NULL,
+            mtime INTEGER NOT NULL,
+            size INTEGER NOT NULL
+          );
+          CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            path TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'memory',
+            start_line INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            hash TEXT NOT NULL,
+            model TEXT NOT NULL,
+            text TEXT NOT NULL,
+            embedding TEXT,
+            updated_at INTEGER NOT NULL
+          );
+          INSERT INTO files VALUES ('note.md', 'memory', 'note-hash', 90, 10);
+        `);
+        db.prepare(`
+          INSERT INTO chunks VALUES (
+            'chunk-broken', 'note.md', 'memory', 1, 5, 'chunk-hash', 'model',
+            'body', ?, 90
+          );
+        `).run(embedding);
 
-      expect(() =>
-        ensureMemoryIndexSchema({
-          db,
-          cacheEnabled: false,
-          ftsEnabled: false,
-        }),
-      ).toThrow("legacy memory chunks rows could not be copied");
-      expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get()).toEqual({
-        count: 0,
-      });
-      expect(
-        db
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks') ORDER BY name",
-          )
-          .all(),
-      ).toEqual([{ name: "chunks" }, { name: "files" }, { name: "meta" }]);
-    } finally {
-      db.close();
-    }
-  });
+        const result = ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+        expect(result.ftsAvailable).toBe(true);
+        expect(db.prepare("SELECT id, text, embedding FROM memory_index_chunks").get()).toEqual({
+          id: "chunk-broken",
+          text: "body",
+          embedding: encodeMemoryEmbedding([]),
+        });
+        expect(
+          db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'note.md'").get(),
+        ).toEqual({ hash: "" });
+        expect(
+          db
+            .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
+            .get(),
+        ).toEqual({ value: "1" });
+        expect(
+          db
+            .prepare(
+              "SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'body'",
+            )
+            .all(),
+        ).toEqual([{ id: "chunk-broken" }]);
+        expect(
+          db
+            .prepare(
+              "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks') ORDER BY name",
+            )
+            .all(),
+        ).toEqual([]);
+      } finally {
+        db.close();
+      }
+    },
+  );
 });

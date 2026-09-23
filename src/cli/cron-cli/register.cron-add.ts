@@ -23,10 +23,9 @@ import {
   handleCronCliError,
   parseCronCommandArgv,
   parseCronCommandEnv,
-  parseCronFallbacks,
   parseCronIntegerOption,
   parseCronNoOutputTimeoutOption,
-  parseCronToolsAllow,
+  parseCronStringList,
   printCronJson,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -103,6 +102,15 @@ export function registerCronAddCommand(cron: Command) {
           cmd: Command,
         ) => {
           try {
+            for (const [flag, cwd] of [
+              ["--command-cwd", opts.commandCwd],
+              ["--on-exit-cwd", opts.onExitCwd],
+              ["--stream-cwd", opts.streamCwd],
+            ] as const) {
+              if (typeof cwd === "string" && !normalizeOptionalString(cwd)) {
+                throw new CronCliError(`${flag} must not be blank`);
+              }
+            }
             const hasScheduleFlag =
               typeof opts.at === "string" ||
               typeof opts.cron === "string" ||
@@ -142,11 +150,14 @@ export function registerCronAddCommand(cron: Command) {
               const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
               const optionMessage = normalizeOptionalString(opts.message);
               const positionalMessage = normalizeOptionalString(messageArg);
-              const commandShell = normalizeOptionalString(opts.command);
+              const commandShell = readNonBlankString(opts.command);
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
               // File arguments identify exact local paths; trimming can select another file.
               const scriptPath = readNonBlankString(opts.script);
-              const toolsAllow = parseCronToolsAllow(opts.tools);
+              if (typeof opts.script === "string" && !scriptPath) {
+                throw new CronCliError("--script must not be blank");
+              }
+              const toolsAllow = parseCronStringList(opts.tools);
               if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
                 throw new CronCliError(
                   "Pass the automation message either positionally or with --message, not both.",
@@ -225,7 +236,7 @@ export function registerCronAddCommand(cron: Command) {
                 kind: "agentTurn" as const,
                 message,
                 model: normalizeOptionalString(opts.model),
-                fallbacks: parseCronFallbacks(opts.fallbacks),
+                fallbacks: parseCronStringList(opts.fallbacks),
                 thinking: normalizeOptionalString(opts.thinking),
                 timeoutSeconds,
                 lightContext: opts.lightContext === true ? true : undefined,

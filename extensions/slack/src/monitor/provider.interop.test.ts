@@ -1,4 +1,5 @@
 // Slack tests cover provider.interop plugin behavior.
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
@@ -136,6 +137,9 @@ describe("createSlackBoltApp", () => {
 
   class FakeSocketModeReceiver {
     args: Record<string, unknown>;
+    client = Object.assign(new EventEmitter(), {
+      send: vi.fn<(envelopeId: string) => Promise<void>>().mockResolvedValue(undefined),
+    });
 
     constructor(args: Record<string, unknown>) {
       this.args = args;
@@ -308,12 +312,13 @@ describe("createSlackBoltApp", () => {
 
   it("routes native reconnect start failures through the socket disconnect event", async () => {
     const startError = new Error("invalid_auth");
-    class FakeSocketModeClient {
+    class FakeSocketModeClient extends EventEmitter {
       emitted: unknown[][] = [];
       clientPingTimeoutMS = 0;
       numOfConsecutiveReconnectionFailures = 0;
       logger = { debug: () => undefined };
       shuttingDown = false;
+      send = async () => {};
       start = async () => {
         throw startError;
       };
@@ -322,8 +327,9 @@ describe("createSlackBoltApp", () => {
         return Promise.resolve(callback.call(this));
       }
 
-      emit(event: string, ...args: unknown[]) {
+      override emit(event: string, ...args: unknown[]) {
         this.emitted.push([event, ...args]);
+        return super.emit(event, ...args);
       }
     }
     class FakeObservedSocketModeReceiver {
@@ -484,6 +490,89 @@ describe("createSlackBoltApp", () => {
       });
     }
   });
+
+  it.each([
+    { type: "app_rate_limited", team_id: "T1", minute_rate_limited: 123, api_app_id: "A1" },
+    { type: "event_callback" },
+  ])(
+    "acknowledges control or incomplete envelopes and keeps receiving messages: $type",
+    async (body) => {
+      const socketServer = new WebSocketServer({ port: 0 });
+      await new Promise<void>((resolve) => {
+        socketServer.once("listening", resolve);
+      });
+      const address = socketServer.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected a TCP Socket Mode test server");
+      }
+      const acknowledgements: string[] = [];
+      socketServer.on("connection", (socket) => {
+        socket.on("message", (data) => {
+          const bytes = Array.isArray(data)
+            ? Buffer.concat(data)
+            : Buffer.isBuffer(data)
+              ? data
+              : Buffer.from(new Uint8Array(data));
+          acknowledgements.push(JSON.parse(bytes.toString("utf8")).envelope_id);
+        });
+        socket.send(JSON.stringify({ type: "hello" }));
+      });
+      const slackBoltModule = await import("@slack/bolt");
+      const { app, socketModeLogger } = createSlackBoltApp({
+        interop: resolveSlackBoltInterop({
+          defaultImport: slackBoltModule.default,
+          namespaceImport: slackBoltModule,
+        }),
+        slackMode: "socket",
+        token: "xoxb-test",
+        appToken: "xapp-test",
+        slackWebhookPath: "/slack/events",
+        clientOptions: {
+          fetch: async () =>
+            new Response(JSON.stringify({ ok: true, url: `ws://127.0.0.1:${address.port}` }), {
+              headers: { "content-type": "application/json" },
+            }),
+        },
+      });
+      const processEvent = vi.spyOn(app, "processEvent").mockImplementation(async (event) => {
+        await event.ack();
+      });
+      const warning = vi.spyOn(socketModeLogger, "warn");
+      try {
+        await app.start();
+        for (const socket of socketServer.clients) {
+          socket.send(
+            JSON.stringify({ type: "events_api", envelope_id: "control", payload: body }),
+          );
+          socket.send(
+            JSON.stringify({
+              type: "events_api",
+              envelope_id: "message",
+              payload: {
+                type: "event_callback",
+                event: { type: "message", text: "still connected" },
+              },
+            }),
+          );
+        }
+        await vi.waitFor(() => expect(acknowledgements).toEqual(["control", "message"]));
+        expect(processEvent).toHaveBeenCalledTimes(1);
+        expect(processEvent.mock.calls[0]?.[0].body).toMatchObject({
+          event: { text: "still connected" },
+        });
+        expect(warning).toHaveBeenCalledTimes(1);
+        expect(socketServer.clients.size).toBe(1);
+      } finally {
+        await gracefulStopSlackApp(app);
+        for (const socket of socketServer.clients) {
+          socket.terminate();
+        }
+        await new Promise<void>((resolve, reject) => {
+          socketServer.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("uses Slack's fixed Socket Mode receiver policy", () => {
     const clientOptions = { teamId: "T1" };

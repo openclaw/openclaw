@@ -398,15 +398,18 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("rejects unsupported scheme references", async () => {
-    await withConfiguredPdfTool(async (tool) => {
-      const result = await tool.execute("t1", {
-        prompt: "test",
-        pdf: "ftp://example.com/doc.pdf",
+  it.each(["ftp://example.com/doc.pdf", "data:application/pdf;base64,JVBERi0xLjQ="])(
+    "rejects unsupported scheme reference %s",
+    async (pdf) => {
+      await withConfiguredPdfTool(async (tool) => {
+        const result = await tool.execute("t1", {
+          prompt: "test",
+          pdf,
+        });
+        expectFields(result.details, { error: "unsupported_pdf_reference" });
       });
-      expectFields(result.details, { error: "unsupported_pdf_reference" });
-    });
-  });
+    },
+  );
 
   it("resolves media://inbound PDF refs", async () => {
     await withManagedInboundPdf(async ({ mediaId }) => {

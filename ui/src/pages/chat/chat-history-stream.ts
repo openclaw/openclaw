@@ -14,6 +14,7 @@ import type { ChatState } from "./chat-state-contract.ts";
 import {
   getChatRunOwner,
   getChatSessionProjection,
+  observeChatRunModel,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   setChatRunOwner,
@@ -273,10 +274,14 @@ export function applyHistoryRun(params: {
       runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)) ||
       sameRunContinued);
   if (canAdoptInFlightRun) {
+    const recoveringRun = !state.chatRunId;
     // Canonical run projections change on every live delta or terminal.
     // Their identity fences ABA races where a run starts and finishes while
     // history is pending; deltas from this same live run must still merge.
     adoptStartedChatRun(state, inFlightRunId, Date.now());
+    if (recoveringRun && sessionInfo) {
+      observeChatRunModel(state, inFlightRunId, sessionInfo);
+    }
     state.chatRunSessionAbortable = run?.sessionAbortable === true;
   }
   if (!inFlightRunIsActive || state.chatRunId !== inFlightRunId) {

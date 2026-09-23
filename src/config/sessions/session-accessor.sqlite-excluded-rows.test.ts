@@ -330,6 +330,62 @@ describe("SQLite exclusion survivor semantics", () => {
 });
 
 describe("SQLite candidate reference reads", () => {
+  it.each(["current ", "current\0 ", "\u00a0current\ufeff"])(
+    "retains normalized current IDs for %j",
+    (current) => {
+      const database = openDatabase();
+      insertEntry(database, "owner", current);
+      expect(readReferencedSessionIds(database)).toEqual(new Set([current, current.trim()]));
+      expect(readReferencedSessionIds(database, undefined, [current.trim()])).toEqual(
+        new Set([current.trim()]),
+      );
+    },
+  );
+
+  it("extracts ordinary references without decoding entry JSON in JavaScript", () => {
+    const database = openDatabase();
+    const expected = new Set<string>();
+    for (let index = 0; index < 32; index += 1) {
+      const ids = [
+        `current-${index}`,
+        `previous-${index}`,
+        `family-${index}`,
+        `checkpoint-${index}`,
+        `pre-${index}`,
+        `post-${index}`,
+      ] as const;
+      for (const id of ids) {
+        expected.add(id);
+      }
+      insertEntry(
+        database,
+        `owner-${index}`,
+        ids[0],
+        JSON.stringify({
+          sessionId: ids[0],
+          updatedAt: 1,
+          previousSessionId: ` ${ids[1]} `,
+          usageFamilySessionIds: [ids[2]],
+          compactionCheckpoints: [
+            {
+              sessionId: ids[3],
+              preCompaction: { sessionId: ids[4] },
+              postCompaction: { sessionId: ids[5] },
+              unrelated: { nested: [{ sessionId: "not-a-reference" }] },
+            },
+          ],
+          skillsSnapshot: { prompt: "large saved prompt".repeat(1024), skills: [] },
+        }),
+      );
+    }
+    const parse = vi.spyOn(JSON, "parse");
+    expect(readReferencedSessionIds(database)).toEqual(expected);
+    expect(readReferencedSessionIds(database, undefined, ["pre-0", "post-31", "missing"])).toEqual(
+      new Set(["pre-0", "post-31"]),
+    );
+    expect(parse).not.toHaveBeenCalled();
+  });
+
   it("does not materialize unrelated node metadata for one candidate", () => {
     const database = openDatabase();
     for (let index = 0; index < 32; index += 1) {
@@ -357,6 +413,15 @@ describe("SQLite candidate reference reads", () => {
     ["escaped key", '"previous\\u0053essionId":" candidate "'],
     ["duplicate key", '"previousSessionId":null,"previousSessionId":" candidate "'],
     ["usage family", '"usageFamilySessionIds":[" candidate "]'],
+    ["escaped surrogate", '"previousSessionId":"candidate","label":"\\ud800"'],
+    [
+      "duplicate identity",
+      '"sessionId":"wrong","sessionId":"current","previousSessionId":"candidate"',
+    ],
+    [
+      "duplicate checkpoint",
+      '"compactionCheckpoints":[{"sessionId":"wrong","sessionId":"candidate","preCompaction":{},"postCompaction":{}}]',
+    ],
     [
       "checkpoint",
       '"compactionCheckpoints":[{"sessionId":"candidate","preCompaction":{},"postCompaction":{}}]',

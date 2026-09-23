@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId, Worker } from "node:worker_threads";
@@ -14,7 +15,7 @@ import type {
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
-import { drainSessionStoreWriterQueuesForTest } from "./store-writer-state.js";
+import { drainSessionStoreWriterQueuesForTest } from "./store-writer-state.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -180,6 +181,67 @@ test("archive pruning file logs whitelist partial stage observations", async () 
   expect(record.content).not.toContain("synthetic-private-archive");
   expect(record.content).not.toContain("synthetic-private-transcript");
 });
+
+test.each([false, true])(
+  "captures fast writer completion without identities or changing failure=%s",
+  async (fail) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      let clock = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => clock);
+      const events: unknown[] = [];
+      const diagnostics = channel("openclaw.session.write");
+      const collect = (event: unknown) => events.push(event);
+      const failure = new Error("synthetic-private-writer-error");
+      const result = { payload: "synthetic-private-writer-result" };
+      diagnostics.subscribe(collect);
+      try {
+        const write = runExclusiveSqliteSessionWrite(
+          { agentId: "synthetic-private-agent", env: state.env },
+          async () => {
+            clock += 25;
+            if (fail) {
+              throw failure;
+            }
+            return result;
+          },
+          "session.transcript.batch",
+          { reclamationAdmission: { admissionId: 98123, releaseCause: "worker-release" } },
+        );
+        if (fail) {
+          await expect(write).rejects.toBe(failure);
+        } else {
+          await expect(write).resolves.toBe(result);
+        }
+        expect(events).toEqual([
+          {
+            operation: "session.transcript.batch",
+            writer: "foreground",
+            outcome: fail ? "error" : "ok",
+            pid: process.pid,
+            threadId,
+            isMainThread,
+            elapsedMs: 25,
+            queueWaitMs: 0,
+            writerExecutionMs: 25,
+            completionDelayMs: 0,
+          },
+        ]);
+        expect(JSON.stringify(events)).not.toContain("synthetic-private");
+        expect(JSON.stringify(events)).not.toContain(state.env.OPENCLAW_STATE_DIR);
+      } finally {
+        diagnostics.unsubscribe(collect);
+      }
+      await expect(
+        runExclusiveSqliteSessionWrite(
+          { agentId: "synthetic-private-agent", env: state.env },
+          async () => result,
+          "session.transcript.batch",
+        ),
+      ).resolves.toBe(result);
+      expect(events).toHaveLength(1);
+    });
+  },
+);
 
 test.each([false, true])(
   "slow writer diagnostics separate waiting and execution without changing failure=%s",

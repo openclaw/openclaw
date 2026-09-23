@@ -98,7 +98,9 @@ test.skipIf(process.platform === "win32")(
         sessionId: run.session.id,
       });
       acknowledgeInternalToolResult(poll);
-      expect((await yieldTool.execute("yield-collected", {})).details).toMatchObject({
+      expect(
+        (await yieldTool.execute("yield-collected", { waitFor: "message" })).details,
+      ).toMatchObject({
         status: "yielded",
       });
       expect(yieldCount).toBe(1);
@@ -113,6 +115,7 @@ test.skipIf(process.platform === "win32")(
 test.skipIf(process.platform === "win32").each([false, true])(
   "observes an explicit real process stop without hiding finalizer failure (fails=%s)",
   async (finalizerFails) => {
+    const scopeKey = `agent:main:requested-stop-${finalizerFails}`;
     const run = await runExecProcess({
       command: "requested-stop-proof",
       workdir: process.cwd(),
@@ -142,15 +145,23 @@ test.skipIf(process.platform === "win32").each([false, true])(
       warnings: [],
       maxOutput: 1000,
       pendingMaxOutput: 1000,
-      notifyOnExit: false,
+      notifyOnExit: true,
+      sessionKey: scopeKey,
+      scopeKey,
       timeoutSec: 10,
     });
     markBackgrounded(run.session);
-    const processTool = createProcessTool();
+    const processTool = createProcessTool({ scopeKey });
     try {
       await expect.poll(() => run.session.aggregated).toContain("STOP_PROOF_READY");
       await processTool.execute("requested-stop", { action: "kill", sessionId: run.session.id });
       await run.promise;
+      // Check before polling: collecting the result can acknowledge a queued event.
+      const notifications = peekSystemEventEntries(scopeKey);
+      expect(notifications).toHaveLength(finalizerFails ? 1 : 0);
+      if (finalizerFails) {
+        expect(notifications[0]?.text).toContain("Exec failed");
+      }
       for (const action of ["poll", "log"] as const) {
         const observed = await processTool.execute(`requested-stop-${action}`, {
           action,

@@ -275,6 +275,7 @@ function preflightMethods(
       ].join("\n");
     },
     getParentJobs: async () => parentJobs,
+    getRun: async (runId: string) => (runId === "77" ? rootRun() : childRun(byRunId.get(runId)!)),
     getRunAttempt: async (runId: string) =>
       runId === "77" ? rootRun() : childRun(byRunId.get(runId)!),
   };
@@ -445,6 +446,240 @@ describe("FRV immutable plan eligibility", () => {
 });
 
 describe("FRV continuation preflight", () => {
+  function artifactFixture(stage = "npm") {
+    const selected = child("normalCi", "101");
+    const methods = preflightMethods([selected], (entry) => runFor(entry, 1, "success"));
+    const producer = {
+      id: 81,
+      run_attempt: 1,
+      event: "workflow_dispatch",
+      path: ".github/workflows/full-release-artifacts.yml",
+      repository: { full_name: REPOSITORY },
+      head_repository: { full_name: REPOSITORY },
+      head_sha: SHA,
+      head_branch: SOURCE_REF,
+      display_title: `Full Release Artifacts full-release-validation-77-1-artifacts-${stage}`,
+      status: "completed",
+      conclusion: "success" as string | null,
+      html_url: `https://github.com/${REPOSITORY}/actions/runs/81`,
+    };
+    const logs = {
+      dispatch: `TARGET_SHA: ${TARGET_SHA}\nDispatched full-release-artifacts.yml: https://github.com/${REPOSITORY}/actions/runs/81 (attempt 1)`,
+    };
+    const client = {
+      ...methods,
+      getReleaseEvidenceClient: () => ({
+        ...methods.getReleaseEvidenceClient(),
+        getWorkflowSource: () =>
+          "name: Full Release Validation\njobs:\n  prepare:\n    steps:\n      - run: node scripts/full-release-artifacts.mjs resolve\n",
+      }),
+      getParentJobs: async () => [
+        ...(await methods.getParentJobs()),
+        ...[
+          ["Prepare release npm artifacts", "npm"],
+          ["Prepare release Docker artifacts", "docker"],
+          ["Acquire full release candidate", "candidate"],
+        ].map(([name, kind]) => ({
+          id: 90,
+          name,
+          run_attempt: 1,
+          status: "completed",
+          conclusion: kind === stage ? "success" : "skipped",
+        })),
+      ],
+      getJobLog: async (id: number) => (id === 90 ? logs.dispatch : methods.getJobLog(id)),
+      getRun: vi.fn(async (id: string) => (id === "81" ? producer : methods.getRun(id))),
+      getAttemptJobs: async () => [job("test")],
+      rerunFailed: vi.fn(),
+      rerunParent: vi.fn(),
+    };
+    return { client, producer, logs, plan: plan([selected]) };
+  }
+
+  it("retries only failed npm producer jobs, preserves green diagnostics, and verifies the parent", async () => {
+    const fixture = artifactFixture();
+    fixture.producer.conclusion = "failure";
+    let parentAttempt = 1;
+    const read = fixture.client.getRun.getMockImplementation()!;
+    fixture.client.getRun.mockImplementation(async (id) =>
+      id === "77"
+        ? rootRun(parentAttempt, parentAttempt === 1 ? "failure" : "success")
+        : structuredClone(await read(id)),
+    );
+    fixture.client.rerunFailed.mockImplementation(async (id: string) => {
+      expect(id).toBe("81");
+      fixture.producer.run_attempt = 2;
+      fixture.producer.conclusion = "success";
+    });
+    fixture.client.rerunParent.mockImplementation(async () => {
+      parentAttempt = 2;
+    });
+    const verify = vi.fn();
+    await expect(
+      continueFailed(fixture.plan, "77", { ...fixture.client, verify }),
+    ).resolves.toMatchObject({ action: "reran-parent" });
+    expect(fixture.client.rerunFailed).toHaveBeenCalledExactlyOnceWith("81");
+    expect(fixture.client.rerunParent).toHaveBeenCalledExactlyOnceWith("77");
+    expect(verify).toHaveBeenCalledWith("77", fixture.plan, expect.any(Number), {
+      "77": 2,
+      "101": 1,
+    });
+  });
+
+  it.each(["failure", "cancelled", "timed_out"])(
+    "offers failed-job producer recovery for %s without mutating during dry run",
+    async (conclusion) => {
+      const fixture = artifactFixture();
+      fixture.producer.conclusion = conclusion;
+      await expect(
+        continueFailed(fixture.plan, "77", fixture.client, { dryRun: true }),
+      ).resolves.toMatchObject({
+        action: "would-rerun",
+        status: { failed: [expect.objectContaining({ key: "artifact:npm", runId: "81" })] },
+      });
+      expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+      expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["before-verify", "after-verify", "after-seal"])(
+    "does not accept changed npm producer evidence %s",
+    async (boundary) => {
+      for (const update of [
+        { run_attempt: 3 },
+        { conclusion: "failure" },
+        { head_sha: "c".repeat(40) },
+      ]) {
+        const fixture = artifactFixture();
+        fixture.producer.run_attempt = 2;
+        let parentAttempt = boundary === "after-seal" ? 2 : 1;
+        const read = fixture.client.getRun.getMockImplementation()!;
+        fixture.client.getRun.mockImplementation(async (id) =>
+          id === "77"
+            ? rootRun(parentAttempt, parentAttempt === 1 ? "failure" : "success")
+            : structuredClone(await read(id)),
+        );
+        const changeProducer = () => Object.assign(fixture.producer, update);
+        fixture.client.rerunParent.mockImplementation(async () => {
+          parentAttempt = 2;
+          if (boundary === "before-verify") {
+            changeProducer();
+          }
+        });
+        const verify = vi.fn(async () => {
+          changeProducer();
+        });
+        const verifySeal = vi.fn(async () => {
+          changeProducer();
+          return true;
+        });
+        await expect(
+          continueFailed(fixture.plan, "77", {
+            ...fixture.client,
+            verify,
+            ...(boundary === "after-seal" ? { verifySeal } : {}),
+          }),
+        ).rejects.toThrow(/Artifact producer (?:run identity changed|changed during recovery)/u);
+        expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+        if (boundary === "before-verify") {
+          expect(verify).not.toHaveBeenCalled();
+        } else if (boundary === "after-verify") {
+          expect(verify).toHaveBeenCalledOnce();
+        } else {
+          expect(verifySeal).toHaveBeenCalledOnce();
+          expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+        }
+      }
+    },
+  );
+
+  it("adopts an already successful newer producer attempt without rerunning it", async () => {
+    const fixture = artifactFixture();
+    fixture.producer.run_attempt = 2;
+    await expect(
+      continueFailed(fixture.plan, "77", fixture.client, { dryRun: true }),
+    ).resolves.toMatchObject({ action: "would-rerun-parent" });
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["different tooling", { head_sha: "c".repeat(40) }],
+    ["different dispatch", { display_title: "Full Release Artifacts unrelated" }],
+    ["regressed attempt", { run_attempt: 0 }],
+  ])("rejects %s producer evidence without mutations", async (_label, update) => {
+    const fixture = artifactFixture();
+    Object.assign(fixture.producer, update);
+    await expect(
+      continueFailed(fixture.plan, "77", fixture.client, { dryRun: true }),
+    ).rejects.toThrow();
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure"])(
+    "keeps successful producers eligible after a collector %s",
+    async (conclusion) => {
+      const fixture = artifactFixture();
+      const jobs = fixture.client.getParentJobs;
+      fixture.client.getParentJobs = async () => {
+        const entries = await jobs();
+        for (const entry of entries) {
+          if (entry.name === "Prepare release npm artifacts") {
+            entry.conclusion = conclusion;
+          }
+        }
+        return entries;
+      };
+      await expect(
+        continueFailed(fixture.plan, "77", fixture.client, { dryRun: true }),
+      ).resolves.toMatchObject({ action: "would-rerun-parent" });
+    },
+  );
+
+  it("rejects ambiguous producer dispatch logs", async () => {
+    const fixture = artifactFixture();
+    fixture.logs.dispatch += `\n${fixture.logs.dispatch}`;
+    await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+      "dispatch identity is unavailable or ambiguous",
+    );
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the producer after child inspection and before parent mutation", async () => {
+    const fixture = artifactFixture();
+    const read = fixture.client.getRun.getMockImplementation()!;
+    fixture.client.getRun.mockImplementation(async (id) => {
+      if (id === "77") {
+        fixture.producer.head_sha = "c".repeat(40);
+      }
+      return read(id);
+    });
+    await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+      "identity changed",
+    );
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the producer before retrying a failed diagnostic child", async () => {
+    const fixture = artifactFixture();
+    const read = fixture.client.getRun.getMockImplementation()!;
+    let childReads = 0;
+    fixture.client.getRun.mockImplementation(async (id) => {
+      if (id === "101") {
+        if (++childReads === 2) {
+          fixture.producer.head_sha = "c".repeat(40);
+        }
+        return runFor(child("normalCi", "101"), 1, "failure");
+      }
+      return read(id);
+    });
+    fixture.client.getAttemptJobs = async () => [job("test", "failure")];
+    await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+      "identity changed",
+    );
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
   it("rejects deleted B admission before continuation can select rerun effects", async () => {
     const selected = child("normalCi", "101");
     const client = {
@@ -911,6 +1146,7 @@ describe("FRV same-parent recovery", () => {
     const scenario = rerunScenario({
       childSource: [1, "success"],
       parentBefore: [
+        [1, "failure"],
         [1, "failure"],
         [2, null],
       ],

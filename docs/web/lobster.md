@@ -14,7 +14,7 @@ This is normal. This is OpenClaw.
 
 ## What you are looking at
 
-Each new composer opening gets its own cast: color, size, build, claw proportions, accessories, and personality stay stable while you type or change controls. Some are round, some are tall, some have claws that are frankly too big for them. Some nap constantly. Some never sit still. One of them waves a lot.
+Each new composer opening gets its own cast: color, size, claw proportions, accessories, and personality stay stable while you type or change controls. Their bodies keep their natural proportions; some are small, some are large, and some have claws that are frankly too big for them. Some nap constantly. Some never sit still. One of them waves a lot.
 
 Hover over a visitor and it will tell you its name.
 
@@ -43,6 +43,12 @@ While the new composer is open, status visits keep their own schedule: **when yo
 Settings → Appearance → **Lobster visits**.
 
 The toggle is browser-local and does exactly what it says. Off means never, including the worried disconnect pacing. Your Gateway status dot continues to work regardless; the lobster was never your only source of truth, just the most sympathetic one.
+
+A theme without a mascot hides the resident lobster and visiting lobster strangers while it is active. Ordinary critters can still cross the composer ledge when **Lobster visits** is enabled. Your toggle stays unchanged, and enabled lobster visits return when you switch to a theme with the mascot.
+
+Themes can add occasional penguin or fedora visitors to that ledge traffic. These visitors follow the same visits toggle. A theme can also add occasional decorative hats to agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog; those hats are separate from composer visits.
+
+Plugin themes can bring their own [SVG hats and visitors](/plugins/manifest/surfaces#themes), with visitors following the same visits toggle.
 
 Reduced-motion users get calm, stationary lobsters automatically.
 

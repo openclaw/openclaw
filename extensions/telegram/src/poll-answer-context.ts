@@ -1,5 +1,6 @@
 // Telegram public-poll answer context prepared before sequentialization.
 import {
+  findTelegramPollRegistryEntry,
   findTelegramPollRegistryEntrySync,
   telegramPollRegistryKey,
   type TelegramPollRegistryEntry,
@@ -50,27 +51,44 @@ export function beginTelegramPollRegistration(params: {
   };
 }
 
-export function prepareTelegramPollAnswerContext(params: {
-  update: object;
-  accountId?: string;
-}): void {
-  if (!isEligibleTelegramPollAnswerUpdate(params.update)) {
-    return;
-  }
-  if (preparedPollAnswers.has(params.update)) {
-    return;
+type TelegramPollAnswerContextParams = { update: object; accountId?: string };
+
+function resolveUnpreparedPollId(params: TelegramPollAnswerContextParams): string | undefined {
+  if (
+    !isEligibleTelegramPollAnswerUpdate(params.update) ||
+    preparedPollAnswers.has(params.update)
+  ) {
+    return undefined;
   }
   const pollId = params.update.poll_answer.poll_id;
   const pending = pendingPollRegistrations.get(telegramPollRegistryKey(params.accountId, pollId));
-  const prepared: PreparedTelegramPollAnswer = pending
-    ? { entry: pending.entry, registrationPending: true }
-    : {
-        entry: findTelegramPollRegistryEntrySync({
-          pollId,
-          accountId: params.accountId,
-        }),
-      };
-  preparedPollAnswers.set(params.update, prepared);
+  if (pending) {
+    preparedPollAnswers.set(params.update, { entry: pending.entry, registrationPending: true });
+    return undefined;
+  }
+  return pollId;
+}
+
+/** Retained for hosts whose ingress monitor does not support inspectAsync. */
+export function prepareTelegramPollAnswerContext(params: TelegramPollAnswerContextParams): void {
+  const pollId = resolveUnpreparedPollId(params);
+  if (pollId === undefined) {
+    return;
+  }
+  preparedPollAnswers.set(params.update, {
+    entry: findTelegramPollRegistryEntrySync({ pollId, accountId: params.accountId }),
+  });
+}
+
+export async function prepareTelegramPollAnswerContextAsync(
+  params: TelegramPollAnswerContextParams,
+): Promise<void> {
+  const pollId = resolveUnpreparedPollId(params);
+  if (pollId === undefined) {
+    return;
+  }
+  const entry = await findTelegramPollRegistryEntry({ pollId, accountId: params.accountId });
+  preparedPollAnswers.set(params.update, { entry });
 }
 
 export async function settleTelegramPollAnswerContext(params: {
@@ -85,7 +103,7 @@ export async function settleTelegramPollAnswerContext(params: {
   const pending = pendingPollRegistrations.get(telegramPollRegistryKey(params.accountId, pollId));
   const entry = pending
     ? await pending.completion
-    : findTelegramPollRegistryEntrySync({ pollId, accountId: params.accountId });
+    : await findTelegramPollRegistryEntry({ pollId, accountId: params.accountId });
   preparedPollAnswers.set(params.update, { entry });
 }
 

@@ -16,6 +16,8 @@ extension ChatSessionSidebarModel.Node {
 struct ChatSessionSidebar: View {
     @Bindable var viewModel: OpenClawChatViewModel
     @Binding var query: String
+    var additionalAttentionRequests: [OpenClawChatAttentionRequest] = []
+    @State private var presentedAttention: OpenClawChatAttentionPresentation?
     @State private var sessionPendingDeletion: OpenClawChatSessionEntry?
     @State private var sessionPendingRename: OpenClawChatSessionEntry?
     @State private var renameText = ""
@@ -56,6 +58,7 @@ struct ChatSessionSidebar: View {
             self.threadsHeading
             ForEach(sections) { section in
                 if section.id.hasPrefix("group:"), let title = section.title {
+                    let attention = self.attentionSummary(sessions: section.nodes.flatMap(\.previewSessions), now: now)
                     Section {
                         if !self.isGroupCollapsed(title) || !self.query
                             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -63,16 +66,26 @@ struct ChatSessionSidebar: View {
                             self.rows(section.nodes, now: now, previewRequest: previewRequest)
                         }
                     } header: {
-                        Button {
-                            self.toggleGroupCollapsed(title)
-                        } label: {
-                            HStack {
-                                Image(systemName: self.isGroupCollapsed(title) ? "chevron.right" : "chevron.down")
-                                Text(verbatim: title)
-                                    .font(OpenClawChatTypography.caption)
+                        HStack(spacing: 6) {
+                            Button {
+                                self.toggleGroupCollapsed(title)
+                            } label: {
+                                HStack {
+                                    Image(systemName: self.isGroupCollapsed(title) ? "chevron.right" : "chevron.down")
+                                    Text(verbatim: title)
+                                        .font(OpenClawChatTypography.caption)
+                                }
                             }
+                            .buttonStyle(.plain)
+                            Spacer(minLength: 0)
+                            self.attentionBadge(summary: attention, targetID: section.id)
                         }
-                        .buttonStyle(.plain)
+                        .modifier(ChatSidebarAttentionAccessibility(
+                            title: title,
+                            targetID: section.id,
+                            summary: attention,
+                            metadata: [],
+                            presentation: self.$presentedAttention))
                     }
                 } else if let title = section.title {
                     Section {
@@ -187,7 +200,7 @@ struct ChatSessionSidebar: View {
                     Image(systemName: "square.and.pencil")
                     Text("New Thread")
                     Spacer(minLength: 4)
-                    Text(verbatim: "⌘N")
+                    Text(verbatim: "⇧⌘N")
                         .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -288,51 +301,62 @@ struct ChatSessionSidebar: View {
         let isSelected = agent.id.lowercased() == self.viewModel.selectedAgentID
         let summary = ChatSessionSidebarModel.agentSummary(
             for: agent.id, sessions: self.viewModel.sessions, now: now.timeIntervalSince1970 * 1000)
-        return Button {
-            self.viewModel.switchAgent(to: agent.id)
-        } label: {
-            HStack(spacing: 8) {
-                ChatSidebarAgentAvatar(agent: agent, size: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: agent.displayName)
-                        .font(OpenClawChatTypography.body(
-                            size: 13,
-                            weight: isSelected ? .medium : .regular,
-                            relativeTo: .body))
-                        .lineLimit(1)
-                    if self.viewModel.healthOK, let summary, let activity = summary.activity {
-                        Label(self.agentSubtitle(summary, activity: activity), systemImage: activity.symbol)
-                            .font(OpenClawChatTypography.body(size: 10, weight: .regular, relativeTo: .caption))
-                            .foregroundStyle(summary.attentionCount > 0 ? OpenClawChatTheme.warning : .secondary)
+        let attention = self.attentionSummary(
+            sessions: self.viewModel.sessions.filter {
+                ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                    key: $0.key, agentID: $0.agentId, activeAgentID: agent.id)
+            },
+            agentID: agent.id,
+            now: now)
+        return HStack(spacing: 4) {
+            Button {
+                self.viewModel.switchAgent(to: agent.id)
+            } label: {
+                HStack(spacing: 8) {
+                    ChatSidebarAgentAvatar(agent: agent, size: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: agent.displayName)
+                            .font(OpenClawChatTypography.body(
+                                size: 13,
+                                weight: isSelected ? .medium : .regular,
+                                relativeTo: .body))
                             .lineLimit(1)
+                        if self.viewModel.healthOK, let summary, let activity = summary.activity {
+                            Label(self.agentSubtitle(summary, activity: activity), systemImage: activity.symbol)
+                                .font(OpenClawChatTypography.body(size: 10, weight: .regular, relativeTo: .caption))
+                                .foregroundStyle(summary.attentionCount > 0 ? OpenClawChatTheme.warning : .secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    if let unread = summary?.unreadCount, unread > 0 {
+                        Text(unread, format: .number)
+                            .font(OpenClawChatTypography.body(size: 10, weight: .semibold, relativeTo: .caption))
+                            .monospacedDigit()
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.quaternary, in: Capsule())
+                            .accessibilityLabel(unread == 1
+                                ? String(localized: "1 unread thread")
+                                : String(format: String(localized: "%lld unread threads"), unread))
+                    } else if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
                     }
                 }
-                Spacer(minLength: 0)
-                if let unread = summary?.unreadCount, unread > 0 {
-                    Text(unread, format: .number)
-                        .font(OpenClawChatTypography.body(size: 10, weight: .semibold, relativeTo: .caption))
-                        .monospacedDigit()
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.quaternary, in: Capsule())
-                        .accessibilityLabel(unread == 1
-                            ? String(localized: "1 unread thread")
-                            : String(format: String(localized: "%lld unread threads"), unread))
-                } else if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(isSelected ? Color.primary.opacity(0.06) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("chat-agent-\(agent.id)")
+            .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+            .help(String(format: String(localized: "Open %@"), agent.displayName))
+            self.attentionBadge(summary: attention, targetID: "agent:\(agent.id)")
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("chat-agent-\(agent.id)")
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-        .help(String(format: String(localized: "Open %@"), agent.displayName))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(isSelected ? Color.primary.opacity(0.06) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
     }
 
     private func agentSubtitle(
@@ -390,13 +414,20 @@ struct ChatSessionSidebar: View {
         previewRequest: ChatSessionSidebarPreviews.Request) -> some View
     {
         let session = node.session
+        let attention = self.attentionSummary(sessions: node.previewSessions, now: now)
+        let targetID = "session:\(session.key)"
+        let subtitle = self.rowSubtitle(for: session, now: now, previewRequest: previewRequest)
+        let timestamp = ChatSessionSidebarModel.activityTimestamp(for: session).map {
+            Date(timeIntervalSince1970: $0 / 1000).formatted(.relative(
+                presentation: .named, unitsStyle: .abbreviated))
+        }
         return HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(ChatSessionSidebarModel.displayName(for: session))
                     .font(OpenClawChatTypography.body(
                         size: 13, weight: session.unread == true ? .medium : .regular, relativeTo: .body))
                     .lineLimit(1)
-                if let subtitle = self.rowSubtitle(for: session, now: now, previewRequest: previewRequest) {
+                if let subtitle {
                     Text(subtitle)
                         .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.secondary)
@@ -405,14 +436,16 @@ struct ChatSessionSidebar: View {
             }
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 6) {
-                if let timestamp = ChatSessionSidebarModel.activityTimestamp(for: session) {
-                    Text(Date(timeIntervalSince1970: timestamp / 1000), format: .relative(
-                        presentation: .named, unitsStyle: .abbreviated))
+                if let timestamp {
+                    Text(verbatim: timestamp)
                         .font(OpenClawChatTypography.body(size: 10, weight: .regular, relativeTo: .caption))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                 }
-                HStack(spacing: 5) { self.badges(for: node) }
+                HStack(spacing: 5) {
+                    self.attentionBadge(summary: attention, targetID: targetID)
+                    self.badges(for: node)
+                }
             }
         }
         .padding(.vertical, 4)
@@ -423,6 +456,37 @@ struct ChatSessionSidebar: View {
         // The tag type must equal the List selection type (String?) exactly.
         .tag(Optional(session.key))
         .contextMenu { self.contextMenu(for: session) }
+        .modifier(ChatSidebarAttentionAccessibility(
+            title: ChatSessionSidebarModel.displayName(for: session),
+            targetID: targetID,
+            summary: attention,
+            metadata: [subtitle, timestamp].compactMap(\.self),
+            presentation: self.$presentedAttention,
+            isOutlineHeading: !node.children.isEmpty))
+    }
+
+    private func attentionSummary(
+        sessions: [OpenClawChatSessionEntry],
+        agentID: String? = nil,
+        now: Date) -> OpenClawChatAttentionSummary?
+    {
+        let requests = self.viewModel.pendingQuestionAttentionRequests + self.additionalAttentionRequests
+        return ChatSessionSidebarModel.attentionSummary(
+            requests: requests,
+            sessions: sessions,
+            mainSessionKey: self.viewModel.selectedAgentMainSessionKey,
+            activeAgentID: agentID ?? self.viewModel.selectedAgentID,
+            sessionRoutingContract: self.viewModel.agentCatalog?.sessionRoutingContract ??
+                self.viewModel.sessionRoutingContract,
+            now: now)
+    }
+
+    @ViewBuilder
+    private func attentionBadge(summary: OpenClawChatAttentionSummary?, targetID: String) -> some View {
+        if let summary {
+            OpenClawChatAttentionBadge(
+                summary: summary, targetID: targetID, presentation: self.$presentedAttention)
+        }
     }
 
     @ViewBuilder
@@ -618,6 +682,36 @@ struct ChatSidebarAgentAvatar: View {
             return String(emoji.prefix(1))
         }
         return String(self.agent.displayName.prefix(1)).uppercased()
+    }
+}
+
+private struct ChatSidebarAttentionAccessibility: ViewModifier {
+    let title: String
+    let targetID: String
+    let summary: OpenClawChatAttentionSummary?
+    let metadata: [String]
+    @Binding var presentation: OpenClawChatAttentionPresentation?
+    var isOutlineHeading = true
+
+    func body(content: Content) -> some View {
+        if self.isOutlineHeading {
+            content
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(Text(verbatim: self.title))
+                .accessibilityValue(Text(verbatim: (
+                    self.metadata + [self.summary?.accessibilityText].compactMap(\.self)).joined(separator: ". ")))
+                .accessibilityIdentifier("chat-attention-host:\(self.targetID)")
+                .accessibilityActions {
+                    if let summary = self.summary {
+                        Button("Show pending request details") {
+                            self.presentation = OpenClawChatAttentionPresentation(
+                                targetID: self.targetID, requestID: summary.disclosureIdentity)
+                        }
+                    }
+                }
+        } else {
+            content.accessibilityElement(children: .contain)
+        }
     }
 }
 #endif

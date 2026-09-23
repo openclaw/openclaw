@@ -17,6 +17,12 @@ export function createFakeTaskFlow(overrides?: Partial<BoundTaskFlow>): BoundTas
   };
 
   return {
+    get: vi.fn<BoundTaskFlow["get"]>().mockResolvedValue({
+      ...baseFlow,
+      revision: 4,
+      status: "waiting",
+      waitJson: { kind: "lobster_approval", resumeToken: "resume-1", approvalId: "approval-1" },
+    }),
     tryCreateManaged: vi.fn<BoundTaskFlow["tryCreateManaged"]>().mockResolvedValue(baseFlow),
     setWaiting: vi.fn<BoundTaskFlow["setWaiting"]>(async (input) => ({
       applied: true,

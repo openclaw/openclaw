@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   createBuiltRuntime,
   createSourceRuntime,
@@ -14,10 +14,11 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createFixtureLifetime();
+afterEach(() => tempDirs.cleanup());
 
 async function createSagCliFixture(binaryPresent: boolean, enabled?: boolean) {
-  const root = tempDirs.make("openclaw-sag-cli-");
+  const root = tempDirs.createTempDir("openclaw-sag-cli-");
   const configPath = path.join(root, "openclaw.json");
   const binDir = path.join(root, "bin");
   fs.mkdirSync(binDir);
@@ -77,20 +78,21 @@ async function createSagCliFixture(binaryPresent: boolean, enabled?: boolean) {
     OPENCLAW_SKIP_CHANNELS: "1",
     OPENCLAW_TEST_FAST: "1",
   };
-  const cli = (args: string[]) => {
+  const cli = async (args: string[]) => {
     const result = source
-      ? runSourceRuntime(
-          runtimeRoot,
-          env,
-          [path.join(runtimeRoot, "src", "entry.ts"), ...args],
-          60_000,
-          4 * 1024 * 1024,
+      ? await tempDirs.track(
+          runSourceRuntime(
+            runtimeRoot,
+            env,
+            [path.join(runtimeRoot, "src", "entry.ts"), ...args],
+            60_000,
+            4 * 1024 * 1024,
+          ),
         )
-      : runBuiltRuntime(runtimeRoot, env, args, 60_000, 4 * 1024 * 1024);
+      : await tempDirs.track(runBuiltRuntime(runtimeRoot, env, args, 60_000, 4 * 1024 * 1024));
     const output = `${result.stderr}\n${result.stdout}`;
-    expect(result.error, output).toBeUndefined();
     expect(result.signal, output).toBeNull();
-    expect(result.status, output).toBe(0);
+    expect(result.code, output).toBe(0);
     return result.stdout;
   };
   return { cli, configPath };
@@ -101,7 +103,7 @@ describe("bundled sag through the registered CLI", () => {
     "requires the binary without requiring credential environment variables (installed: %s)",
     async (binaryPresent) => {
       const { cli } = await createSagCliFixture(binaryPresent);
-      const status = JSON.parse(cli(["skills", "info", "sag", "--json"]));
+      const status = JSON.parse(await cli(["skills", "info", "sag", "--json"]));
 
       expect(status).toMatchObject({
         name: "sag",
@@ -122,7 +124,12 @@ describe("bundled sag through the registered CLI", () => {
     "doctor --fix preserves an installed sag skill's saved enable flag (%s) with the Gateway stopped",
     async (enabled) => {
       const { cli, configPath } = await createSagCliFixture(true, enabled);
-      const output = cli(["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"]);
+      const output = await cli([
+        "doctor",
+        "--fix",
+        "--non-interactive",
+        "--no-workspace-suggestions",
+      ]);
 
       expect(output).toContain("Doctor complete.");
       const saved: OpenClawConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));

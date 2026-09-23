@@ -42,6 +42,7 @@ export const CONTROL_UI_RESERVED_ROUTE_SEGMENTS: readonly string[] = Object.free
   "settings",
   "share",
   "skills",
+  "systems",
   "tasks",
   "terminal",
   "usage",

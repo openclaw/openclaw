@@ -257,7 +257,11 @@ export function classifyReleaseChangelogEvidenceComparison(comparison, { baseSha
     policy: split ? SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY : CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY,
   };
 }
-const REVIEWED_TELEGRAM_WAIVERS = new Set(["2026.8.1-owner-approved", "2026.9.1-owner-approved"]);
+const REVIEWED_TELEGRAM_WAIVERS = new Map([
+  ["2026.8.1-owner-approved", ["telegram"]],
+  ["2026.9.1-owner-approved", ["telegram"]],
+  ["2026.9.5-owner-approved", ["telegram", "matrix"]],
+]);
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|410|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
 const RATE_LIMITED_403_PATTERN =
@@ -610,13 +614,17 @@ export function normalizeReleaseTelegramWaiver({
           "non-slack",
           "no-slack",
           "without-slack",
-          "qa-live-telegram",
-          "qa-telegram",
-          "telegram",
+          ...REVIEWED_TELEGRAM_WAIVERS.get(telegramWaiver).flatMap((channel) => [
+            `qa-live-${channel}`,
+            `qa-${channel}`,
+            channel,
+          ]),
         ].includes(lane.trim()),
       )
   ) {
-    throw new Error("Telegram waiver conflicts with explicitly requested Telegram validation");
+    throw new Error(
+      "Telegram waiver conflicts with explicitly requested waived-channel validation",
+    );
   }
   // Blank specs select the sealed SHA candidate. Registry overrides must name
   // the waived release exactly; a moving dist-tag does not establish version.
@@ -628,6 +636,10 @@ export function normalizeReleaseTelegramWaiver({
     throw new Error(`Telegram waiver package overrides must be openclaw@${targetVersion}`);
   }
   return telegramWaiver;
+}
+
+export function releaseWaivedIntegrationChannels(input) {
+  return [...(REVIEWED_TELEGRAM_WAIVERS.get(normalizeReleaseTelegramWaiver(input)) ?? [])];
 }
 
 export function validateReleaseTelegramWaiverBinding(plan, validationInputs = {}) {

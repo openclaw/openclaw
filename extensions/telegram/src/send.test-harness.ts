@@ -189,8 +189,8 @@ vi.mock("grammy", () => ({
   },
 }));
 
-vi.mock("undici", async () => {
-  const actual = await vi.importActual<typeof import("undici")>("undici");
+vi.mock("undici/index.js", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici/index.js");
   return {
     ...actual,
     Agent: undiciAgentCtor,
@@ -321,4 +321,20 @@ export function installTelegramSendTestHooks() {
 export async function importTelegramSendModule() {
   vi.resetModules();
   return await import("./send.js");
+}
+
+export function mockLoadedMedia({
+  buffer = Buffer.from("media"),
+  contentType,
+  fileName,
+}: {
+  buffer?: Buffer;
+  contentType?: string;
+  fileName?: string;
+}): void {
+  loadWebMedia.mockResolvedValueOnce({
+    buffer,
+    ...(contentType ? { contentType } : {}),
+    ...(fileName ? { fileName } : {}),
+  });
 }

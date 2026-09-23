@@ -550,7 +550,7 @@ describe("legacy exec approvals migration", () => {
     expect(result.changes).toEqual([
       "Replaced an invalid SQLite exec approvals row with validated legacy state.",
     ]);
-    expect(readExecApprovalsConfigRow(db)?.raw_json).toContain('"security": "deny"');
+    expect(readExecApprovalsConfigRow(database(env))?.raw_json).toContain('"security": "deny"');
   });
 
   it("recovers an interrupted claim and completes import", async () => {

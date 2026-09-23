@@ -1,4 +1,4 @@
-import { html, svg, type PropertyValues } from "lit";
+import { html, nothing, svg, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
@@ -438,17 +438,22 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   }
 
   private handlePlayerKeydown(event: KeyboardEvent): void {
-    if (event.target !== event.currentTarget) {
+    const seekTarget = event.target instanceof HTMLInputElement && event.target.type === "range";
+    if (event.target !== event.currentTarget && !seekTarget) {
       return;
     }
-    if (event.key === " ") {
+    if (!seekTarget && event.key === " ") {
       event.preventDefault();
       this.togglePlayback();
       return;
     }
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    if (
+      event.key === "ArrowLeft" ||
+      event.key === "ArrowRight" ||
+      (seekTarget && (event.key === "ArrowDown" || event.key === "ArrowUp"))
+    ) {
       event.preventDefault();
-      const direction = event.key === "ArrowLeft" ? -1 : 1;
+      const direction = event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1;
       this.seekTo(this.currentTime + direction * SEEK_STEP_SECONDS);
     }
   }
@@ -476,6 +481,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       step="0.01"
       .value=${String(Math.min(this.currentTime, this.duration || this.currentTime))}
       aria-label=${t("chat.mediaPlayer.seek")}
+      aria-valuetext=${`${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(this.duration)}`}
       style=${styleMap({
         "--chat-audio-progress": `${progress * 100}%`,
         "--chat-audio-buffered": `${Math.max(progress, this.buffered) * 100}%`,
@@ -504,7 +510,8 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     return html`<div class="chat-audio-player__waveform" ${ref(this.setWaveform)}>
       <svg viewBox="0 0 ${count} 24" preserveAspectRatio="none" aria-hidden="true">
         ${displayedPeaks.map((peak, index) => {
-          const height = Math.max(2, peak * 20);
+          // Voice notes retain measured relative peaks in a calmer visual range.
+          const height = this.voiceNote ? 6 + peak * 8 : Math.max(2, peak * 20);
           return svg`<rect
               class=${index / count < progress ? "is-played" : ""}
               x=${String(index + 0.25)}
@@ -523,6 +530,18 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const progress = this.duration > 0 ? Math.min(1, this.currentTime / this.duration) : 0;
     const downloadHref = safeMediaAttachmentHref(this.src);
     const failed = this.sourceController.readiness === "unavailable";
+    if (failed && this.voiceNote) {
+      return html`<div
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--voice-note"
+      >
+        <div class="chat-audio-player" role="group" aria-label=${t("chat.messages.voiceNote")}>
+          <span class="chat-assistant-attachment-card__reason" role="status"
+            >${t("chat.attachments.previewUnavailable")}</span
+          >
+          ${downloadHref ? html`<a class="chat-assistant-attachment-card__action" href=${downloadHref} download=${this.label} target="_blank" rel="noreferrer" aria-label=${t("chat.mediaPlayer.download", { filename: this.label })}>${icons.download}</a>` : nothing}
+        </div>
+      </div>`;
+    }
     if (failed) {
       return renderCompactAttachmentCard({
         kind: "audio",
@@ -537,21 +556,25 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const timeLabel = `${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(this.duration)}`;
     return html`
       <div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--audio"
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--audio ${this.voiceNote ? "chat-assistant-attachment-card--voice-note" : ""}"
         ${ref(this.setViewportElement)}
-        ?data-openable=${Boolean(this.onExpand)}
-        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.onExpand)}
+        ?data-openable=${!this.voiceNote && Boolean(this.onExpand)}
+        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.voiceNote ? undefined : this.onExpand)}
       >
-        ${renderAttachmentCardHeader({
-          kind: "audio",
-          label: this.label,
-          mimeType: this.mimeType,
-          sizeBytes: this.sizeBytes,
-          downloadHref,
-          onExpand: this.onExpand,
-          visualMode: "preview-with-favicon",
-          voiceNote: this.voiceNote,
-        })}
+        ${
+          this.voiceNote
+            ? nothing
+            : renderAttachmentCardHeader({
+                kind: "audio",
+                label: this.label,
+                mimeType: this.mimeType,
+                sizeBytes: this.sizeBytes,
+                downloadHref,
+                onExpand: this.onExpand,
+                visualMode: "preview-with-favicon",
+                voiceNote: this.voiceNote,
+              })
+        }
         ${
           this.sourceController.readiness === "preparing"
             ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
@@ -559,6 +582,8 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
               </div>`
             : html`<div
                 class="chat-audio-player"
+                role="group"
+                aria-label=${this.voiceNote ? t("chat.messages.voiceNote") : this.label}
                 tabindex="0"
                 @keydown=${(event: KeyboardEvent) => this.handlePlayerKeydown(event)}
               >
@@ -581,7 +606,6 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                   type="button"
                   class="chat-audio-player__volume"
                   aria-label=${t(this.muted ? "chat.mediaPlayer.unmute" : "chat.mediaPlayer.mute")}
-                  aria-pressed=${this.muted ? "true" : "false"}
                   @click=${() => this.toggleMuted()}
                 >
                   ${this.muted ? icons.volumeX : icons.volume2}

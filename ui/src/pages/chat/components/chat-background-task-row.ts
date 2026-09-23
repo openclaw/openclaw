@@ -3,6 +3,7 @@ import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
 import { formatMs, formatRelativeTimestamp } from "../../../lib/format.ts";
 import {
   isActiveTask,
@@ -13,8 +14,15 @@ import {
   taskTitle,
 } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import { backgroundTaskStatusLabel, STATUS_TONES } from "./chat-background-tasks-shared.ts";
+import {
+  backgroundTaskDeliveryLabel,
+  backgroundTaskIsExecuting,
+  backgroundTaskStatusLabel,
+  STATUS_TONES,
+} from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+
+registerBackgroundTasksEnglish();
 
 type TaskDisplayFacts = {
   active: boolean;
@@ -84,9 +92,12 @@ function renderTaskMeta(task: TaskSummary, facts: TaskDisplayFacts): TemplateRes
           : nothing
       }
       ${
-        facts.active && task.lastToolName
+        facts.active && (task.execution?.currentTool || task.lastToolName)
           ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-              <span class="chat-tasks-rail__task-tool">${task.lastToolName}</span>`
+              <span class="chat-tasks-rail__task-tool"
+                >${t(task.execution?.currentTool ? "chat.backgroundTasks.currentTool" : "chat.backgroundTasks.lastTool")}:
+                ${task.execution?.currentTool?.name ?? task.lastToolName}</span
+              >`
           : nothing
       }
     </div>
@@ -96,14 +107,13 @@ function renderTaskMeta(task: TaskSummary, facts: TaskDisplayFacts): TemplateRes
 export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
   const facts = taskDisplayFacts(task);
   const detail = taskDetail(task);
+  const delivery = backgroundTaskDeliveryLabel(task);
   const cancelling = props.cancellingTaskIds.has(task.id);
-  const open = props.openTaskId === task.id;
   return html`
     <div
-      class="chat-tasks-rail__task ${open ? "chat-tasks-rail__task--open" : ""}"
+      class="chat-tasks-rail__task"
       role="listitem"
       data-task-id=${task.id}
-      aria-current=${open ? "true" : nothing}
       @click=${(event: MouseEvent) => {
         const target = event.target;
         if (target instanceof Element && target.closest("button, a")) {
@@ -119,7 +129,7 @@ export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): T
           @click=${() => props.onOpenTaskDetail?.(task)}
         >
           ${
-            task.status === "running"
+            backgroundTaskIsExecuting(task)
               ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
               : nothing
           }
@@ -151,6 +161,7 @@ export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): T
         }
       </div>
       ${renderTaskMeta(task, facts)}
+      ${delivery ? html`<div class="chat-tasks-rail__task-detail">${delivery}</div>` : nothing}
       ${detail ? html`<div class="chat-tasks-rail__task-detail">${detail}</div>` : nothing}
     </div>
   `;

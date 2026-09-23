@@ -11,14 +11,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
-import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
-import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
+import type { ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
-import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
-import { createDefaultDeps } from "../cli/deps.js";
-import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
@@ -34,9 +30,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
-import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
-import { defaultRuntime } from "../runtime.js";
 import {
   mergeAssistantText,
   mergePendingAssistantText,
@@ -53,18 +47,18 @@ import {
   IMAGE_ONLY_USER_MESSAGE,
   renderConversationToolCall,
 } from "./agent-prompt.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   parseGatewayJsonRequest,
   sendInvalidRequest,
   sendJson,
   sendMissingScopeForbidden,
+  sendUnauthorized,
   setSseHeaders,
   watchClientDisconnect,
   writeDone,
 } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
+import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeOpenAiCompatibleHttpSession,
@@ -74,30 +68,25 @@ import {
   isUnknownGatewayAgentError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
 import {
+  readOpenAiHttpRunTerminal,
+  runOpenAiCompatibleAgentCommand,
+  type OpenAiCompatibleHttpOptions,
+} from "./openai-compatible-agent-run.js";
+import {
   applyToolChoice,
   isToolChoiceConstraintSatisfied,
+  resolveChatToolChoice,
   resolveUnsatisfiedToolChoiceMessage,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
-import type { GatewayContextResolver } from "./server-methods/types.js";
-
-type OpenAiHttpOptions = {
-  auth: ResolvedGatewayAuth;
-  config?: GatewayHttpChatCompletionsConfig;
-  maxBodyBytes?: number;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-  resolveGatewayContext?: GatewayContextResolver;
-};
 
 type OpenAiChatMessage = {
   role?: unknown;
@@ -170,35 +159,6 @@ function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-function buildAgentCommandInput(params: {
-  prompt: { message: string; extraSystemPrompt?: string; images?: ImageContent[] };
-  clientTools?: ClientToolDefinition[];
-  modelOverride?: string;
-  sessionKey: string;
-  runId: string;
-  messageChannel: string;
-  senderIsOwner: boolean;
-  abortSignal?: AbortSignal;
-  streamParams?: AgentStreamParams;
-}) {
-  return {
-    message: params.prompt.message,
-    extraSystemPrompt: params.prompt.extraSystemPrompt,
-    images: params.prompt.images,
-    clientTools: params.clientTools,
-    model: params.modelOverride,
-    sessionKey: params.sessionKey,
-    runId: params.runId,
-    deliver: false as const,
-    messageChannel: params.messageChannel,
-    senderIsOwner: params.senderIsOwner,
-    bestEffortDeliver: false as const,
-    allowModelOverride: params.modelOverride !== undefined,
-    abortSignal: params.abortSignal,
-    streamParams: params.streamParams,
-  };
-}
-
 function extractClientToolsFromChatRequest(tools: unknown): ClientToolDefinition[] {
   if (tools == null) {
     return [];
@@ -239,35 +199,6 @@ function extractClientToolsFromChatRequest(tools: unknown): ClientToolDefinition
     });
   }
   return clientTools;
-}
-
-function resolveChatToolChoice(toolChoice: unknown): ToolChoiceConstraint | "none" | undefined {
-  if (toolChoice == null || toolChoice === "auto") {
-    return undefined;
-  }
-  if (toolChoice === "none") {
-    return "none";
-  }
-  if (toolChoice === "required") {
-    return { type: "required" };
-  }
-  if (typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
-    throw new Error("tool_choice must be a string or object");
-  }
-  const choiceType = (toolChoice as { type?: unknown }).type;
-  if (choiceType === "function") {
-    const targetName = normalizeOptionalString(
-      (toolChoice as { function?: { name?: unknown } }).function?.name,
-    );
-    if (!targetName) {
-      throw new Error("tool_choice.function.name is required");
-    }
-    return { type: "function", name: targetName };
-  }
-  if (typeof choiceType !== "string") {
-    throw new Error("unsupported tool_choice type");
-  }
-  throw new Error(`tool_choice ${choiceType} is not supported`);
 }
 
 type ChatCompletionStreamIdentity = { runId: string; model: string; created: number };
@@ -565,6 +496,7 @@ async function resolveImagesForRequest(
   activeTurnContext: Pick<ActiveTurnContext, "imageUrls">,
   limits: ResolvedOpenAiChatCompletionsLimits,
   signal: AbortSignal,
+  assertCurrent: () => void,
 ): Promise<ImageContent[]> {
   signal.throwIfAborted();
   if (activeTurnContext.imageUrls.kind === "invalid") {
@@ -581,6 +513,7 @@ async function resolveImagesForRequest(
   const images: ImageContent[] = [];
   let totalBytes = 0;
   for (const url of urls) {
+    assertCurrent();
     const source = parseImageUrlToSource(url);
     if (source.type === "base64") {
       const sourceBytes = estimateBase64DecodedBytes(source.data);
@@ -696,44 +629,6 @@ function buildAgentPrompt(
   };
 }
 
-type PendingToolCall = {
-  id?: unknown;
-  name?: unknown;
-  arguments?: unknown;
-};
-
-function resolveStopReasonAndPendingToolCalls(meta: unknown): {
-  stopReason: string | undefined;
-  pendingToolCalls: Array<{ id: string; name: string; arguments: string }> | undefined;
-} {
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return { stopReason: undefined, pendingToolCalls: undefined };
-  }
-  const stopReasonRaw = (meta as { stopReason?: unknown }).stopReason;
-  const stopReason = typeof stopReasonRaw === "string" ? stopReasonRaw : undefined;
-  const pendingRaw = (meta as { pendingToolCalls?: unknown }).pendingToolCalls;
-  if (!Array.isArray(pendingRaw)) {
-    return { stopReason, pendingToolCalls: undefined };
-  }
-  const pendingToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
-  for (const call of pendingRaw as PendingToolCall[]) {
-    const id = typeof call?.id === "string" ? call.id.trim() : "";
-    const name = typeof call?.name === "string" ? call.name.trim() : "";
-    const argsValue = call?.arguments;
-    const argumentsValue =
-      typeof argsValue === "string"
-        ? argsValue
-        : argsValue == null
-          ? ""
-          : JSON.stringify(argsValue);
-    if (!id || !name) {
-      continue;
-    }
-    pendingToolCalls.push({ id, name, arguments: argumentsValue });
-  }
-  return { stopReason, pendingToolCalls };
-}
-
 function resolveChatCompletionUsage(result: unknown): OpenAiChatCompletionsUsage {
   return toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
 }
@@ -799,19 +694,16 @@ function resolveChatCompletionTokenCap(value: unknown, field: string): number | 
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: OpenAiHttpOptions,
+  opts: OpenAiCompatibleHttpOptions<GatewayHttpChatCompletionsConfig>,
 ): Promise<boolean> {
   const limits = resolveOpenAiChatCompletionsLimits(opts.config);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
+    ...opts,
     pathname: "/v1/chat/completions",
     requiredOperatorMethod: "chat.send",
     // Compat HTTP uses a different scope model from generic HTTP helpers:
     // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
+    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes: opts.maxBodyBytes ?? limits.maxBodyBytes,
   });
   if (handled === false) {
@@ -979,9 +871,16 @@ export async function handleOpenAiHttpRequest(
   }
   let images: ImageContent[];
   try {
-    images = await resolveImagesForRequest(activeTurnContext, limits, abortController.signal);
+    assertGatewayHttpRequestCurrent(handled.requestAuth);
+    images = await resolveImagesForRequest(activeTurnContext, limits, abortController.signal, () =>
+      assertGatewayHttpRequestCurrent(handled.requestAuth),
+    );
   } catch (err) {
     if (abortController.signal.aborted) {
+      return true;
+    }
+    if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
+      sendUnauthorized(res);
       return true;
     }
     logWarn(`openai-compat: invalid image_url content: ${String(err)}`);
@@ -997,52 +896,41 @@ export async function handleOpenAiHttpRequest(
   const runId = `chatcmpl_${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   const streamIdentity = { runId, model, created };
-  const deps = createDefaultDeps();
   const mergedExtraSystemPrompt = [prompt.extraSystemPrompt, toolChoicePrompt]
     .filter((part): part is string => Boolean(part))
     .join("\n\n");
-  const commandInput = buildAgentCommandInput({
-    prompt: {
+  const runAgentCommand = () =>
+    runOpenAiCompatibleAgentCommand({
       message: prompt.message,
-      extraSystemPrompt: mergedExtraSystemPrompt || undefined,
-      images: images.length > 0 ? images : undefined,
-    },
-    clientTools: resolvedClientTools.length > 0 ? resolvedClientTools : undefined,
-    modelOverride,
-    sessionKey,
-    runId,
-    messageChannel,
-    senderIsOwner,
-    abortSignal: abortController.signal,
-    streamParams,
-  });
-  const gatewayCommandInput = opts.resolveGatewayContext
-    ? {
-        ...commandInput,
-        onAdmittedRunContext: (context: AdmittedRunContext) =>
-          bindGatewayContextResolver(context, opts.resolveGatewayContext),
-      }
-    : commandInput;
+      extraSystemPrompt: mergedExtraSystemPrompt,
+      images,
+      clientTools: resolvedClientTools,
+      modelOverride,
+      sessionKey,
+      runId,
+      messageChannel,
+      senderIsOwner,
+      requestAuth: handled.requestAuth,
+      operatorScopes: handled.operatorScopes,
+      abortSignal: abortController.signal,
+      hasCurrentClientAuthority: handled.requestAuth.hasCurrentClientAuthority,
+      streamParams,
+      resolveGatewayContext: opts.resolveGatewayContext,
+    });
 
   if (!stream) {
     try {
-      const result = await agentCommandFromGatewayIngress(
-        gatewayCommandInput,
-        defaultRuntime,
-        deps,
-        {},
-      );
+      const result = await runAgentCommand();
 
       if (abortController.signal.aborted) {
         return true;
       }
 
-      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
-      if (readAgentRunTerminalOutcome(result) === "failed") {
+      const { runFailed, stopReason, pendingToolCalls } = readOpenAiHttpRunTerminal(result);
+      if (runFailed) {
         throw new Error("agent run failed");
       }
       const usage = resolveChatCompletionUsage(result);
-      const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // `tool_choice` is an HTTP client-tool contract. The provider may still
       // ignore the prompt, so enforce after the run using structured pending
@@ -1134,7 +1022,7 @@ export async function handleOpenAiHttpRequest(
   let pendingAssistantText: AssistantTextSnapshot | undefined;
   let finalResultText: string | undefined;
   let finalFinishReason: "stop" | "length" = "stop";
-  let finalToolCalls: ReturnType<typeof resolveStopReasonAndPendingToolCalls>["pendingToolCalls"];
+  let finalToolCalls: ReturnType<typeof readOpenAiHttpRunTerminal>["pendingToolCalls"];
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
   let finalizeScheduled = false;
@@ -1309,19 +1197,15 @@ export async function handleOpenAiHttpRequest(
 
   void (async () => {
     try {
-      const result = await agentCommandFromGatewayIngress(
-        gatewayCommandInput,
-        defaultRuntime,
-        deps,
-        {},
-      );
+      const result = await runAgentCommand();
       resultResolved = true;
 
       if (closed) {
         return;
       }
 
-      if (readAgentRunTerminalOutcome(result) === "failed") {
+      const { runFailed, stopReason, pendingToolCalls } = readOpenAiHttpRunTerminal(result);
+      if (runFailed) {
         terminalLifecyclePhase = "error";
         finishStreamWithError({ message: "internal error", type: "api_error" });
         return;
@@ -1333,8 +1217,6 @@ export async function handleOpenAiHttpRequest(
       }
 
       finalUsage = resolveChatCompletionUsage(result);
-      const meta = (result as { meta?: unknown } | null)?.meta;
-      const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // Streaming enforces the same post-run client-tool contract as the
       // non-streaming path; buffered assistant prose is only flushed when the

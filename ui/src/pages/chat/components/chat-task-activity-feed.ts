@@ -1,37 +1,38 @@
 import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
 } from "../../../../../src/chat/tool-content.js";
 import { resolveAssistantMessagePhase } from "../../../../../src/shared/chat-message-content.js";
 import { icons } from "../../../components/icons.ts";
+import { t } from "../../../i18n/index.ts";
+import { redactToolPayloadText } from "../../../lib/browser-redact.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
   isStandaloneToolMessageForDisplay,
   normalizeMessage,
 } from "../../../lib/chat/message-normalizer.ts";
-import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
-import {
-  resolveToolCallTargetPaths,
-  resolveToolCallView,
-} from "../../../lib/chat/tool-call-view.ts";
+import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
+import { resolveToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   extractToolCardsCached,
   isToolCardError,
   isToolCallContentBlock,
-  resolveCollapsedToolArgumentPreview,
+  resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
-import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
-import type { AssistantMessageExpansionState } from "../chat-thread.ts";
-import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
 import {
-  FULL_MESSAGE_RETRY_REVISION_LIMIT,
   resolveCappedMessageId,
-} from "./chat-message-markdown.ts";
+  type AssistantMessageExpansionState,
+} from "../chat-message-recovery.ts";
+import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
+import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
+import { FULL_MESSAGE_RETRY_REVISION_LIMIT } from "./chat-message-markdown.ts";
 import { renderMessageMarkdown, type AssistantMessageDisclosure } from "./chat-message-text.ts";
 
 type TaskMessageRecovery = {
@@ -40,21 +41,18 @@ type TaskMessageRecovery = {
 };
 
 type Entry = { key: string; timestamp: number | null } & (
-  | { kind: "tools"; calls: ToolCard[] }
+  | {
+      kind: "tools";
+      calls: Array<{ key: string; card: ToolCard }>;
+      activity: ReturnType<typeof readPreparedActivity>;
+    }
   | { kind: "user" | "assistant" | "block"; text: string; cappedMessageId?: string }
 );
 
-// Collapsed rows show the first line; expanded rows keep the complete command
-// or script so a multi-line call can be inspected.
-function toolLine(call: ToolCard, mode: "summary" | "full"): string {
+function toolLine(call: ToolCard): string {
   const view = resolveToolCallView(call);
-  const text =
-    view.command ??
-    view.code ??
-    (view.kind === "search" ? view.target : resolveToolCallTargetPaths(call.name, call.args)[0]) ??
-    view.target ??
-    [call.name, resolveCollapsedToolArgumentPreview(call.args)].filter(Boolean).join(" ");
-  return mode === "full" ? text.trim() : text.split(/\r?\n/)[0]!.trim();
+  const text = view.command ?? view.code ?? call.inputText ?? call.name;
+  return redactToolPayloadText(text.trim(), { preservePaths: true });
 }
 
 function entries(messages: unknown[]): Entry[] {
@@ -101,9 +99,18 @@ function entries(messages: unknown[]): Entry[] {
         }
         const previous = result.at(-1);
         if (previous?.kind === "tools") {
-          previous.calls.push(call);
+          previous.calls.push({ key, card: call });
+          if (call.activity) {
+            previous.activity.push(call.activity);
+          }
         } else {
-          result.push({ kind: "tools", key, timestamp, calls: [call] });
+          result.push({
+            kind: "tools",
+            key,
+            timestamp,
+            calls: [{ key, card: call }],
+            activity: call.activity ? [call.activity] : [],
+          });
         }
       } else if (
         isToolResultContentType(block.type) ||
@@ -173,14 +180,59 @@ function toolIcon(call: ToolCard) {
   }
 }
 
-function renderToolLine(call: ToolCard, mode: "summary" | "full") {
-  // The text sits in an inline element so template whitespace stays outside
-  // the `pre-wrap` region of expanded rows.
-  return html`<div
-    class="chat-task-feed__tool-line ${mode === "full" ? "chat-task-feed__tool-line--full" : ""} ${isToolCardError(call) ? "chat-task-feed__error" : ""}"
+function renderToolLine(call: ToolCard) {
+  const view = resolveToolCallView(call);
+  const raw = toolLine(call);
+  const command = view.command ? stripShellPreamble(view.command).command : undefined;
+  const label = truncateUtf16Safe(
+    redactToolPayloadText(
+      view.title ?? view.target ?? (command || view.command)?.split("\n")[0] ?? call.name,
+      { preservePaths: true },
+    ),
+    160,
+  );
+  const outcome = resolveToolCardOutcome(call, false);
+  const outcomeLabel = t(
+    `chat.toolCards.${outcome === "succeeded" ? "completed" : outcome === "unknown" ? "outcomeUnknown" : outcome}`,
+  );
+  return html`<details
+    class="chat-task-feed__tool-line ${isToolCardError(call) ? "chat-task-feed__error" : ""}"
   >
-    <code>${toolLine(call, mode)}</code>
-  </div>`;
+    <summary>
+      <span class="chat-task-feed__row-icon" aria-hidden="true">${toolIcon(call)}</span>
+      <span class="chat-task-feed__row-label">${label}</span>
+      <span class="chat-task-feed__row-outcome" title=${outcomeLabel}
+        >${outcome === "succeeded" ? html`<span role="img" aria-label=${outcomeLabel}>${icons.check}</span>` : outcomeLabel}</span
+      >
+      <span class="chat-task-feed__chevron" aria-hidden="true">${icons.chevronRight}</span>
+    </summary>
+    <pre class="chat-task-feed__tool-line--full"><code>${raw}</code></pre>
+  </details>`;
+}
+
+function renderToolGroup(entry: Extract<Entry, { kind: "tools" }>) {
+  const overview = describeToolGroup(entry.activity);
+  return html`<details class="chat-task-feed__tool-group">
+    <summary>
+      <span class="chat-task-feed__overview">
+        <span class="chat-task-feed__overview-heading">
+          <strong
+            >${overview.total ? t(`chat.toolCards.activity.title${overview.total === 1 ? "One" : "Many"}`, { count: String(overview.total) }) : t("chat.toolCards.rawDetails")}</strong
+          >
+          ${overview.outcomes.map(({ kind, label }) => html`<span class="chat-task-feed__outcome chat-task-feed__outcome--${kind}">${label} </span>`)}
+        </span>
+        ${overview.label ? html`<span class="chat-task-feed__summary">${overview.label}</span>` : nothing}
+      </span>
+      <span class="chat-task-feed__chevron" aria-hidden="true">${icons.chevronRight}</span>
+    </summary>
+    <div class="chat-task-feed__calls">
+      ${repeat(
+        entry.calls,
+        ({ key }) => key,
+        ({ card }) => renderToolLine(card),
+      )}
+    </div>
+  </details>`;
 }
 
 function messageDisclosure(
@@ -214,19 +266,17 @@ export function renderTaskActivityFeed(
       (entry) => entry.key,
       (entry) => html` <div class="chat-task-feed__entry" data-task-feed-entry=${entry.key}>
         <span class="chat-task-feed__icon" aria-hidden="true"
-          >${entry.kind === "tools" ? toolIcon(entry.calls[0]!) : entry.kind === "user" ? icons.users : entry.kind === "block" ? icons.paperclip : icons.messageSquare}</span
+          >${entry.kind === "tools" ? toolIcon(entry.calls[0]!.card) : entry.kind === "user" ? icons.users : entry.kind === "block" ? icons.paperclip : icons.messageSquare}</span
         >
         <div class="chat-task-feed__body">
           ${
+            entry.kind === "user" || entry.kind === "assistant"
+              ? html`<span class="sr-only">${t(`sessionsView.${entry.kind}`)}: </span>`
+              : nothing
+          }
+          ${
             entry.kind === "tools"
-              ? html` <details class="chat-task-feed__tool-group">
-                  <summary>
-                    ${renderToolLine(entry.calls[0]!, "summary")}${entry.calls.length > 1 ? html`<div class="chat-task-feed__summary">${summarizeToolGroup(entry.calls)}</div>` : nothing}
-                  </summary>
-                  <div class="chat-task-feed__calls">
-                    ${entry.calls.map((call) => renderToolLine(call, "full"))}
-                  </div>
-                </details>`
+              ? renderToolGroup(entry)
               : entry.kind === "assistant"
                 ? renderMessageMarkdown(
                     entry.text,

@@ -23,6 +23,11 @@ import { isCodeModeModelVisibleToolName, sha256Hex } from "./transport-utils.js"
 const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
+const OPENAI_COMPLETIONS_APIS: ReadonlySet<string> = new Set([
+  "openai-completions",
+  "openclaw-openai-completions-transport",
+]);
+
 function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
   try {
     return Object.hasOwn(record, field) ? record[field] : undefined;
@@ -308,6 +313,24 @@ export function buildOpenAIClientHeaders(
       getAiTransportHost().buildCopilotDynamicHeaders(context.messages),
     );
   }
+  if (OPENAI_COMPLETIONS_APIS.has(model.api) && sessionId && cacheRetention !== "none") {
+    const { sessionAffinity } = resolveOpenAICompletionsCompat(model);
+    if (sessionAffinity !== "none") {
+      const affinityValue = clampOpenAIPromptCacheKey(sessionId) ?? sessionId;
+      const affinityHeaders =
+        sessionAffinity === "openrouter"
+          ? ["x-session-id"]
+          : ["session_id", "x-client-request-id", "x-session-affinity"];
+      const configuredHeaders = new Set(
+        Object.keys(providerHeaders).map((key) => key.toLowerCase()),
+      );
+      for (const name of affinityHeaders) {
+        if (!configuredHeaders.has(name)) {
+          providerHeaders[name] = affinityValue;
+        }
+      }
+    }
+  }
   const callerHeaders = { ...optionHeaders, ...turnHeaders };
   const headers = resolveProviderRequestPolicyConfig(model, {
     provider: model.provider,
@@ -345,12 +368,8 @@ export function buildOpenAIClientHeaders(
   );
 }
 
-function resolveOpenAISdkTimeoutMs(model: Model, timeoutMs?: number): number | undefined {
-  return resolveModelRequestTimeoutMs(model, timeoutMs);
-}
-
 export function buildOpenAISdkClientOptions(model: Model): { timeout?: number; maxRetries: 0 } {
-  const timeout = resolveOpenAISdkTimeoutMs(model);
+  const timeout = resolveModelRequestTimeoutMs(model);
   return { ...(timeout === undefined ? {} : { timeout }), maxRetries: 0 };
 }
 
@@ -368,7 +387,7 @@ export function buildOpenAISdkRequestOptions(
       headers?: Record<string, string>;
     }
   | undefined {
-  const timeout = resolveOpenAISdkTimeoutMs(model, options?.timeoutMs);
+  const timeout = resolveModelRequestTimeoutMs(model, options?.timeoutMs);
   const headers =
     options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
       ? { Accept: "text/event-stream" }

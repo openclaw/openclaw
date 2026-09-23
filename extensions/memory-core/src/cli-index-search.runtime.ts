@@ -197,14 +197,10 @@ export async function runMemoryIndex(
   });
 }
 export async function runMemorySearch(
-  queryArg: string | undefined,
+  query: string,
   opts: MemorySearchCommandOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const query = opts.query ?? queryArg;
-  if (!query) {
-    throw new Error("Missing search query. Provide a positional query or use --query <text>.");
-  }
   await withMemoryCommand({
     commandName: "memory search",
     agent: opts.agent,
@@ -282,11 +278,6 @@ export async function runMemorySearch(
 }
 
 export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
-  if (!opts.session?.length && !opts.hookSource?.length && !opts.participant?.length) {
-    throw new Error(
-      "Memory forget requires --session <id-or-key>, --hook-source <source>, or --participant <actor-id>.",
-    );
-  }
   try {
     const cfg = getRuntimeConfig({ skipPluginValidation: true });
     const agentId = resolveMemoryAgent(cfg, opts.agent);
@@ -549,14 +540,10 @@ export async function runMemoryPromote(
   });
 }
 export async function runMemoryPromoteExplain(
-  selectorArg: string | undefined,
+  selector: string,
   opts: MemoryPromoteExplainOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const selector = selectorArg?.trim();
-  if (!selector) {
-    throw new Error("Memory promote-explain requires a non-empty selector.");
-  }
   await withMemoryCommand({
     commandName: "memory promote-explain",
     agent: opts.agent,

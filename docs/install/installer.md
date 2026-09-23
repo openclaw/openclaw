@@ -10,11 +10,11 @@ title: "Installer internals"
 
 OpenClaw ships three installer scripts, served from `openclaw.ai`.
 
-| Script                             | Platform                      | What it does                                                                                   |
-| ---------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------- |
-| [`install.sh`](#installsh)         | macOS / Linux / WSL           | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.       |
-| [`install-cli.sh`](#install-clish) | macOS / Linux / WSL / FreeBSD | Installs Node + OpenClaw into a local prefix (`~/.openclaw`) via npm or git. No root required. |
-| [`install.ps1`](#installps1)       | Windows (PowerShell)          | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.       |
+| Script                             | Platform                      | What it does                                                                                                                   |
+| ---------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| [`install.sh`](#installsh)         | macOS / Linux / WSL           | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.                                       |
+| [`install-cli.sh`](#install-clish) | macOS / Linux / WSL / FreeBSD | Installs Node + OpenClaw into a local prefix (`~/.openclaw`) via npm (FreeBSD) or npm/git (macOS/Linux/WSL). No root required. |
+| [`install.ps1`](#installps1)       | Windows (PowerShell)          | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.                                       |
 
 All three support Node **24.16+ or 26.1+** with a WAL-reset-safe linked SQLite library. When Node is missing and nvm is not detected, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.19.0 on macOS and glibc Linux. FreeBSD uses an installed system runtime. Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
 
@@ -43,6 +43,9 @@ These commands print `Running on an unsupported Node (<version>); diagnostics ma
 Diagnostic readers preserve the live SQLite files. They may recover a disposable private copy so committed state remains readable after a crash; the runtime exemption does not permit writable live database access.
 
 ## Source build toolchain
+
+On FreeBSD, use the npm method described in [install-cli.sh](/install/installer#install-clish).
+Source/git installation is currently unsupported.
 
 For source installs, the installer selects pnpm after choosing the checkout ref.
 It uses Corepack to create pnpm shims in an installer-owned temporary directory,
@@ -278,7 +281,8 @@ object is unavailable or cannot resolve to a commit.
 <Info>
 Designed for environments where you want everything under a local prefix
 (default `~/.openclaw`). Supports npm installs by default, plus git-checkout
-installs under the same prefix flow. FreeBSD and Alpine use system Node packages.
+installs on macOS/Linux/WSL. FreeBSD uses the npm method. FreeBSD and Alpine use
+system Node packages.
 </Info>
 
 ### Flow (install-cli.sh)
@@ -309,6 +313,11 @@ installs under the same prefix flow. FreeBSD and Alpine use system Node packages
   </Step>
 </Steps>
 
+On FreeBSD, use the default npm method (`--install-method npm`) with a published
+version or compatible built `.tgz` package. Source/git installation is unsupported.
+If OpenClaw is managed by pkg or Ports, keep using that package owner instead of
+installing over it.
+
 On FreeBSD, install `bash`, `node24`, `npm-node24`, `git`, `python3`, and `gmake` through `pkg` before running the installer.
 Python and GNU Make support native npm dependency builds.
 Ask the system administrator to update those packages if the runtime checks fail.
@@ -316,7 +325,21 @@ The installer requires supported Node and npm commands on `PATH`, and verifies t
 It links that runtime into the local prefix without changing system packages.
 An explicit `--node-version` sets the minimum accepted system version on FreeBSD.
 
+The upstream Codex CLI does not provide a FreeBSD binary target.
+A successful installation or `openclaw doctor --fix` does not verify native Codex execution.
+For OpenAI API models, configure an API-key auth profile.
+Explicitly select `agentRuntime.id: "openclaw"` for the models you use.
+API-key access uses OpenAI Platform billing, separate from a ChatGPT/Codex subscription.
+See [OpenAI setup](/providers/openai/setup) and [runtime selection](/providers/openai/runtimes#implicit-agent-runtime).
+
 With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix>/tools/node-v<version>` and updating the `<prefix>/tools/node` alias. It skips Git, OpenClaw installation, onboarding, and Gateway service work. This mode refuses musl Linux and FreeBSD. Update their system Node packages manually.
+
+With `--runtime-only`, the script installs Node and the CLI but skips Gateway
+service discovery, refresh, and onboarding, even if `--onboard` is also supplied.
+The npm path also skips system Git provisioning. Desktop browser setup uses
+this with `--npm`, an exact app version, and a separate app-owned prefix; it does
+not replace an independently managed Gateway runtime. Normal installation keeps
+its existing service-refresh behavior.
 
 ### Examples (install-cli.sh)
 
@@ -336,7 +359,7 @@ With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --node-only --prefix "$HOME/.openclaw/tools/cli-node"
     ```
   </Tab>
-  <Tab title="Git install">
+  <Tab title="Git install (macOS/Linux/WSL)">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --install-method git --git-dir ~/openclaw
     ```
@@ -368,6 +391,7 @@ With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix
 | `--compatible-with <ver>`               | Refuse a CLI that cannot modify config written by `<ver>`                         |
 | `--node-version <ver>`                  | Node version (default: `24.19.0`)                                                 |
 | `--node-only`                           | Install only the private Node runtime under `--prefix`; no system package changes |
+| `--runtime-only`                        | Install Node and CLI without Gateway probes, service refresh, or onboarding       |
 | `--json`                                | Emit NDJSON events                                                                |
 | `--onboard`                             | Run `openclaw onboard` after install                                              |
 | `--no-onboard`                          | Skip onboarding (default)                                                         |
@@ -394,7 +418,7 @@ With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix
 </AccordionGroup>
 
 <Note>
-`openclaw@main` and other GitHub source specs are not valid `--version` targets for npm installs. Use `--install-method git --version main` instead.
+`openclaw@main` and other GitHub source specs are not valid `--version` targets for npm installs. On macOS/Linux/WSL, use `--install-method git --version main` instead. FreeBSD requires a published npm version or a compatible built package.
 </Note>
 
 ---
@@ -410,7 +434,7 @@ With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix
     Requires PowerShell 5+.
   </Step>
   <Step title="Ensure a supported Node.js runtime">
-    If missing, attempts install via winget, then Chocolatey, then Scoop. If no package manager is available, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
+    If missing, attempts install via winget, then Chocolatey, then Scoop. If those methods are unavailable, fail, or leave an unsupported runtime, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using the selected `-Tag`, launched from a writable installer temp directory so shells opened in protected folders such as `C:\` still work

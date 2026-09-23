@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
 import { getAiTransportHost } from "@openclaw/ai";
 import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
+import type { Message } from "@openclaw/llm-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { runAgentLoopContinue } from "../../../packages/agent-core/src/agent-loop.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -12,6 +13,7 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import * as reconciliation from "../../config/sessions/session-transcript-reconcile.js";
+import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "../../config/sessions/session-transcript-reconcile.worker.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -32,6 +34,13 @@ import {
 } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
+vi.mock("node:worker_threads", async () =>
+  (
+    await import("../../config/sessions/session-transcript-reconcile.test-support.js")
+  ).createObservedWorkerThreads(),
+);
+
+const observer = useReconcileWorkerObserver();
 const tempRoots = createTempDirTracker();
 const runAttempt = vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
 type ProductionRun = typeof import("./run.js").runEmbeddedAgent;
@@ -81,29 +90,30 @@ function fenceProjection(target: SessionTranscriptRuntimeTarget) {
   const held = createDeferred();
   let releaseAcknowledgement: (() => void) | undefined;
   let released = false;
+  observer.onTask = ({ input, port, observeMessage }) => {
+    if (input.mode !== "disk" || input.path !== database.path) {
+      return;
+    }
+    const postMessage = port.postMessage.bind(port);
+    let startingTarget = false;
+    observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
+      startingTarget = message.type === "plan-start" && message.plan.sessionId === target.sessionId;
+    });
+    // Hold after the owner's claim, before any rebuilt projection is committed.
+    port.postMessage = (message: unknown, transferList) => {
+      const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
+      if (startingTarget && !released) {
+        startingTarget = false;
+        releaseAcknowledgement = () => postMessage(message, options);
+        held.resolve();
+        return;
+      }
+      postMessage(message, options);
+    };
+  };
   reconciliation.startSessionTranscriptIndexReconcile({
     ...databaseOptions,
     preferredSessionId: target.sessionId,
-    createWorker: (filename, options) => {
-      const worker = new Worker(filename, options);
-      const postMessage = worker.postMessage.bind(worker);
-      let startingTarget = false;
-      worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
-        startingTarget =
-          message.type === "plan-start" && message.plan.sessionId === target.sessionId;
-      });
-      // Hold after the owner's claim, before any rebuilt projection is committed.
-      worker.postMessage = (message: unknown, transferList) => {
-        if (startingTarget && !released) {
-          startingTarget = false;
-          releaseAcknowledgement = () => postMessage(message, transferList);
-          held.resolve();
-          return;
-        }
-        postMessage(message, transferList);
-      };
-      return worker;
-    },
   });
   const joined = reconciliation.waitForSessionTranscriptIndexReconcile(databaseOptions);
   return {
@@ -132,16 +142,18 @@ function fenceProjection(target: SessionTranscriptRuntimeTarget) {
 
 describe("embedded retry transcript ownership", () => {
   it.each([
-    ["detached", false, "active", false],
-    ["detached", true, "active", false],
-    ["durable", true, "active", false],
-    ["durable", false, "active", false],
-    ["durable", false, "active", true],
-    ["detached", false, "absent", false],
-    ["durable", false, "idle", false],
+    ["detached", false, "active", false, "disconnect"],
+    ["detached", true, "active", false, "disconnect"],
+    ["durable", true, "active", false, "disconnect"],
+    ["durable", false, "active", false, "disconnect"],
+    ["durable", false, "active", true, "disconnect"],
+    ["detached", false, "absent", false, "disconnect"],
+    ["durable", false, "idle", false, "disconnect"],
+    ["detached", false, "absent", false, "output-limit"],
+    ["durable", false, "active", false, "output-limit"],
   ] as const)(
-    "%s metadata, caller manager=%s, projection=%s, abort=%s",
-    async (sessionPersistence, suppliedManager, projection, abort) => {
+    "%s metadata, caller manager=%s, projection=%s, abort=%s, failure=%s",
+    async (sessionPersistence, suppliedManager, projection, abort, failure) => {
       const root = tempRoots.make("openclaw-retry-projection-");
       const stateDir = path.join(root, "state");
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -166,6 +178,34 @@ describe("embedded retry transcript ownership", () => {
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockRejectedValue(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
+      if (failure === "output-limit") {
+        const item = {
+          type: "function_call",
+          id: "fc_unfinished",
+          call_id: "unfinished",
+          name: "exec",
+          arguments: '{"command":',
+          status: "incomplete",
+        };
+        const events = [
+          { type: "response.output_item.added", output_index: 0, item },
+          {
+            type: "response.incomplete",
+            response: {
+              id: "response-output-limit",
+              status: "incomplete",
+              incomplete_details: { reason: "max_output_tokens" },
+              output: [item],
+              usage: { input_tokens: 440_445, output_tokens: 128_000 },
+            },
+          },
+        ];
+        fetchMock.mockResolvedValueOnce(
+          new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      }
       vi.spyOn(getAiTransportHost().plugin, "resolveTransportTurnState").mockReturnValue(undefined);
       vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(fetchMock);
       const history = [
@@ -184,12 +224,35 @@ describe("embedded retry transcript ownership", () => {
           timestamp: 2,
         })),
       ] satisfies EmbeddedRunAttemptResult["messagesSnapshot"];
-      const erroredAssistant = await streamOpenAIResponses(
-        model,
-        { messages: history },
-        { apiKey: "synthetic-transport-key" },
-      ).result();
+      const responseMessages = await runAgentLoopContinue(
+        { systemPrompt: "", messages: [...history], tools: [] },
+        { model, convertToLlm: (messages) => messages as Message[] },
+        () => {},
+        undefined,
+        (_model, context, options) =>
+          streamOpenAIResponses(model, context, {
+            ...options,
+            apiKey: "synthetic-transport-key",
+          }),
+      );
+      const erroredAssistant = responseMessages.findLast((message) => message.role === "assistant");
+      if (!erroredAssistant) {
+        throw new Error("Expected the AgentCore terminal assistant message");
+      }
+      expect(responseMessages.some((message) => message.role === "toolResult")).toBe(false);
       expect(fetchMock).toHaveBeenCalledOnce();
+      if (failure === "output-limit") {
+        expect(erroredAssistant).toMatchObject({
+          errorCode: "incomplete_tool_call",
+          usage: { output: 128_000 },
+          diagnostics: [
+            expect.objectContaining({
+              type: "openai_responses_terminal",
+              details: expect.objectContaining({ incompleteReason: "max_output_tokens" }),
+            }),
+          ],
+        });
+      }
       history.push(erroredAssistant);
       const waiting = createDeferred();
       const secondAttempt = createDeferred();

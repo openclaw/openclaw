@@ -1,10 +1,9 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
+import { sha256File } from "../../infra/directory-durability.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
@@ -237,9 +236,10 @@ export function createWorkerProjectPreparation(params: {
         if (bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
           throw new Error("Project Git pack exceeds the workspace byte limit");
         }
-        const hash = createHash("sha256");
-        for await (const chunk of fs.createReadStream(pack, { signal })) {
-          hash.update(chunk);
+        let sha256: string;
+        {
+          await using handle = await fsp.open(pack, "r");
+          ({ digest: sha256 } = await sha256File(handle, { signal }));
         }
         requireCurrent();
         await transport.upload(pack, path.posix.join(directory, "base.pack"), signal);
@@ -248,7 +248,7 @@ export function createWorkerProjectPreparation(params: {
           pack: {
             directory,
             bytes,
-            sha256: hash.digest("hex"),
+            sha256,
             ...(repository
               ? { repositoryUrl: repository.url }
               : typeof retainedCommit === "string"

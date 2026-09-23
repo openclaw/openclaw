@@ -53,7 +53,7 @@ Shared flags work in either position, so `openclaw migrate --no-auth-credentials
   Import into a configured agent. Omit this only when the configured default agent is the intended owner. Invalid and unknown agent IDs are rejected.
 </ParamField>
 <ParamField path="--include-secrets" type="boolean">
-  Import supported credentials without prompting. Interactive apply asks before importing detected auth credentials, with yes selected by default. Non-interactive `--yes` requires `--include-secrets` to import them.
+  Import supported credentials without an OpenClaw confirmation prompt. Codex may still request operating-system credential-store access, such as macOS Keychain access. Interactive apply asks before inspecting and importing auth credentials, with yes selected by default. Non-interactive `--yes` requires `--include-secrets` to import them.
 </ParamField>
 <ParamField path="--no-auth-credentials" type="boolean">
   Skip auth credential import, including the interactive prompt.
@@ -140,7 +140,12 @@ The bundled Codex provider detects Codex CLI state at `~/.codex` by default, or 
 
 Use this provider when moving to the OpenClaw Codex harness and you want to promote useful personal Codex CLI assets deliberately. Local Codex app-server launches use a per-agent `CODEX_HOME`, so they do not read your personal `~/.codex` by default. The normal process `HOME` is still inherited, so Codex can see shared `$HOME/.agents/*` skills/plugin marketplace entries and subprocesses can find user-home config and tokens.
 
-Codex `auth.json` credentials are sensitive migration inputs. The default
+Codex credentials are sensitive migration inputs. Initial credential planning
+offers import without inspecting native credential storage. Accepting the
+interactive credential prompt or passing `--include-secrets` allows inspection
+and import from Codex's selected storage; macOS may request Keychain access.
+Native plugin inventory discovery separately follows Codex's authentication
+behavior, including during a dry run. The default
 agent-scoped runtime does not consume a copied or mounted `auth.json` directly.
 Import those credentials into the owning agent's OpenClaw auth store explicitly.
 Replace `<agent-id>` with that configured agent's ID:
@@ -149,6 +154,16 @@ Replace `<agent-id>` with that configured agent's ID:
 openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai
 openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai --yes
 ```
+
+For callers embedding the Codex migration provider, an explicit
+`providerOptions.allowKeychainPrompt: false` disables credential inspection for
+auth import, including file-backed imports, even with `includeSecrets: true`.
+Earlier tagged versions could import file credentials with that override. Native
+startup can access credential storage before OpenClaw can inspect the selected
+store, so the auth-import step does not start its native reader when this override
+is false. The normal migration CLI and onboarding consent flows do not set this
+override. Plugin discovery is separate and can still request operating-system
+credential access.
 
 Running `openclaw migrate codex` in an interactive terminal previews the full plan, then opens checkbox selectors before the final apply confirmation. Skill copy items are prompted first. Use `Toggle all on` or `Toggle all off` for bulk selection. Press Space to toggle rows, or Enter to activate the highlighted row and continue. Planned skills start checked, conflict skills start unchecked, and `Skip for now` skips skill copies for this run while still continuing to plugin selection. When source-installed curated Codex plugins are migratable and `--plugin` was not supplied, migration then prompts for native Codex plugin activation by plugin name. Plugin items start checked unless the target OpenClaw Codex plugin config already has that plugin. Existing target plugins start unchecked and show a conflict hint such as `conflict: plugin exists`. Choose `Toggle all off` to migrate no native Codex plugins in that run, or `Skip for now` to stop before applying.
 
@@ -163,7 +178,7 @@ openclaw migrate apply codex --yes --plugin google-calendar
 
 ### What Codex imports
 
-- ChatGPT OAuth or OpenAI API-key credentials from `$CODEX_HOME/auth.json`,
+- ChatGPT OAuth or OpenAI API-key credentials from Codex's selected native storage,
   imported into the agent's OpenClaw auth store only when `--include-secrets`
   is set.
 - Consolidated Codex `MEMORY.md` and `memory_summary.md` from
@@ -172,6 +187,10 @@ openclaw migrate apply codex --yes --plugin google-calendar
 - Codex CLI skill directories under `$CODEX_HOME/skills`, excluding Codex's `.system` cache.
 - Personal AgentSkills under `$HOME/.agents/skills`, copied into the current OpenClaw agent workspace for per-agent ownership.
 - Source-installed `openai-curated` Codex plugins discovered through Codex app-server `plugin/installed`. Planning reads `plugin/read` for each enabled installed plugin.
+
+Codex sessions and chat history are not imported. Consolidated memories are not conversation transcripts. Migration does not move or delete your source files.
+
+During onboarding, the migration offer explains this scope before asking whether to continue. Continuing opens the import options; credentials require separate consent, skills and eligible plugins can be selected, and a final confirmation is required before applying.
 
 App-backed plugin migration has extra gates:
 

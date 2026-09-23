@@ -49,6 +49,7 @@ export function buildDraftSessionCreateParams(draft: {
   displayName?: string;
   deferInitialTurn?: boolean;
   model?: string;
+  agentRuntime?: string;
   contextWindow?: string;
   thinkingLevel?: string;
   fastMode?: SessionCreateParams["fastMode"];
@@ -73,6 +74,7 @@ export function buildDraftSessionCreateParams(draft: {
   const catalogId = normalizeOptionalString(draft.catalogId);
   const category = normalizeOptionalString(draft.category);
   const model = normalizeOptionalString(draft.model);
+  const agentRuntime = normalizeOptionalString(draft.agentRuntime);
   const contextWindow = normalizeOptionalString(draft.contextWindow);
   const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
   const message = draft.deferInitialTurn ? "" : draft.message;
@@ -114,6 +116,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(catalogId ? { catalogId } : {}),
     ...(category ? { category } : {}),
     ...(!catalogId && model ? { model } : {}),
+    ...(!catalogId && model && agentRuntime ? { agentRuntime } : {}),
     ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
     ...(!catalogId && draft.fastMode !== undefined ? { fastMode: draft.fastMode } : {}),

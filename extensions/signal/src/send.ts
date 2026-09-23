@@ -42,6 +42,8 @@ export type SignalSendOpts = {
   replyToId?: string | null;
   replyToAuthor?: string | null;
   replyToBody?: string | null;
+  /** Revalidate the originating request before every daemon mutation. */
+  assertDirectAdapterHandoff?: () => void;
 };
 
 export type SignalSendResult = {
@@ -379,6 +381,7 @@ export async function sendMessageSignal(
     timeoutMs: opts.timeoutMs,
     transportKind: opts.transportKind ?? accountInfo.transport.kind,
     maxAttachmentBytes: maxBytes,
+    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
   let result: SignalSendRpcResult | undefined;

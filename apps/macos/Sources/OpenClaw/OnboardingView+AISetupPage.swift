@@ -81,11 +81,12 @@ extension OnboardingView {
     @discardableResult
     func resumePendingSystemAgent(
         modelRef: String,
+        modelTarget: OnboardingAISetupModel.ModelTarget? = nil,
         intent: OnboardingAISetupModel.SetupIntent = .resumePending) -> Task<Void, Never>
     {
         self.prepareSystemAgentHandoff()
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
-        aiSetup.resumeConfiguredInference(modelRef: modelRef)
+        aiSetup.resumeConfiguredInference(modelRef: modelRef, modelTarget: modelTarget)
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
         }

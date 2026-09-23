@@ -1,5 +1,5 @@
-// Discord plugin module implements thread bindings.state behavior.
 import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/outbound-echo-runtime";
+import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -23,6 +23,7 @@ type ThreadBindingsGlobalState = {
   reusableWebhooksByAccountChannel: Map<string, { webhookId: string; webhookToken: string }>;
   persistByAccountId: Map<string, boolean>;
   loadedBindings: boolean;
+  loadingBindings?: Promise<void>;
   loadedPersistentBindings: boolean;
   persistenceAvailable: boolean;
   lastPersistedAtMs: number;
@@ -446,27 +447,15 @@ export function saveBindingsToDisk(params: { force?: boolean; minIntervalMs?: nu
   }
 }
 
-export function ensureBindingsLoaded() {
-  if (THREAD_BINDINGS_STATE.loadedBindings) {
-    return;
-  }
+function beginBindingsLoad() {
   THREAD_BINDINGS_STATE.loadedBindings = true;
   BINDINGS_BY_THREAD_ID.clear();
   BINDINGS_BY_SESSION_KEY.clear();
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
   THREAD_BINDINGS_STATE.loadedPersistentBindings = false;
+}
 
-  const entries = (() => {
-    try {
-      return openThreadBindingsStore().entries();
-    } catch {
-      THREAD_BINDINGS_STATE.persistenceAvailable = false;
-      return null;
-    }
-  })();
-  if (!entries) {
-    return;
-  }
+function restoreBindings(entries: PluginStateEntry<PersistedThreadBindingRecord>[]) {
   THREAD_BINDINGS_STATE.persistenceAvailable = true;
   THREAD_BINDINGS_STATE.loadedPersistentBindings = entries.length > 0;
   for (const entry of entries) {
@@ -475,6 +464,59 @@ export function ensureBindingsLoaded() {
       continue;
     }
     setBindingRecord(normalized);
+  }
+}
+
+export function ensureBindingsLoaded() {
+  if (THREAD_BINDINGS_STATE.loadedBindings) {
+    return;
+  }
+  beginBindingsLoad();
+  let entries: PluginStateEntry<PersistedThreadBindingRecord>[];
+  try {
+    entries = openThreadBindingsStore().entries();
+  } catch {
+    THREAD_BINDINGS_STATE.persistenceAvailable = false;
+    return;
+  }
+  restoreBindings(entries);
+}
+
+async function loadBindingsAsync() {
+  let entries: PluginStateEntry<PersistedThreadBindingRecord>[];
+  try {
+    entries = await getDiscordRuntime()
+      .state.openKeyedStore<PersistedThreadBindingRecord>({
+        namespace: THREAD_BINDINGS_NAMESPACE,
+        maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+      })
+      .entries();
+  } catch {
+    if (!THREAD_BINDINGS_STATE.loadedBindings) {
+      beginBindingsLoad();
+      THREAD_BINDINGS_STATE.persistenceAvailable = false;
+    }
+    return;
+  }
+  // A synchronous compatibility caller can initialize and mutate the registry while we wait.
+  if (THREAD_BINDINGS_STATE.loadedBindings) {
+    return;
+  }
+  beginBindingsLoad();
+  restoreBindings(entries);
+}
+
+export async function ensureBindingsLoadedAsync(): Promise<void> {
+  if (THREAD_BINDINGS_STATE.loadedBindings) {
+    return;
+  }
+  const loading = (THREAD_BINDINGS_STATE.loadingBindings ??= loadBindingsAsync());
+  try {
+    await loading;
+  } finally {
+    if (THREAD_BINDINGS_STATE.loadingBindings === loading) {
+      delete THREAD_BINDINGS_STATE.loadingBindings;
+    }
   }
 }
 

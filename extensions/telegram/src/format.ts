@@ -16,22 +16,23 @@ import {
   protectTelegramAssistantTranscriptRoleHeaders,
   TELEGRAM_ASSISTANT_TRANSCRIPT_PREFIX,
 } from "./format-assistant-transcript.js";
-import { decodeTelegramHtmlEntities, findTelegramHtmlEntityEnd } from "./format-html.js";
+import {
+  decodeTelegramHtmlEntities,
+  escapeTelegramHtml,
+  escapeTelegramHtmlAttr,
+  findTelegramHtmlEntityEnd,
+  prepareTelegramHtmlTextSplitter,
+  type TelegramHtmlTextSplitter,
+} from "./format-html.js";
 import { renderTelegramMarkdownIR } from "./format-render.js";
 import { renderTelegramMonospaceGrid } from "./text-width.js";
+
+export { escapeTelegramHtml } from "./format-html.js";
 
 export type TelegramFormattedChunk = {
   html: string;
   text: string;
 };
-
-export function escapeTelegramHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function escapeHtmlAttr(text: string): string {
-  return escapeTelegramHtml(text).replace(/"/g, "&quot;");
-}
 
 function isTelegramRichLinkHref(href: string): boolean {
   return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
@@ -70,7 +71,7 @@ function buildTelegramLink(
   if (context.origin === "linkify" && isAutoLinkedFileRef(href, label)) {
     return null;
   }
-  const safeHref = escapeHtmlAttr(href);
+  const safeHref = escapeTelegramHtmlAttr(href);
   return {
     start: link.start,
     end: link.end,
@@ -83,7 +84,7 @@ function buildTelegramCodeBlockOpen(span: { language?: string }): string {
   if (!span.language) {
     return "<pre><code>";
   }
-  return `<pre><code class="language-${escapeHtmlAttr(span.language)}">`;
+  return `<pre><code class="language-${escapeTelegramHtmlAttr(span.language)}">`;
 }
 
 function renderTelegramHtml(ir: MarkdownIR): string {
@@ -235,14 +236,12 @@ function popLastTagName(tags: string[], name: string): boolean {
   return false;
 }
 
-function isSupportedTelegramHtmlTag(rawTag: string, support: TelegramHtmlTagSupport): boolean {
-  const match = HTML_MODE_TAG_PATTERN.exec(rawTag);
-  if (!match) {
-    return false;
-  }
-  const closing = match[1] === "/";
-  const name = normalizeLowercaseStringOrEmpty(match[2]);
-  const attrs = match[3] ?? "";
+function isSupportedTelegramHtmlTag(
+  closing: boolean,
+  name: string,
+  attrs: string,
+  support: TelegramHtmlTagSupport,
+): boolean {
   if (closing) {
     return attrs.trim() === "" && (support.simpleTags.has(name) || support.attrPatterns.has(name));
   }
@@ -279,7 +278,7 @@ function preserveTelegramHtmlTag(
     }
     return "<code>";
   }
-  if (!isSupportedTelegramHtmlTag(rawTag, support)) {
+  if (!isSupportedTelegramHtmlTag(closing, tagName, attrs, support)) {
     return escapeTag(rawTag);
   }
   if (closing) {
@@ -482,7 +481,7 @@ function wrapSegmentFileRefs(
   preDepth: number,
   anchorDepth: number,
 ): string {
-  if (!text || codeDepth > 0 || preDepth > 0 || anchorDepth > 0) {
+  if (codeDepth > 0 || preDepth > 0 || anchorDepth > 0 || !text.includes(".")) {
     return text;
   }
   const wrappedStandalone = text.replace(getFileReferencePattern(), wrapStandaloneFileRef);
@@ -642,65 +641,6 @@ function buildTelegramHtmlCloseSuffixLength(tags: TelegramHtmlTag[]): number {
   return tags.reduce((total, tag) => total + tag.closeTag.length, 0);
 }
 
-// Never return a split index that lands between a UTF-16 surrogate pair, or
-// both chunks would carry a lone surrogate that re-encodes to U+FFFD. If the
-// pair starts the segment, keep it whole so chunking still advances.
-function clampToSurrogateBoundary(text: string, index: number): number {
-  const high = text.charCodeAt(index - 1);
-  const low = text.charCodeAt(index);
-  const splitsPair =
-    index > 0 && high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
-  if (!splitsPair) {
-    return index;
-  }
-  return index > 1 ? index - 1 : index + 1;
-}
-
-// Prefer a word/paragraph boundary inside the entity-safe window so long text
-// runs break between words instead of mid-word. Whitespace never falls inside
-// an HTML entity, so this keeps entities intact; the caller falls back to the
-// entity-safe hard cut only when the window has no interior whitespace.
-function findTelegramHtmlWordSafeSplitIndex(text: string, end: number): number {
-  let lastNewline = 0;
-  let lastWhitespace = 0;
-  for (let index = 1; index < end; index += 1) {
-    const char = text[index];
-    if (char === "\n") {
-      lastNewline = index + 1;
-    } else if (char !== undefined && /\s/.test(char)) {
-      lastWhitespace = index + 1;
-    }
-  }
-  return lastNewline > 0 ? lastNewline : lastWhitespace;
-}
-
-function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number {
-  if (text.length <= maxLength) {
-    return text.length;
-  }
-  const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
-  const entitySafeIndex = findTelegramHtmlEntitySafeSplitIndex(text, normalizedMaxLength);
-  const wordSafeIndex = findTelegramHtmlWordSafeSplitIndex(text, entitySafeIndex);
-  const splitIndex = wordSafeIndex > 0 ? wordSafeIndex : entitySafeIndex;
-  return clampToSurrogateBoundary(text, splitIndex);
-}
-
-function findTelegramHtmlEntitySafeSplitIndex(text: string, normalizedMaxLength: number): number {
-  const lastAmpersand = text.lastIndexOf("&", normalizedMaxLength - 1);
-  if (lastAmpersand === -1) {
-    return normalizedMaxLength;
-  }
-  const lastSemicolon = text.lastIndexOf(";", normalizedMaxLength - 1);
-  if (lastAmpersand < lastSemicolon) {
-    return normalizedMaxLength;
-  }
-  const entityEnd = findTelegramHtmlEntityEnd(text, lastAmpersand);
-  if (entityEnd === -1 || entityEnd < normalizedMaxLength) {
-    return normalizedMaxLength;
-  }
-  return lastAmpersand;
-}
-
 function popTelegramHtmlTag(tags: TelegramHtmlTag[], name: string): void {
   for (let index = tags.length - 1; index >= 0; index -= 1) {
     if (tags[index]?.name === name) {
@@ -710,11 +650,10 @@ function popTelegramHtmlTag(tags: TelegramHtmlTag[], name: string): void {
   }
 }
 
-function splitTelegramHtmlChunksRaw(html: string, limit: number): string[] {
+function splitTelegramHtmlChunksRaw(html: string, normalizedLimit: number): string[] {
   if (!html) {
     return [];
   }
-  const normalizedLimit = Math.max(1, Math.floor(limit));
   if (html.length <= normalizedLimit) {
     return [html];
   }
@@ -739,42 +678,42 @@ function splitTelegramHtmlChunksRaw(html: string, limit: number): string[] {
   };
 
   const appendText = (segment: string) => {
-    let remaining = segment;
-    while (remaining.length > 0) {
+    let findSplitIndex: TelegramHtmlTextSplitter | undefined;
+    let start = 0;
+    while (start < segment.length) {
       const available =
         normalizedLimit - current.length - buildTelegramHtmlCloseSuffixLength(openTags);
-      if (available <= 0) {
-        if (!chunkHasPayload) {
-          // Preserve the matching closes separately when tag overhead alone
-          // fills a chunk. Dropping only this active scope keeps later tags
-          // balanced while the affected text degrades to plain HTML content.
-          suppressedTagNames.push(...openTags.map((tag) => tag.name));
-          openTags.length = 0;
-          resetCurrent();
-          continue;
+      let splitAt = start;
+      if (available > 0) {
+        if (segment.length - start <= available) {
+          splitAt = segment.length;
+        } else {
+          findSplitIndex ??= prepareTelegramHtmlTextSplitter(segment);
+          splitAt = findSplitIndex(start, available, current.length === 0);
         }
+      }
+      if (chunkHasPayload && splitAt <= start) {
         flushCurrent();
         continue;
       }
-      if (remaining.length <= available) {
-        current += remaining;
-        chunkHasPayload = true;
-        break;
-      }
-      const splitAt = findTelegramHtmlSafeSplitIndex(remaining, available);
-      if (splitAt <= 0) {
-        if (!chunkHasPayload) {
-          throw new Error(
-            `Telegram HTML chunk limit exceeded by leading entity (limit=${normalizedLimit})`,
-          );
-        }
-        flushCurrent();
+      if (current.length > 0 && (splitAt <= start || splitAt - start > available)) {
+        // Discard empty tag overhead, suppressing only active scopes that block the next payload.
+        suppressedTagNames.push(...openTags.map((tag) => tag.name));
+        openTags.length = 0;
+        resetCurrent();
         continue;
       }
-      current += remaining.slice(0, splitAt);
+      if (splitAt <= start) {
+        throw new Error(
+          `Telegram HTML chunk limit exceeded by leading entity (limit=${normalizedLimit})`,
+        );
+      }
+      current += segment.slice(start, splitAt);
       chunkHasPayload = true;
-      remaining = remaining.slice(splitAt);
-      flushCurrent();
+      start = splitAt;
+      if (start < segment.length) {
+        flushCurrent();
+      }
     }
   };
 
@@ -831,12 +770,15 @@ function splitTelegramHtmlChunksRaw(html: string, limit: number): string[] {
 }
 
 export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
-  const chunks = splitTelegramHtmlChunksRaw(html, limit);
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (Number.isNaN(normalizedLimit)) {
+    throw new TypeError("Telegram HTML chunk limit must be numeric");
+  }
+  const chunks = splitTelegramHtmlChunksRaw(html, normalizedLimit);
   if (chunks.every((chunk) => protectTelegramAssistantTranscriptRoleHeaders(chunk) === chunk)) {
     return chunks;
   }
 
-  const normalizedLimit = Math.max(1, Math.floor(limit));
   const protectedContentLimit = normalizedLimit - TELEGRAM_ASSISTANT_TRANSCRIPT_PREFIX.length;
   if (protectedContentLimit < 1) {
     throw new Error(

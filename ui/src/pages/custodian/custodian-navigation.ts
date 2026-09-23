@@ -9,6 +9,19 @@ import {
   buildAgentMainSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import type { CustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
+
+export function navigateFromCustodianSetup(
+  context: ApplicationContext | null,
+  destination: "chat" | "model-setup" | "profile",
+  inferenceState: CustodianConfiguredInferenceState,
+): void {
+  if (destination === "chat" && inferenceState === "utility") {
+    context?.navigate("model-setup", { search: "?firstRun=1" });
+  } else {
+    context?.navigate(destination);
+  }
+}
 
 /**
  * Route an `open-agent` reply to the destination agent chat. Resolves the

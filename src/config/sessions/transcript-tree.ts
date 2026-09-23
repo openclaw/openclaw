@@ -189,6 +189,13 @@ export function scanSessionTranscriptTree<T>(entries: Iterable<T>): SessionTrans
   return { nodes, byId, ...navigation };
 }
 
+/** Resolves the active branch leaf from the same transcript tree used by branch listing. */
+export function resolveSessionTranscriptActiveLeafEntryId(
+  events: readonly unknown[],
+): string | undefined {
+  return scanSessionTranscriptTree(events).leafId ?? undefined;
+}
+
 export function scanSessionTranscriptNavigation<T>(
   entries: Iterable<T>,
   storage: SessionTranscriptNavigationStorage<T>,

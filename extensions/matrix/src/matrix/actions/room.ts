@@ -1,4 +1,3 @@
-// Matrix plugin module implements room behavior.
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixRoomId } from "../send.js";
 import { withResolvedActionClient, withResolvedRoomAction } from "./client.js";

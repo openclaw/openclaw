@@ -71,6 +71,7 @@ openclaw tui --local
 - If the session has a [goal](/tools/goal), the footer shows its compact state:
   `Pursuing goal`, `Goal paused (/goal resume)`, `Goal blocked (/goal resume)`, or `Goal achieved`.
 - When started without `--session`, gateway-mode TUI resumes the last selected session. The gateway, agent, and session scope must match, and that session must still exist. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
+- Session details and remembered-session restoration select the exact conversation, even when newer sessions have similar names. After reconnecting, metadata from the previous connection is discarded.
 
 ## Sending + delivery
 
@@ -138,7 +139,7 @@ Core:
 
 - `/help`
 - `/status` (Gateway-forwarded, shows session/model summary)
-- `/gateway-status` (alias `/gwstatus`) shows Gateway version, channel configuration summaries, and sessions directly.
+- `/gateway-status` (alias `/gwstatus`) shows Gateway version, channel configuration summaries, and stored session inventory, including archived sessions.
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model|default>` (or `/models`). `default` clears the session override.
@@ -191,6 +192,22 @@ OpenClaw:
 - `/openclaw [request]` returns from the normal agent TUI to the [OpenClaw](#openclaw-setup-and-repair-helper) setup/repair chat, optionally forwarding one request.
 
 Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. See [Slash commands](/tools/slash-commands).
+
+## Local Chrome setup
+
+Use `/browser-setup` (or `/browser-setup inspect`) to inspect Chrome extension
+setup on the **TUI process host**, not the connected Gateway.
+`/browser-setup install` explicitly prepares automatic local setup;
+`/browser-setup verify` checks the local authenticated extension relay.
+No pairing code is requested for supported local native bootstrap. Chrome still
+requires its own extension installation and permission approval, and existing
+pairings and automatic-setup opt-outs are preserved.
+
+These commands are deterministic local CLI operations, not messages to the agent.
+Do not paste credentials into them. `/stop`, `/abort`, Escape, or exiting the TUI
+cancels a pending setup command. After interruption, inspect again to reconcile
+any preparation that already completed. When the TUI runs through SSH, setup runs
+on the SSH host; the physical terminal viewer is not assumed to host Chrome.
 
 ## Local shell commands
 

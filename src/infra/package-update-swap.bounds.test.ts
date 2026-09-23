@@ -5,6 +5,10 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import {
+  createPackageIntegrityReader,
+  PackageIntegrityLimitError,
+} from "./package-update-integrity.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
@@ -31,6 +35,22 @@ function captureReaderLogs() {
 }
 
 describe("package verification bounds", () => {
+  it("distinguishes entry and byte budget exhaustion from integrity failures", async () => {
+    await withTestDir({ prefix: "openclaw-integrity-budget-type-" }, async (base) => {
+      const { packageRoot, launcher } = await createPackageSwapFixture(base);
+      await expect(createPackageIntegrityReader().entries(packageRoot, 1)).rejects.toBeInstanceOf(
+        PackageIntegrityLimitError,
+      );
+      await fs.truncate(launcher, 1024 * 1024 + 1);
+      await expect(createPackageIntegrityReader().launcher(launcher)).rejects.toMatchObject({
+        resource: "byte",
+      });
+      await expect(createPackageIntegrityReader().launcher(packageRoot)).rejects.not.toBeInstanceOf(
+        PackageIntegrityLimitError,
+      );
+    });
+  });
+
   it.each([
     { timeoutMs: 55_000, elapsedMs: 31_000, incomplete: false },
     { timeoutMs: 55_000, elapsedMs: 55_001, incomplete: true },
@@ -161,7 +181,7 @@ describe("package verification bounds", () => {
             "baseline package fingerprint incomplete",
           );
           expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
-            expect.objectContaining({ step: "warning:global install swap", status: "completed" }),
+            expect.objectContaining({ step: "warning:package-swap", status: "completed" }),
           );
           expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
           if (!transaction) {
@@ -367,21 +387,29 @@ describe("package verification bounds", () => {
         const handle = await realOpen(path.join(packageRoot, "dist", "index.js"), "r");
         const close = vi.spyOn(handle, "close");
         const read = vi.spyOn(handle, "read");
+        // Expire only the injected stall; unrelated filesystem latency must not
+        // consume the separate launcher and recovery-observation budgets.
+        let now = Date.now();
+        vi.spyOn(Date, "now").mockImplementation(() => now);
         const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
           if (String(args[0]) !== path.join(packageRoot, "dist", "index.js")) {
             return realOpen(...args);
           }
           if (operation === "open") {
+            now += 41;
             return late.promise;
           }
           const actual = await realOpen(...args);
-          vi.spyOn(actual, "read").mockImplementation(() => new Promise(() => {}));
+          vi.spyOn(actual, "read").mockImplementation(() => {
+            now += 41;
+            return new Promise(() => {});
+          });
           return actual;
         });
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
         const observations = captureReaderLogs();
-        const started = Date.now();
+        const started = performance.now();
         try {
           const result = await swapStagedPackageInstall({
             ...params,
@@ -393,7 +421,7 @@ describe("package verification bounds", () => {
           expect(result.step.advisory?.message).toContain(
             "baseline package fingerprint incomplete",
           );
-          expect(Date.now() - started).toBeLessThan(2000);
+          expect(performance.now() - started).toBeLessThan(2000);
           expect(beforeActivate).toHaveBeenCalledOnce();
           expect(onLiveMutation).toHaveBeenCalledOnce();
           expect(

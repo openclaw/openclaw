@@ -3,19 +3,25 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
+import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
+import { registerBackgroundTasksEnglish } from "../../i18n/locales/en-background-tasks.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { formatKeyboardShortcutCombo } from "../../lib/keyboard-shortcut-catalog.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
-import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
+import type {
+  ChatSessionCompanionThread,
+  ChatSessionCompanionTurn,
+} from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { openTaskDetailId } from "./components/chat-detail-slot.ts";
 import {
   getSessionWorkspace,
   selectSessionWorkspacePreview,
@@ -27,10 +33,11 @@ import type {
   SidebarPanelTemplates,
 } from "./components/chat-sidebar-region-types.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
-import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
+
+registerBackgroundTasksEnglish();
 
 type SidebarPanelDefinitionParams = {
   state: ChatPageHost;
@@ -38,6 +45,10 @@ type SidebarPanelDefinitionParams = {
   agentId: string | null;
   browserPresented: boolean;
   browserTabsInHeader: boolean;
+  linkReaders?: readonly ControlUiLinkReaderDescriptor[];
+  linkReaderPresented?: boolean;
+  linkReaderTabsInHeader?: boolean;
+  onCloseLinkReader?: () => void;
   terminalTabsInHeader: boolean;
   browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
@@ -46,6 +57,7 @@ type SidebarPanelDefinitionParams = {
   desktopAvailable: boolean;
   desktopSource: string | null;
   desktopFocusHref: string;
+  portalPresented?: boolean;
   onDesktopFocusTargetChange: (
     target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>,
   ) => void;
@@ -60,11 +72,11 @@ type SidebarPanelDefinitionParams = {
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
   companionPresented: boolean;
-  onCompanionSubmit: (question: string) => void;
+  companionFocusRequest: (() => boolean) | undefined;
+  onCompanionSubmit: (question: string | ChatSessionCompanionTurn) => void;
   onCompanionDraftChange: (draft: string) => void;
   onCompanionVisibilityChange: (visible: boolean) => void;
   connected: boolean;
-  pendingQuestion: string | null;
   onClearCompanion: () => void;
   onRefreshTasks: () => void;
   tasksLoading: boolean;
@@ -77,7 +89,7 @@ type SidebarPanelDefinitionParams = {
 };
 
 type SidebarPanelTextKey =
-  | Exclude<SidebarSlotId, `plugin:${string}` | "detail" | "workspace">
+  | Exclude<SidebarSlotId, `plugin:${string}` | "detail" | "workspace" | "link-reader">
   | "review"
   | "files";
 
@@ -100,10 +112,6 @@ export function sidebarPanelDefinitions(
   params?: SidebarPanelDefinitionParams,
 ): SidebarPanelDefinition[] {
   const state = params?.state;
-  // Review owns task history; rendering Files must not retire that selection.
-  if (state && openTaskDetailId(state.sidebarContent, state.sidebarLayout) === undefined) {
-    resetTaskDetail(state);
-  }
   // Metadata-only definitions have no pane context, so they describe types without offering tabs.
   const panelContext = params && {
     ...params,
@@ -119,14 +127,30 @@ export function sidebarPanelDefinitions(
     slot,
     label: t(`chat.sidePanel.${textKey}`),
     icon,
-    available: Boolean(panelContext && SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
+    available: Boolean(
+      panelContext &&
+      (slot === "portal"
+        ? state &&
+          canCallGatewayMethod(
+            {
+              hello: state.hello,
+              client: state.client,
+              phase: state.connected ? "connected" : "stopped",
+            },
+            "portal.list",
+            "operator.write",
+          )
+        : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
+    ),
     content,
     loading: renderPanelLoadingSkeleton(
       textKey === "conversation" || textKey === "companion"
         ? "chat"
-        : textKey === "dashboard"
-          ? "board"
-          : textKey,
+        : textKey === "portal"
+          ? "browser"
+          : textKey === "dashboard"
+            ? "board"
+            : textKey,
       t(textKey === "desktop" ? "desktop.connecting" : "common.loading"),
     ),
     empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
@@ -170,6 +194,7 @@ export function sidebarPanelDefinitions(
     ? html`<openclaw-chat-session-rail
         embedded
         .presented=${params.companionPresented}
+        .focusRequest=${params.companionFocusRequest}
         .sessionKey=${state?.sessionKey}
         .digest=${params.digest}
         .running=${Boolean(params.activeRunId)}
@@ -208,6 +233,14 @@ export function sidebarPanelDefinitions(
         .openDiscussion=${params.discussion.openDiscussion}
         .onStateChange=${params.discussion.onStateChange}
       ></openclaw-session-discussion>`
+    : null;
+  const portal = state
+    ? html`<openclaw-portals-page
+        embedded
+        .presented=${params?.portalPresented ?? false}
+        .requestedPortalId=${state.sidebarLayout.columns.flatMap((column) => column.panels).find((panel) => panel.slot === "portal")?.portalId ?? null}
+        .requestedEnvironmentId=${state.sidebarLayout.columns.flatMap((column) => column.panels).find((panel) => panel.slot === "portal")?.environmentId ?? null}
+      ></openclaw-portals-page>`
     : null;
   const workspace = state ? getSessionWorkspace(state) : null;
   // The region owns mounting and visibility. Hidden Review tabs must keep the
@@ -256,6 +289,29 @@ export function sidebarPanelDefinitions(
     ),
     definePanel("terminal", "terminal", icons.terminal, terminal),
     definePanel("browser", "browser", icons.globe, browser),
+    {
+      slot: "link-reader",
+      label: t("linkReader.title"),
+      icon: icons.link,
+      available: Boolean(params?.linkReaders?.length),
+      content: state
+        ? html`<openclaw-link-reader-panel
+            embedded
+            data-chat-autotype-exempt
+            .client=${state.connected ? state.client : null}
+            .available=${state.connected}
+            .readers=${params?.linkReaders ?? EMPTY_LINK_READERS}
+            .agentId=${params?.agentId ?? undefined}
+            .sessionKey=${state.sessionKey}
+            .presented=${params?.linkReaderPresented ?? false}
+            .tabsInHeader=${params?.linkReaderTabsInHeader ?? true}
+            .onClose=${params?.onCloseLinkReader}
+          ></openclaw-link-reader-panel>`
+        : null,
+      loading: renderPanelLoadingSkeleton("files", t("linkReader.loadingPreview")),
+      empty: { description: t("linkReader.urlPlaceholder") },
+    },
+    definePanel("portal", "portal", icons.globe, portal),
     definePanel("workspace", "files", icons.fileText, workspaceContent),
     definePanel(
       "companion",
@@ -268,7 +324,7 @@ export function sidebarPanelDefinitions(
               class="rail-header__action chat-session-rail__clear"
               type="button"
               aria-label=${t("chat.rail.clear")}
-              ?disabled=${!params.connected || params.pendingQuestion !== null}
+              ?disabled=${!params.connected || params.companion.turns.some((turn) => turn.status === "pending")}
               @click=${params.onClearCompanion}
             >
               ${icons.trash}

@@ -8,10 +8,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { writeFileWindowFully } from "../infra/file-descriptor.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { readChunkWithIdleTimeout } from "../infra/http-response-body-timeout.js";
+import type { TimedInstallModeOptions } from "../infra/install-mode-options.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -763,20 +765,6 @@ function parseMarketplaceContentLength(raw: string): number {
   return size;
 }
 
-async function writeMarketplaceChunk(
-  fileHandle: Awaited<ReturnType<typeof fs.open>>,
-  chunk: Uint8Array,
-): Promise<void> {
-  let offset = 0;
-  while (offset < chunk.length) {
-    const { bytesWritten } = await fileHandle.write(chunk, offset, chunk.length - offset);
-    if (bytesWritten <= 0) {
-      throw new Error("failed to write download chunk");
-    }
-    offset += bytesWritten;
-  }
-}
-
 async function streamMarketplaceResponseToFile(params: {
   response: Response & { body: ReadableStream<Uint8Array> };
   targetPath: string;
@@ -806,7 +794,7 @@ async function streamMarketplaceResponseToFile(params: {
         throw new Error(`download too large: ${nextTotal} bytes (limit: ${params.maxBytes} bytes)`);
       }
 
-      await writeMarketplaceChunk(fileHandle, value);
+      await writeFileWindowFully(fileHandle, value, null);
       total = nextTotal;
     }
   } catch (error) {
@@ -1212,18 +1200,15 @@ export async function resolveMarketplaceInstallShortcut(
 }
 
 export async function installPluginFromMarketplace(
-  params: InstallSafetyOverrides & {
-    marketplace: string;
-    plugin: string;
-    logger?: MarketplaceLogger;
-    timeoutMs?: number;
-    mode?: "install" | "update";
-    extensionsDir?: string;
-    dryRun?: boolean;
-    expectedPluginId?: string;
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    beforePersistentApply?: () => void;
-  },
+  params: InstallSafetyOverrides &
+    TimedInstallModeOptions<MarketplaceLogger> & {
+      marketplace: string;
+      plugin: string;
+      extensionsDir?: string;
+      expectedPluginId?: string;
+      onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+      beforePersistentApply?: () => void;
+    },
 ): Promise<MarketplaceInstallResult> {
   const loaded = await loadMarketplace({
     source: params.marketplace,
@@ -1270,6 +1255,7 @@ export async function installPluginFromMarketplace(
         mode: params.mode,
         extensionsDir: params.extensionsDir,
         timeoutMs: params.timeoutMs,
+        workTimeoutMs: params.workTimeoutMs,
         dryRun: params.dryRun,
         expectedPluginId: params.expectedPluginId,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,

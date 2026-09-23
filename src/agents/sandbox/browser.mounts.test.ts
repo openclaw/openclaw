@@ -80,6 +80,39 @@ describe("ensureSandboxBrowser managed mounts", () => {
     expect(harness.BROWSER_BRIDGES.get("session:test")).toBe(bridge);
   });
 
+  it("preserves a hot browser and bridge when a descendant tmpfs was removed", async () => {
+    const containerName = "openclaw-sbx-browser-session-test-0661d10a";
+    const bridge = { containerName, bridge: { server: { listening: true } } };
+    harness.BROWSER_BRIDGES.set("session:test", bridge);
+    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+    dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");
+    dockerMocks.readDockerContainerLabel.mockResolvedValue("old-tmpfs-config");
+    vi.mocked(execContainer).mockResolvedValue({
+      stdout: JSON.stringify({
+        Mounts: [
+          { Type: "bind", Source: harness.testWorkspaceDir, Destination: "/workspace", RW: true },
+        ],
+        Tmpfs: { "/workspace/cache": "rw" },
+      }),
+      stderr: "",
+      code: 0,
+    });
+    const cfg = buildConfig(false);
+    cfg.docker.tmpfs = [];
+    await expect(
+      ensureTestSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: harness.testWorkspaceDir,
+        agentWorkspaceDir: harness.testWorkspaceDir,
+        cfg,
+      }),
+    ).rejects.toThrow("openclaw sandbox recreate --browser --session session:test");
+    expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "rm")).toBeUndefined();
+    expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
+    expect(bridgeMocks.stopBrowserBridgeServer).not.toHaveBeenCalled();
+    expect(harness.BROWSER_BRIDGES.get("session:test")).toBe(bridge);
+  });
+
   it("skips browser user binds that conflict with protected skill overlay container paths", async () => {
     // Protected skill overlays are authoritative; a browser bind targeting the same
     // container path is skipped so the read-only skill overlay wins and Docker does

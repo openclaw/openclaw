@@ -1,0 +1,284 @@
+import type { DatabaseSync } from "node:sqlite";
+import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
+import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
+import type {
+  SessionTranscriptContextVersion,
+  SessionTranscriptWriteScope,
+  TranscriptAppendRefusal,
+} from "../../config/sessions/session-accessor.sqlite-contract.js";
+import {
+  ensureSessionEntryInTransaction,
+  type InitialSessionEntryCommit,
+} from "../../config/sessions/session-accessor.sqlite-initial-entry.js";
+import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-metadata-read.js";
+import {
+  inspectTranscriptEventsSync,
+  loadTranscriptReadSnapshotSync,
+} from "../../config/sessions/session-accessor.sqlite-read.js";
+import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { appendTranscriptEventSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-key.js";
+import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
+import type {
+  SqliteWorkerBackend,
+  SqliteWorkerCommand,
+} from "../../infra/sqlite-worker-contract.js";
+import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  encodeOpenClawStateWorkerError,
+  type OpenClawStateWorkerErrorPayload,
+} from "../../state/openclaw-state-worker-error.js";
+import type {
+  ModelChangeEntry,
+  SessionHeader,
+  ThinkingLevelChangeEntry,
+} from "./session-manager-types.js";
+import type {
+  PreparedSessionTranscriptReload,
+  SessionManagerBoundedContextLimits,
+} from "./session-manager-view-types.js";
+
+type MetadataTarget = Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
+
+export type SessionMetadataOperations = {
+  "session.metadata.initialize": {
+    input: {
+      scope: MetadataTarget;
+      entry: InternalSessionEntry;
+      initialWriterRunId?: string;
+    };
+    output: InitialSessionEntryCommit;
+  };
+  "session.metadata.append": {
+    input: {
+      scope: MetadataTarget;
+      event: SessionHeader | ModelChangeEntry | ThinkingLevelChangeEntry;
+      options: Pick<
+        NonNullable<Parameters<typeof appendTranscriptEventSnapshotSync>[2]>,
+        "appendIntent" | "expectedMutationAt"
+      >;
+      view?: {
+        loadedVersion?: SessionTranscriptContextVersion;
+        limits?: SessionManagerBoundedContextLimits;
+        admission?: UserTurnTranscriptAdmissionReceipt;
+      };
+    };
+    output: {
+      snapshot: ReturnType<typeof appendTranscriptEventSnapshotSync>;
+      projectionNeedsReconcile: boolean;
+      reload?: Result<PreparedSessionTranscriptReload, OpenClawStateWorkerErrorPayload | undefined>;
+    };
+  };
+  "session.metadata.mutation": {
+    input: { scope: MetadataTarget };
+    output: number | null;
+  };
+};
+
+export type SessionMetadataWorkerOperations = {
+  [Key in keyof SessionMetadataOperations]: {
+    input: SessionMetadataOperations[Key]["input"];
+    output:
+      | { ok: true; value: SessionMetadataOperations[Key]["output"] }
+      | { ok: false; refusal?: TranscriptAppendRefusal };
+  };
+};
+
+function copyTranscriptRefusal(value: unknown): TranscriptAppendRefusal | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !isRecord(value) ||
+    typeof value.agentIdHash !== "string" ||
+    typeof value.expectedSessionIdHash !== "string" ||
+    typeof value.sessionKeyHash !== "string"
+  ) {
+    throw new Error("Session metadata refusal has an invalid identity");
+  }
+  const identity = {
+    agentIdHash: value.agentIdHash,
+    expectedSessionIdHash: value.expectedSessionIdHash,
+    sessionKeyHash: value.sessionKeyHash,
+  };
+  if (value.code === "session-entry-missing") {
+    return { ...identity, code: value.code };
+  }
+  if (value.code === "session-rebound" && typeof value.actualSessionIdHash === "string") {
+    return { ...identity, code: value.code, actualSessionIdHash: value.actualSessionIdHash };
+  }
+  throw new Error("Session metadata refusal has an invalid kind");
+}
+
+function readCommittedMetadataView(
+  scope: MetadataTarget,
+  limits: SessionManagerBoundedContextLimits | undefined,
+  admission: UserTurnTranscriptAdmissionReceipt | undefined,
+): PreparedSessionTranscriptReload {
+  return runWithSessionTranscriptReadFence(admission, (): PreparedSessionTranscriptReload => {
+    if (limits) {
+      return {
+        kind: "bounded",
+        snapshot: readSessionTranscriptBoundedActiveContextCore(scope, {
+          ...limits,
+          ...(admission !== undefined ? { ignoreReadFence: true } : {}),
+        }),
+      };
+    }
+    if (admission !== undefined) {
+      const inspected = inspectTranscriptEventsSync(scope);
+      return {
+        kind: "full",
+        snapshot: {
+          events: inspected.events,
+          version: {
+            generation: inspected.snapshot.generation,
+            rawSeq: inspected.snapshot.lastSeq,
+            updatedAt: inspected.snapshot.transcriptUpdatedAt,
+          },
+        },
+      };
+    }
+    return { kind: "full", snapshot: loadTranscriptReadSnapshotSync(scope) };
+  });
+}
+
+/** Borrow the canonical actor's connection; this domain never opens or closes a database. */
+export function bindSqliteWorkerBackend(
+  _input: undefined,
+  context: {
+    databasePath: string;
+    database: DatabaseSync;
+    admit(stage: "transaction" | "commit"): void;
+  },
+): SqliteWorkerBackend<SessionMetadataWorkerOperations> {
+  let closed = false;
+  const assertOpen = () => {
+    if (closed || !context.database.isOpen) {
+      throw new Error("Session metadata domain is closed");
+    }
+    assertTransactionUsable(context.database);
+  };
+  const execute = (
+    command: SqliteWorkerCommand<SessionMetadataOperations>,
+  ): SessionMetadataWorkerOperations[keyof SessionMetadataWorkerOperations]["output"] => {
+    assertOpen();
+    // Database execution already carries the captured host environment. Command payloads
+    // must not transport process.env or its non-cloneable Windows semantics proxy.
+    const scope = { ...command.input.scope, env: getSqliteWorkerStateContext().environment };
+    const resolved = resolveSqliteTranscriptScope(scope);
+    const options = toDatabaseOptions(resolved);
+    if (options.path !== context.databasePath) {
+      throw new Error("Session metadata target changed its database owner");
+    }
+    if (command.type === "session.metadata.mutation") {
+      return { ok: true, value: readTranscriptMutationAtSync(scope) };
+    }
+    assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
+    const outcome = runOpenClawAgentWriteTransaction<
+      SessionMetadataWorkerOperations[
+        | "session.metadata.initialize"
+        | "session.metadata.append"]["output"]
+    >((database) => {
+      if (database.db !== context.database) {
+        throw new Error("Session metadata lost its borrowed canonical connection");
+      }
+      context.admit("transaction");
+      if (command.type === "session.metadata.initialize") {
+        const result = ensureSessionEntryInTransaction(
+          database,
+          resolved,
+          scope,
+          command.input.entry,
+          command.input.initialWriterRunId,
+        );
+        context.admit("commit");
+        return { ok: true, value: result };
+      }
+      let projectionNeedsReconcile = false;
+      const snapshot = appendTranscriptEventSnapshotSync(
+        scope,
+        command.input.event,
+        command.input.options,
+        {
+          scheduleProjectionReconcile: false,
+          onProjectionReconcileNeeded: () => {
+            projectionNeedsReconcile = true;
+          },
+        },
+      );
+      context.admit("commit");
+      return { ok: true, value: { snapshot, projectionNeedsReconcile } };
+    }, options);
+    if (
+      command.type === "session.metadata.append" &&
+      command.input.event.type !== "session" &&
+      command.input.view &&
+      outcome.ok &&
+      "snapshot" in outcome.value &&
+      outcome.value.snapshot.ok
+    ) {
+      const { event, view } = command.input;
+      const committed = outcome.value.snapshot.value;
+      if (!committed.result.appended) {
+        return outcome;
+      }
+      const version = view.loadedVersion;
+      const effectiveParentId = committed.result.effectiveParentId;
+      if (
+        (version &&
+          (committed.before.generation !== version.generation ||
+            committed.before.rawSeq !== version.rawSeq)) ||
+        (effectiveParentId !== undefined && effectiveParentId !== event.parentId)
+      ) {
+        try {
+          outcome.value.reload = {
+            ok: true,
+            value: readCommittedMetadataView(scope, view.limits, view.admission),
+          };
+          // Detect view serialization failure while the small committed receipt is still retained.
+          serialize(outcome);
+        } catch (error) {
+          // This transaction already committed. Preserve its receipt across read failure.
+          outcome.value.reload = {
+            ok: false,
+            error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
+          };
+        }
+      }
+    }
+    return outcome;
+  };
+  return {
+    execute(command) {
+      try {
+        return execute(command);
+      } catch (error) {
+        if (error instanceof SessionTranscriptWriterClaimReboundError) {
+          return { ok: false, refusal: copyTranscriptRefusal(error.cause) };
+        }
+        throw error;
+      }
+    },
+    assertSettled() {
+      assertOpen();
+      if (context.database.isTransaction) {
+        throw new Error("Session metadata command left a transaction open");
+      }
+    },
+    close() {
+      closed = true;
+    },
+  };
+}

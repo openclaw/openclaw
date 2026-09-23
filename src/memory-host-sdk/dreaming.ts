@@ -614,17 +614,26 @@ export function resolveMemoryRemDreamingConfig(params: {
   };
 }
 
+let memoryDreamingDayFormatter: { timezone: string; formatter: Intl.DateTimeFormat } | undefined;
+
 export function formatMemoryDreamingDay(epochMs: number, timezone?: string): string {
   if (!timezone) {
     return formatLocalIsoDay(epochMs);
   }
   try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(new Date(epochMs));
+    // Cache only explicit timezones so host-local fallback follows timezone changes.
+    if (memoryDreamingDayFormatter?.timezone !== timezone) {
+      memoryDreamingDayFormatter = {
+        timezone,
+        formatter: new Intl.DateTimeFormat("en-CA", {
+          timeZone: timezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }),
+      };
+    }
+    const parts = memoryDreamingDayFormatter.formatter.formatToParts(new Date(epochMs));
     const values = new Map(parts.map((part) => [part.type, part.value]));
     const year = values.get("year");
     const month = values.get("month");

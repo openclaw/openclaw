@@ -1,4 +1,5 @@
 // Matrix tests cover index plugin behavior.
+import { setImmediate } from "node:timers/promises";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixConfig, MatrixStreamingMode } from "../../types.js";
 import {
@@ -495,9 +496,13 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.stopThreadBindingManager).toHaveBeenCalledTimes(1);
   });
 
-  it("starts monitoring without waiting for best-effort deviceId backfill", async () => {
+  it("starts monitoring without waiting for backfill but joins it during retirement", async () => {
+    let finishBackfill: (() => void) | undefined;
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockImplementation(
-      () => new Promise<undefined>(() => {}),
+      () =>
+        new Promise<undefined>((resolve) => {
+          finishBackfill = () => resolve(undefined);
+        }),
     );
 
     const abortController = new AbortController();
@@ -511,8 +516,16 @@ describe("monitorMatrixProvider", () => {
     expect(backfillParams.abortSignal).not.toBe(abortController.signal);
     expect(backfillParams.abortSignal?.aborted).toBe(false);
 
+    let retired = false;
+    void monitorPromise.then(() => {
+      retired = true;
+    });
     abortController.abort();
     expect(backfillParams.abortSignal?.aborted).toBe(true);
+    await setImmediate();
+    expect(retired).toBe(false);
+    expect(hoisted.stopThreadBindingManager).not.toHaveBeenCalled();
+    finishBackfill?.();
     await expect(monitorPromise).resolves.toBeUndefined();
   });
 
@@ -536,12 +549,13 @@ describe("monitorMatrixProvider", () => {
       abortSignal?: AbortSignal;
     };
     expect(startSignal).toBe(hoisted.state.leaseAbortController.signal);
-    expect(backfillParams.abortSignal).toBe(startSignal);
+    expect(backfillParams.abortSignal?.aborted).toBe(false);
     expect(runtimeContextParams.abortSignal).toBe(startSignal);
     expect(maintenanceParams.abortSignal).toBe(startSignal);
     expect(startSignal.aborted).toBe(false);
 
     hoisted.state.leaseAbortController.abort();
+    expect(backfillParams.abortSignal?.aborted).toBe(true);
     await hoisted.runRegisteredMonitorRetirement();
     await expect(monitorPromise).resolves.toBeUndefined();
 

@@ -58,9 +58,7 @@ async function drainTelegramTestUpdates(apiRoot, token) {
     });
     const payload = await response.json();
     if (!response.ok || payload?.ok !== true || !Array.isArray(payload.result)) {
-      throw new Error(
-        `Telegram Test Bot API getUpdates failed while draining stale updates (HTTP ${response.status}).`,
-      );
+      throw new Error("Telegram Test Bot API getUpdates failed while draining stale updates.");
     }
     if (payload.result.length === 0) return;
     const updateId = payload.result.at(-1)?.update_id;
@@ -85,17 +83,24 @@ export async function startTelegramTestApiProxy({
   const holdEvents = [];
   const methodOrdinals = new Map();
   const heldWaiters = new Set();
+  const sockets = new Set();
+  const requests = new Set();
+  let closing;
 
   const assertLeaseHealthy = () => {
     if (leaseError) throw leaseError;
     leaseHealth?.assertHealthy();
   };
 
-  leaseHealth?.whenUnhealthy.then((error) => {
-    leaseError = error;
+  const stop = (error) => {
+    leaseError ??= error;
+    responseHold = undefined;
     heldResponse?.release.resolve();
+    for (const waiter of heldWaiters) waiter.reject(error);
     for (const controller of upstreamControllers) controller.abort(error);
-  });
+    for (const socket of sockets) socket.destroy();
+  };
+  leaseHealth?.whenUnhealthy.then(stop);
 
   const claimResponseHold = (method) => {
     const ordinal = (methodOrdinals.get(method) ?? 0) + 1;
@@ -110,12 +115,25 @@ export async function startTelegramTestApiProxy({
     heldResponse = { event, release };
     responseHold = undefined;
     holdEvents.push(event);
-    for (const waiter of heldWaiters) waiter(event);
-    heldWaiters.clear();
+    for (const waiter of heldWaiters) {
+      if (waiter.method === method) waiter.resolve(event);
+    }
     return release.promise;
   };
 
-  const server = http.createServer(async (request, response) => {
+  const server = http.createServer((request, response) => {
+    const work = handleRequest(request, response);
+    requests.add(work);
+    work.then(
+      () => requests.delete(work),
+      () => requests.delete(work),
+    );
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  async function handleRequest(request, response) {
     const upstreamController = new AbortController();
     upstreamControllers.add(upstreamController);
     const abortUpstream = () => upstreamController.abort();
@@ -197,7 +215,7 @@ export async function startTelegramTestApiProxy({
       response.off("close", abortUpstream);
       upstreamControllers.delete(upstreamController);
     }
-  });
+  }
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, () => {
@@ -215,26 +233,38 @@ export async function startTelegramTestApiProxy({
     apiRoot,
     drainUpdates: (token) => drainTelegramTestUpdates(apiRoot, token),
     holdNextResponse({ method, skip = 0 }) {
+      assertLeaseHealthy();
       if (responseHold || heldResponse) throw new Error("A Telegram API response hold is active.");
       responseHold = { method, skip };
     },
     waitForHeldResponse(method, timeoutMs) {
+      assertLeaseHealthy();
       if (heldResponse?.event.method === method) return Promise.resolve(heldResponse.event);
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          heldWaiters.delete(onHeld);
-          reject(new Error(`Timed out waiting for held Telegram ${method} response.`));
-        }, timeoutMs);
-        const onHeld = (event) => {
-          if (event.method !== method) return;
+        const done = () => {
           clearTimeout(timer);
-          heldWaiters.delete(onHeld);
-          resolve(event);
+          heldWaiters.delete(waiter);
         };
-        heldWaiters.add(onHeld);
+        const waiter = {
+          method,
+          resolve(event) {
+            done();
+            resolve(event);
+          },
+          reject(error) {
+            done();
+            reject(error);
+          },
+        };
+        const timer = setTimeout(
+          () => waiter.reject(new Error(`Timed out waiting for held Telegram ${method} response.`)),
+          timeoutMs,
+        );
+        heldWaiters.add(waiter);
       });
     },
     releaseHeldResponse() {
+      assertLeaseHealthy();
       if (!heldResponse) throw new Error("No Telegram API response is held.");
       const event = heldResponse.event;
       heldResponse.release.resolve();
@@ -242,9 +272,12 @@ export async function startTelegramTestApiProxy({
     },
     getResponseHoldEvents: () => holdEvents.map((event) => ({ ...event })),
     close: () => {
-      heldResponse?.release.resolve();
-      for (const controller of upstreamControllers) controller.abort();
-      return new Promise((resolve) => server.close(() => resolve()));
+      closing ??= (async () => {
+        stop(new Error("Telegram Test Server proxy closed."));
+        await new Promise((resolve) => server.close(() => resolve()));
+        await Promise.allSettled([...requests]);
+      })();
+      return closing;
     },
   };
 }

@@ -1,15 +1,19 @@
 import fs from "node:fs";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
+  type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 
 type PreparedSessionCreateRoot = {
   sessionCwd?: string;
@@ -71,4 +75,76 @@ export function prepareSessionCreateFilesystemRoot(params: {
       ),
     );
   }
+}
+
+/** Keep an implicit Gateway default distinct from a caller-selected fork destination. */
+export function resolveSessionCreateRootParameters(
+  params: Pick<SessionsCreateParams, "cwd" | "projectId" | "fork" | "worktree">,
+  root: PreparedSessionCreateRoot | undefined,
+) {
+  if (params.worktree === true) {
+    return {};
+  }
+  const inheritsParent =
+    params.fork === true &&
+    !normalizeOptionalString(params.cwd) &&
+    !normalizeOptionalString(params.projectId);
+  return {
+    spawnedCwd: root?.sessionCwd,
+    sessionRoot: inheritsParent ? undefined : root?.sessionRoot,
+    defaultSessionRoot: root?.sessionRoot,
+  };
+}
+
+/** Reuse local workspace selections without inheriting managed or remote ownership. */
+export function prepareSessionForkFilesystemRoot(params: {
+  cfg: OpenClawConfig;
+  parent: InternalSessionEntry;
+  targetAgentId: string;
+  sessionKey: string;
+  sandboxRequired?: boolean;
+}): Result<
+  Pick<InternalSessionEntry, "projectId" | "spawnedCwd" | "spawnedWorkspaceDir" | "sessionRoot">,
+  ErrorShape
+> {
+  const parent = params.parent;
+  if (
+    parent.worktree ||
+    parent.repositoryWorkspaceId ||
+    parent.execHost === "node" ||
+    parent.execNode ||
+    parent.pendingWorktree ||
+    parent.pendingProjectGitUrl ||
+    (!parent.spawnedCwd && !parent.spawnedWorkspaceDir)
+  ) {
+    return ok({});
+  }
+  const roots = resolveSessionWorkspaceRoots(params.cfg, params.targetAgentId, parent);
+  const cwd = prepareSessionCreateFilesystemRoot({
+    ...params,
+    enforceSandboxContainment: true,
+    requestedProjectId: parent.projectId,
+    sessionCwd: roots.diffCwd,
+  });
+  if (!cwd.ok) {
+    return cwd;
+  }
+  const root =
+    roots.root === roots.diffCwd
+      ? cwd
+      : prepareSessionCreateFilesystemRoot({
+          ...params,
+          enforceSandboxContainment: true,
+          requestedProjectId: parent.projectId,
+          sessionCwd: roots.root,
+        });
+  if (!root.ok) {
+    return root;
+  }
+  return ok({
+    ...(parent.projectId ? { projectId: parent.projectId } : {}),
+    spawnedCwd: cwd.value.sessionCwd,
+    ...(parent.spawnedWorkspaceDir ? { spawnedWorkspaceDir: root.value.sessionRoot } : {}),
+    sessionRoot: root.value.sessionRoot,
+  });
 }

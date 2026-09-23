@@ -1,4 +1,3 @@
-// Google provider module implements model/runtime integration.
 import type { sanitizeConfiguredModelProviderRequest } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -15,6 +14,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { GOOGLE_PREBUILT_VOICES } from "./voice-catalog.js";
 
 const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.1-flash-tts-preview";
 const DEFAULT_GOOGLE_TTS_VOICE = "Kore";
@@ -27,39 +27,6 @@ const GOOGLE_TTS_MODELS = [
   "gemini-3.1-flash-tts-preview",
   "gemini-2.5-flash-preview-tts",
   "gemini-2.5-pro-preview-tts",
-] as const;
-
-const GOOGLE_TTS_VOICES = [
-  "Zephyr",
-  "Puck",
-  "Charon",
-  "Kore",
-  "Fenrir",
-  "Leda",
-  "Orus",
-  "Aoede",
-  "Callirrhoe",
-  "Autonoe",
-  "Enceladus",
-  "Iapetus",
-  "Umbriel",
-  "Algieba",
-  "Despina",
-  "Erinome",
-  "Algenib",
-  "Rasalgethi",
-  "Laomedeia",
-  "Achernar",
-  "Alnilam",
-  "Schedar",
-  "Gacrux",
-  "Pulcherrima",
-  "Achird",
-  "Zubenelgenubi",
-  "Vindemiatrix",
-  "Sadachbia",
-  "Sadaltager",
-  "Sulafat",
 ] as const;
 
 type GoogleTtsProviderConfig = {
@@ -532,7 +499,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     autoSelectOrder: 50,
     defaultModel: DEFAULT_GOOGLE_TTS_MODEL,
     models: GOOGLE_TTS_MODELS,
-    voices: GOOGLE_TTS_VOICES,
+    voices: GOOGLE_PREBUILT_VOICES,
     resolveConfig: ({ rawConfig }) => normalizeGoogleTtsProviderConfig(rawConfig),
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
@@ -566,7 +533,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         ? {}
         : { model: normalizeGoogleTtsModel(params.modelId) }),
     }),
-    listVoices: async () => GOOGLE_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
+    listVoices: async () => GOOGLE_PREBUILT_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(resolveGoogleTtsApiKey({ cfg, providerConfig })),
     prepareSynthesis: (ctx) => {

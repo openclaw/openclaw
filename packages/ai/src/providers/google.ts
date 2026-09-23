@@ -57,10 +57,7 @@ export const streamSimpleGoogle: StreamFunction<"google-generative-ai", SimpleSt
   const base = buildBaseOptions(model, options, apiKey);
   return streamGoogle(model, context, {
     ...base,
-    thinking: buildGoogleSimpleThinking(model, options, {
-      includeGemma4ThinkingLevel: true,
-      useFlashLiteBudgets: true,
-    }),
+    thinking: buildGoogleSimpleThinking(model, options),
   } satisfies GoogleOptions);
 };
 

@@ -1,4 +1,3 @@
-// Discord plugin module implements agent components behavior.
 export {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,

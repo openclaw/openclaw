@@ -118,6 +118,7 @@ vi.mock("./doctor-plugin-manifests.js", () => ({
 
 vi.mock("./doctor-plugin-registry.js", () => ({
   maybeRepairPluginRegistryState: vi.fn(async ({ config }: { config: unknown }) => ({ config })),
+  maybeRepairStaleManagedNpmBundledPlugins: vi.fn(() => null),
 }));
 
 vi.mock("./doctor-platform-notes.js", () => ({

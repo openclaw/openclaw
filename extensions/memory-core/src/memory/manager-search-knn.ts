@@ -121,6 +121,8 @@ export function runVectorKnnQuery(
     // TEXT substr stops at NUL, so retain the byte prefix when it contains one.
     // Four bytes per UTF-16 unit cover UTF-8/UTF-16 without scanning the full body;
     // truncateUtf16Safe below removes any excess or partial trailing code point.
+    // CROSS JOIN is intentional: sqlite-vec must run KNN before chunk lookup.
+    // Reordering the chunks table first repeats the KNN scan once per chunk.
     const queryRows = db
       .prepare(
         `SELECT c.id, c.path, c.start_line, c.end_line,\n` +
@@ -130,7 +132,7 @@ export function runVectorKnnQuery(
           `       c.source,\n` +
           `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
           `  FROM ${request.vectorTable} v\n` +
-          `  JOIN memory_index_chunks c ON c.id = v.id\n` +
+          `  CROSS JOIN memory_index_chunks c ON c.id = v.id\n` +
           ` WHERE v.embedding MATCH ? AND k = ? AND ${vectorModelFilter}${request.sourceFilter.sql}\n` +
           ` ORDER BY dist ASC\n` +
           ` LIMIT ?`,

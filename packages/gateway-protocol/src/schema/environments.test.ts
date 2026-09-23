@@ -51,6 +51,49 @@ function workerSummary(
 }
 
 describe("worker environment protocol schemas", () => {
+  it("accepts opt-in desktop setup discovery with a closed credential-free result", () => {
+    expect(validateEnvironmentsListParams({ includeDesktopSetup: true })).toBe(true);
+    expect(validateEnvironmentsListParams({ includeDesktopSetup: false })).toBe(true);
+    expect(validateEnvironmentsListParams({ includeDesktopSetup: "true" })).toBe(false);
+    const gateway = { id: "gateway", type: "local", status: "available" };
+    for (const state of ["ready", "needs-server", "unsupported", "managed"]) {
+      expect(
+        Value.Check(EnvironmentsListResultSchema, {
+          environments: [{ ...gateway, desktopSetup: { state } }],
+        }),
+      ).toBe(true);
+    }
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...gateway,
+        desktopSetup: { state: "unsupported", detail: "VNC authentication is required" },
+      }),
+    ).toBe(true);
+    for (const desktopSetup of [
+      {},
+      { state: "unknown" },
+      { state: "ready", password: "hidden" },
+      { state: "unsupported", detail: "" },
+    ]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...gateway, desktopSetup })).toBe(false);
+    }
+  });
+
+  it("allows only bounded readonly profile display IDs, never settings", () => {
+    const check = (profile: Record<string, unknown>) =>
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [{ id: "production", providerId: "crabbox", ...profile }],
+      });
+    expect(check({})).toBe(true);
+    expect(check({ providerDisplayId: "aws" })).toBe(true);
+    expect(check({ providerDisplayId: "google-cloud" })).toBe(true);
+    for (const providerDisplayId of ["", "AWS", "aws\n", "a".repeat(65), "aws/token", 42, {}]) {
+      expect(check({ providerDisplayId })).toBe(false);
+    }
+    expect(check({ providerDisplayId: "aws", settings: { provider: "aws" } })).toBe(false);
+  });
+
   it("accepts bounded desktop availability in environment lists and status responses", () => {
     const base = { id: "node:mac-1", type: "node", status: "available" };
     for (const state of ["locked", "unlocked", "unknown"]) {
@@ -287,6 +330,11 @@ describe("worker environment protocol schemas", () => {
 
     expect(validateEnvironmentsListParams({})).toBe(true);
     expect(validateEnvironmentsListParams({ runtimeId: "codex" })).toBe(true);
+    expect(validateEnvironmentsListParams({ projection: "profiles" })).toBe(true);
+    expect(validateEnvironmentsListParams({ runtimeId: "codex", projection: "profiles" })).toBe(
+      true,
+    );
+    expect(validateEnvironmentsListParams({ projection: "unknown" })).toBe(false);
     expect(validateEnvironmentsListParams({ runtimeId: "" })).toBe(false);
     expect(validateEnvironmentsListParams({ runtimeId: "x".repeat(129) })).toBe(false);
     expect(validateEnvironmentsListParams({ runtimeId: "codex", command: "runtime.exec" })).toBe(

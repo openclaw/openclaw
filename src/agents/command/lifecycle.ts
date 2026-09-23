@@ -70,7 +70,7 @@ export function createAgentCommandLifecycle(params: {
           (payload) => payload.isError === true && typeof payload.text === "string",
         )?.text
       : undefined) ??
-    (runResult.meta.error ? "Agent run failed" : undefined);
+    (runResult.meta.error ? runResult.meta.error.message.trim() || "Agent run failed" : undefined);
   const resolveTerminalError = (
     runResult: AgentAttemptResult,
     fallbackExhausted: boolean,

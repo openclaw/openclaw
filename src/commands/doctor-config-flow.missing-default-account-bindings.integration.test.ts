@@ -83,6 +83,7 @@ type OwnershipRepairCase = {
   discord: NonNullable<OpenClawConfig["channels"]>["discord"];
   bindings: NonNullable<OpenClawConfig["bindings"]>;
   added: NonNullable<OpenClawConfig["bindings"]>;
+  sourceConfig?: unknown;
 };
 
 describe("doctor channel account ownership repair", () => {
@@ -90,13 +91,55 @@ describe("doctor channel account ownership repair", () => {
 
   it.each<OwnershipRepairCase>([
     {
-      name: "implicit default account",
+      name: "unbound legacy account preserves its first agent",
+      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
+      discord: {},
+      bindings: [],
+      added: [{ agentId: "ops", match: { channel: "discord", accountId: "default" } }],
+    },
+    {
+      name: "legacy owner precedes inferred narrower ownership",
+      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
+      discord: {},
+      bindings: [{ agentId: "research", match: { channel: "discord", guildId: "guild-b" } }],
+      added: [{ agentId: "ops", match: { channel: "discord", accountId: "default" } }],
+    },
+    {
+      name: "normalized legacy agent id",
+      sourceConfig: { agents: { list: [{ id: "Ops" }, { id: "research" }] } },
+      discord: {},
+      bindings: [],
+      added: [{ agentId: "ops", match: { channel: "discord", accountId: "default" } }],
+    },
+    {
+      name: "explicit fleet does not inherit legacy list order",
+      sourceConfig: {
+        agents: { ownership: "explicit", list: [{ id: "ops" }, { id: "research" }] },
+      },
+      discord: {},
+      bindings: [],
+      added: [],
+    },
+    {
+      name: "legacy fallback preserves narrower route owners",
+      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
+      discord: {},
+      bindings: [
+        { agentId: "ops", match: { channel: "discord", guildId: "guild-a" } },
+        { agentId: "research", match: { channel: "discord", guildId: "guild-b" } },
+      ],
+      added: [{ agentId: "ops", match: { channel: "discord", accountId: "default" } }],
+    },
+    {
+      name: "implicit default account with historical ownership",
+      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
       discord: {},
       bindings: [{ agentId: "ops", match: { channel: "discord", guildId: "guild-a" } }],
       added: [{ agentId: "ops", match: { channel: "discord", accountId: "default" } }],
     },
     {
       name: "named account without widening other account or guild owners",
+      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
       discord: { accounts: { alerts: {}, work: {} } },
       bindings: [
         { agentId: "ops", match: { channel: "discord", accountId: "alerts", guildId: "guild-a" } },
@@ -107,6 +150,7 @@ describe("doctor channel account ownership repair", () => {
     },
     {
       name: "environment-only default account alongside a named account",
+      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
       envToken: true,
       discord: { accounts: { alerts: {} } },
       bindings: [
@@ -119,6 +163,7 @@ describe("doctor channel account ownership repair", () => {
     },
     {
       name: "root-token default account alongside a named account",
+      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
       discord: { token: "synthetic-discord-token", accounts: { alerts: {} } },
       bindings: [
         { agentId: "ops", match: { channel: "discord", accountId: "*", guildId: "guild-a" } },
@@ -129,7 +174,8 @@ describe("doctor channel account ownership repair", () => {
       ],
     },
     {
-      name: "narrow wildcard ownership without inventing a default account",
+      name: "historical ownership without inventing a default account",
+      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
       discord: { accounts: { alerts: {}, work: { enabled: false } } },
       bindings: [
         { agentId: "ops", match: { channel: "discord", accountId: "*", guildId: "guild-a" } },
@@ -138,6 +184,7 @@ describe("doctor channel account ownership repair", () => {
     },
     {
       name: "disabled default account alongside an active account",
+      sourceConfig: { agents: { list: [{ id: "research" }, { id: "ops" }] } },
       discord: { accounts: { default: { enabled: false }, work: {} } },
       bindings: [
         { agentId: "ops", match: { channel: "discord", guildId: "guild-a" } },
@@ -213,14 +260,30 @@ describe("doctor channel account ownership repair", () => {
       channels: { discord },
       bindings,
     };
-    const repaired = repairUnownedChannelAccountBindings(config);
+    const repaired = repairUnownedChannelAccountBindings({
+      config,
+      sourceConfigBeforeMigrations: testCase.sourceConfig,
+    });
     expect(repaired.config.bindings).toEqual([...bindings, ...added]);
     for (const binding of added) {
       expect(resolveAgentRoute({ cfg: repaired.config, ...binding.match }).agentId).toBe(
         binding.agentId,
       );
     }
-    const secondPass = repairUnownedChannelAccountBindings(repaired.config);
+    if (testCase.name === "legacy fallback preserves narrower route owners") {
+      expect(
+        resolveAgentRoute({ cfg: repaired.config, channel: "discord", guildId: "guild-b" }).agentId,
+      ).toBe("research");
+    }
+    if (testCase.name === "explicit fleet does not inherit legacy list order") {
+      expect(repaired.warnings?.join("\n")).toContain(
+        '{"agentId":"<agentId>","match":{"channel":"discord","accountId":"default"}}',
+      );
+    }
+    const secondPass = repairUnownedChannelAccountBindings({
+      config: repaired.config,
+      sourceConfigBeforeMigrations: testCase.sourceConfig,
+    });
     expect(secondPass.config).toBe(repaired.config);
     expect(secondPass.changes).toEqual([]);
   });

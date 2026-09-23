@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{ provider: SessionCatalogProvider }>;
@@ -22,22 +24,18 @@ const SHARE_ROUTE = {
 const hoisted = vi.hoisted(() => ({
   activeRegistry: {} as TestPluginRegistry,
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
-  listSessionEntriesReadOnly: vi.fn(() => []),
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginRegistry: () => hoisted.activeRegistry,
   requireActivePluginRegistry: () => hoisted.activeRegistry,
 }));
-vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
-  return { ...actual, listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly };
-});
 vi.mock("../../state/user-profiles.js", () => ({
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
 }));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
+let projection: ReturnType<typeof createSessionRowProjectionFixture>;
 
 function provider(
   id: string,
@@ -57,7 +55,7 @@ async function listCatalogs(params: unknown = {}) {
   await sessionCatalogHandlers["sessions.catalog.list"]?.({
     params,
     respond,
-    context: { getRuntimeConfig: () => ({}) },
+    context: bindSessionRowProjection({ getRuntimeConfig: () => ({}) }, () => projection),
   } as never);
   return respond;
 }
@@ -67,8 +65,9 @@ describe("session catalog share routes", () => {
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
     markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
     hoisted.hasMultipleSessionSharingIdentities.mockReset().mockReturnValue(false);
-    hoisted.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
+    projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
   });
+  afterEach(() => projection.dispose());
 
   it("projects uniquely owned routes and suppresses collisions", async () => {
     hoisted.activeRegistry.sessionCatalogs.push({

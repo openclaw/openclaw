@@ -276,9 +276,9 @@ function createNativePolicyPool(requests: NativeModelRequestProbe[]): CopilotCli
 
 /** Runs the real Copilot CLI and SDK against a deterministic model-layer request handler. */
 export function createNativeCopilotPolicyHarnessFixtureForTest(sessionStore: {
-  delete(key: string): boolean;
-  lookup(key: string): CopilotSessionBinding | undefined;
-  register(key: string, value: CopilotSessionBinding): void;
+  delete(key: string): Promise<boolean>;
+  lookup(key: string): Promise<CopilotSessionBinding | undefined>;
+  register(key: string, value: CopilotSessionBinding): Promise<void>;
 }) {
   const requests: NativeModelRequestProbe[] = [];
   const pool = createNativePolicyPool(requests);

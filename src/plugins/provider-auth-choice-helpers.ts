@@ -89,12 +89,7 @@ function mergeConfigPatch<T>(base: T, patch: unknown): T {
     if (BLOCKED_MERGE_KEYS.has(key)) {
       continue;
     }
-    const existing = next[key];
-    if (isPlainRecord(existing) && isPlainRecord(value)) {
-      next[key] = mergeConfigPatch(existing, value);
-    } else {
-      next[key] = sanitizeConfigPatchValue(value);
-    }
+    next[key] = mergeConfigPatch(next[key], value);
   }
   return next as T;
 }

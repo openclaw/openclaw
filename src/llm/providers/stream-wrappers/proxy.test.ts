@@ -206,13 +206,13 @@ describe("proxy stream wrappers", () => {
   });
 
   it.each([
-    { cacheRetention: "none", requiresStringContent: false },
-    { cacheRetention: "short", requiresStringContent: false },
-    { cacheRetention: "long", requiresStringContent: false },
-    { cacheRetention: "short", requiresStringContent: true },
+    ["none", false],
+    ["short", false],
+    ["long", false],
+    ["short", true],
   ] as const)(
-    "composes managed requests with $cacheRetention retention and string-only=$requiresStringContent",
-    ({ cacheRetention, requiresStringContent }) => {
+    "composes managed requests with %s retention and string-only=%s",
+    (cacheRetention, requiresStringContent) => {
       const model: Model<"openai-completions"> & {
         compat: { requiresStringContent: boolean };
       } = {

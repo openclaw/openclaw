@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
@@ -39,14 +39,12 @@ import type { WorkerEnvironmentService } from "./worker-environments/service.js"
 import type { WorkerTunnelManager } from "./worker-environments/tunnel.js";
 import type { WorkerBootstrapArtifactTransferHttpCallback } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bundle-retention.js";
+import type { WorkerSessionToolExecutor } from "./worker-environments/worker-session-tool-result.js";
 
-type WorkerEnvironmentStore = ReturnType<
-  typeof import("./worker-environments/store.js").createWorkerEnvironmentStore
+type WorkerEnvironmentStore = Awaited<
+  ReturnType<typeof import("./worker-environments/store.js").createWorkerEnvironmentStore>
 >;
 type WorkerEnvironmentRecord = ReturnType<WorkerEnvironmentStore["list"]>[number];
-type WorkerSessionToolExecutor = ReturnType<
-  typeof import("./worker-environments/worker-session-tool-executor.js").createWorkerSessionToolExecutor
->;
 type WorkerEnvironmentLogger = {
   child: (name: string) => { warn: (message: string) => void };
 };
@@ -90,7 +88,7 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
       import("./worker-environments/store.js"),
       import("./worker-environments/placement-store.js"),
     ]);
-  const store = createWorkerEnvironmentStore();
+  const store = await createWorkerEnvironmentStore();
   const placementStore = createWorkerSessionPlacementStore();
   const records = store.list();
   const durableProviderIds = uniqueStrings(
@@ -163,7 +161,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     import("./worker-environments/node-workspace-transfer-http.js"),
     import("./worker-environments/node-desktop-carrier.js"),
     import("./worker-environments/portal-node-carrier.js"),
-    import("./worker-environments/computer-transport.js"),
+    import("./worker-environments/computer-service.js"),
     import("../plugins/worker-provider-registry.js"),
     import("../plugins/worker-provider-maintenance.js"),
     import("./worker-environments/worker-bootstrap-artifact-transfer-service.js"),
@@ -201,7 +199,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       },
     }));
     const bundle = await producer.prepare();
-    await producer.prune(listRetainedBundleHashes());
+    await producer.prune(listRetainedBundleHashes);
     if (install === "bundle") {
       return bundle;
     }
@@ -288,7 +286,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   params.startup.store.onCredentialRevoked((environmentId) => {
     nodeWorkspaceTransfer.fenceEnvironment(environmentId);
   });
-  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
+  const gatewayDeviceId = (await loadOrCreateProcessDeviceIdentityAsync()).deviceId;
   const nodeWorkerGatewayNamespace = resolveNodeWorkerGatewayNamespace(gatewayDeviceId);
   const nodeWorkerTunnelManager = createNodeWorkerTunnelManager({
     gatewayDeviceId,
@@ -394,6 +392,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     placements: params.startup.placementStore,
     resolveGatewayContext: params.resolveGatewayContext,
     getNodeTransport: () => deviceRuntime.getNodeTransport(),
+    desktopRegistry: params.desktopSessionRegistry,
     warn: (message) => workerEnvironmentLog.warn(message),
   });
   const preparedWorkspaces = createNodeWorkerPreparedWorkspaceTransport({
@@ -405,8 +404,12 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const workerEnvironmentServiceBase = createWorkerEnvironmentService({
     projectNamespace: nodeWorkerGatewayNamespace,
     prepareComputer: computers.prepare,
+    prepareAttachedComputer: computers.prepareAttached,
     executeComputer: computers.execute,
     closeComputers: computers.close,
+    closeEnvironmentComputers: computers.closeEnvironment,
+    hasAttachedEnvironmentActivity: (environmentId, ownerEpoch) =>
+      params.desktopSessionRegistry.hasActivity(environmentId, ownerEpoch),
     store: params.startup.store,
     getConfig: getRuntimeConfig,
     maintainProviders: (signal) =>
@@ -471,6 +474,8 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     },
     tunnelManager: workerTunnelManager,
     nodeTunnelManager: nodeWorkerTunnelManager,
+    runSessionEnvironmentCommand: (binding, command) =>
+      nodeWorkerTunnelManager.runSessionCommand(binding, command),
     nodeDesktopCarrier: workerNodeDesktopCarrier,
     nodePortalCarrier: workerNodePortalCarrier,
     closeWorkerPortals: async (environmentId, ownerEpoch) => {
@@ -545,7 +550,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       })
       .map((record) => record.environmentId);
     for (const environmentId of environmentIds) {
-      params.startup.store.revokeEnvironmentCredential(environmentId);
+      await params.startup.store.revokeEnvironmentCredential(environmentId);
     }
     await Promise.all(
       environmentIds.map(async (environmentId) => {

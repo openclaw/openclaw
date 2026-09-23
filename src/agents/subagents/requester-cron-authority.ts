@@ -6,12 +6,14 @@ import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.j
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
-  captureActiveControlUiCronAuthority,
+  captureActiveCronManagementAuthority,
   type CronCreatorAuthorityCapability,
 } from "../cron-creator-authority-context.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 
 type RequesterCronAuthority = {
+  managementEntitlement: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
+  requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
   requesterSessionKey: string;
   requesterSessionId: string;
   requesterAgentId: string;
@@ -67,6 +69,8 @@ function sameBatch(left: readonly SubagentRunRecord[], right: readonly SubagentR
 function isCurrent(authority: RequesterCronAuthority): boolean {
   if (
     !authority.active ||
+    (authority.managementEntitlement.source === "channel-owner" &&
+      !authority.managementEntitlement.isCurrent()) ||
     authority.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
     !state.bySession.get(authority.requesterSessionKey)?.has(authority)
   ) {
@@ -123,7 +127,7 @@ export function captureRequesterCronAuthority(params: {
   if (!requesterAgentId || params.batch.length === 0) {
     return undefined;
   }
-  const capture = captureActiveControlUiCronAuthority({
+  const capture = captureActiveCronManagementAuthority({
     runId: params.requesterTurnRunId,
     sessionKey: params.requesterSessionKey,
     agentId: requesterAgentId,
@@ -142,6 +146,8 @@ export function captureRequesterCronAuthority(params: {
     ...params,
     requesterAgentId,
     requesterSessionId: capture.sessionId,
+    managementEntitlement: capture.managementEntitlement,
+    requesterOwner: capture.requesterOwner,
     lifecycleGeneration: capture.lifecycleGeneration,
     sessionLifecycleRevision: session.lifecycleRevision,
     storePath,
@@ -305,7 +311,8 @@ export function consumeRequesterCronAuthorityAdmission(params: {
   | {
       runId: string;
       callerOrigin: { kind: "unknown" };
-      controlUiAdmin: true;
+      managementEntitlement: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
+      requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
       isCurrent: () => boolean;
       bindRunScope: (scope: CronCreatorAuthorityCapability) => void;
     }
@@ -332,7 +339,8 @@ export function consumeRequesterCronAuthorityAdmission(params: {
   return {
     runId: params.runId,
     callerOrigin: { kind: "unknown" },
-    controlUiAdmin: true,
+    managementEntitlement: dispatch.authority.managementEntitlement,
+    requesterOwner: dispatch.authority.requesterOwner,
     isCurrent: dispatch.isCurrent,
     bindRunScope: (scope) => {
       if (
@@ -340,7 +348,8 @@ export function consumeRequesterCronAuthorityAdmission(params: {
         !dispatch.isCurrent() ||
         scope.runId !== params.runId ||
         scope.isCurrent !== dispatch.isCurrent ||
-        !scope.controlUiAdmin ||
+        scope.managementEntitlement !== dispatch.authority.managementEntitlement ||
+        scope.requesterOwner !== dispatch.authority.requesterOwner ||
         scope.callerOrigin.kind !== "unknown" ||
         !scope.active ||
         scope.signal.aborted

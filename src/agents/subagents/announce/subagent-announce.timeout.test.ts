@@ -103,7 +103,12 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     targetRequesterSessionKey: string;
     triggerMessage: string;
     requesterIsSubagent?: boolean;
-    requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
+    completionDirectOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+    };
     requesterSessionOrigin?: { provider?: string; channel?: string };
     bestEffortDeliver?: boolean;
     directIdempotencyKey?: string;
@@ -124,10 +129,10 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         ...(params.requesterIsSubagent
           ? {}
           : {
-              channel: params.requesterOrigin?.channel,
-              to: params.requesterOrigin?.to,
-              accountId: params.requesterOrigin?.accountId,
-              threadId: params.requesterOrigin?.threadId,
+              channel: params.completionDirectOrigin?.channel,
+              to: params.completionDirectOrigin?.to,
+              accountId: params.completionDirectOrigin?.accountId,
+              threadId: params.completionDirectOrigin?.threadId,
             }),
       },
     });

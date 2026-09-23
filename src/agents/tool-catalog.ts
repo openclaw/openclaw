@@ -68,6 +68,13 @@ const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
 
 const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
+    id: "decision_evaluate",
+    description: "Evaluate explicit evidence with the agent's decision model",
+    sectionId: "agents",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "ls",
     description: "List directory entries",
     sectionId: "fs",
@@ -292,6 +299,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "theme",
+    description: "List, select, and create appearance themes",
+    sectionId: "ui",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "dashboard",
     description: "Read and arrange the session dashboard",
     sectionId: "ui",
@@ -358,6 +372,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Manage and reload plugins",
     sectionId: "automation",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "openclaw",
+    description: "Delegate OpenClaw setup and repair",
+    sectionId: "automation",
+    profiles: [],
     includeInOpenClawGroup: true,
   },
   {

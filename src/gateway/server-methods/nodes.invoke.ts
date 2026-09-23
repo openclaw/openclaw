@@ -381,7 +381,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           }
         }
 
-        const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
+        const forwardedParams = await sanitizeNodeInvokeParamsForForwarding({
           nodeId,
           command,
           rawParams: p.params,

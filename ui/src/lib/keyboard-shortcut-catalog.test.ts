@@ -15,6 +15,41 @@ import {
 
 describe("keyboard shortcut catalog matching", () => {
   afterEach(() => vi.restoreAllMocks());
+  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+    "matches direct session shortcuts exactly on %s without taking New Window",
+    (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const modifier = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
+      for (const combo of [
+        KEYBOARD_SHORTCUT_COMBOS.newSession,
+        KEYBOARD_SHORTCUT_COMBOS.archiveSession,
+      ]) {
+        const init = {
+          key: combo.key.toUpperCase(),
+          code: `Key${combo.key.toUpperCase()}`,
+          shiftKey: true,
+          ...modifier,
+        };
+        expect(matchesShortcutCombo(combo, new KeyboardEvent("keydown", init))).toBe(true);
+        for (const changes of [
+          { shiftKey: false },
+          { altKey: true },
+          { metaKey: true, ctrlKey: true },
+          { key: "Dead" },
+          { isComposing: true },
+          { keyCode: 229 },
+          { key: "n", code: "KeyN" },
+        ]) {
+          expect(
+            matchesShortcutCombo(combo, new KeyboardEvent("keydown", { ...init, ...changes })),
+          ).toBe(false);
+        }
+        expect(
+          matchesShortcutCombo(combo, new KeyboardEvent("keydown", { ...init, key: "ж" })),
+        ).toBe(true);
+      }
+    },
+  );
   it.each([
     { name: "Command", platform: "MacIntel", modifiers: { metaKey: true } },
     { name: "Control", platform: "Win32", modifiers: { ctrlKey: true } },

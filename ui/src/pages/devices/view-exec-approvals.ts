@@ -1,5 +1,6 @@
 // Control UI view renders nodes exec approvals screen content.
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
 import "../../components/agent-select-registration.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -318,6 +319,7 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
         <select
           class="settings-select"
           aria-label=${t("devices.execApprovals.host")}
+          .value=${live(state.target)}
           ?disabled=${state.disabled}
           @change=${(event: Event) => {
             const target = event.target as HTMLSelectElement;
@@ -348,6 +350,7 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
               <select
                 class="settings-select"
                 aria-label=${t("devices.execApprovals.node")}
+                .value=${live(nodeValue)}
                 ?disabled=${state.disabled || !hasNodes}
                 @change=${(event: Event) => {
                   const target = event.target as HTMLSelectElement;
@@ -418,6 +421,7 @@ function renderPolicySelect(
     <select
       class="settings-select"
       aria-label=${options.ariaLabel}
+      .value=${live(options.currentValue)}
       ?disabled=${state.disabled}
       @change=${(event: Event) => {
         const target = event.target as HTMLSelectElement;
@@ -467,7 +471,9 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
       title: t("devices.execApprovals.security"),
       description: isDefaults
         ? t("devices.execApprovals.defaultSecurity")
-        : t("devices.execApprovals.defaultValue", { value: defaults.security }),
+        : agentSecurity !== undefined
+          ? t("devices.execApprovals.defaultValue", { value: defaults.security })
+          : undefined,
       control: renderPolicySelect(state, {
         key: "security",
         ariaLabel: t("devices.execApprovals.mode"),
@@ -482,7 +488,9 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
       title: t("devices.execApprovals.ask"),
       description: isDefaults
         ? t("devices.execApprovals.defaultPrompt")
-        : t("devices.execApprovals.defaultValue", { value: defaults.ask }),
+        : agentAsk !== undefined
+          ? t("devices.execApprovals.defaultValue", { value: defaults.ask })
+          : undefined,
       control: renderPolicySelect(state, {
         key: "ask",
         ariaLabel: t("devices.execApprovals.mode"),
@@ -497,7 +505,9 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
       title: t("devices.execApprovals.askFallback"),
       description: isDefaults
         ? t("devices.execApprovals.promptUnavailable")
-        : t("devices.execApprovals.defaultValue", { value: defaults.askFallback }),
+        : agentAskFallback !== undefined
+          ? t("devices.execApprovals.defaultValue", { value: defaults.askFallback })
+          : undefined,
       control: renderPolicySelect(state, {
         key: "askFallback",
         ariaLabel: t("devices.execApprovals.fallback"),
@@ -513,11 +523,7 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
       description: isDefaults
         ? t("devices.execApprovals.autoAllowSkillsHint")
         : autoIsDefault
-          ? t("devices.execApprovals.usingDefault", {
-              value: defaults.autoAllowSkills
-                ? t("devices.execApprovals.on")
-                : t("devices.execApprovals.off"),
-            })
+          ? undefined
           : t("devices.execApprovals.override", {
               value: autoEffective ? t("devices.execApprovals.on") : t("devices.execApprovals.off"),
             }),

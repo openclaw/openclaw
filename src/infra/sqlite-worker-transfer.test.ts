@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 import { serialize } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
+import { SQLITE_WORKER_MAX_RESULT_BYTES } from "./sqlite-worker-contract.js";
 import {
-  SQLITE_WORKER_MAX_RESULT_BYTES,
   SQLITE_WORKER_TRANSFER_FRAME_BYTES,
-} from "./sqlite-worker-contract.js";
-import {
   createSqliteWorkerTransferOwner,
   createSqliteWorkerTransferReceiver,
   type SqliteWorkerTransferFrame,

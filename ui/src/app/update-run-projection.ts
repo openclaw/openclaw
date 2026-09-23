@@ -1,7 +1,14 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import type { UpdateRunRecord, UpdateRunStep } from "../../../src/infra/update-run-record.ts";
-import { renderUpdateRunReport } from "../../../src/infra/update-run-report.ts";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+  type UpdateRunStep,
+} from "../../../src/infra/update-run-record.ts";
+import {
+  renderUpdateRunReport,
+  resolveUpdateRunIdentity,
+} from "../../../src/infra/update-run-report.ts";
 import { t } from "../i18n/index.ts";
 
 type OracleState = "pass" | "warn" | "fail" | "pending";
@@ -48,11 +55,18 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
         .join("\n")
     : "";
   const facts = run.verification;
+  const identity = resolveUpdateRunIdentity(facts, run.after);
   const booleanState = (value: boolean | undefined): OracleState =>
     value === undefined ? (terminal ? "warn" : "pending") : value ? "pass" : "fail";
   const oracles = [
     { name: "service", state: booleanState(facts.serviceRunning) },
-    { name: "version", state: booleanState(facts.versionMatch) },
+    {
+      name: "version",
+      state:
+        identity.kind === "unavailable"
+          ? "warn"
+          : booleanState(identity.kind === "unobserved" ? undefined : identity.kind === "verified"),
+    },
     {
       name: "plugins",
       state: booleanState(
@@ -66,6 +80,7 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
   return {
     report,
     terminal,
+    reconciled: isAcknowledgedAbandonedUpdateRun(run),
     headline:
       !connected &&
       !terminal &&

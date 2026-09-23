@@ -1,5 +1,20 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
+export function createReplyPhotoMessage(text: string) {
+  return {
+    chat: { id: 7, type: "private" },
+    text,
+    date: 1_736_380_800,
+    reply_to_message: {
+      chat: { id: 7, type: "private", first_name: "Ada" },
+      date: 1_736_380_700,
+      message_id: 9001,
+      photo: [{ file_id: "reply-photo-1" }],
+      from: { first_name: "Ada" },
+    },
+  };
+}
+
 export type TelegramTestContext = Record<string, unknown>;
 export type TelegramTestMiddleware = (
   ctx: TelegramTestContext,

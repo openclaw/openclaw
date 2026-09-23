@@ -1,6 +1,7 @@
 // Tests ACP dispatch delivery routing and visible reply handoff.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { raceWithTimeoutResult } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
@@ -111,26 +112,6 @@ function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>)
     shouldRouteToOriginating: false,
     ...(onReplyStart ? { onReplyStart } : {}),
   });
-}
-
-async function raceWithTimeoutResult<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  timeoutResult: T,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((resolve) => {
-        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
 }
 
 function createVisibleChatAcpCoordinator(
@@ -333,13 +314,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       await Promise.resolve();
       expect(transcriptSettled).toBe(false);
 
-      const fallback = coordinator
-        .settleVisibleText()
-        .then(() => coordinator.getBlockTextForFallback());
+      const fallback = coordinator.settleVisibleText().then(() => coordinator.recoverBlockText());
       await Promise.resolve();
       releaseDelivery?.();
       await expect(transcriptPromise).resolves.toBe(noSend ? "" : "hello");
-      await expect(fallback).resolves.toBe(noSend ? "hello" : "");
+      await fallback;
+      expect(delivered).toEqual(
+        noSend ? [{ text: "hello" }, { text: "hello" }] : [{ text: "hello" }],
+      );
       await dispatcher.waitForIdle();
     },
   );
@@ -516,7 +498,8 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   });
 
   it("strips split TTS directives from visible ACP block delivery", async () => {
-    const dispatcher = createDispatcher();
+    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+    vi.spyOn(dispatcher, "sendBlockReply");
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig({
         tts: { enabled: true },
@@ -540,7 +523,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(1, { text: "Intro " });
     expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(2, { text: " visible" });
-    expect(coordinator.getAccumulatedVisibleBlockText()).toBe("Intro \n visible");
+    expect(coordinator.getAccumulatedVisibleBlockText()).toBe("Intro  visible");
     expect(coordinator.getAccumulatedBlockTtsText()).toBe(
       "Intro [[tts:text]]hidden[[/tts:text]] visible",
     );

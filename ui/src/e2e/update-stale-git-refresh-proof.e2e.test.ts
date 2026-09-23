@@ -69,24 +69,32 @@ suite.define(() => {
         });
         await gateway.waitForRequest("update.status");
         const staleStatus = page.locator(".settings-status", { hasText: "12 commits behind" });
-        await staleStatus.waitFor();
+        await page.locator(".settings-status", { hasText: "Checking for updates…" }).waitFor();
         await page.screenshot({
           animations: "disabled",
-          path: path.join(proofDir, "01-stale-update-status.png"),
+          path: path.join(proofDir, "01-checking-update-status.png"),
         });
-        const refreshRequest = (await gateway.getRequests("update.status")).at(-1);
+        const refreshRequest = (await gateway.getRequests("update.status")).findLast(
+          (request) =>
+            (request.params as { refreshCheckout?: boolean } | undefined)?.refreshCheckout,
+        );
         const refreshCheckoutRequested =
           typeof refreshRequest?.params === "object" &&
           refreshRequest.params !== null &&
           "refreshCheckout" in refreshRequest.params &&
           refreshRequest.params.refreshCheckout === true;
         expect(refreshCheckoutRequested).toBe(true);
-        await gateway.resolveDeferred("update.status", {
+        const refreshedStatus = {
           sentinel: null,
           schedule: currentSchedule,
           updateAvailable,
-        });
+        };
+        await gateway.setMethodResponse("update.status", refreshedStatus);
+        await gateway.resolveDeferred("update.status", refreshedStatus);
         await page.getByText("Up to date", { exact: true }).waitFor();
+        await page
+          .locator(".settings-status", { hasText: "Checking for updates…" })
+          .waitFor({ state: "hidden" });
         expect(await staleStatus.count()).toBe(0);
         await page.screenshot({
           animations: "disabled",

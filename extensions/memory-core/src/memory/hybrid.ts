@@ -1,7 +1,11 @@
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { applyImportanceMultiplier } from "./importance.js";
 import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
-import { applyProjectRanking, projectScoreMultiplier } from "./project-ranking.js";
+import {
+  applyProjectRanking,
+  prepareActiveProjectKeys,
+  projectScoreMultiplier,
+} from "./project-ranking.js";
 import {
   applyTemporalDecayToHybridResults,
   type TemporalDecayConfig,
@@ -73,6 +77,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   isNonTextMediaPath?: (path: string) => boolean;
   workspaceDir?: string;
   sessionSourceMtimes?: ReadonlyMap<string, number | undefined>;
+  memorySourceMtimes?: ReadonlyMap<string, number | undefined>;
   /** MMR configuration for diversity-aware re-ranking */
   mmr?: Partial<MMRConfig>;
   /** Temporal decay configuration for recency-aware scoring */
@@ -236,25 +241,26 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     temporalDecay: temporalDecayConfig,
     workspaceDir: params.workspaceDir,
     sessionSourceMtimes: params.sessionSourceMtimes,
+    memorySourceMtimes: params.memorySourceMtimes,
     nowMs: params.nowMs,
   });
-  const rankable = applyProjectRanking(
-    applyImportanceMultiplier(decayed),
-    params.activeProjectKeys,
-  ).map((entry) => {
-    // Exact tiers and recall-only LIKE hits keep their public confidence;
-    // their private ranking score still includes every weighting pass.
-    const rankingScore = entry.score;
-    return Object.assign(entry, {
-      rankingScore,
-      score:
-        entry.exactPathSpecificity > 0
-          ? projectScoreMultiplier(entry.projectKey, params.activeProjectKeys)
-          : entry.contentScore === 0
-            ? 0
-            : entry.score,
-    });
-  });
+  const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
+  const rankable = applyProjectRanking(applyImportanceMultiplier(decayed), activeProjects).map(
+    (entry) => {
+      // Exact tiers and recall-only LIKE hits keep their public confidence;
+      // their private ranking score still includes every weighting pass.
+      const rankingScore = entry.score;
+      return Object.assign(entry, {
+        rankingScore,
+        score:
+          entry.exactPathSpecificity > 0
+            ? projectScoreMultiplier(entry.projectKey, activeProjects)
+            : entry.contentScore === 0
+              ? 0
+              : entry.score,
+      });
+    },
+  );
   const compareRankingScores = (a: (typeof rankable)[number], b: (typeof rankable)[number]) =>
     b.rankingScore - a.rankingScore ||
     b.lexicalRank - a.lexicalRank ||
@@ -276,7 +282,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
       mmrConfig,
     ).map((entry) =>
       Object.assign(entry, {
-        score: projectScoreMultiplier(entry.projectKey, params.activeProjectKeys),
+        score: projectScoreMultiplier(entry.projectKey, activeProjects),
       }),
     );
   };

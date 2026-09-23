@@ -11,10 +11,8 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
-import {
-  normalizeAgentRunTerminalReplySnapshot,
-  type AgentRunTerminalReplySnapshot,
-} from "./agent-run-terminal-reply.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,

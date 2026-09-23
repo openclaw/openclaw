@@ -9,7 +9,7 @@ import {
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
   type QaProviderMode,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { readLoggingConfig } from "../../../../src/logging/config.js";
 import { redactToolPayloadTextWithConfig } from "../../../../src/logging/redact.js";
 import { withFullContextToolPayloadRedaction } from "../../../../src/logging/redact.test-support.js";

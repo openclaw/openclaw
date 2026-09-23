@@ -342,6 +342,112 @@ describe("OpenClaw native shell", () => {
     expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
   });
 
+  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+    "opens a draft from the composer on %s without taking New Window or modified Enter",
+    (platform) => {
+      const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const navigate = vi.fn();
+      const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+      shell.runtime = { context: nativeSessionContext(navigate, "research") };
+      const textarea = document.createElement("textarea");
+      textarea.value = "Keep this foreground draft";
+      textarea.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
+      const modifier = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
+      try {
+        // Receiver semantics only; synthetic DOM events cannot prove browser delivery.
+        const event = new KeyboardEvent("keydown", {
+          key: "O",
+          code: "KeyO",
+          shiftKey: true,
+          cancelable: true,
+          ...modifier,
+        });
+        textarea.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+        expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", {
+          search: "?agent=research",
+        });
+        expect(textarea.value).toBe("Keep this foreground draft");
+        for (const init of [
+          { key: "n", code: "KeyN" },
+          { key: "Enter", code: "Enter" },
+          { key: "O", code: "KeyO", shiftKey: true, repeat: true },
+          { key: "O", code: "KeyO", shiftKey: true, isComposing: true },
+          { key: "O", code: "KeyO", shiftKey: true, keyCode: 229 },
+        ]) {
+          const ignored = new KeyboardEvent("keydown", { ...modifier, ...init, cancelable: true });
+          textarea.dispatchEvent(ignored);
+          expect(ignored.defaultPrevented).toBe(false);
+        }
+        expect(navigate).toHaveBeenCalledOnce();
+      } finally {
+        platformSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["modal", "onboarding", "read-only", "unavailable", "offline"])(
+    "leaves the New Session shortcut unhandled during %s",
+    (guard) => {
+      const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      const navigate = vi.fn();
+      const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState &
+        ShellNavigationState;
+      const context = nativeSessionContext(navigate, "main", {
+        ...(guard === "read-only" ? { scopes: ["operator.read"] } : {}),
+        ...(guard === "unavailable" ? { methods: [] } : {}),
+      });
+      shell.runtime = { context };
+      shell.onboarding = guard === "onboarding";
+      if (guard === "offline") {
+        context.gateway.snapshot.phase = "offline";
+      }
+      const modal = document.createElement("div");
+      if (guard === "modal") {
+        (document.openClawModalLayers ??= new Set()).add(modal);
+      }
+      try {
+        const key = new KeyboardEvent("keydown", {
+          key: "O",
+          code: "KeyO",
+          metaKey: true,
+          shiftKey: true,
+          cancelable: true,
+        });
+        shell.handleDocumentKeydown(key);
+        expect(key.defaultPrevented).toBe(false);
+        expect(navigate).not.toHaveBeenCalled();
+      } finally {
+        document.openClawModalLayers?.delete(modal);
+        platformSpy.mockRestore();
+      }
+    },
+  );
+
+  it("leaves a rendered modal navigation drawer in control of the New Session chord", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    shell.runtime = { context: nativeSessionContext(navigate, "main") };
+    const drawer = document.body.appendChild(document.createElement("nav"));
+    drawer.className = "shell-nav";
+    drawer.setAttribute("aria-modal", "true");
+    try {
+      shell.handleDocumentKeydown(
+        new KeyboardEvent("keydown", {
+          key: "O",
+          code: "KeyO",
+          metaKey: true,
+          shiftKey: true,
+          cancelable: true,
+        }),
+      );
+      expect(navigate).not.toHaveBeenCalled();
+    } finally {
+      drawer.remove();
+    }
+  });
+
   it("keeps the new-thread control in the native titlebar only while collapsed", async () => {
     const onOpenPalette = vi.fn();
     const onOpenNewSession = vi.fn();
@@ -420,12 +526,13 @@ describe("OpenClaw native shell", () => {
 
   it.each(
     [
+      { path: "/settings/appearance", routeId: "appearance" },
       { path: "/settings/channels", routeId: "channels" },
       { path: "/custodian", routeId: "custodian", search: "?onboarding=1" },
       {
         path: "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
         routeId: "chat",
-        search: "?nav=collapsed",
+        search: "?view=chat",
       },
       { path: "/dashboard/main/tasks/review", routeId: "dashboard" },
       { path: "/settings/agents/main/overview", routeId: "agents" },

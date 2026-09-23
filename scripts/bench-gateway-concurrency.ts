@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
-// Bench Gateway Concurrency script measures gateway probes during synthetic streaming turns.
+// Measure Gateway probes during mock or explicitly selected live streaming turns.
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import {
   copyFileSync,
   cpSync,
@@ -8,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -16,16 +18,31 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import type { ModelsListResult } from "../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
+import type { createAgentTurnService } from "../src/gateway/agent-turn/agent-turn-service.js";
+import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
+import {
+  summarizeMockInferenceRequest,
+  type MockInferenceFacts,
+} from "./e2e/lib/mock-inference-facts.ts";
+import { createActivitySummaryDiagnostics } from "./lib/gateway-bench-activity-summary.ts";
 import {
   startGatewayBrowserProbe,
   type BrowserSessionClick,
   type BrowserSessionTarget,
 } from "./lib/gateway-bench-browser.ts";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
+import {
+  configureLiveGatewayBenchmark,
+  createLiveGatewayEvidence,
+  LIVE_GATEWAY_MODEL_ID,
+  redactLiveBenchmarkText,
+  type LiveGatewayEvidence,
+} from "./lib/gateway-bench-live.ts";
 import {
   type GatewayMemorySample,
   type GatewayRpc,
@@ -61,6 +78,7 @@ import {
   writePluginFixtures,
 } from "./lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
+import { inspectManagedProcessGroup } from "./lib/managed-child-process.mts";
 
 type MetricSummary = {
   count: number;
@@ -120,6 +138,19 @@ type MainProfileArtifacts = {
 };
 
 type BenchmarkRun = {
+  activitySummaryDiagnostics?: ReturnType<
+    ReturnType<typeof createActivitySummaryDiagnostics>["finish"]
+  >;
+  agentCoverage?: {
+    configuredAgentIds: string[];
+    activeTurnAgentIds: string[];
+    beforeLoad: Array<{
+      agentId: string;
+      models: ModelsListResult;
+      sessions: SessionsListResult[];
+    }>;
+    completedTurns: Array<{ agentId: string; count: number }>;
+  };
   browser?: {
     newPageReadyMs: number;
     initialSessionReadyMs: number | null;
@@ -147,12 +178,29 @@ type BenchmarkRun = {
     exitEvent: GatewayChildExit | undefined;
     closeEvent: GatewayChildExit | undefined;
   };
+  processPlacement?: {
+    driver: { pid: number; affinity?: string };
+    mockProvider: { pid: number; affinity?: string };
+  };
   loadWindow?: { startMonotonicMicros: number; endMonotonicMicros: number };
-  history: TimedProbe[];
+  history: Array<TimedProbe & { sessionKey?: string }>;
   memory: { after: GatewayMemorySample; before: GatewayMemorySample; peakRssMb: number };
   messageSubscriptions: TimedProbe[];
   messageSubscriptionsDuringLoad: TimedProbe[];
-  modelRequestCount: number;
+  mockRequests?: ReturnType<typeof summarizeMockRequests>;
+  liveProof?: ReturnType<LiveGatewayEvidence["finish"]>;
+  turnEvidence: ReturnType<ReturnType<typeof createTurnEvidence>["finish"]>;
+  providerRequests?: ReturnType<typeof summarizeProviderRequests>;
+  turnAccounting: { launched: number; terminalOk: number; verified: number };
+  agentWarmup: {
+    durationMs: number;
+    launched: number;
+    terminalOk: number;
+    verified: number;
+    beforeOrdinal?: number;
+    afterOrdinal?: number;
+    turnEvidence: ReturnType<ReturnType<typeof createTurnEvidence>["finish"]>;
+  };
   probeWarmup: {
     durationMs: number;
     samples: GatewaySample[];
@@ -168,6 +216,10 @@ type BenchmarkRun = {
 };
 
 type CliOptions = {
+  provider: "mock" | "openai";
+  agentCount: number;
+  agentWarmupTurns: number;
+  gatewayCpus?: string;
   browserHistoryMessages: number;
   browserSessionClicks: number;
   cadenceMs: number;
@@ -177,6 +229,7 @@ type CliOptions = {
   loadCpuProfDir?: string;
   heapProfDir?: string;
   diagnosticsTimeline: boolean;
+  activitySummaryDiagnostics: boolean;
   entry: string;
   historyBurst: number;
   historyClients: number;
@@ -209,6 +262,9 @@ const DEFAULT_RUNS = 1;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_WARMUP = 0;
 const MOCK_RESPONSE_CHUNK_DELAY_MS = 1_000;
+const STREAM_SUCCESS_MARKER = "OpenClaw gateway concurrency benchmark streaming response.";
+const TOOL_SUCCESS_MARKER = "OPENCLAW_E2E_DRAFTPROOF";
+const MAX_AGENT_COUNT = 128;
 const MAX_CONCURRENCY = 64;
 const MAX_TURNS_PER_SESSION = 100;
 const MAX_PLUGIN_COUNT = 100;
@@ -225,17 +281,33 @@ const PROBE_WARMUP_TARGET_MS = 1_000;
 const PROBE_WARMUP_RETRY_DELAY_MS = 100;
 const GATEWAY_STDERR_TAIL_LINES = 20;
 const AGENT_WAIT_RPC_GRACE_MS = 5_000;
+const UTILITY_MODEL_ID = "gateway-bench-utility";
+const OBSERVER_ASSESSMENT = "Synthetic benchmark observation is valid.";
+const MOCK_INGRESS_KEYS = ["responses", "chatCompletions", "embeddings", "other"] as const;
+const MOCK_SELECTION_KEYS = ["model", "global", "automaticTool", "automaticText"] as const;
+type MockRequestSnapshot = {
+  id: string;
+  ingress: Record<(typeof MOCK_INGRESS_KEYS)[number], number>;
+  selections: Record<(typeof MOCK_SELECTION_KEYS)[number], number>;
+  beforeMs: number;
+  afterMs: number;
+};
 const BOOLEAN_FLAGS = new Set([
   "--help",
   "-h",
   "--json",
   "--control-plane",
   "--no-diagnostics-timeline",
+  "--activity-summary-diagnostics",
   "--tool-events",
   "--visible-observer",
   "--workspace-fanout",
 ]);
 const VALUE_FLAGS = new Set([
+  "--provider",
+  "--agent-count",
+  "--agent-warmup-turns",
+  "--gateway-cpus",
   "--browser-history-messages",
   "--browser-session-clicks",
   "--cadence-ms",
@@ -292,7 +364,18 @@ function parseBoundedNonNegativeInt(
 
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   validateCliArgs(argv, { booleanFlags: BOOLEAN_FLAGS, valueFlags: VALUE_FLAGS });
-  const options = {
+  const provider = parseFlagValue(argv, "--provider") ?? "mock";
+  if (provider !== "mock" && provider !== "openai") {
+    throw new CliArgumentError("--provider must be mock or openai");
+  }
+  const options: CliOptions = {
+    provider,
+    agentCount: parseBoundedPositiveInt(
+      parseFlagValue(argv, "--agent-count"),
+      1,
+      "--agent-count",
+      MAX_AGENT_COUNT,
+    ),
     browserHistoryMessages: parseBoundedPositiveInt(
       parseFlagValue(argv, "--browser-history-messages"),
       80,
@@ -322,6 +405,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     loadCpuProfDir: resolveOutputPath(parseFlagValue(argv, "--load-cpu-prof-dir")),
     heapProfDir: resolveOutputPath(parseFlagValue(argv, "--heap-prof-dir")),
     diagnosticsTimeline: !hasFlag(argv, "--no-diagnostics-timeline"),
+    activitySummaryDiagnostics: hasFlag(argv, "--activity-summary-diagnostics"),
     entry: resolveEntry(parseFlagValue(argv, "--entry"), DEFAULT_ENTRY),
     historyBurst: parseBoundedPositiveInt(
       parseFlagValue(argv, "--history-burst"),
@@ -417,6 +501,13 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--timeout-ms",
       10 * 60_000,
     ),
+    gatewayCpus: parseFlagValue(argv, "--gateway-cpus"),
+    agentWarmupTurns: parseBoundedNonNegativeInt(
+      parseFlagValue(argv, "--agent-warmup-turns"),
+      0,
+      "--agent-warmup-turns",
+      MAX_WARMUP,
+    ),
     toolEvents: hasFlag(argv, "--tool-events"),
     turnsPerSession: parseBoundedPositiveInt(
       parseFlagValue(argv, "--turns-per-session"),
@@ -433,10 +524,39 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     ),
     workspaceFanout: hasFlag(argv, "--workspace-fanout"),
   };
+  if (options.activitySummaryDiagnostics && provider !== "mock") {
+    throw new CliArgumentError("--activity-summary-diagnostics requires the mock provider");
+  }
+  if (options.gatewayCpus !== undefined && !/^\d+(?:,\d+)*$/u.test(options.gatewayCpus)) {
+    throw new CliArgumentError("--gateway-cpus requires comma-separated CPU numbers");
+  }
+  if (
+    provider === "openai" &&
+    (options.runs !== 1 ||
+      options.warmup !== 0 ||
+      options.agentWarmupTurns !== 0 ||
+      options.agentCount !== options.concurrency ||
+      options.concurrency > 32 ||
+      options.turnsPerSession > 3 ||
+      options.toolEvents ||
+      options.visibleObserver ||
+      options.pluginCount !== 0 ||
+      options.workspaceFanout ||
+      options.browserSessionClicks !== 0 ||
+      options.heapProfDir ||
+      parseFlagValue(argv, "--stream-chunk-delay-ms") !== undefined)
+  ) {
+    throw new CliArgumentError(
+      "OpenAI requires one run, no warmups, one active session per agent (at most 32), at most three turns, and no mock tools, observer, plugins, browser, heap sampling, workspace fanout, or stream pacing",
+    );
+  }
   if (options.loadCpuProfDir && options.heapProfDir) {
     throw new CliArgumentError(
       "--load-cpu-prof-dir and --heap-prof-dir require separate benchmark runs",
     );
+  }
+  if (options.agentCount > Math.max(options.sessionCount, options.concurrency)) {
+    throw new CliArgumentError("--agent-count must not exceed the total session count");
   }
   const historyMessageCount =
     Math.max(options.sessionCount, options.concurrency) * options.historyMessages +
@@ -466,9 +586,13 @@ Usage:
   node scripts/bench-gateway-concurrency.ts [options]
 
 Options:
+  --provider <name> mock (default) or openai (live ${LIVE_GATEWAY_MODEL_ID}; requires OPENAI_API_KEY)
+  --agent-count <n> Configured agents sharing the fixed session inventory (default: 1, max: ${MAX_AGENT_COUNT})
   --browser-history-messages <n> Messages per browser click target, independent of inventory history (default: 80, max: 500)
   --browser-session-clicks <n> Click n existing sessions and revisit one during load (default: 0, max: 20; requires built UI and Chromium)
   --concurrency <n>  Concurrent synthetic sessions (default: ${DEFAULT_CONCURRENCY})
+  --gateway-cpus <list> Linux Gateway-only CPU affinity (comma-separated CPU numbers)
+  --agent-warmup-turns <n> Verified turns per active session in the same Gateway before load (default: 0, max: ${MAX_WARMUP})
   --turns-per-session <n> Serial turns per session (default: 1, max: ${MAX_TURNS_PER_SESSION})
   --control-plane   Also probe tasks.list, cron.list, and cron.status during load
   --history-messages <n> Inject up to 500 synthetic messages per seeded session
@@ -489,6 +613,7 @@ Options:
   --history-burst <n> Parallel history requests per prefetch client (default: 5)
   --subscribers <n> Dedicated session-message subscription clients
   --stream-chunk-delay-ms <n> Mock-provider delay between stream chunks (default: ${MOCK_RESPONSE_CHUNK_DELAY_MS})
+  --activity-summary-diagnostics Retain bounded passive recap states/errors (mock only; changes logging, not performance proof)
   --visible-observer Mark subscribed clients visible to exercise session observation
   --no-diagnostics-timeline Disable diagnostics timeline file writes
   --plugin-count <n> Configure synthetic plugins through plugins.load.paths (default: 0)
@@ -679,9 +804,14 @@ function tailLines(output: string, lineCount: number): string {
   return output.trimEnd().split(/\r?\n/u).slice(-lineCount).join("\n");
 }
 
-function captureChildOutput(child: ChildProcess): {
+function captureChildOutput(
+  child: ChildProcess,
+  onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void,
+): {
   readOutput: () => string;
   readStderrTail: () => string;
+  readFailureOutput: () => string;
+  suppressFailureOutput: boolean;
 } {
   if (!child.stdout || !child.stderr) {
     throw new Error("Gateway benchmark children require piped stdout and stderr");
@@ -691,28 +821,45 @@ function captureChildOutput(child: ChildProcess): {
   const appendOutput = (chunk: Buffer) => {
     output = sliceUtf16Safe(`${output}${chunk.toString("utf8")}`, -64 * 1_024);
   };
-  child.stdout.on("data", appendOutput);
+  child.stdout.on("data", (chunk: Buffer) => {
+    appendOutput(chunk);
+    onOutput?.("stdout", chunk);
+  });
   child.stderr.on("data", (chunk: Buffer) => {
     appendOutput(chunk);
     stderr = sliceUtf16Safe(`${stderr}${chunk.toString("utf8")}`, -64 * 1_024);
+    onOutput?.("stderr", chunk);
   });
   return {
     readOutput: () => output,
-    readStderrTail: () => tailLines(stderr, GATEWAY_STDERR_TAIL_LINES),
+    suppressFailureOutput: Boolean(onOutput),
+    // Debug JSON carries arbitrary error metadata; only the bounded projector may retain it.
+    readStderrTail: () => (onOutput ? "" : tailLines(stderr, GATEWAY_STDERR_TAIL_LINES)),
+    readFailureOutput: () =>
+      onOutput ? "Gateway diagnostic output omitted; inspect activitySummaryDiagnostics" : output,
   };
 }
 
 function formatRunFailure(
   error: unknown,
-  gatewayOutput: { readOutput: () => string; readStderrTail: () => string },
+  gatewayOutput: {
+    readOutput: () => string;
+    readStderrTail: () => string;
+    readFailureOutput?: () => string;
+    suppressFailureOutput?: boolean;
+  },
   mockOutput: { readOutput: () => string },
 ): string {
+  if (gatewayOutput.suppressFailureOutput) {
+    return "Gateway benchmark failed; raw output omitted in activity-summary diagnostics mode";
+  }
+  const output = gatewayOutput.readFailureOutput?.() ?? gatewayOutput.readOutput();
   return [
     error instanceof Error ? error.message : String(error),
     gatewayOutput.readStderrTail()
       ? `gateway stderr tail:\n${gatewayOutput.readStderrTail()}`
       : "gateway stderr tail: (empty)",
-    gatewayOutput.readOutput() ? `gateway output tail:\n${gatewayOutput.readOutput()}` : "",
+    output ? `gateway output tail:\n${output}` : "",
     mockOutput.readOutput() ? `mock provider output tail:\n${mockOutput.readOutput()}` : "",
   ]
     .filter(Boolean)
@@ -759,12 +906,202 @@ async function waitForGatewayDispatchReady(
   throw new Error("gateway did not finish dispatch-ready sidecars");
 }
 
+function parseMockRequests(value: unknown, beforeMs: number, afterMs: number): MockRequestSnapshot {
+  if (!isRecord(value) || typeof value.id !== "string" || !value.id || value.id.length > 64) {
+    throw new Error("mock request counter identity is missing");
+  }
+  const counts = <K extends string>(record: unknown, keys: readonly K[]): Record<K, number> => {
+    if (
+      !isRecord(record) ||
+      Object.keys(record).length !== keys.length ||
+      keys.some((key) => !Number.isSafeInteger(record[key]) || (record[key] as number) < 0)
+    ) {
+      throw new Error("mock request counters are invalid");
+    }
+    return Object.fromEntries(keys.map((key) => [key, record[key]])) as Record<K, number>;
+  };
+  return {
+    id: value.id,
+    ingress: counts(value.ingress, MOCK_INGRESS_KEYS),
+    selections: counts(value.selections, MOCK_SELECTION_KEYS),
+    beforeMs,
+    afterMs,
+  };
+}
+
+async function readMockRequests(port: number, deadlineAt: number): Promise<MockRequestSnapshot> {
+  const beforeMs = performance.now();
+  const response = await requestHttp({
+    accept: "application/json",
+    port,
+    path: "/health",
+    deadlineAt,
+  });
+  const afterMs = performance.now();
+  if (response.status !== 200) {
+    throw new Error(`mock request checkpoint failed: HTTP ${response.status}`);
+  }
+  return parseMockRequests(JSON.parse(response.body).requests, beforeMs, afterMs);
+}
+
+function summarizeMockRequests(checkpoints: readonly MockRequestSnapshot[]) {
+  const phases = ["startupAndWarmup", "setup", "agentWarmup", "loadBracket", "postLoad"] as const;
+  if (checkpoints.length !== phases.length + 1) {
+    throw new Error("mock request checkpoints are incomplete");
+  }
+  const first = checkpoints[0]!;
+  if (
+    [...Object.values(first.ingress), ...Object.values(first.selections)].some(
+      (count) => count !== 0,
+    )
+  ) {
+    throw new Error("mock request counters were not zero before Gateway startup");
+  }
+  for (let index = 0; index < checkpoints.length; index += 1) {
+    const current = checkpoints[index]!;
+    const previous = checkpoints[Math.max(0, index - 1)]!;
+    if (
+      current.id !== first.id ||
+      !Number.isFinite(current.beforeMs) ||
+      !Number.isFinite(current.afterMs) ||
+      current.afterMs < current.beforeMs ||
+      (index > 0 && current.beforeMs < previous.afterMs) ||
+      MOCK_INGRESS_KEYS.some((key) => current.ingress[key] < previous.ingress[key]) ||
+      MOCK_SELECTION_KEYS.some((key) => current.selections[key] < previous.selections[key])
+    ) {
+      throw new Error("mock request checkpoints changed identity or regressed");
+    }
+  }
+  const difference = (after: MockRequestSnapshot, before: MockRequestSnapshot) =>
+    Object.fromEntries(
+      MOCK_INGRESS_KEYS.map((key) => [key, after.ingress[key] - before.ingress[key]]),
+    ) as MockRequestSnapshot["ingress"];
+  return {
+    // Acknowledged HTTP brackets partition ingress, not causal work or exact CPU windows.
+    checkpoints,
+    ingress: {
+      ...Object.fromEntries(
+        phases.map((phase, index) => [
+          phase,
+          difference(checkpoints[index + 1]!, checkpoints[index]!),
+        ]),
+      ),
+      total: difference(checkpoints.at(-1)!, first),
+    },
+    selections: { ...checkpoints.at(-1)!.selections },
+  };
+}
+
+function createTurnEvidence(toolEvents: boolean) {
+  const turns = new Map<
+    string,
+    {
+      sessionKey: string;
+      phase: "warmup" | "load";
+      toolCallId?: string;
+      toolCompleted: boolean;
+      final: boolean;
+      observer: boolean;
+    }
+  >();
+  let invalid = false;
+  return {
+    register(runId: string, sessionKey: string, phase: "warmup" | "load" = "load") {
+      if (turns.has(runId)) {
+        throw new Error("duplicate benchmark run identity");
+      }
+      turns.set(runId, { sessionKey, phase, toolCompleted: false, final: false, observer: false });
+    },
+    onEvent(this: void, event: { event: string; payload?: unknown }) {
+      const payload = event.payload;
+      if (!isRecord(payload) || typeof payload.runId !== "string") {
+        return;
+      }
+      const turn = turns.get(payload.runId);
+      if (!turn) {
+        return;
+      }
+      if (event.event === "session.observer") {
+        if (payload.sessionKey === turn.sessionKey && payload.assessment === OBSERVER_ASSESSMENT) {
+          turn.observer = true;
+        }
+        return;
+      }
+      if (!toolEvents || event.event !== "session.tool") {
+        return;
+      }
+      // The WebSocket callback cannot throw into runTurn's promise. Retain bounded
+      // failure state through client teardown, including late duplicate results.
+      const data = payload.data;
+      if (
+        payload.sessionKey !== turn.sessionKey ||
+        !isRecord(data) ||
+        data.name !== "exec" ||
+        typeof data.toolCallId !== "string"
+      ) {
+        invalid = true;
+        return;
+      }
+      if (data.phase === "start") {
+        invalid ||= turn.toolCallId !== undefined;
+        turn.toolCallId = data.toolCallId;
+      } else if (data.phase === "result") {
+        const result = isRecord(data.result) ? data.result : {};
+        const details = isRecord(result.details) ? result.details : {};
+        invalid ||=
+          turn.toolCompleted ||
+          turn.toolCallId !== data.toolCallId ||
+          data.isError !== false ||
+          details.status !== "completed" ||
+          details.exitCode !== 0 ||
+          typeof details.aggregated !== "string" ||
+          !details.aggregated.includes("openclaw-draft-proof");
+        turn.toolCompleted = true;
+      }
+    },
+    complete(runId: string, terminalReply: unknown) {
+      const turn = turns.get(runId);
+      if (
+        !turn ||
+        turn.final ||
+        !isRecord(terminalReply) ||
+        terminalReply.disposition !== "visible" ||
+        terminalReply.text !== "OPENCLAW_E2E_DRAFTPROOF"
+      ) {
+        throw new Error("benchmark tool turn did not produce its expected visible final reply");
+      }
+      turn.final = true;
+    },
+    finish(phase: "warmup" | "load" = "load") {
+      const allTurns = [...turns.values()];
+      if (
+        invalid ||
+        (toolEvents &&
+          allTurns.some((turn) => !turn.toolCallId || !turn.toolCompleted || !turn.final))
+      ) {
+        throw new Error(
+          "benchmark tool lifecycle evidence is missing, duplicated, or unsuccessful",
+        );
+      }
+      // Validate late events from both phases, but keep warmup out of measured totals.
+      const phaseTurns = allTurns.filter((turn) => turn.phase === phase);
+      return {
+        toolTurns: toolEvents ? phaseTurns.length : 0,
+        observerModelDigestTurns: phaseTurns.filter((turn) => turn.observer).length,
+      };
+    },
+  };
+}
+
 function buildConfig(
   root: string,
   mockPort: number,
   concurrency: number,
   pluginCount: number,
   browserSessionClicks: number,
+  agentIds: string[],
+  provider: CliOptions["provider"],
+  activitySummaryDiagnostics = false,
 ): string {
   const controlUiRoot = path.join(root, "control-ui");
   mkdirSync(controlUiRoot, { recursive: true });
@@ -787,21 +1124,41 @@ function buildConfig(
   }
 
   const config = structuredClone(BASE_GATEWAY_BENCH_CONFIG) as Record<string, unknown>;
+  if (activitySummaryDiagnostics) {
+    config.logging = { consoleLevel: "debug", consoleStyle: "json" };
+  }
   config.gateway = {
     ...(config.gateway as Record<string, unknown>),
     controlUi: { enabled: true, root: controlUiRoot },
   };
-  applyMockOpenAiModelConfig(config, { mockPort, modelRef: "openai/gpt-5.6-luna" });
+  if (provider === "openai") {
+    configureLiveGatewayBenchmark(config, root, concurrency);
+  } else {
+    applyMockOpenAiModelConfig(config, {
+      mockPort,
+      modelRef: "openai/gpt-5.6-luna",
+      utilityModelRef: `openai/${UTILITY_MODEL_ID}`,
+    });
+  }
+  const plugins = config.plugins as { entries: Record<string, unknown> };
+  plugins.entries["memory-core"] = { config: { dreaming: { enabled: false } } };
   const agents = config.agents as Record<string, unknown>;
   agents.defaults = {
     ...(agents.defaults as Record<string, unknown>),
     maxConcurrent: concurrency,
     heartbeat: { every: "0m" },
-    utilityModel: "openai/gpt-5.6-luna",
   };
   const pluginFixtures =
     pluginCount > 0 ? writePluginFixtures(root, { count: pluginCount }) : undefined;
-  return writeGatewayBenchConfig(root, config, { pluginFixtures });
+  const agentList =
+    agentIds.length > 1 || provider === "openai"
+      ? agentIds.map((id, index) => {
+          const workspace = path.join(root, `workspace-${id}`);
+          mkdirSync(workspace, { recursive: true });
+          return { id, default: index === 0, workspace };
+        })
+      : undefined;
+  return writeGatewayBenchConfig(root, config, { agentList, pluginFixtures });
 }
 
 async function readGatewayProtocolVersion(entry: string): Promise<number> {
@@ -828,12 +1185,14 @@ async function connectGateway(
   deadlineAt: number,
   protocolVersion: number,
   subscribeSessions = true,
+  onEvent?: Parameters<typeof createGatewayWsClient>[0]["onEvent"],
 ) {
   let requestDeadlineAt = deadlineAt;
   const client = createGatewayWsClient({
     handshakeTimeoutMs: Math.min(8_000, requireRemainingMs(deadlineAt, "connecting WebSocket")),
     openTimeoutMs: Math.min(8_000, requireRemainingMs(deadlineAt, "opening WebSocket")),
     url: `ws://127.0.0.1:${port}`,
+    onEvent,
   });
   await client.waitOpen();
 
@@ -882,6 +1241,23 @@ async function connectGateway(
   }
   return {
     close: client.close,
+    waitClosed: () =>
+      new Promise<void>((resolve, reject) => {
+        if (client.ws.readyState === client.ws.CLOSED) {
+          resolve();
+          return;
+        }
+        const onClose = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          client.ws.off("close", onClose);
+          reject(new Error("benchmark event client did not close"));
+        }, HTTP_TIMEOUT_MS);
+        timer.unref();
+        client.ws.once("close", onClose);
+      }),
     request: requestRpc,
     setDeadlineAt: (value: number) => {
       requestDeadlineAt = value;
@@ -931,27 +1307,168 @@ async function timeRpcProbe(
   }
 }
 
+function readProviderRequestLog(file: string): string[] {
+  // A live append may have an incomplete final record. Its producer ordinal belongs to the next snapshot.
+  return existsSync(file) ? readFileSync(file, "utf8").split("\n").slice(0, -1) : [];
+}
+
+function summarizeProviderRequests(
+  lines: string[],
+  beforeLoad: number,
+  afterLoad: number,
+  warmup?: { beforeOrdinal: number; afterOrdinal: number },
+) {
+  if (beforeLoad < 0 || beforeLoad > afterLoad || afterLoad > lines.length) {
+    throw new Error("mock provider request snapshots are out of order");
+  }
+  if (
+    warmup &&
+    (warmup.beforeOrdinal < 0 ||
+      warmup.beforeOrdinal > warmup.afterOrdinal ||
+      warmup.afterOrdinal > beforeLoad)
+  ) {
+    throw new Error("mock provider warmup snapshots are out of order");
+  }
+  const createPhase = () => ({
+    total: 0,
+    inference: 0,
+    byEndpoint: {} as Record<string, number>,
+    requestBytes: 0,
+    unknownRequestBytes: 0,
+    bytesByEndpoint: {} as Record<string, number>,
+    bytesByPurpose: { "activity-recap": 0, "session-observer": 0, "benchmark-turn": 0, other: 0 },
+    byPurpose: { "activity-recap": 0, "session-observer": 0, "benchmark-turn": 0, other: 0 },
+  });
+  const phases = {
+    warmup: createPhase(),
+    setup: createPhase(),
+    load: createPhase(),
+    afterLoad: createPhase(),
+  };
+  const turns = new Map<number, { withoutToolOutput: number; withToolOutput: number }>();
+  let unboundInference = 0;
+  const loadContinuations = { withPreviousResponse: 0, withToolOutput: 0, unboundToolOutput: 0 };
+  for (const [index, line] of lines.entries()) {
+    const record = JSON.parse(line) as {
+      seq: number;
+      method: string;
+      path: string;
+      body: unknown;
+      requestBytes?: number;
+      inferenceFacts?: MockInferenceFacts;
+    };
+    if (record.seq !== index + 1) {
+      throw new Error("mock provider request log has a missing or repeated ordinal");
+    }
+    const phase =
+      warmup && record.seq > warmup.beforeOrdinal && record.seq <= warmup.afterOrdinal
+        ? phases.warmup
+        : record.seq <= beforeLoad
+          ? phases.setup
+          : record.seq <= afterLoad
+            ? phases.load
+            : phases.afterLoad;
+    const endpoint = `${record.method} ${record.path}`;
+    const bytes = record.requestBytes;
+    const knownBytes = typeof bytes === "number" && Number.isSafeInteger(bytes) && bytes >= 0;
+    phase.requestBytes += knownBytes ? bytes : 0;
+    phase.unknownRequestBytes += Number(!knownBytes);
+    phase.bytesByEndpoint[endpoint] =
+      (phase.bytesByEndpoint[endpoint] ?? 0) + (knownBytes ? bytes : 0);
+    phase.total += 1;
+    phase.byEndpoint[endpoint] = (phase.byEndpoint[endpoint] ?? 0) + 1;
+    if (
+      record.method !== "POST" ||
+      !["/v1/responses", "/v1/chat/completions"].includes(record.path)
+    ) {
+      continue;
+    }
+    phase.inference += 1;
+    let body: unknown;
+    // The mock intentionally replaces oversized or unparseable bodies with bounded evidence.
+    // Keep those arrivals in the denominator even when a turn marker cannot be recovered.
+    if (typeof record.body === "string") {
+      try {
+        body = JSON.parse(record.body);
+      } catch {
+        body = undefined;
+      }
+    }
+    const facts = record.inferenceFacts ?? summarizeMockInferenceRequest(body);
+    phase.byPurpose[facts.purpose] += 1;
+    phase.bytesByPurpose[facts.purpose] += knownBytes ? bytes : 0;
+    if (phase !== phases.load) {
+      continue;
+    }
+    loadContinuations.withPreviousResponse += Number(facts.hasPreviousResponse);
+    loadContinuations.withToolOutput += Number(facts.hasToolOutput);
+    const turnIndex = facts.benchmarkPhase === "load" ? facts.turnIndex : undefined;
+    if (turnIndex === undefined) {
+      loadContinuations.unboundToolOutput += Number(facts.hasToolOutput);
+      unboundInference += 1;
+      continue;
+    }
+    const turn = turns.get(turnIndex) ?? { withoutToolOutput: 0, withToolOutput: 0 };
+    turn[facts.hasToolOutput ? "withToolOutput" : "withoutToolOutput"] += 1;
+    turns.set(turnIndex, turn);
+  }
+  return {
+    scope:
+      "complete request records observed at snapshots outside the timed load; arrivals, not HTTP completion status",
+    beforeLoadOrdinal: beforeLoad,
+    afterLoadOrdinal: afterLoad,
+    ...phases,
+    loadTurns: [...turns]
+      .toSorted(([left], [right]) => left - right)
+      .map(([turnIndex, counts]) => ({
+        turnIndex,
+        withoutToolOutput: counts.withoutToolOutput,
+        withToolOutput: counts.withToolOutput,
+      })),
+    loadPurposes: phases.load.byPurpose,
+    loadContinuations,
+    unboundLoadInference: unboundInference,
+    unclassifiedLoadInference: phases.load.byPurpose.other,
+  };
+}
+
 async function runTurn(
   rpc: GatewayRpc,
   index: number,
   deadlineAt: number,
   toolEvents = false,
-  options?: { onStarted?: () => void; sessionKey?: string },
+  options?: {
+    onStarted?: () => void;
+    warmup?: boolean;
+    sessionKey?: string;
+    accounting?: BenchmarkRun["turnAccounting"];
+    evidence?: ReturnType<typeof createTurnEvidence>;
+    live?: LiveGatewayEvidence;
+  },
 ): Promise<void> {
   const requestedRunId = randomUUID();
+  const sessionKey = options?.sessionKey ?? `agent:main:gateway-concurrency-${index + 1}`;
+  const evidence = options?.evidence ?? createTurnEvidence(toolEvents);
+  evidence.register(requestedRunId, sessionKey, options?.warmup ? "warmup" : "load");
+  if (options?.accounting) {
+    options.accounting.launched += 1;
+  }
   const started = await rpc<{ runId?: string; status?: string }>("agent", {
-    sessionKey: options?.sessionKey ?? `agent:main:gateway-concurrency-${index + 1}`,
-    message: toolEvents
-      ? `OPENCLAW_E2E_DRAFTPROOF benchmark tool stream ${index + 1}.`
-      : `Reply with benchmark stream ${index + 1}.`,
+    sessionKey,
+    message:
+      options?.live?.register(requestedRunId, sessionKey, index) ??
+      (toolEvents
+        ? `${TOOL_SUCCESS_MARKER} benchmark ${options?.warmup ? "warmup " : ""}tool stream ${index + 1}.`
+        : `Reply with benchmark ${options?.warmup ? "warmup " : ""}stream ${index + 1}.`),
     deliver: false,
     idempotencyKey: requestedRunId,
   });
+  options?.live?.accept(requestedRunId, started);
   options?.onStarted?.();
-  if (started.status === "ok") {
-    return;
+  if (options?.evidence && started.runId !== undefined && started.runId !== requestedRunId) {
+    throw new Error("agent returned a different benchmark run identity");
   }
-  if (started.status !== "accepted") {
+  if (started.status !== "accepted" && started.status !== "ok") {
     throw new Error(`agent ${index + 1} was not accepted: ${JSON.stringify(started)}`);
   }
   const remaining = requireRemainingMs(deadlineAt, `waiting for agent ${index + 1} completion`);
@@ -959,16 +1476,52 @@ async function runTurn(
   // an active turn while the benchmark still has time to measure completion.
   const waitTimeoutMs = Math.max(0, Math.floor(remaining - AGENT_WAIT_RPC_GRACE_MS));
   const rpcTimeoutMs = Math.max(1, Math.ceil(remaining));
-  const completed = await rpc<{ status?: string }>(
+  const runId = started.runId ?? requestedRunId;
+  const completed = await rpc<
+    Awaited<ReturnType<ReturnType<typeof createAgentTurnService>["waitForTurn"]>>["result"]
+  >(
     "agent.wait",
     {
-      runId: started.runId ?? requestedRunId,
+      runId,
       timeoutMs: waitTimeoutMs,
     },
     rpcTimeoutMs,
   );
   if (completed.status !== "ok") {
     throw new Error(`agent ${index + 1} did not complete: ${JSON.stringify(completed)}`);
+  }
+  if (options?.accounting) {
+    options.accounting.terminalOk += 1;
+  }
+  if (completed.runId !== runId) {
+    throw new Error("agent.wait returned a different or missing benchmark run identity");
+  }
+  const receipt = completed.terminalReceipt;
+  const reply = completed.terminalReply;
+  if (options?.live) {
+    options.live.complete(runId, completed);
+  } else if (
+    completed.error ||
+    completed.pendingError ||
+    completed.yielded ||
+    receipt?.runId !== runId ||
+    !receipt.sessionId ||
+    !receipt.turnId ||
+    receipt.rerouted ||
+    receipt.terminalDisposition !== "visible" ||
+    receipt.effective.provider !== "openai" ||
+    receipt.effective.model !== "gpt-5.6-luna" ||
+    reply?.disposition !== "visible" ||
+    reply.text !== (toolEvents ? TOOL_SUCCESS_MARKER : STREAM_SUCCESS_MARKER) ||
+    (toolEvents && !receipt.successfulToolNames.includes("exec"))
+  ) {
+    throw new Error(`agent ${index + 1} terminal evidence failed: ${JSON.stringify(completed)}`);
+  }
+  if (toolEvents) {
+    evidence.complete(requestedRunId, completed.terminalReply);
+  }
+  if (options?.accounting) {
+    options.accounting.verified += 1;
   }
 }
 
@@ -978,16 +1531,24 @@ async function runSessionTurns(
   deadlineAt: number,
   options: {
     onStarted?: () => void;
+    warmup?: boolean;
     sessionKey: string;
     toolEvents: boolean;
     turnsPerSession: number;
+    evidence?: ReturnType<typeof createTurnEvidence>;
+    accounting?: BenchmarkRun["turnAccounting"];
+    live?: LiveGatewayEvidence;
   },
 ): Promise<number> {
   for (let turn = 0; turn < options.turnsPerSession; turn += 1) {
     requireRemainingMs(deadlineAt, `starting session ${index + 1} turn ${turn + 1}`);
     await runTurn(rpc, index * options.turnsPerSession + turn, deadlineAt, options.toolEvents, {
       sessionKey: options.sessionKey,
+      warmup: options.warmup,
+      accounting: options.accounting,
       onStarted: turn === 0 ? options.onStarted : undefined,
+      evidence: options.evidence,
+      live: options.live,
     });
   }
   return options.turnsPerSession;
@@ -999,6 +1560,7 @@ async function sampleGateway(params: {
   rpc: GatewayRpc;
   runStartedAt: number;
   serial?: boolean;
+  activitySummaryDiagnostics?: ReturnType<typeof createActivitySummaryDiagnostics>;
 }): Promise<GatewaySample> {
   const atMs = performance.now() - params.runStartedAt;
   const safeHttpProbe = async (pathValue: string, accept: string) => {
@@ -1034,7 +1596,9 @@ async function sampleGateway(params: {
         {},
         Math.min(HTTP_TIMEOUT_MS, requireRemainingMs(params.deadlineAt, "probing sessions.list")),
       );
-      return { error: null, latencyMs: performance.now() - startedAt, ok: true, payload };
+      const latencyMs = performance.now() - startedAt;
+      params.activitySummaryDiagnostics?.onProbe(payload);
+      return { error: null, latencyMs, ok: true, payload };
     } catch (error) {
       return {
         error: describeProbeError(error),
@@ -1163,6 +1727,11 @@ async function runProbeRounds(params: {
 }
 
 async function runGatewaySample(options: {
+  provider: CliOptions["provider"];
+  output?: string;
+  agentCount: number;
+  agentWarmupTurns: number;
+  gatewayCpus?: string;
   browserHistoryMessages: number;
   browserSessionClicks: number;
   cadenceMs: number;
@@ -1170,6 +1739,7 @@ async function runGatewaySample(options: {
   controlPlane: boolean;
   deadlineAt: number;
   diagnosticsTimeline: boolean;
+  activitySummaryDiagnostics: boolean;
   entry: string;
   cpuProfDir?: string;
   loadCpuProfDir?: string;
@@ -1191,11 +1761,29 @@ async function runGatewaySample(options: {
   visibleObserver: boolean;
   workspaceFanout: boolean;
 }): Promise<BenchmarkRun> {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-concurrency-"));
-  const [port, mockPort] = await Promise.all([getFreePort(), getFreePort()]);
+  if (options.provider === "openai" && !process.env.OPENAI_API_KEY?.trim()) {
+    throw new Error("OpenAI benchmark requires OPENAI_API_KEY");
+  }
+  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "openclaw-gateway-concurrency-"));
+  const [port, mockPort] = await Promise.all([
+    getFreePort(),
+    options.provider === "mock" ? getFreePort() : Promise.resolve(0),
+  ]);
   const runStartedAt = performance.now();
+  const activityDiagnostics =
+    options.activitySummaryDiagnostics && options.provider === "mock"
+      ? createActivitySummaryDiagnostics(runStartedAt)
+      : undefined;
+  const agentIds = Array.from({ length: options.agentCount }, (_, index) =>
+    index === 0 ? "main" : `bench-agent-${index + 1}`,
+  );
+  const live =
+    options.provider === "openai"
+      ? createLiveGatewayEvidence(agentIds, options.turnsPerSession)
+      : undefined;
   const timelinePath = path.join(root, "diagnostics-timeline.jsonl");
   const requestLogPath = path.join(root, "mock-provider-requests.jsonl");
+  const responseControlPath = path.join(root, "mock-provider-responses.json");
   const heapProfilePath = options.heapProfDir
     ? path.resolve(options.heapProfDir, `gateway-load-${randomUUID()}.heapprofile`)
     : undefined;
@@ -1210,9 +1798,19 @@ async function runGatewaySample(options: {
   const auxiliaryClients: Array<Awaited<ReturnType<typeof connectGateway>>> = [];
   let probesStopped = false;
   const probeJobs: Promise<unknown>[] = [];
-  let gatewayOutput = { readOutput: () => "", readStderrTail: () => "" };
+  let gatewayOutput = {
+    readOutput: () => "",
+    readStderrTail: () => "",
+    readFailureOutput: () => "",
+    suppressFailureOutput: Boolean(activityDiagnostics),
+  };
   let mockOutput = { readOutput: () => "", readStderrTail: () => "" };
-  let result: BenchmarkRun;
+  let result: Omit<
+    BenchmarkRun,
+    "mockRequests" | "turnEvidence" | "providerRequests" | "agentWarmup"
+  >;
+  const mockCheckpoints: MockRequestSnapshot[] = [];
+  const turnEvidence = createTurnEvidence(options.toolEvents);
   let gatewayExit: Awaited<ReturnType<typeof stopChild>> | undefined;
   let gatewayExitEvent: GatewayChildExit | undefined;
   let gatewayCloseEvent: GatewayChildExit | undefined;
@@ -1224,6 +1822,17 @@ async function runGatewaySample(options: {
     closeEvent: gatewayCloseEvent,
   });
   let timelineWindow: { from: number; through: number } | undefined;
+  const turnAccounting = { launched: 0, terminalOk: 0, verified: 0 };
+  const agentWarmup = {
+    durationMs: 0,
+    launched: 0,
+    terminalOk: 0,
+    verified: 0,
+    beforeOrdinal: 0,
+    afterOrdinal: 0,
+  };
+  let providerBeforeLoad: number | undefined;
+  let providerAfterLoad: number | undefined;
 
   try {
     try {
@@ -1233,21 +1842,43 @@ async function runGatewaySample(options: {
         options.concurrency,
         options.pluginCount,
         options.browserSessionClicks,
+        agentIds,
+        options.provider,
+        Boolean(activityDiagnostics),
       );
-      mockProvider = spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
-        cwd: process.cwd(),
-        detached: process.platform !== "win32",
-        env: {
-          LANG: process.env.LANG ?? "en_US.UTF-8",
-          PATH: process.env.PATH,
-          MOCK_PORT: String(mockPort),
-          MOCK_REQUEST_LOG: requestLogPath,
-          MOCK_RESPONSE_CHUNK_DELAY_MS: String(options.streamChunkDelayMs),
-          SUCCESS_MARKER: "OpenClaw gateway concurrency benchmark streaming response.",
-        },
-      });
-      mockOutput = captureChildOutput(mockProvider);
-      await waitForMockServer(mockPort, options.deadlineAt);
+      if (!live) {
+        writeFileSync(
+          responseControlPath,
+          JSON.stringify({
+            models: {
+              [UTILITY_MODEL_ID]: {
+                text: JSON.stringify({
+                  headline: "Synthetic benchmark work is progressing.",
+                  assessment: OBSERVER_ASSESSMENT,
+                  health: "on-track",
+                }),
+              },
+            },
+          }),
+        );
+        mockProvider = spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
+          cwd: process.cwd(),
+          detached: process.platform !== "win32",
+          env: {
+            LANG: process.env.LANG ?? "en_US.UTF-8",
+            PATH: process.env.PATH,
+            MOCK_PORT: String(mockPort),
+            MOCK_RESPONSE_CONTROL: responseControlPath,
+            MOCK_REQUEST_LOG: requestLogPath,
+            MOCK_RESPONSE_CHUNK_DELAY_MS: String(options.streamChunkDelayMs),
+            SUCCESS_MARKER: STREAM_SUCCESS_MARKER,
+          },
+        });
+        await once(mockProvider, "spawn");
+        mockOutput = captureChildOutput(mockProvider);
+        await waitForMockServer(mockPort, options.deadlineAt);
+        mockCheckpoints.push(await readMockRequests(mockPort, options.deadlineAt));
+      }
 
       if (options.cpuProfDir) {
         mkdirSync(options.cpuProfDir, { recursive: true });
@@ -1264,11 +1895,17 @@ async function runGatewaySample(options: {
           }
         }
       }
+      if (options.gatewayCpus && process.platform !== "linux") {
+        throw new Error("--gateway-cpus requires Linux taskset");
+      }
+      const profiledArgs = options.cpuProfDir
+        ? ["--cpu-prof", `--cpu-prof-dir=${options.cpuProfDir}`, ...gatewayArgs]
+        : gatewayArgs;
       gateway = spawn(
-        process.execPath,
-        options.cpuProfDir
-          ? ["--cpu-prof", `--cpu-prof-dir=${options.cpuProfDir}`, ...gatewayArgs]
-          : gatewayArgs,
+        options.gatewayCpus ? "taskset" : process.execPath,
+        options.gatewayCpus
+          ? ["--cpu-list", options.gatewayCpus, process.execPath, ...profiledArgs]
+          : profiledArgs,
         {
           cwd: process.cwd(),
           detached: process.platform !== "win32",
@@ -1285,7 +1922,7 @@ async function runGatewaySample(options: {
                 OPENCLAW_SKIP_CHANNELS: "1",
               },
             }),
-            OPENAI_API_KEY: "gateway-concurrency-benchmark",
+            OPENAI_API_KEY: live ? process.env.OPENAI_API_KEY : "gateway-concurrency-benchmark",
           },
         },
       );
@@ -1303,7 +1940,9 @@ async function runGatewaySample(options: {
           signal,
         };
       });
-      gatewayOutput = captureChildOutput(gateway);
+      // A failed launch emits error instead of exit; reject into teardown before polling readiness.
+      await once(gateway, "spawn");
+      gatewayOutput = captureChildOutput(gateway, activityDiagnostics?.onOutput);
       const ready = await waitForInitialProbe({
         deadlineAt: options.deadlineAt,
         isDone: () => gateway?.exitCode != null || gateway?.signalCode != null,
@@ -1312,11 +1951,16 @@ async function runGatewaySample(options: {
         startAt: runStartedAt,
       });
       if (ready.status !== 200) {
-        throw new Error(`gateway did not become ready\n${gatewayOutput.readOutput()}`);
+        throw new Error(`gateway did not become ready\n${gatewayOutput.readFailureOutput()}`);
       }
       await waitForGatewayDispatchReady(gatewayOutput.readOutput, options.deadlineAt);
-      client = await connectGateway(port, options.deadlineAt, protocolVersion);
+      client = await connectGateway(port, options.deadlineAt, protocolVersion, true, (event) => {
+        activityDiagnostics?.onEvent(event);
+        turnEvidence.onEvent(event);
+        live?.onEvent(event);
+      });
       const rpc = client.request;
+      await live?.verifyConfiguration(rpc);
       if (options.visibleObserver) {
         await rpc("sessions.observer.visibility", { visible: true });
       }
@@ -1333,13 +1977,18 @@ async function runGatewaySample(options: {
             port,
             rpc,
             runStartedAt,
+            activitySummaryDiagnostics: activityDiagnostics,
           }),
       });
       const setupDeadlineAt = performance.now() + options.timeoutMs;
       const setupStartedAt = performance.now();
+      if (!live) {
+        mockCheckpoints.push(await readMockRequests(mockPort, setupDeadlineAt));
+      }
       client.setDeadlineAt(setupDeadlineAt);
       const sessionCount = Math.max(options.concurrency, options.sessionCount);
       const prepareSessions =
+        options.agentCount > 1 ||
         options.browserSessionClicks > 0 ||
         options.workspaceFanout ||
         options.sessionCount > 0 ||
@@ -1347,9 +1996,12 @@ async function runGatewaySample(options: {
         options.historyMessages > 0 ||
         options.sessionUpdates > 0 ||
         options.subscribers > 0;
-      const sessionKeys = Array.from(
+      const sessionAgents = Array.from(
         { length: sessionCount },
-        (_, index) => `agent:main:gateway-concurrency-${index + 1}`,
+        (_, index) => agentIds[index % agentIds.length]!,
+      );
+      const sessionKeys = sessionAgents.map(
+        (agentId, index) => `agent:${agentId}:gateway-concurrency-${index + 1}`,
       );
       const sessionSeedStartedAt = performance.now();
       if (prepareSessions) {
@@ -1371,7 +2023,7 @@ async function runGatewaySample(options: {
               }
               await rpc("sessions.create", {
                 key: sessionKey,
-                agentId: "main",
+                agentId: sessionAgents[index],
                 ...(workspaceDir ? { cwd: workspaceDir } : {}),
               });
               for (
@@ -1439,6 +2091,84 @@ async function runGatewaySample(options: {
       // Normal inventory maintenance can archive older fixture sessions while seeding.
       // Active turns and observers use the newest sessions; history still spans the inventory.
       const turnSessionKeys = sessionKeys.slice(-options.concurrency);
+      const turnAgentIds = sessionAgents.slice(-options.concurrency);
+      const agentCoverage: BenchmarkRun["agentCoverage"] =
+        options.agentCount > 1
+          ? {
+              configuredAgentIds: agentIds,
+              activeTurnAgentIds: [...new Set(turnAgentIds)],
+              beforeLoad: [],
+              completedTurns: [],
+            }
+          : undefined;
+      if (agentCoverage) {
+        for (const agentId of agentIds) {
+          // Require published runtime facts before measuring the configured roster.
+          const models = await rpc<ModelsListResult>("models.list", {
+            agentId,
+            view: "configured",
+            refresh: false,
+          });
+          if (
+            (live ? [LIVE_GATEWAY_MODEL_ID] : ["gpt-5.6-luna", UTILITY_MODEL_ID]).some(
+              (id) =>
+                !models.models.some((model) => model.provider === "openai" && model.id === id),
+            )
+          ) {
+            throw new Error(`Configured benchmark model is not published for ${agentId}`);
+          }
+          const storePath = path.join(
+            root,
+            "state",
+            "agents",
+            agentId,
+            "agent",
+            "openclaw-agent.sqlite",
+          );
+          const sessions: SessionsListResult[] = [];
+          let offset = 0;
+          for (;;) {
+            const page = await rpc<SessionsListResult>("sessions.list", {
+              agentId,
+              archived: "all",
+              limit: 1_000,
+              offset,
+            });
+            if (page.path !== storePath || page.count !== page.sessions.length) {
+              throw new Error(`Benchmark session store or page mismatch for ${agentId}`);
+            }
+            sessions.push(page);
+            if (!page.hasMore) {
+              break;
+            }
+            if (
+              !Number.isSafeInteger(page.nextOffset) ||
+              page.nextOffset == null ||
+              page.nextOffset <= offset ||
+              page.nextOffset > sessionCount + browserTargets.length
+            ) {
+              throw new Error(`Benchmark session pagination did not advance for ${agentId}`);
+            }
+            offset = page.nextOffset;
+          }
+          const expectedKeys = sessionKeys.filter((_, index) => sessionAgents[index] === agentId);
+          const observedRows = sessions.flatMap((page) =>
+            page.sessions.filter((row) => row.key.includes(":gateway-concurrency-")),
+          );
+          const observedKeys = new Set(observedRows.map((row) => row.key));
+          if (
+            observedRows.length !== expectedKeys.length ||
+            observedKeys.size !== expectedKeys.length ||
+            observedRows.some((row) => row.agentId !== agentId) ||
+            expectedKeys.some((key) => !observedKeys.has(key))
+          ) {
+            throw new Error(
+              `Benchmark session inventory or distinct store mismatch for ${agentId}`,
+            );
+          }
+          agentCoverage.beforeLoad.push({ agentId, models, sessions });
+        }
+      }
       const messageSubscriptions: TimedProbe[] = [];
       for (let index = 0; index < options.subscribers; index += 1) {
         const subscriber = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
@@ -1486,7 +2216,44 @@ async function runGatewaySample(options: {
       if (subscriptionProbeClient) {
         auxiliaryClients.push(subscriptionProbeClient);
       }
+      if (!live) {
+        mockCheckpoints.push(await readMockRequests(mockPort, setupDeadlineAt));
+      }
+      let preparedDeadlineAt = setupDeadlineAt;
+      if (!live) {
+        agentWarmup.beforeOrdinal = readProviderRequestLog(requestLogPath).length;
+      }
+      activityDiagnostics?.setPhase("warmup");
+      const agentWarmupStartedAt = performance.now();
+      if (options.agentWarmupTurns > 0) {
+        const warmupDeadlineAt = performance.now() + options.timeoutMs;
+        preparedDeadlineAt = warmupDeadlineAt;
+        client.setDeadlineAt(warmupDeadlineAt);
+        try {
+          await Promise.all(
+            turnSessionKeys.map((sessionKey, index) =>
+              runSessionTurns(rpc, index, warmupDeadlineAt, {
+                sessionKey,
+                warmup: true,
+                toolEvents: options.toolEvents,
+                turnsPerSession: options.agentWarmupTurns,
+                accounting: agentWarmup,
+                evidence: turnEvidence,
+              }),
+            ),
+          );
+        } finally {
+          agentWarmup.durationMs = performance.now() - agentWarmupStartedAt;
+          agentWarmup.afterOrdinal = readProviderRequestLog(requestLogPath).length;
+        }
+      } else {
+        agentWarmup.afterOrdinal = agentWarmup.beforeOrdinal;
+      }
+      // Warm turns exercise this Gateway's runtime; they do not prove background queues drained.
       const memoryBefore = await readGatewayMemory(rpc, runStartedAt);
+      if (!live) {
+        mockCheckpoints.push(await readMockRequests(mockPort, preparedDeadlineAt));
+      }
       if (loadCpuProfilePath) {
         await controlGatewayProfile(gateway, "cpu", "start", loadCpuProfilePath, {
           includeWorkers: true,
@@ -1500,6 +2267,7 @@ async function runGatewaySample(options: {
       const setupDurationMs = performance.now() - setupStartedAt;
       // Large session fixtures are setup, not benchmarked load. Every measured
       // run therefore gets its complete timeout after all clients are ready.
+      activityDiagnostics?.setPhase("load");
       const loadDeadlineAt = performance.now() + options.timeoutMs;
       client.setDeadlineAt(loadDeadlineAt);
       for (const auxiliaryClient of auxiliaryClients) {
@@ -1507,7 +2275,7 @@ async function runGatewaySample(options: {
       }
       const controlPlane: BenchmarkRun["controlPlane"] = [];
       const controlUi: ControlUiProbe[] = [];
-      const history: TimedProbe[] = [];
+      const history: BenchmarkRun["history"] = [];
       const messageSubscriptionsDuringLoad: TimedProbe[] = [];
       const readyz: ReadyProbe[] = [];
       const sessionsList: TimedProbe[] = [];
@@ -1523,6 +2291,26 @@ async function runGatewaySample(options: {
       const allTurnsStarted = new Promise<void>((resolve) => {
         resolveAllTurnsStarted = resolve;
       });
+      if (!live) {
+        providerBeforeLoad = readProviderRequestLog(requestLogPath).length;
+      }
+      const processPlacement =
+        process.platform === "linux" && mockProvider?.pid
+          ? {
+              driver: {
+                pid: process.pid,
+                affinity: readFileSync("/proc/self/status", "utf8").match(
+                  /^Cpus_allowed_list:\s*(.+)$/mu,
+                )?.[1],
+              },
+              mockProvider: {
+                pid: mockProvider.pid,
+                affinity: readFileSync(`/proc/${mockProvider.pid}/status`, "utf8").match(
+                  /^Cpus_allowed_list:\s*(.+)$/mu,
+                )?.[1],
+              },
+            }
+          : undefined;
       const cpuBefore = await readGatewayCpuUsage(gateway);
       const turnsStartedAt = performance.now();
       // Keep the live artifact intact: buffered setup writes can arrive after this boundary.
@@ -1541,6 +2329,9 @@ async function runGatewaySample(options: {
             sessionKey,
             toolEvents: options.toolEvents,
             turnsPerSession: options.turnsPerSession,
+            evidence: turnEvidence,
+            accounting: turnAccounting,
+            live,
           }),
         ),
       ).finally(() => {
@@ -1599,6 +2390,7 @@ async function runGatewaySample(options: {
               port,
               rpc,
               runStartedAt,
+              activitySummaryDiagnostics: activityDiagnostics,
             }),
             subscriptionProbeClient && subscriptionKey
               ? timeRpcProbe(
@@ -1650,14 +2442,18 @@ async function runGatewaySample(options: {
             stopped: () => probesStopped,
             runRound: async () => {
               const probes = await Promise.all(
-                Array.from({ length: options.historyBurst }, (_, index) =>
-                  timeRpcProbe(
+                Array.from({ length: options.historyBurst }, (_, index) => {
+                  const sessionKey = sessionKeys[(offset + index) % sessionKeys.length]!;
+                  const probe = timeRpcProbe(
                     historyClient.request,
                     "chat.history",
-                    { sessionKey: sessionKeys[(offset + index) % sessionKeys.length] },
+                    { sessionKey },
                     runStartedAt,
-                  ),
-                ),
+                  );
+                  return agentCoverage
+                    ? probe.then((sample) => ({ ...sample, sessionKey }))
+                    : probe;
+                }),
               );
               history.push(...probes);
               offset += options.historyBurst;
@@ -1702,6 +2498,9 @@ async function runGatewaySample(options: {
       const cpuAfter = await readGatewayCpuUsage(gateway);
       const loadEndMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
       const turnsDurationMs = performance.now() - turnsStartedAt;
+      if (!live) {
+        providerAfterLoad = readProviderRequestLog(requestLogPath).length;
+      }
       const memoryAfter = await readGatewayMemory(rpc, runStartedAt);
       timelineWindow = { from: timelineFrom, through: Date.now() };
       let loadCpuProfile: BenchmarkRun["loadCpuProfile"];
@@ -1722,16 +2521,27 @@ async function runGatewaySample(options: {
           workersManifestPath: `${heapProfilePath}.workers.json`,
         };
       }
+      await live?.captureHistories(rpc);
       if (options.historyClients > 0 && !history.some((sample) => sample.ok)) {
         const failure = history[0]?.error ?? "no requests completed before turns finished";
         throw new Error(`all configured chat.history load probes failed: ${failure}`);
       }
       peakRssMb = Math.max(peakRssMb, memoryAfter.rssMb);
-      const modelRequestCount = existsSync(requestLogPath)
-        ? readFileSync(requestLogPath, "utf8").split(/\r?\n/u).filter(Boolean).length
-        : 0;
+      if (!live) {
+        mockCheckpoints.push(await readMockRequests(mockPort, loadDeadlineAt));
+      }
 
+      if (agentCoverage) {
+        agentCoverage.completedTurns = agentIds.map((agentId) => ({
+          agentId,
+          count: sessionTurnCounts.reduce(
+            (total, count, index) => total + (turnAgentIds[index] === agentId ? count : 0),
+            0,
+          ),
+        }));
+      }
       result = {
+        ...(agentCoverage ? { agentCoverage } : {}),
         ...(browserProbe && browserInventory
           ? {
               browser: {
@@ -1748,6 +2558,7 @@ async function runGatewaySample(options: {
         controlPlane,
         controlUi,
         cpuUsage: measureGatewayCpuUsage(cpuBefore, cpuAfter),
+        processPlacement,
         durationMs: performance.now() - runStartedAt,
         freshConnection: freshConnectionResult,
         history,
@@ -1758,7 +2569,7 @@ async function runGatewaySample(options: {
         memory: { after: memoryAfter, before: memoryBefore, peakRssMb },
         messageSubscriptions,
         messageSubscriptionsDuringLoad,
-        modelRequestCount,
+        turnAccounting,
         probeWarmup,
         pluginMetadataScans: summarizePluginMetadataScans([]),
         readyz,
@@ -1771,8 +2582,26 @@ async function runGatewaySample(options: {
       };
     } catch (error) {
       const detail = formatRunFailure(error, gatewayOutput, mockOutput);
+      console.error(
+        `turn accounting at failure: ${JSON.stringify({ requested: options.concurrency * options.turnsPerSession, ...turnAccounting, agentWarmup })}`,
+      );
+      if (!live) {
+        try {
+          const requests = readProviderRequestLog(requestLogPath);
+          console.error(
+            `provider requests at failure: ${JSON.stringify(summarizeProviderRequests(requests, providerBeforeLoad ?? requests.length, providerAfterLoad ?? requests.length, agentWarmup))}`,
+          );
+        } catch (accountingError) {
+          console.error(
+            activityDiagnostics
+              ? "provider request accounting failed; diagnostic error details omitted"
+              : `provider request accounting failed: ${String(accountingError)}`,
+          );
+        }
+      }
       throw new Error(detail, { cause: error });
     } finally {
+      activityDiagnostics?.setPhase("shutdown");
       probesStopped = true;
       try {
         await browserProbe?.close();
@@ -1780,24 +2609,34 @@ async function runGatewaySample(options: {
         for (const auxiliaryClient of auxiliaryClients) {
           auxiliaryClient.close();
         }
-        client?.close();
-        if (gateway) {
-          if (options.cpuProfDir && gateway.exitCode === null && gateway.signalCode === null) {
-            // V8 flushes the main-isolate CPU profile on its normal interrupt path.
-            const profileFlushed = new Promise<void>((resolve) => {
-              gateway!.once("exit", () => {
-                resolve();
+        try {
+          if (gateway) {
+            if (options.cpuProfDir && gateway.exitCode === null && gateway.signalCode === null) {
+              // V8 flushes the main-isolate CPU profile on its normal interrupt path.
+              const profileFlushed = new Promise<void>((resolve) => {
+                gateway!.once("exit", () => {
+                  resolve();
+                });
               });
-            });
-            gateway.kill("SIGINT");
-            await Promise.race([profileFlushed, delay(2_000)]);
+              gateway.kill("SIGINT");
+              await Promise.race([profileFlushed, delay(2_000)]);
+            }
+            gatewayExit = await stopChild(gateway);
           }
-          gatewayExit = await stopChild(gateway);
+          // A fatal turn may end Promise.all before fixed probe rounds settle.
+          // Join their closed-client failures before removing the fixture state.
+          await Promise.allSettled(probeJobs);
+        } finally {
+          // Gateway shutdown drains admitted event dispatches before closing sockets.
+          // Keep this client alive through that drain so delayed tool evidence survives.
+          client?.close();
         }
-        // A fatal turn may end Promise.all before fixed probe rounds settle.
-        // Join their closed-client failures before removing the fixture state.
-        await Promise.allSettled(probeJobs);
       }
+    }
+    // close() initiates a handshake; retain late event evidence until it settles.
+    await client?.waitClosed();
+    if (!live) {
+      mockCheckpoints.push(await readMockRequests(mockPort, performance.now() + HTTP_TIMEOUT_MS));
     }
     if (options.diagnosticsTimeline) {
       if (!gatewayExit || gatewayExit.exitCode !== 0 || gatewayExit.signal !== null) {
@@ -1818,20 +2657,133 @@ async function runGatewaySample(options: {
         readDiagnosticsTimelineSpans(timelinePath, timelineWindow),
       );
     }
+    if (!live && (providerBeforeLoad === undefined || providerAfterLoad === undefined)) {
+      throw new Error("Missing provider request load snapshots");
+    }
+    if (
+      live &&
+      (!gateway ||
+        gatewayExit?.exitCode !== 0 ||
+        gatewayExit.signal !== null ||
+        inspectManagedProcessGroup(gateway, { errorPolicy: "indeterminate" }) !== "dead")
+    ) {
+      throw new Error("Live Gateway did not stop cleanly before transcript verification");
+    }
     return {
       ...result,
+      ...(live
+        ? { liveProof: live.finish(root) }
+        : {
+            providerRequests: summarizeProviderRequests(
+              readProviderRequestLog(requestLogPath),
+              providerBeforeLoad!,
+              providerAfterLoad!,
+              agentWarmup,
+            ),
+            mockRequests: summarizeMockRequests(mockCheckpoints),
+          }),
+      turnEvidence: turnEvidence.finish(),
+      agentWarmup: {
+        ...(live ? { durationMs: 0, launched: 0, terminalOk: 0, verified: 0 } : agentWarmup),
+        turnEvidence: turnEvidence.finish("warmup"),
+      },
       gatewayProcess: readGatewayProcess(),
+      ...(activityDiagnostics ? { activitySummaryDiagnostics: activityDiagnostics.finish() } : {}),
       ...(gatewayExit ? { gatewayExit } : {}),
     };
+  } catch (error) {
+    if ((live || activityDiagnostics) && options.output) {
+      try {
+        mkdirSync(path.dirname(options.output), { recursive: true });
+        writeFileSync(
+          `${options.output}.failure.json`,
+          redactLiveBenchmarkText(
+            JSON.stringify(
+              {
+                mode: live ? "live-openai-agent" : "mock-activity-summary-diagnostics",
+                status: "failed",
+                ...(live ? { liveProof: live.snapshot() } : {}),
+                ...(activityDiagnostics
+                  ? { activitySummaryDiagnostics: activityDiagnostics.finish() }
+                  : {}),
+                turnAccounting,
+                gatewayExit,
+                gatewayProcess: readGatewayProcess(),
+                error: activityDiagnostics
+                  ? "Benchmark did not complete"
+                  : error instanceof Error
+                    ? error.message
+                    : String(error),
+              },
+              null,
+              2,
+            ),
+          ) + "\n",
+          { mode: 0o600 },
+        );
+      } catch {
+        console.error("Benchmark failure evidence could not be written");
+      }
+    }
+    throw error;
   } finally {
     try {
       if (mockProvider) {
         await stopChild(mockProvider);
       }
     } finally {
-      rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
+      if (
+        live &&
+        gateway &&
+        inspectManagedProcessGroup(gateway, { errorPolicy: "indeterminate" }) !== "dead"
+      ) {
+        // Successful runs already prove group exit before transcript verification.
+        // Preserve the original failure when teardown could not settle the group.
+        console.error("Live Gateway group unsettled; isolated fixture retained");
+      } else {
+        rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
+      }
     }
   }
+}
+
+function liveRunPassed(run: BenchmarkRun, options: CliOptions): boolean {
+  const expectedTurns = options.concurrency * options.turnsPerSession;
+  const probesMatch = (samples: readonly { ok: boolean }[], expected?: number) =>
+    (expected === undefined ? samples.length > 0 : samples.length === expected) &&
+    samples.every((sample) => sample.ok);
+  const rounds = options.probeRounds;
+  return (
+    run.liveProof?.passed === true &&
+    run.liveProof.requestedTurns === expectedTurns &&
+    run.turnCount === expectedTurns &&
+    Object.values(run.turnAccounting).every((count) => count === expectedTurns) &&
+    run.gatewayExit?.exitCode === 0 &&
+    run.gatewayExit.signal === null &&
+    run.freshConnection.ok &&
+    probesMatch(run.readyz, rounds) &&
+    probesMatch(run.controlUi, rounds) &&
+    probesMatch(run.sessionsList, rounds) &&
+    probesMatch(run.sessionUpdates, options.sessionUpdates) &&
+    probesMatch(
+      run.history,
+      options.historyClients === 0
+        ? 0
+        : rounds === undefined
+          ? undefined
+          : rounds * options.historyClients * options.historyBurst,
+    ) &&
+    probesMatch(run.messageSubscriptions, options.subscribers) &&
+    probesMatch(run.messageSubscriptionsDuringLoad, options.subscribers === 0 ? 0 : rounds) &&
+    (options.controlPlane
+      ? ["tasks.list", "cron.list", "cron.status"].every((method) =>
+          probesMatch(
+            run.controlPlane.filter((sample) => sample.method === method),
+            rounds,
+          ),
+        )
+      : run.controlPlane.length === 0)
+  );
 }
 
 function summarizeRuns(
@@ -1847,6 +2799,7 @@ function summarizeRuns(
   const subscriptions = runs.flatMap((run) => run.messageSubscriptions);
   const subscriptionsDuringLoad = runs.flatMap((run) => run.messageSubscriptionsDuringLoad);
   const sessionUpdates = runs.flatMap((run) => run.sessionUpdates);
+  const mockRequests = runs.flatMap((run) => (run.mockRequests ? [run.mockRequests] : []));
   // Setup subscriptions and warmup probes are not load-phase measurements.
   const controlMethods = ["tasks.list", "cron.list", "cron.status"];
   const controlMethodProbes = controlMethods.map((method) => ({
@@ -2005,7 +2958,27 @@ function summarizeRuns(
     messageSubscriptionLoadLatencyMs: summarizeNumbers(
       subscriptionsDuringLoad.map((sample) => sample.latencyMs),
     ),
-    modelRequestCount: runs.reduce((count, run) => count + run.modelRequestCount, 0),
+    ...(mockRequests.length === runs.length
+      ? {
+          mockRequestIngress: Object.fromEntries(
+            MOCK_INGRESS_KEYS.map((key) => [
+              key,
+              mockRequests.reduce((count, requests) => count + requests.ingress.total[key], 0),
+            ]),
+          ),
+          mockResponseSelections: Object.fromEntries(
+            MOCK_SELECTION_KEYS.map((key) => [
+              key,
+              mockRequests.reduce((count, requests) => count + requests.selections[key], 0),
+            ]),
+          ),
+        }
+      : {}),
+    toolTurns: runs.reduce((count, run) => count + run.turnEvidence.toolTurns, 0),
+    observerModelDigestTurns: runs.reduce(
+      (count, run) => count + run.turnEvidence.observerModelDigestTurns,
+      0,
+    ),
     pluginMetadataScanCount: runs.reduce((sum, run) => sum + run.pluginMetadataScans.count, 0),
     pluginMetadataScanTotalDurationMs: runs.reduce(
       (sum, run) => sum + run.pluginMetadataScans.totalDurationMs,
@@ -2064,6 +3037,7 @@ async function main(): Promise<void> {
   const options = parseOptions(argv);
   const runs = await runBenchmarkSamples({ onProgress: console.error, options });
   const payload = {
+    agentCount: options.agentCount,
     browserHistoryMessages: options.browserHistoryMessages,
     browserSessionClicks: options.browserSessionClicks,
     cadenceMs: options.cadenceMs,
@@ -2076,7 +3050,13 @@ async function main(): Promise<void> {
     generatedAt: new Date().toISOString(),
     historyBurst: options.historyBurst,
     historyClients: options.historyClients,
-    mode: "mock-streaming-agent",
+    mode:
+      options.provider === "openai"
+        ? "live-openai-agent"
+        : options.activitySummaryDiagnostics
+          ? "mock-activity-summary-diagnostics"
+          : "mock-streaming-agent",
+    provider: options.provider,
     pluginCount: options.pluginCount,
     probeWorkload: {
       mode: options.probeRounds === undefined ? "adaptive" : "fixed-rounds",
@@ -2091,20 +3071,31 @@ async function main(): Promise<void> {
     sessionCount: Math.max(options.sessionCount, options.concurrency),
     sessionUpdateClients: options.sessionUpdates > 0 ? options.sessionUpdateClients : 0,
     sessionUpdates: options.sessionUpdates,
-    streamChunkDelayMs: options.streamChunkDelayMs,
+    ...(options.provider === "mock" ? { streamChunkDelayMs: options.streamChunkDelayMs } : {}),
+    effectivePacing:
+      options.provider === "openai"
+        ? { kind: "live-provider" }
+        : options.toolEvents
+          ? { kind: "shell-delay", toolDelayMs: 3000, streamChunkDelayMs: 0 }
+          : { kind: "text-stream", streamChunkDelayMs: options.streamChunkDelayMs },
     subscribers: options.subscribers,
     summary: summarizeRuns(runs, options),
     toolEvents: options.toolEvents,
     turnsPerSession: options.turnsPerSession,
+    agentWarmupTurns: options.agentWarmupTurns,
+    gatewayCpus: options.gatewayCpus,
     visibleObserver: options.visibleObserver,
     workspaceFanout: options.workspaceFanout,
   };
   if (options.output) {
     mkdirSync(path.dirname(options.output), { recursive: true });
-    writeFileSync(options.output, `${JSON.stringify(payload, null, 2)}\n`);
+    writeFileSync(options.output, `${redactLiveBenchmarkText(JSON.stringify(payload, null, 2))}\n`);
   }
   if (options.json || !options.output) {
-    console.log(JSON.stringify(payload, null, 2));
+    console.log(redactLiveBenchmarkText(JSON.stringify(payload, null, 2)));
+  }
+  if (options.provider === "openai" && runs.some((run) => !liveRunPassed(run, options))) {
+    throw new Error("Live benchmark functional verification failed; inspect the retained result");
   }
   if (payload.summary.budgetViolations.length > 0) {
     throw new Error(payload.summary.budgetViolations.join("\n"));
@@ -2113,6 +3104,11 @@ async function main(): Promise<void> {
 
 export const testing = {
   parseOptions,
+  parseMockRequests,
+  summarizeMockRequests,
+  createTurnEvidence,
+  captureChildOutput,
+  buildConfig,
   formatProbeFailure,
   formatRunFailure,
   requestHttp,
@@ -2125,6 +3121,7 @@ export const testing = {
   summarizePluginMetadataScans,
   summarizeNumbers,
   summarizeRuns,
+  summarizeProviderRequests,
   tailLines,
   warmGatewayProbes,
 };
@@ -2132,7 +3129,17 @@ export const testing = {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void main()
     .catch((error: unknown) => {
-      console.error(error instanceof CliArgumentError ? error.message : (error as Error)?.stack);
+      console.error(
+        redactLiveBenchmarkText(
+          hasFlag(process.argv.slice(2), "--activity-summary-diagnostics")
+            ? "Activity-summary diagnostic benchmark failed; inspect retained observations"
+            : error instanceof CliArgumentError
+              ? error.message
+              : error instanceof Error
+                ? (error.stack ?? error.message)
+                : String(error),
+        ),
+      );
       process.exitCode = 1;
     })
     .finally(() => {

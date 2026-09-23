@@ -262,6 +262,8 @@ describe("qa scenario catalog channel contracts", () => {
     const flow = JSON.stringify(scenario.execution.flow);
 
     expect(flow).toContain("env.gateway.call('send'");
+    expect(flow.match(/env\.gateway\.call\('send'/g)).toHaveLength(2);
+    expect(flow).toContain("idempotencyKey: randomUUID(), message: config.seedMarker");
     expect(flow).toContain("sendError.includes('504')");
     expect(flow).toContain("matchingOutbound.length === 1");
     expect(flow).toContain("seed proactive conversation reference");
@@ -284,14 +286,15 @@ describe("qa scenario catalog channel contracts", () => {
     const compactionFlow = JSON.stringify(compaction.execution.flow);
 
     expect(semanticFlow).toContain(
-      "received.some((message) => String(message.botApiMessageId) === String(receipt.messageId))",
+      "readTelegramMessages().slice(startIndex).some((message) => String(message.botApiMessageId) === String(receipt.messageId))",
     );
     expect(semanticFlow).not.toContain("received.at(-1)?.botApiMessageId");
-    expect(semanticFlow).toContain('"set":"expectedNormalized"');
-    expect(semanticFlow).toContain("JSON.stringify(actual) === JSON.stringify(expectedNormalized)");
-    expect(semanticFlow).not.toContain(
-      "JSON.stringify(actual) === JSON.stringify(fixture.expectedChunks)",
-    );
+    expect(semanticFlow).not.toContain('"set":"expectedNormalized"');
+    expect(semanticFlow).toContain("actual.length === fixture.expectedChunks.length");
+    expect(semanticFlow).toContain("entity.type['@type'] === expectedEntity.type['@type']");
+    expect(semanticFlow).toContain("entity.type.url === expectedEntity.type.url");
+    expect(semanticFlow).toContain("entity.type.language === expectedEntity.type.language");
+    expect(semanticFlow).not.toContain("JSON.stringify(actual) === JSON.stringify");
     expect(compactionFlow).toContain('"minimumPreviewEvents":2');
     expect(compactionFlow).toContain("progress: { commentary: true, toolProgress: true }");
     expect(compactionFlow).toContain("config.commentaryOne");

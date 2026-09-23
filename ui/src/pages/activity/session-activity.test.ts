@@ -6,6 +6,7 @@ import {
   canonicalSessionActivityLocation,
   projectSessionActivity,
   sessionActivityLocation,
+  sessionActivityTimestamp,
 } from "./session-activity.ts";
 
 const people: NonNullable<SessionsListResult["people"]> = [
@@ -63,12 +64,25 @@ describe("session activity projection", () => {
       {
         key: "agent:main:first",
         kind: "direct",
-        updatedAt: now,
+        updatedAt: now + 60_000,
+        lastActivityAt: now - 26 * 60 * 60_000,
+        lastInteractionAt: now,
         participants: [{ identity: { type: "agent", id: "bob" } }],
       },
-      { key: "agent:main:second", kind: "direct", updatedAt: now - 60_000 },
-      { key: "agent:main:older", kind: "direct", updatedAt: now - 26 * 60 * 60_000 },
+      {
+        key: "agent:main:second",
+        kind: "direct",
+        updatedAt: now - 26 * 60 * 60_000,
+        lastActivityAt: now - 60_000,
+      },
+      {
+        key: "agent:main:older",
+        kind: "direct",
+        updatedAt: now,
+        lastActivityAt: now - 26 * 60 * 60_000,
+      },
     ];
+    Object.freeze(rows);
     const activity = projectSessionActivity(result(rows));
     expect(activity.people.map(({ id, count }) => ({ id, count }))).toEqual([
       { id: "alice", count: 12 },
@@ -81,6 +95,22 @@ describe("session activity projection", () => {
     ]);
     expect(activity.matchedCount).toBe(12);
     expect(activity.timeCount).toBe(15);
+    expect(activity.sessions).toBe(rows);
+    expect(activity.sessions.map(sessionActivityTimestamp)).toEqual([
+      now,
+      now - 60_000,
+      now - 26 * 60 * 60_000,
+    ]);
+  });
+
+  it.each([
+    { lastActivityAt: 0, lastInteractionAt: Number.NaN, updatedAt: 120, createdAt: 100 },
+    { lastActivityAt: Number.POSITIVE_INFINITY, updatedAt: null, createdAt: 120 },
+    { lastActivityAt: 0, updatedAt: 0, createdAt: 120 },
+    { lastActivityAt: 120, lastInteractionAt: Number.NaN, updatedAt: 200 },
+    { lastActivityAt: -1, lastInteractionAt: 120, updatedAt: 200 },
+  ])("uses known clocks for Activity ages when a stored timestamp is invalid: %j", (clocks) => {
+    expect(sessionActivityTimestamp(clocks)).toBe(120);
   });
 
   it("does not infer people from unqualified owner or participant IDs", () => {

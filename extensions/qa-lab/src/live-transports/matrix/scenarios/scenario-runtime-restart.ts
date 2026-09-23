@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime restart behavior.
 import {
   MATRIX_QA_HOMESERVER_ROOM_KEY,
   MATRIX_QA_RESTART_ROOM_KEY,
@@ -113,12 +112,12 @@ export async function runInitialCatchupThenIncrementalScenario(context: MatrixQa
       incrementalDriverEventId: incremental.driverEventId,
       incrementalReply: incremental.reply,
       incrementalToken: incremental.token,
-      restartSignal: "SIGUSR1",
+      restartSignal: "SIGUSR2",
       roomId,
     },
     details: [
       `room id: ${roomId}`,
-      "restart signal: SIGUSR1",
+      "restart signal: SIGUSR2",
       `catchup driver event: ${catchupDriverEventId}`,
       ...buildMatrixReplyDetails("catchup reply", catchupReply),
       `incremental driver event: ${incremental.driverEventId}`,

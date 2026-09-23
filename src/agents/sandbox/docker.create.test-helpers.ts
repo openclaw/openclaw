@@ -23,8 +23,10 @@ const spawnState = vi.hoisted(() => ({
   containerExists: true,
   inspectRunning: true,
   inspectError: "",
+  createError: "",
   labelHash: "",
   mounts: "[]",
+  tmpfs: null as Record<string, string> | null,
   podmanInfo: "true\tfalse\t\t5.0.0\n",
   podmanConnections: "[]\n",
   podmanMachines: "[]\n",
@@ -143,7 +145,7 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     args[0] === "inspect" &&
     args[2] === '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}'
   ) {
-    stdout = JSON.stringify({ Mounts: JSON.parse(spawnState.mounts), Tmpfs: null });
+    stdout = JSON.stringify({ Mounts: JSON.parse(spawnState.mounts), Tmpfs: spawnState.tmpfs });
   } else if (command === "podman" && args[0] === "info") {
     stdout = spawnState.podmanInfo;
   } else if (command === "podman" && args[0] === "system") {
@@ -156,7 +158,10 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   } else if (args[0] === "image" && args[1] === "inspect") {
     code = 0;
   } else if (args[0] === "create") {
-    if (spawnState.containerExists) {
+    if (spawnState.createError) {
+      code = 125;
+      stderr = spawnState.createError;
+    } else if (spawnState.containerExists) {
       code = 1;
       stderr = "container name is already in use";
     } else {
@@ -307,8 +312,10 @@ export function createSandboxContainerTestHarness() {
     spawnState.containerExists = true;
     spawnState.inspectRunning = true;
     spawnState.inspectError = "";
+    spawnState.createError = "";
     spawnState.labelHash = "";
     spawnState.mounts = "[]";
+    spawnState.tmpfs = null;
     namespaceMocks.resolveDockerSourceNamespace.mockResolvedValue(undefined);
     spawnState.podmanInfo = "true\tfalse\t\t5.0.0\n";
     spawnState.podmanConnections = "[]\n";

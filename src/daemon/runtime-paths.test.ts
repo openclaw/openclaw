@@ -231,6 +231,35 @@ describe("resolvePreferredNodePath", () => {
     );
   });
 
+  it.each([
+    { platform: "linux", execPath: "/custom/bin/node", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/nodejs", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/node24", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/node-24", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/bun", isNode: false },
+    { platform: "win32", execPath: "D:\\Tools\\node.exe", isNode: true },
+    { platform: "win32", execPath: "D:\\Tools\\nodejs.exe", isNode: true },
+    { platform: "win32", execPath: "D:\\Tools\\node24.exe", isNode: true },
+    { platform: "win32", execPath: "D:\\Tools\\bun.exe", isNode: false },
+  ] as const)(
+    "selects a supported current Node at $execPath on $platform",
+    async ({ platform, execPath, isNode }) => {
+      mockNodePathPresent();
+      const execFile = vi.fn().mockResolvedValue(nodeRuntime("24.16.0"));
+
+      const result = await resolvePreferredNodePath({
+        env: {},
+        runtime: "node",
+        platform,
+        execFile,
+        execPath,
+      });
+
+      expect(result).toBe(isNode ? execPath : undefined);
+      expect(execFile).toHaveBeenCalledTimes(isNode ? 1 : 0);
+    },
+  );
+
   it("prefers supported system node over version-manager execPath", async () => {
     mockNodePathPresent(darwinNode);
 

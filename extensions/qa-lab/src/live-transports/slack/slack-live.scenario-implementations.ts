@@ -51,6 +51,7 @@ export const slackQaMentionGatingScenario: SlackQaScenarioImplementation = {
       expectReply: false,
       input: `reply with only this exact marker: ${token}`,
       matchText: token,
+      noReplyObservationMs: 8_000,
     };
   },
 };
@@ -209,6 +210,7 @@ export const slackQaAllowlistBlockScenario: SlackQaScenarioImplementation = {
       expectReply: false,
       input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
       matchText: token,
+      noReplyObservationMs: 8_000,
     };
   },
 };
@@ -222,6 +224,7 @@ export const slackQaChannelDisabledWarningScenario: SlackQaScenarioImplementatio
       expectReply: false,
       input: `<@${sutUserId}> reply with only this exact marker: ${marker}`,
       matchText: marker,
+      noReplyObservationMs: 8_000,
       preserveGatewayDebug: true,
       beforeRun: async ({ gateway }) => {
         const gatewayLogTail = (await gateway.call(

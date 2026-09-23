@@ -31,6 +31,8 @@ import { databaseWorkerCoreTestFiles } from "./vitest/vitest.database-worker-cor
 import { createDatabaseWorkerWatchVitestConfig } from "./vitest/vitest.database-worker-watch.config.ts";
 import { createExtensionAcpxVitestConfig } from "./vitest/vitest.extension-acpx.config.ts";
 import { createExtensionBrowserVitestConfig } from "./vitest/vitest.extension-browser.config.ts";
+import { databaseWorkerExtensionTestFiles } from "./vitest/vitest.extension-database-workers-paths.mjs";
+import { createExtensionDatabaseWorkersVitestConfig } from "./vitest/vitest.extension-database-workers.config.ts";
 import { createExtensionDiffsVitestConfig } from "./vitest/vitest.extension-diffs.config.ts";
 import { createExtensionDiscordVitestConfig } from "./vitest/vitest.extension-discord.config.ts";
 import { createExtensionFeishuVitestConfig } from "./vitest/vitest.extension-feishu.config.ts";
@@ -54,6 +56,7 @@ import { createExtensionVoiceCallVitestConfig } from "./vitest/vitest.extension-
 import { createExtensionWhatsAppVitestConfig } from "./vitest/vitest.extension-whatsapp.config.ts";
 import { createExtensionZaloVitestConfig } from "./vitest/vitest.extension-zalo.config.ts";
 import { createExtensionsVitestConfig } from "./vitest/vitest.extensions.config.ts";
+import { diagnosticForksPool } from "./vitest/vitest.forks-pool.ts";
 import { createGatewayClientVitestConfig } from "./vitest/vitest.gateway-client.config.ts";
 import { createGatewayCoreVitestConfig } from "./vitest/vitest.gateway-core.config.ts";
 import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
@@ -83,6 +86,7 @@ import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isola
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
+import { isUnitFastTestFile } from "./vitest/vitest.unit-fast-paths.mjs";
 import { bundledPluginDependentUnitTestFiles } from "./vitest/vitest.unit-paths.mjs";
 import { createUtilsVitestConfig } from "./vitest/vitest.utils.config.ts";
 import { createWizardVitestConfig } from "./vitest/vitest.wizard.config.ts";
@@ -130,36 +134,38 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
   return config.test as NonNullable<T["test"]>;
 }
 
-function expectThreadedNonIsolatedRunner(config: {
+function expectDefaultNonIsolatedRunner(config: {
   test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
 }) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("threads");
+  expect(testConfig.pool).toBe(process.platform === "win32" ? "forks" : "threads");
   expect(testConfig.isolate).toBe(false);
   expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
 }
-function expectThreadedIsolatedRunner(config: {
+function expectDefaultIsolatedRunner(config: {
   test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
 }) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("threads");
+  expect(testConfig.pool).toBe(process.platform === "win32" ? "forks" : "threads");
   expect(testConfig.isolate).toBe(true);
   expect(testConfig.runner).toBeUndefined();
 }
-function expectForkedNonIsolatedRunner(config: {
-  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
-}) {
+function expectForkedNonIsolatedRunner(
+  config: { test?: { pool?: unknown; isolate?: unknown; runner?: unknown } },
+  pool: "forks" | typeof diagnosticForksPool = "forks",
+) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("forks");
+  expect(testConfig.pool).toBe(pool);
   expect(testConfig.isolate).toBe(false);
   expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
 }
 
-function expectForkedIsolatedRunner(config: {
-  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
-}) {
+function expectForkedIsolatedRunner(
+  config: { test?: { pool?: unknown; isolate?: unknown; runner?: unknown } },
+  pool: "forks" | typeof diagnosticForksPool = "forks",
+) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("forks");
+  expect(testConfig.pool).toBe(pool);
   expect(testConfig.isolate).toBe(true);
   expect(testConfig.runner).toBeUndefined();
 }
@@ -569,7 +575,6 @@ describe("scoped vitest configs", () => {
   const defaultPluginSdkConfig = createPluginSdkVitestConfig({});
   const defaultSecretsConfig = createSecretsVitestConfig({});
   const defaultRuntimeConfig = createRuntimeConfigVitestConfig({});
-  const defaultCronConfig = createCronVitestConfig({});
   const defaultDaemonConfig = createDaemonVitestConfig({});
   const defaultMediaConfig = createMediaVitestConfig({});
   const defaultMediaUnderstandingConfig = createMediaUnderstandingVitestConfig({});
@@ -603,8 +608,8 @@ describe("scoped vitest configs", () => {
       defaultExtensionImessageConfig,
       defaultExtensionLineConfig,
       defaultExtensionProviderOpenAiConfig,
+      defaultExtensionProvidersConfig,
       defaultExtensionSignalConfig,
-      defaultExtensionSlackConfig,
       defaultAutoReplyConfig,
       defaultAutoReplyCoreConfig,
       defaultAutoReplyTopLevelConfig,
@@ -612,25 +617,25 @@ describe("scoped vitest configs", () => {
       defaultToolingDockerConfig,
       defaultToolingConfig,
     ]) {
-      expectThreadedNonIsolatedRunner(config);
+      expectDefaultNonIsolatedRunner(config);
     }
 
     for (const config of [defaultGatewayConfig, defaultAgentsConfig]) {
-      expectThreadedNonIsolatedRunner(config);
+      expectDefaultNonIsolatedRunner(config);
     }
 
     expectForkedNonIsolatedRunner(defaultCommandsConfig);
 
-    expectThreadedNonIsolatedRunner(defaultUiConfig);
-    expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
-    expectThreadedIsolatedRunner(defaultExtensionProvidersConfig);
-    expectForkedIsolatedRunner(defaultInfraConfig);
+    expectDefaultNonIsolatedRunner(defaultUiConfig);
+    expectDefaultIsolatedRunner(defaultExtensionMemoryConfig);
+    expectForkedIsolatedRunner(defaultInfraConfig, diagnosticForksPool);
     expectForkedIsolatedRunner(defaultCliProcessConfig);
   });
 
-  it("keeps process-launching CLI files out of the shared CLI graph", () => {
+  it("keeps source-child process tests in the isolated process project", () => {
+    const cliProcessFiles = cliProcessTestFiles.filter((file) => file.startsWith("src/cli/"));
     expect(requireTestConfig(defaultCliConfig).exclude).toEqual(
-      expect.arrayContaining(cliProcessTestFiles.map((file) => file.replace("src/cli/", ""))),
+      expect.arrayContaining(cliProcessFiles.map((file) => file.replace("src/cli/", ""))),
     );
     const processTestConfig = requireTestConfig(defaultCliProcessConfig);
     expect(processTestConfig.include).toContain("src/cli/update-dry-run-state.process.test.ts");
@@ -670,12 +675,24 @@ describe("scoped vitest configs", () => {
     expect(coreTestConfig.exclude).toContain("reply*.test.ts");
     expect(requireTestConfig(defaultAutoReplyTopLevelConfig).include).toEqual(["reply*.test.ts"]);
     expect(requireTestConfig(defaultAutoReplyReplyConfig).include).toEqual(["reply/**/*.test.ts"]);
-  });
-
-  it("keeps the broad agents lane on shared file parallelism", () => {
-    expect(requireTestConfig(defaultAgentsConfig).fileParallelism).toBe(
+    expect(requireTestConfig(defaultAutoReplyReplyConfig).fileParallelism).toBe(
       sharedVitestConfig.test.fileParallelism,
     );
+  });
+
+  it.each([1, 2, 8])("keeps agents lanes on the shared %i-worker schedule", (maxWorkers) => {
+    const original = sharedVitestConfig.test;
+    try {
+      sharedVitestConfig.test = { ...original, maxWorkers, fileParallelism: maxWorkers > 1 };
+      for (const createConfig of [createAgentsVitestConfig, createAgentsCoreVitestConfig]) {
+        expect(requireTestConfig(createConfig({}))).toMatchObject({
+          maxWorkers,
+          fileParallelism: maxWorkers > 1,
+        });
+      }
+    } finally {
+      sharedVitestConfig.test = original;
+    }
   });
 
   it("isolates agent suites with conflicting shared-module mocks", () => {
@@ -688,6 +705,13 @@ describe("scoped vitest configs", () => {
     );
     expect(sharedConfig.exclude).toEqual(expect.arrayContaining(scopedIsolatedFiles));
     expect(isolatedConfig.include).toEqual(scopedIsolatedFiles);
+    for (const file of agentVitestProjectOwners.coreIsolated.include) {
+      expect(isUnitFastTestFile(file), file).toBe(false);
+      expect(
+        matchingExcludePatterns(isolatedConfig.exclude ?? [], file.replace("src/agents/", "")),
+        file,
+      ).toEqual([]);
+    }
     expect(isolatedConfig.isolate).toBe(true);
     expect(isolatedConfig.runner).toBeUndefined();
     expect(productionBoundaryConfig.include).toEqual(
@@ -697,6 +721,7 @@ describe("scoped vitest configs", () => {
     );
     expect(productionBoundaryConfig.fileParallelism).toBe(false);
     expect(productionBoundaryConfig.isolate).toBe(true);
+    expect(productionBoundaryConfig.pool).toBe("forks");
     expect(productionBoundaryConfig.runner).toBeUndefined();
   });
 
@@ -718,8 +743,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.exclude).not.toContain("chat/slash-command-executor.node.test.ts");
   });
 
-  it("defaults channel tests to threads with the non-isolated runner", () => {
-    expectThreadedNonIsolatedRunner(defaultChannelsConfig);
+  it("defaults channel tests to the platform pool with the non-isolated runner", () => {
+    expectDefaultNonIsolatedRunner(defaultChannelsConfig);
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
@@ -754,13 +779,18 @@ describe("scoped vitest configs", () => {
     }
   });
 
-  it("serializes and isolates Telegram extension files with conflicting mocks", () => {
-    expectThreadedIsolatedRunner(defaultExtensionTelegramConfig);
-    expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(false);
+  it("isolates Telegram extension mocks while inheriting file scheduling", () => {
+    expectDefaultIsolatedRunner(defaultExtensionTelegramConfig);
+    expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(
+      sharedVitestConfig.test.fileParallelism,
+    );
   });
 
-  it("serializes Slack extension files that share process globals", () => {
-    expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(false);
+  it("keeps Slack file-local fixtures on reusable forks with inherited scheduling", () => {
+    expectForkedNonIsolatedRunner(defaultExtensionSlackConfig, diagnosticForksPool);
+    expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(
+      sharedVitestConfig.test.fileParallelism,
+    );
   });
 
   it("normalizes split extension channel include patterns relative to the scoped dir", () => {
@@ -811,6 +841,7 @@ describe("scoped vitest configs", () => {
       "amazon-bedrock-mantle/**/*.test.ts",
       "anthropic/**/*.test.ts",
       "anthropic-vertex/**/*.test.ts",
+      "apple-fm/**/*.test.ts",
       "byteplus/**/*.test.ts",
       "chutes/**/*.test.ts",
       "comfy/**/*.test.ts",
@@ -870,11 +901,7 @@ describe("scoped vitest configs", () => {
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
-    expect(testConfig.include).toEqual([
-      "memory-core/**/*.test.ts",
-      "memory-lancedb/**/*.test.ts",
-      "memory-wiki/**/*.test.ts",
-    ]);
+    expect(testConfig.include).toEqual(["memory-lancedb/**/*.test.ts", "memory-wiki/**/*.test.ts"]);
   });
 
   it("keeps telegram plugin tests out of the shared extensions lane", () => {
@@ -1016,6 +1043,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual([
       "src/gateway/**/*.test.ts",
       "test/plugins/codex-model-catalog.gateway.test.ts",
+      "test/plugins/crabbox-allocation-authority.gateway.test.ts",
+      "test/plugins/team-reports-http.gateway.test.ts",
     ]);
     expect(testConfig.exclude).toContain("src/gateway/gateway.test.ts");
     expect(testConfig.exclude).toContain(
@@ -1028,73 +1057,116 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultInfraConfig);
     expect(testConfig.dir).toBe(process.cwd());
     expect(testConfig.include).toEqual(["src/infra/**/*.test.ts", ...databaseWorkerCoreTestFiles]);
+    const recoveryFile = "src/wizard/setup.inference-recovery.integration.test.ts";
+    expect(testConfig.include?.filter((file) => file === recoveryFile)).toEqual([recoveryFile]);
+    expect(requireTestConfig(defaultWizardConfig).exclude).toContain(
+      "wizard/setup.inference-recovery.integration.test.ts",
+    );
     for (const file of databaseWorkerCoreTestFiles) {
       expect(matchingExcludePatterns(testConfig.exclude ?? [], file), file).toEqual([]);
     }
   });
 
-  it("discovers current and newly added watch files once across the original and database owners", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-worker-watch-"));
-    try {
-      const includeFile = path.join(tempDir, "include.json");
-      fs.writeFileSync(includeFile, JSON.stringify(["src/agents/**/*.test.ts"]));
-      const env = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
-      const owner = createAgentsVitestConfig(env);
-      const aggregate = createDatabaseWorkerWatchVitestConfig(
-        owner,
-        databaseWorkerCoreTestFiles.filter((file) => file.startsWith("src/agents/")),
-        env,
-      );
-      const resolved = await resolveConfig({ config: false }, aggregate);
-      const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
-      expect(projects.map((project) => project.name)).toEqual(["agents", "infra"]);
-      expect(projects.map((project) => project.pool)).toEqual(["threads", "forks"]);
-      expect(projects[0]?.setupFiles).toEqual(owner.test?.setupFiles);
-      expect(projects[0]?.maxWorkers).toBe(owner.test?.maxWorkers);
-      expect(projects[1]?.maxWorkers).toBe(1);
+  it.each([
+    {
+      root: "src/agents",
+      createOwner: createAgentsVitestConfig,
+      workerFiles: databaseWorkerCoreTestFiles,
+      names: ["agents", "infra"],
+      existing: "src/agents/memory-write-provenance.test.ts",
+      createWorker: createInfraVitestConfig,
+    },
+    {
+      root: "extensions/matrix",
+      createOwner: createExtensionMatrixVitestConfig,
+      workerFiles: databaseWorkerExtensionTestFiles,
+      names: ["extension-matrix", "extension-database-workers"],
+      existing: "extensions/matrix/src/matrix/client/storage.test.ts",
+      createWorker: createExtensionDatabaseWorkersVitestConfig,
+    },
+  ])(
+    "discovers current and new $root watch files once across database owners",
+    async ({ root, createOwner, workerFiles, names, existing, createWorker }) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-worker-watch-"));
+      try {
+        const includeFile = path.join(tempDir, "include.json");
+        fs.writeFileSync(includeFile, JSON.stringify([`${root}/**/*.test.ts`]));
+        const env = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+        const owner = createOwner(env);
+        const aggregate = createDatabaseWorkerWatchVitestConfig(
+          owner,
+          workerFiles.filter((file) => file.startsWith(`${root}/`)),
+          env,
+        );
+        const resolved = await resolveConfig({ config: false }, aggregate);
+        const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
+        const resolvedOwner = await resolveConfig({ config: false }, owner);
+        expect(resolved.test.reporters).toEqual(resolvedOwner.test.reporters);
+        const { exclude: exclusions, ...coverage } = resolved.test.coverage;
+        const { exclude: ownerExclusions, ...ownerCoverage } = resolvedOwner.test.coverage;
+        expect(coverage).toEqual(ownerCoverage);
+        expect(exclusions).toEqual(expect.arrayContaining(ownerExclusions));
+        expect(
+          exclusions
+            .filter((pattern) => !ownerExclusions.includes(pattern))
+            .every((pattern) => /\.test\.[cm]?[jt]sx?$/u.test(pattern)),
+        ).toBe(true);
+        expect(projects.map((project) => project.name)).toEqual(names);
+        expect(projects.map((project) => project.pool)).toEqual([
+          process.platform === "win32" ? "forks" : "threads",
+          diagnosticForksPool.name,
+        ]);
+        expect(projects[0]?.setupFiles).toEqual(owner.test?.setupFiles);
+        expect(projects[0]?.maxWorkers).toBe(owner.test?.maxWorkers);
+        const workerConfig = await resolveConfig(
+          { config: false },
+          createWorker({ ...env, OPENCLAW_VITEST_INCLUDE_FILE: undefined }),
+        );
+        expect(projects[1]?.maxWorkers).toBe(workerConfig.test.maxWorkers);
 
-      const discover = (fixtureRoot: string) =>
-        projects.flatMap((project) => {
-          const scopedDir = path.relative(process.cwd(), project.dir);
-          const exclude = project.exclude.map((pattern) =>
-            path.isAbsolute(pattern) ? path.relative(project.dir, pattern) : pattern,
-          );
-          return fs
-            .globSync(project.include, {
-              cwd: path.join(fixtureRoot, scopedDir),
-              exclude,
-            })
-            .map((file) => path.join(scopedDir, file).replaceAll("\\", "/"));
-        });
-      const current = discover(process.cwd());
-      expect(new Set(current).size).toBe(current.length);
-      for (const file of databaseWorkerCoreTestFiles.filter((candidate) =>
-        candidate.startsWith("src/agents/"),
-      )) {
-        expect(current).toContain(file);
+        const discover = (fixtureRoot: string) =>
+          projects.flatMap((project) => {
+            const scopedDir = path.relative(process.cwd(), project.dir);
+            const exclude = project.exclude.map((pattern) =>
+              path.isAbsolute(pattern) ? path.relative(project.dir, pattern) : pattern,
+            );
+            return fs
+              .globSync(project.include, {
+                cwd: path.join(fixtureRoot, scopedDir),
+                exclude,
+              })
+              .map((file) => path.join(scopedDir, file).replaceAll("\\", "/"));
+          });
+        const current = discover(process.cwd());
+        expect(new Set(current).size).toBe(current.length);
+        for (const file of workerFiles.filter((candidate) => candidate.startsWith(`${root}/`))) {
+          expect(current).toContain(file);
+        }
+
+        const fixtureRoot = path.join(tempDir, "repo");
+        fs.mkdirSync(path.dirname(path.join(fixtureRoot, existing)), { recursive: true });
+        fs.writeFileSync(path.join(fixtureRoot, existing), "// discovery only\n");
+        expect(discover(fixtureRoot)).toEqual([existing]);
+        const added = `${root}/new-watch-consumer.test.ts`;
+        fs.writeFileSync(path.join(fixtureRoot, added), "// discovery only\n");
+        expect(discover(fixtureRoot).toSorted()).toEqual([existing, added].toSorted());
+
+        fs.writeFileSync(includeFile, JSON.stringify([existing]));
+        const narrowed = createDatabaseWorkerWatchVitestConfig(
+          createOwner(env),
+          workerFiles.filter((file) => file.startsWith(`${root}/`)),
+          env,
+        );
+        const narrowedConfig = await resolveConfig({ config: false }, narrowed);
+        const workerProject = narrowedConfig.test.resolvedProjects[1]?.projectConfig;
+        expect(workerProject?.include).toEqual([
+          path.relative(workerProject!.dir, path.resolve(existing)),
+        ]);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
       }
-
-      const fixtureRoot = path.join(tempDir, "repo");
-      fs.mkdirSync(path.join(fixtureRoot, "src/agents"), { recursive: true });
-      const existing = "src/agents/memory-write-provenance.test.ts";
-      fs.writeFileSync(path.join(fixtureRoot, existing), "// discovery only\n");
-      expect(discover(fixtureRoot)).toEqual([existing]);
-      const added = "src/agents/new-watch-consumer.test.ts";
-      fs.writeFileSync(path.join(fixtureRoot, added), "// discovery only\n");
-      expect(discover(fixtureRoot).toSorted()).toEqual([existing, added].toSorted());
-
-      fs.writeFileSync(includeFile, JSON.stringify([existing]));
-      const narrowed = createDatabaseWorkerWatchVitestConfig(
-        createAgentsVitestConfig(env),
-        databaseWorkerCoreTestFiles.filter((file) => file.startsWith("src/agents/")),
-        env,
-      );
-      const narrowedConfig = await resolveConfig({ config: false }, narrowed);
-      expect(narrowedConfig.test.resolvedProjects[1]?.projectConfig.include).toEqual([existing]);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("normalizes runtime config include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultRuntimeConfig);
@@ -1102,10 +1174,24 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual(["config/**/*.test.ts"]);
   });
 
-  it("normalizes cron include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultCronConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
-    expect(testConfig.include).toEqual(["cron/**/*.test.ts"]);
+  it.each([1, 2, 8])("keeps cron scoped while honoring %i shared workers", (maxWorkers) => {
+    const original = sharedVitestConfig.test;
+    try {
+      sharedVitestConfig.test = {
+        ...original,
+        maxWorkers,
+        fileParallelism: maxWorkers > 1,
+      };
+      const config = createCronVitestConfig({});
+      const testConfig = requireTestConfig(config);
+      expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+      expect(testConfig.include).toEqual(["cron/**/*.test.ts"]);
+      expectForkedNonIsolatedRunner(config);
+      expect(testConfig.maxWorkers).toBe(maxWorkers);
+      expect(testConfig.fileParallelism).toBe(maxWorkers > 1);
+    } finally {
+      sharedVitestConfig.test = original;
+    }
   });
 
   it("normalizes daemon include patterns relative to the scoped dir", () => {
@@ -1124,6 +1210,10 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultLoggingConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
     expect(testConfig.include).toEqual(["logging/**/*.test.ts"]);
+    expect(testConfig.exclude).toContain("logging/diagnostic-session-context.test.ts");
+    expect(testConfig.exclude).toContain(
+      "logging/diagnostic-stuck-session-recovery.runtime.test.ts",
+    );
   });
 
   it("normalizes plugin-sdk include patterns relative to the scoped dir", () => {
@@ -1175,6 +1265,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual(["test/**/*.test.ts", "src/scripts/**/*.test.ts"]);
     expect(testConfig.exclude).toEqual(expect.arrayContaining(toolingDockerTestFiles));
     expect(testConfig.exclude).toEqual(expect.arrayContaining(toolingIsolatedTestFiles));
+    expect(testConfig.fileParallelism).toBe(sharedVitestConfig.test.fileParallelism);
+    expect(testConfig.maxWorkers).toBe(sharedVitestConfig.test.maxWorkers);
     expect(testConfig.include).not.toContain("src/config/doc-baseline.integration.test.ts");
   });
 

@@ -3,10 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "../process/exec.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -46,7 +50,10 @@ const BUNDLE_HASH = "a".repeat(64);
 const RECEIPT = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.8.1",
-  protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+  protocolFeatures: [
+    WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+    WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  ],
 };
 const INSTALLATION: WorkerInstallationArtifact = {
   install: "bundle",
@@ -283,6 +290,7 @@ afterEach(async () => {
   workerService = undefined;
   await tunnelManager?.stopAll();
   tunnelManager = undefined;
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   database = undefined;
   if (root) {
@@ -291,7 +299,7 @@ afterEach(async () => {
   }
 });
 
-test("preserves ordered fallback through restart, workspace sync, and safe session retirement", async () => {
+test("preserves ordered fallback through inventory rehydration, workspace sync, and safe session retirement", async () => {
   root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-order-"));
   const stateDir = path.join(root, "state");
   const remoteHome = path.join(root, "remote-home");
@@ -325,7 +333,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
   };
 
   database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-  const environmentStore = createWorkerEnvironmentStore({ database, now: () => 2_000 });
+  const environmentStore = await createWorkerEnvironmentStore({ database, now: () => 2_000 });
   const placements = createWorkerSessionPlacementStore({ database, now: () => 3_000 });
   tunnelManager = createWorkerTunnelManager({ runner });
   const environmentService = createWorkerEnvironmentService({
@@ -351,11 +359,9 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
         state: "bootstrapping",
         sshEndpoint: SSH_ENDPOINT,
       });
-      closeOpenClawStateDatabaseForTest();
-      events.push("gateway:reopen");
-      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+      events.push("inventory:rehydrate");
       expect(
-        createWorkerEnvironmentStore({ database, now: () => 2_000 }).get(ENVIRONMENT_ID),
+        (await createWorkerEnvironmentStore({ database, now: () => 2_000 })).get(ENVIRONMENT_ID),
       ).toMatchObject({ state: "bootstrapping", sshEndpoint: SSH_ENDPOINT });
       return await bootstrapWorker(
         {
@@ -483,7 +489,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
   expect(loadSessionEntry(SESSION_KEY).entry).toBeUndefined();
   expectOrdered(events, [
     "provider:provision",
-    "gateway:reopen",
+    "inventory:rehydrate",
     `bootstrap:preflight:${PRIMARY_PORT}`,
     `bootstrap:preflight:${FALLBACK_PORT}`,
     `bootstrap:transfer:${FALLBACK_PORT}`,

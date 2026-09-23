@@ -50,7 +50,7 @@ export default definePluginEntry({
   `openclaw/plugin-sdk/session-catalog` and register a
   `SessionCatalogProvider` with `api.registerSessionCatalog(...)`. Required
   provider fields are `id`, `label`, `list`, and `read`; optional hooks are
-  `resolveCreateSession`, `continueSession`, `copyToGatewaySession`,
+  `createListOperation`, `resolveCreateSession`, `continueSession`, `copyToGatewaySession`,
   `checkUpstreamActivity`, `archive`, `openTerminal`, and `startTerminalSession`.
   Core owns the
   `sessions.catalog.*` Gateway methods; providers return host, session,
@@ -58,6 +58,21 @@ export default definePluginEntry({
   provider should call the optional
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
+
+  The optional `allowPartialResults` flag is true only when a connected caller
+  explicitly opts in while receiving host progress on a list without host selection
+  or cursors. When true, a provider may return retained host snapshots or mark a
+  still-loading host `pending: true`, then publish its completed snapshot through
+  `onHost` and `waitUntil`. Pending hosts preserve existing client rows and cursors;
+  omitted hosts are removed. Clear `pending` on a completed host.
+  Each `onHost` publication must be authoritative for that host: the Gateway
+  includes the latest publication for each retained host in the aggregate response
+  even when another provider or visibility projection delays delivery. The final
+  host set is authoritative: an omitted host is withdrawn, not restored from an
+  earlier publication. Preserve the last known
+  rows while refreshing; do not publish an empty host to represent pending work.
+  When the flag is absent or false, return the complete compatibility snapshot.
+  Targeted host lookups and pagination retain that complete-response contract.
 
   If a host can finish after `list` returns a fail-soft snapshot, register its
   bounded completion with the optional `waitUntil(completion: Promise<void>)`
@@ -77,10 +92,51 @@ export default definePluginEntry({
   grant new authority, or permit starting work after the owner retires. Providers
   remain responsible for bounded work that settles after cancellation.
 
-  Keep `onHost`, `waitUntil`, and `signal` separate from validated catalog query
+  The Gateway admits at most 16 foreground catalog lists or fill steps at once,
+  with one active step and up to 32 queued steps per provider ID. Queued
+  work keeps FIFO order within each provider; the oldest eligible step starts when
+  capacity becomes available. A slow provider cannot occupy every slot. Lists for
+  the same provider wait their turn, including calls from different clients.
+
+  Keep `allowPartialResults`, `onHost`, `waitUntil`, and `signal` separate from validated catalog query
   objects and node command payloads. The request-owned `sessionEntries` snapshot
-  and `listNodes` hook still must not be retained past `list`; prepare any facts
-  needed by late host mapping before returning.
+  and `listNodes` hook must be released when `list` settles, or when the optional
+  list operation below closes. Prepare the facts needed by late host mapping
+  before that boundary.
+
+  Providers with a multi-step fill can implement the optional
+  `SessionCatalogProvider.createListOperation(params)` hook. Its synchronous
+  factory returns `{ next, close }` without starting source work. The Gateway
+  calls the factory once inside the first admission and calls `next()` serially:
+
+  - `{ done: false }` means the step has settled and only inert continuation
+    state remains. The same request rejoins the existing provider FIFO behind
+    waiting callers; no partial result is sent to the client.
+  - `{ done: true, hosts }` supplies the complete filled result that `list`
+    would return. Providers without this hook continue using `list` once.
+
+  `sessions.catalog.list` checks its original Gateway and catalog registration
+  owner before each step and after it settles. A stale owner ends the stepped
+  list and closes its operation without starting further source work.
+
+  Each `next()` returns a promise and must join all foreground work it starts
+  before settling. A handoff cannot leave a source page, classification, or
+  required projection running. Preserve the source's existing limits, shared
+  producer ownership, ordering, and failure behavior. One logical request keeps
+  the same `sessionEntries`, `listNodes`, `onHost`, `waitUntil`, and `signal`
+  lifetime across every step. Register publication work before the logical list
+  settles, using `publishSessionCatalogHost` as above; an asynchronous publication
+  callback remains separately accounted work, not a foreground step.
+
+  The Gateway calls synchronous `close()` once after completion, failure, or
+  cancellation while queued. Active cancellation still waits for the actual
+  `next()` promise before closing. Mark the operation closed first, reject any
+  unfinished logical host results, and release only operation-owned references.
+  Close starts no source work or asynchronous cleanup and must not cancel shared
+  producers. Later `next()` calls must fail before I/O; repeated close is inert.
+  Native-discovery consent is checked before factory construction and before
+  and after each step. Initial disablement returns an empty result without
+  constructing the source; later revocation rejects the logical list.
 
   Transcript items may include a `sender` with a qualified `SessionParticipant`
   identity and optional display label or avatar. Supply only source-known

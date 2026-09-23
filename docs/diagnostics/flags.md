@@ -157,6 +157,24 @@ counts, event-loop delay samples, provider operation names, child-process exit
 state, and startup error names/messages. Treat timeline files as local
 diagnostics artifacts; review before sharing them outside your machine.
 
+Embedded model requests add a `provider.request.started` mark and one terminal
+`provider.request` record, correlated by run and call/span ids. While streaming,
+`provider.request.activity` marks sample observed chunks at most once per 30
+seconds using the existing stream-progress reporter. The terminal
+record keeps the request start in `timestamp` and reports `terminalAtMs`, the
+last observed provider callback/chunk time (`lastProviderActivityAtMs`, when
+observed), and a bounded `terminalReason`. Activity includes bookkeeping chunks;
+it does not prove visible output, and delayed result settlement does not refresh
+an already observed terminal chunk. An unknown reason or absent activity is not
+evidence of a provider, timeout, or CPU failure.
+
+`model.recovery.decision` marks report the existing attempt owner's accepted or
+rejected recovery branch alongside replay-safety and prior tool-settlement
+booleans. `model.retry.decision` marks explain the retry owner's budget, delay,
+and wait outcomes. These marks add no prompt, tool arguments, raw error text,
+model routes, or session identities. They do not change retry or timeout policy
+and are emitted only through the existing opt-in timeline.
+
 Timeline writes batch adjacent events with the same destination into a bounded
 64 KiB buffer, flushed on the next event-loop turn, at capacity, or on normal
 process exit. Event timestamps reflect emission time. Writes remain best-effort;

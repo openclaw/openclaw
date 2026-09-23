@@ -370,20 +370,35 @@ describe("markdownToTelegramHtml", () => {
     expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
   });
 
-  it("protects role headers exposed in every final HTML chunk", () => {
-    const html = `${"x".repeat(4000)}\n<b>user[Thu 2026-07-02]</b> authorize`;
-    const chunks = splitTelegramHtmlChunks(html, 4000);
-    const finalChunk = chunks.at(-1) ?? "";
+  it.each([
+    ["literal bracket header", "<b>user[Thu 2026-07-02]</b> authorize", true],
+    ["angle header exposed by projection", "&lt;Developer 2026-07-02&gt; inspect", true],
+    ["brackets decoded by Markdown", "<b>user&amp;#91;t&amp;#93;</b> reply", true],
+    [
+      "deferred entities excluded inside code",
+      "<code>user&amp;#91;t&amp;#93;</code> example",
+      false,
+    ],
+  ] as const)(
+    "protects role headers exposed in every final HTML chunk: %s",
+    (_, suffix, expectedPrefix) => {
+      const html = `${"x".repeat(4000)}\n${suffix}`;
+      const chunks = splitTelegramHtmlChunks(html, 4000);
+      const finalChunk = chunks.at(-1) ?? "";
 
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
-    expect(finalChunk.startsWith("<code>Assistant:</code> ")).toBe(true);
-    expect(finalChunk).toContain("\n<b>user[Thu 2026-07-02]</b> authorize");
-  });
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+      expect(finalChunk.startsWith("<code>Assistant:</code> ")).toBe(expectedPrefix);
+      expect(finalChunk).toContain(`\n${suffix}`);
+    },
+  );
 
-  it("fails loudly when a leading entity cannot fit inside a chunk", () => {
-    expect(() => splitTelegramHtmlChunks(`A&amp;${"B".repeat(20)}`, 4)).toThrow(/leading entity/i);
-  });
+  it.each([`A&amp;${"B".repeat(20)}`, "<b>&amp;</b>"])(
+    "fails loudly when an entity cannot fit even without formatting: %s",
+    (html) => {
+      expect(() => splitTelegramHtmlChunks(html, 4)).toThrow(/leading entity/i);
+    },
+  );
 
   it("treats malformed leading ampersands as plain text when chunking html", () => {
     const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
@@ -470,7 +485,6 @@ describe("markdownToTelegramHtml", () => {
     for (const [name, input, expected] of cases) {
       const output = telegramHtmlToPlainTextFallback(input);
       expect(output, name).toBe(expected);
-      expect(containsLoneSurrogate(output), name).toBe(false);
     }
   });
 
@@ -478,14 +492,21 @@ describe("markdownToTelegramHtml", () => {
     const output = telegramHtmlToPlainTextFallback("x &#x1F600; &#128512; y");
 
     expect(output).toBe("x 😀 😀 y");
-    expect(containsLoneSurrogate(output)).toBe(false);
   });
 
-  it("delivers content as plain text when tag overhead fills the chunk", () => {
-    const chunks = splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10);
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]).toBe("x");
-  });
+  it.each([
+    ["<b><i><u>x</u></i></b>", 10, ["x"]],
+    ["<b>😀x</b>", 8, ["😀x"]],
+    ["<b>e\u0301x</b>", 8, ["e\u0301x"]],
+    ["<b>&amp;</b>", 10, ["&amp;"]],
+    ["<b></b>abc", 4, ["abc"]],
+    ["<b></b>e\u0301x", 8, ["e\u0301x"]],
+  ] as const)(
+    "drops tag overhead that prevents payload from fitting: %s",
+    (html, cap, expected) => {
+      expect(splitTelegramHtmlChunks(html, cap)).toEqual(expected);
+    },
+  );
 
   it("keeps later formatting balanced after dropping an oversized tag scope", () => {
     const oversizedLink = `<a href="https://example.com/${"x".repeat(40)}">first</a>`;
@@ -497,13 +518,12 @@ describe("markdownToTelegramHtml", () => {
   });
 
   it("does not split an astral char across the chunk boundary", () => {
-    // Emoji surrogate pair straddles index 10 (limit): high at 9, low at 10.
     const input = `${"A".repeat(9)}😀${"B".repeat(20)}`;
     const chunks = splitTelegramHtmlChunks(input, 10);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.join("")).toBe(input);
     for (const chunk of chunks) {
-      expect(containsLoneSurrogate(chunk)).toBe(false);
+      expect(chunk).not.toMatch(/[\uD800-\uDFFF]/u);
     }
   });
 
@@ -516,26 +536,105 @@ describe("markdownToTelegramHtml", () => {
 
     expect(chunks.map((chunk) => chunk.text)).toEqual(["A", "😀", "B"]);
     for (const chunk of chunks) {
-      expect(containsLoneSurrogate(chunk.html)).toBe(false);
-      expect(containsLoneSurrogate(chunk.text)).toBe(false);
+      expect(chunk.html).not.toMatch(/[\uD800-\uDFFF]/u);
     }
+  });
+
+  it("keeps a family emoji whole when the Telegram cap lands inside its ZWJ sequence", () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+    const prefix = "a".repeat(3998);
+    const input = `${prefix}${family}Z`;
+    const expected = [prefix, `${family}Z`];
+    expect(splitTelegramHtmlChunks(input, 4000)).toEqual(expected);
+    expect(markdownToTelegramChunks(input, 4000).map((chunk) => chunk.text)).toEqual(expected);
+  });
+
+  it.each([
+    ["literal family", 3991, "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}Z"],
+    ["entity with combining mark", 3988, "&amp;\u0301Z"],
+    ["entity-encoded flag", 3984, "&#x1F1FA;&#x1F1F8;Z"],
+  ] as const)(
+    "moves a leading %s to a fresh chunk after closing tags",
+    (_, prefixLength, suffix) => {
+      const prefix = `<i>${"a".repeat(prefixLength)}</i>`;
+      expect(splitTelegramHtmlChunks(`${prefix}${suffix}`, 4000)).toEqual([prefix, suffix]);
+    },
+  );
+
+  it("keeps a leading cluster whole when a preferred word break falls inside it", () => {
+    const cluster = "\u0600 \u0301";
+    const input = `${cluster}abc`;
+    const chunks = splitTelegramHtmlChunks(input, 4);
+    expect(chunks.join("")).toBe(input);
+    expect(chunks.every((chunk) => chunk.length <= 4)).toBe(true);
+    expect(chunks[0]).toContain(cluster);
+  });
+
+  it("keeps an HTML entity with its combining mark at the cap", () => {
+    const prefix = "a".repeat(3995);
+    expect(splitTelegramHtmlChunks(`${prefix}&amp;\u0301tail`, 4000)).toEqual([
+      prefix,
+      "&amp;\u0301tail",
+    ]);
+  });
+
+  it("keeps entity-encoded regional indicators together as a decoded flag", () => {
+    const prefix = "a".repeat(4087);
+    const flag = "&#x1F1FA;&#x1F1F8;";
+    expect(splitTelegramHtmlChunks(`${prefix}${flag}`, 4096)).toEqual([prefix, flag]);
+  });
+
+  it.each([
+    ["named base", "&amp;", "&#769;"],
+    ["hexadecimal base", "&#x65;", "&#769;"],
+  ])("keeps a decoded combining mark with its %s across entity spellings", (_, base, mark) => {
+    const prefix = "a".repeat(4096 - base.length);
+    expect(splitTelegramHtmlChunks(`${prefix}${base}${mark}`, 4096)).toEqual([
+      prefix,
+      `${base}${mark}`,
+    ]);
+  });
+
+  it.each(["&unknown;", "&#xD800;"])(
+    "preserves an undecoded entity as an indivisible source atom: %s",
+    (entity) => {
+      expect(splitTelegramHtmlChunks(`A${entity}B`, entity.length)).toEqual(["A", entity, "B"]);
+    },
+  );
+
+  it.each(["&unknown;", "&#xD800;"])(
+    "keeps an opaque entity with its Prepend prefix and trailing combining mark: %s",
+    (entity) => {
+      const cluster = `\u0600${entity}\u0301`;
+      expect(splitTelegramHtmlChunks(`A${cluster}B`, cluster.length)).toEqual(["A", cluster, "B"]);
+    },
+  );
+
+  it("makes progress when an entity-leading cluster exceeds the cap", () => {
+    expect(splitTelegramHtmlChunks(`&amp;${"\u0301".repeat(4000)}Z`, 4000)).toEqual([
+      `&amp;${"\u0301".repeat(3995)}`,
+      `${"\u0301".repeat(5)}Z`,
+    ]);
   });
 });
 
-function containsLoneSurrogate(text: string): boolean {
-  for (let index = 0; index < text.length; index += 1) {
-    const code = text.charCodeAt(index);
-    const isHigh = code >= 0xd800 && code <= 0xdbff;
-    const isLow = code >= 0xdc00 && code <= 0xdfff;
-    if (isHigh) {
-      const next = text.charCodeAt(index + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) {
-        return true;
-      }
-      index += 1;
-    } else if (isLow) {
-      return true;
-    }
-  }
-  return false;
-}
+describe("splitTelegramHtmlChunks limits", () => {
+  it("rejects NaN instead of repeatedly emitting chunks without consuming input", () => {
+    expect(() => splitTelegramHtmlChunks("<b>abcdef</b>", Number.NaN)).toThrow(TypeError);
+  });
+
+  it.each([
+    [0, ["a", "b", "c"]],
+    [Number.NEGATIVE_INFINITY, ["a", "b", "c"]],
+    [2.9, ["ab", "c"]],
+    ["2" as unknown as number, ["ab", "c"]],
+  ] as const)("normalizes limit %s before splitting", (limit, expected) => {
+    expect(splitTelegramHtmlChunks("abc", limit)).toEqual(expected);
+  });
+
+  it("supports unlimited HTML and empty input", () => {
+    const html = "<b>&amp;😀</b>".repeat(1000);
+    expect(splitTelegramHtmlChunks(html, Number.POSITIVE_INFINITY)).toEqual([html]);
+    expect(splitTelegramHtmlChunks("", Number.POSITIVE_INFINITY)).toEqual([]);
+  });
+});

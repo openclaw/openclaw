@@ -1,6 +1,7 @@
 // Docker backend manager tests cover runtime image matching and removal error
 // handling for sandbox and browser containers.
 import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -26,6 +27,11 @@ vi.mock("./docker.js", async () => {
     validateSandboxContainerEngineTarget: dockerMocks.validateSandboxContainerEngineTarget,
   };
 });
+
+vi.mock("./container-engine.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./container-engine.js")>()),
+  execContainer: dockerMocks.execContainer,
+}));
 
 const {
   createDockerSandboxBackend,
@@ -74,11 +80,17 @@ describe("docker sandbox backend manager", () => {
       exists: true,
       running: true,
     });
-    dockerMocks.execContainer.mockResolvedValue({
+    dockerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => ({
       code: 0,
-      stdout: "unused-image",
+      stdout: args.includes('{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}')
+        ? JSON.stringify({ Mounts: [], Tmpfs: null })
+        : args.includes("{{.Id}}")
+          ? "a".repeat(64)
+          : args.includes("/proc/self/mountinfo")
+            ? "1 1 0:1 / / rw - overlay overlay rw\n2 1 8:1 /workspace /workspace rw - ext4 /dev/root rw\n"
+            : "unused-image",
       stderr: "",
-    });
+    }));
     dockerMocks.resolvePodmanSandboxRuntimeInfo.mockResolvedValue({
       machine: false,
       rootless: true,
@@ -86,21 +98,363 @@ describe("docker sandbox backend manager", () => {
     });
   });
 
+  it("rechecks runtime authority after awaited engine validation before filesystem exec", async () => {
+    let current = true;
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+    const backend = await createDockerSandboxBackend({
+      sessionKey: "agent:coder:main",
+      scopeKey: "agent:coder:main",
+      workspaceDir: "/workspace",
+      agentWorkspaceDir: "/workspace",
+      cfg: resolveSandboxConfigForAgent(createConfig()),
+      assertRuntimeCurrent: () => {
+        if (!current) {
+          throw new Error("runtime revoked");
+        }
+      },
+    });
+    dockerMocks.validateSandboxContainerEngineTarget.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      current = false;
+    });
+    await expect(backend.runShellCommand({ script: "write should not run" })).rejects.toThrow(
+      "runtime revoked",
+    );
+    expect(dockerMocks.execContainerRaw).not.toHaveBeenCalled();
+  });
+
+  it.each(["identity", "mounts"] as const)(
+    "does not execute a mount probe after authority retires during %s inspection",
+    async (stage) => {
+      let current = true;
+      const execute = dockerMocks.execContainer.getMockImplementation()!;
+      dockerMocks.execContainer.mockImplementation(async (engine, args, options) => {
+        const result = await execute(engine, args, options);
+        if (
+          args[0] === "inspect" &&
+          (stage === "identity"
+            ? args.includes("{{.Id}}")
+            : args.some((arg: string) => arg.includes("Mounts")))
+        ) {
+          current = false;
+        }
+        return result;
+      });
+      dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+      await expect(
+        createDockerSandboxBackend({
+          sessionKey: "agent:coder:main",
+          scopeKey: "agent:coder:main",
+          workspaceDir: "/workspace",
+          agentWorkspaceDir: "/workspace",
+          cfg: resolveSandboxConfigForAgent(createConfig()),
+          assertRuntimeCurrent: () => {
+            if (!current) {
+              throw new Error("runtime retired");
+            }
+          },
+        }),
+      ).rejects.toThrow("runtime retired");
+      expect(dockerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "exec")).toBe(
+        false,
+      );
+    },
+  );
+
+  it("pins retained termination to its original container generation", async () => {
+    const backend = await createDockerExecBackend();
+    const cleanup = backend.prepareProcessCleanup!({});
+    dockerMocks.execContainerRaw.mockResolvedValueOnce({
+      code: 0,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+    });
+    // The stable display name may now refer to a different container.
+    await cleanup.terminate();
+    expect(dockerMocks.execContainerRaw.mock.calls.at(-1)?.[1]?.[2]).toBe("a".repeat(64));
+  });
+
+  it.each(["removed", "unreachable", "still present"] as const)(
+    "settles retained cleanup only for confirmed generation removal: %s",
+    async (state) => {
+      const backend = await createDockerExecBackend();
+      const cleanup = backend.prepareProcessCleanup!({});
+      dockerMocks.execContainerRaw.mockResolvedValueOnce({
+        code: 125,
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.from("exec failed"),
+      });
+      dockerMocks.execContainer.mockResolvedValueOnce({
+        code: state === "still present" ? 0 : 1,
+        stdout: state === "still present" ? "a".repeat(64) : "",
+        stderr:
+          state === "removed" ? `Error: No such object: ${"a".repeat(64)}` : "engine unreachable",
+      });
+      if (state === "removed") {
+        await expect(cleanup.terminate()).resolves.toBeUndefined();
+      } else {
+        await expect(cleanup.terminate()).rejects.toThrow("exec failed");
+      }
+      expect(dockerMocks.execContainer.mock.calls.at(-1)?.[1]).toEqual([
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "a".repeat(64),
+      ]);
+    },
+  );
+
+  it("pins ordinary filesystem dispatch to the same prepared generation", async () => {
+    const backend = await createDockerExecBackend();
+    dockerMocks.execContainerRaw.mockResolvedValueOnce({
+      code: 0,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+    });
+    await backend.runShellCommand({ script: "true" });
+    expect(dockerMocks.execContainerRaw.mock.calls.at(-1)?.[1]?.[2]).toBe("a".repeat(64));
+  });
+
   it("forwards the canonical scope key to container provisioning", async () => {
     dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
     const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
+    const readOnlyResourceMounts = [
+      { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
+    ];
 
     await createDockerSandboxBackend({
       sessionKey: "agent:poly:msteams:channel-1",
       scopeKey,
       workspaceDir: "/tmp/customer/workspace",
       agentWorkspaceDir: "/tmp/customer/workspace",
+      readOnlyResourceMounts,
       cfg: resolveSandboxConfigForAgent(createConfig(), "poly"),
     });
 
     expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
-      expect.objectContaining({ scopeKey }),
+      expect.objectContaining({ scopeKey, readOnlyResourceMounts }),
     );
+  });
+
+  it("captures image-volume masks once for the filesystem bridge after provisioning", async () => {
+    dockerMocks.execContainer
+      .mockResolvedValueOnce({ code: 0, stdout: "a".repeat(64), stderr: "" })
+      .mockResolvedValueOnce({
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          Mounts: [
+            { Type: "bind", Source: "/host/project", Destination: "/workspace", RW: true },
+            { Type: "volume", Source: "/engine/volume", Destination: "/workspace/cache", RW: true },
+            {
+              Type: "bind",
+              Source: "/host/export",
+              Destination: "/workspace/cache/export",
+              RW: false,
+            },
+          ],
+          Tmpfs: { "/tmp": "rw" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        stderr: "",
+        stdout: [
+          "1 1 0:1 / / rw - overlay overlay rw",
+          "2 1 8:1 /project /workspace rw - ext4 /dev/root rw",
+          "3 2 8:1 /volume /workspace/cache rw - ext4 /dev/root rw",
+          "4 3 8:1 /export /workspace/cache/export ro - ext4 /dev/root rw",
+        ].join("\n"),
+      });
+    const backend = await createDockerExecBackend();
+    const bridge = backend.createFsBridge!({
+      sandbox: {
+        workspaceDir: "/host/project",
+        agentWorkspaceDir: "/host/project",
+        workspaceAccess: "rw",
+        containerName: backend.runtimeId,
+        containerWorkdir: "/workspace",
+        docker: { binds: ["/host/export:/workspace/cache/export:ro"] },
+        backend,
+      },
+    });
+    expect(() => bridge.resolvePath({ filePath: "cache/marker" })).toThrow("container-only");
+    expect(() => bridge.resolvePath({ filePath: "/workspace/cache/marker" })).toThrow(
+      "container-only",
+    );
+    expect(bridge.resolvePath({ filePath: "cache/export/marker" }).hostPath).toBe(
+      path.resolve("/host/export/marker"),
+    );
+    expect(dockerMocks.execContainer).toHaveBeenCalledTimes(3);
+    expect(dockerMocks.ensureSandboxContainer.mock.invocationCallOrder[0]).toBeLessThan(
+      dockerMocks.execContainer.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it.each([
+    {
+      name: "tmpfs destination alias and retained retarget",
+      binds: [],
+      tmpfs: { "/workspace/link": "rw" },
+      table: ["3 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw"],
+      masked: ["/workspace/link/marker", "/workspace/cache/marker"],
+      readable: ["/workspace/other/marker"],
+    },
+    {
+      name: "different backing stacked on a declared bind",
+      binds: [
+        { source: "/host/cache", target: "/workspace/cache", writable: true },
+        { source: "/host/hidden", target: "/workspace/cache/hidden", writable: true },
+        { source: "/host/live", target: "/workspace/cache/live", writable: true },
+      ],
+      tmpfs: { "/workspace/aliases/link": "rw" },
+      table: [
+        "3 2 8:1 /cache /workspace/cache rw - ext4 /dev/root rw",
+        "4 3 8:1 /hidden /workspace/cache/hidden rw - ext4 /dev/root rw",
+        "5 3 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
+        "6 5 8:1 /live /workspace/cache/live rw - ext4 /dev/root rw",
+      ],
+      masked: ["/workspace/cache/marker", "/workspace/cache/hidden/marker"],
+      readable: ["/workspace/cache/live/marker"],
+    },
+    {
+      name: "intervening tmpfs hides an older sibling bind",
+      binds: [{ source: "/host/export", target: "/workspace/cache/export", writable: true }],
+      tmpfs: { "/workspace/aliases/deep/link": "rw" },
+      table: [
+        "3 2 8:1 /export /workspace/cache/export rw - ext4 /dev/root rw",
+        "4 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
+      ],
+      masked: ["/workspace/cache/marker", "/workspace/cache/export/marker"],
+      readable: ["/workspace/other/marker"],
+    },
+    {
+      name: "bind attached inside the intervening tmpfs remains visible",
+      binds: [{ source: "/host/export", target: "/workspace/cache/export", writable: true }],
+      tmpfs: { "/workspace/aliases/deep/link": "rw" },
+      table: [
+        "3 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
+        "4 3 8:1 /export /workspace/cache/export rw - ext4 /dev/root rw",
+      ],
+      masked: ["/workspace/cache/marker"],
+      readable: ["/workspace/cache/export/marker"],
+    },
+    {
+      name: "identical recursive bind backing with a readonly top",
+      binds: [{ source: "/host/export", target: "/workspace/export", writable: false }],
+      tmpfs: {},
+      table: [
+        "3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw",
+        "4 3 8:1 /export /workspace/export ro - ext4 /dev/root rw",
+      ],
+      masked: [],
+      readable: ["/workspace/export/marker"],
+    },
+    {
+      name: "readonly bind with mismatched realized access",
+      binds: [{ source: "/host/export", target: "/workspace/export", writable: false }],
+      tmpfs: {},
+      table: ["3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw"],
+      masked: ["/workspace/export/marker"],
+      readable: [],
+    },
+    {
+      name: "escaped whitespace in realized bind paths",
+      binds: [{ source: "/host/export ", target: "/workspace/export ", writable: false }],
+      tmpfs: {},
+      table: ["3 2 8:1 /export\\040 /workspace/export\\040 ro - ext4 /dev/root rw"],
+      masked: [],
+      readable: ["/workspace/export /marker"],
+    },
+    {
+      name: "visible recursive child above a hidden older child",
+      binds: [{ source: "/host/export", target: "/workspace/export", writable: false }],
+      tmpfs: {},
+      table: [
+        "3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw",
+        "4 2 8:1 /project /workspace rw - ext4 /dev/root rw",
+        "5 4 8:1 /export /workspace/export rw - ext4 /dev/root rw",
+        "6 5 8:1 /export /workspace/export ro - ext4 /dev/root rw",
+      ],
+      masked: [],
+      readable: ["/workspace/export/marker"],
+    },
+    {
+      name: "different backing above a hidden older bind",
+      binds: [{ source: "/host/cache", target: "/workspace/cache", writable: true }],
+      tmpfs: { "/workspace/aliases/link": "rw" },
+      table: [
+        "3 2 8:1 /cache /workspace/cache rw - ext4 /dev/root rw",
+        "4 2 8:1 /project /workspace rw - ext4 /dev/root rw",
+        "5 4 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
+      ],
+      masked: ["/workspace/cache/marker"],
+      readable: ["/workspace/other/marker"],
+    },
+    {
+      name: "bind destination alias without a realized lexical mount",
+      binds: [{ source: "/host/export", target: "/workspace/link", writable: true }],
+      tmpfs: {},
+      table: ["3 2 8:1 /export /workspace/cache rw - ext4 /dev/root rw"],
+      masked: ["/workspace/link/marker", "/workspace/cache/marker"],
+      readable: ["/workspace/other/marker"],
+    },
+  ])("captures realized masks for $name", async ({ binds, tmpfs, table, masked, readable }) => {
+    dockerMocks.execContainer
+      .mockResolvedValueOnce({ code: 0, stdout: "a".repeat(64), stderr: "" })
+      .mockResolvedValueOnce({
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          Mounts: [
+            { Type: "bind", Source: "/host/project", Destination: "/workspace", RW: true },
+            ...binds.map((bind) => ({
+              Type: "bind",
+              Source: bind.source,
+              Destination: bind.target,
+              RW: bind.writable,
+            })),
+          ],
+          Tmpfs: tmpfs,
+        }),
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        stderr: "",
+        stdout: [
+          "1 1 0:1 / / rw - overlay overlay rw",
+          "2 1 8:1 /project /workspace rw - ext4 /dev/root rw",
+          ...table,
+        ].join("\n"),
+      });
+    const backend = await createDockerExecBackend();
+    const bridge = backend.createFsBridge!({
+      sandbox: {
+        workspaceDir: "/host/project",
+        agentWorkspaceDir: "/host/project",
+        workspaceAccess: "rw",
+        containerName: backend.runtimeId,
+        containerWorkdir: "/workspace",
+        docker: {
+          binds: binds.map(
+            (bind) => `${bind.source}:${bind.target}:${bind.writable ? "rw" : "ro"}`,
+          ),
+        },
+        backend,
+      },
+    });
+    for (const filePath of masked) {
+      expect(() => bridge.resolvePath({ filePath })).toThrow("container-only");
+    }
+    for (const filePath of readable) {
+      expect(bridge.resolvePath({ filePath }).containerPath).toBe(filePath);
+    }
+    expect(dockerMocks.execContainer).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not return a backend when its filesystem snapshot cannot be read", async () => {
+    dockerMocks.execContainer.mockRejectedValueOnce(new Error("inspect failed"));
+    await expect(createDockerExecBackend()).rejects.toThrow("inspect failed");
   });
 
   it("binds Podman provisioning and later execs to the resolved target", async () => {
@@ -139,6 +493,11 @@ describe("docker sandbox backend manager", () => {
     expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
       expect.objectContaining({ podmanTarget }),
     );
+    expect(dockerMocks.execContainer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "podman", globalArgs: podmanTarget.globalArgs }),
+      expect.arrayContaining(["inspect", "sandbox-podman"]),
+      expect.anything(),
+    );
     expect(dockerMocks.validateSandboxContainerEngineTarget).toHaveBeenCalledWith(
       expect.objectContaining({ id: "podman" }),
       podmanTarget,
@@ -171,7 +530,7 @@ describe("docker sandbox backend manager", () => {
     expect(execSpec.argv).toContain("-t");
     expect(execSpec.argv).toContain("-w");
     expect(execSpec.argv).toContain("/workspace/project");
-    expect(execSpec.argv.slice(-4, -1)).toEqual(["sandbox-container", "/bin/sh", "-lc"]);
+    expect(execSpec.argv.slice(-4, -1)).toEqual(["a".repeat(64), "/bin/sh", "-lc"]);
     expect(execSpec.argv.at(-1)).toBe(
       'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; printf ready',
     );

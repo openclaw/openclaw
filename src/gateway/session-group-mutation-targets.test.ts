@@ -9,12 +9,12 @@ import * as sqliteWal from "../infra/sqlite-wal.js";
 import * as agentDatabaseLeases from "../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
-  listOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { setStateDirEnv, withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { resolveSessionGroupMutationTargetsByName } from "./session-groups.js";
+import { readSessionGroupMembershipInWorker } from "./session-group-catalog.js";
 
 const EXPECTED_OPEN_HANDLE_CAP = 64;
 
@@ -45,9 +45,11 @@ test.each([false, true])(
         },
       };
       const parse = vi.spyOn(JSON, "parse");
-      const readTargets = () => {
+      const readTargets = async () => {
         parse.mockClear();
-        const targets = resolveSessionGroupMutationTargetsByName(config);
+        const targets = new Map(
+          (await readSessionGroupMembershipInWorker(config, process.env)).groups,
+        );
         expect(
           parse.mock.calls.filter(
             ([json]) => json.includes('"skillsSnapshot"') || json.includes('"systemPromptReport"'),
@@ -62,9 +64,9 @@ test.each([false, true])(
         if (cold) {
           closeOpenClawAgentDatabasesForTest();
         }
-        expect(readTargets()).toEqual(new Map([["Shared work", scopes]]));
+        expect(await readTargets()).toEqual(new Map([["Shared work", scopes]]));
         await upsertSessionEntryCore(scopes[0], { ...entry, category: "Renamed" });
-        expect(readTargets()).toEqual(
+        expect(await readTargets()).toEqual(
           new Map([
             ["Renamed", [scopes[0]]],
             ["Shared work", [scopes[1]]],
@@ -81,7 +83,7 @@ test.each([false, true])(
         } finally {
           external.close();
         }
-        expect(readTargets()).toEqual(
+        expect(await readTargets()).toEqual(
           new Map([
             ["External", [scopes[0]]],
             ["Shared work", [scopes[1]]],
@@ -131,10 +133,10 @@ test("discovers groups across more than the handle cap without writable database
     const walSpy = vi.spyOn(sqliteWal, "configureSqliteConnectionPragmas");
 
     try {
-      let targets: ReturnType<typeof resolveSessionGroupMutationTargetsByName> | undefined;
+      let targets: Map<string, Array<{ agentId?: string; sessionKey: string }>> | undefined;
       const startedAt = performance.now();
       try {
-        targets = resolveSessionGroupMutationTargetsByName(config);
+        targets = new Map((await readSessionGroupMembershipInWorker(config, process.env)).groups);
       } finally {
         console.info(
           JSON.stringify({

@@ -1,5 +1,5 @@
 // Memory Core coordinates published-index readers with atomic shadow publication.
-import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   acquireMemorySqliteWriterLease,

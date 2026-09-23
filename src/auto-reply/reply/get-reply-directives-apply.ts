@@ -5,6 +5,7 @@ import { resolveContextConfigProviderForRuntime } from "../../agents/openai-rout
 import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   isModelSelectionLocked,
@@ -246,7 +247,7 @@ export async function applyInlineDirectiveOverrides(params: {
         modelPolicyRepairConfigPath: modelState.modelPolicyRepairConfigPath,
       }),
       {
-        sessionKey,
+        sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
         contextKey: `model:reset:${initialModelLabel}`,
       },
     );
@@ -463,7 +464,9 @@ export async function applyInlineDirectiveOverrides(params: {
           request: {
             ...modelSelection,
             profileOverride: modelResolution.profileOverride,
-            runtime,
+            // Preserve model-only intent so the service prepares the configured runtime
+            // after discarding an incompatible inherited pin.
+            runtime: directives.rawModelRuntime ? runtime : { kind: "unchanged" },
           },
           patchModel: effectiveModelDirective,
           markLiveSwitchPending: true,

@@ -803,6 +803,26 @@ struct ChatGatewayPayloadCodecTests {
         #expect(encoded["inputConsumptions"] as? [[String: String]] == consumptions)
     }
 
+    @Test(arguments: [nil, "running", "completed", "failed", "blocked"] as [String?])
+    func `history activity decodes quiet and optional terminal states`(status: String?) throws {
+        var item: [String: Any] = ["itemId": "tool:work", "kind": "tool", "phase": "end", "title": "Read"]
+        item["status"] = status
+        let object: [String: Any] = [
+            "sessionKey": "main", "messages": [],
+            "activity": [["messageId": "quiet", "items": []], ["messageId": "work", "items": [item]]],
+        ]
+        let payload = try JSONDecoder().decode(OpenClawChatHistoryPayload.self,
+                                             from: JSONSerialization.data(withJSONObject: object))
+        #expect(payload.activity?.first?.items.isEmpty == true)
+        #expect(payload.activity?.last?.items.first?.status == status)
+        let roundTrip = try JSONDecoder().decode(OpenClawChatHistoryPayload.self,
+                                               from: JSONEncoder().encode(payload))
+        #expect(roundTrip.activity?.last?.items == payload.activity?.last?.items)
+        let legacy = try JSONDecoder().decode(OpenClawChatHistoryPayload.self,
+                                            from: Data(#"{"sessionKey":"main","messages":[]}"#.utf8))
+        #expect(legacy.activity == nil)
+    }
+
     @Test func `session row decodes permission and every tool override family`() throws {
         let row = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
         {

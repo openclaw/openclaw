@@ -352,18 +352,15 @@ export async function renderPluginSdkApiBaseline(params?: {
     }),
   );
 
-  const declarationSections = [
-    ...new Map(
-      modules.flatMap((moduleSurface) =>
-        moduleSurface.exports.flatMap((exportSurface) =>
-          (exportSurface.closureSections ?? []).map((section) => [
-            `${section.name}\0${section.text}`,
-            section,
-          ]),
-        ),
-      ),
-    ).values(),
-  ].toSorted(
+  const sectionsByContent = new Map<string, PluginSdkApiDeclarationSection>();
+  for (const moduleSurface of modules) {
+    for (const exportSurface of moduleSurface.exports) {
+      for (const section of exportSurface.closureSections ?? []) {
+        sectionsByContent.set(`${section.name}\0${section.text}`, section);
+      }
+    }
+  }
+  const declarationSections = [...sectionsByContent.values()].toSorted(
     (left, right) => compareText(left.name, right.name) || compareText(left.text, right.text),
   );
   const sectionIds = new Map(

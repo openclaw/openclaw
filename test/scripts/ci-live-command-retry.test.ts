@@ -7,6 +7,10 @@ import { afterEach, describe, expect, it } from "vitest";
 const SCRIPT_PATH = path.resolve("scripts/ci-live-command-retry.sh");
 const tempDirs: string[] = [];
 
+function bashPrintfValue(value: string): string {
+  return JSON.stringify(value).replaceAll("\\u001b", "\\x1b");
+}
+
 function writeCommand(
   prefix: string,
   lines: string[],
@@ -81,7 +85,7 @@ describe("scripts/ci-live-command-retry.sh", () => {
   ])("ignores successful %s when the command fails deterministically", (_label, row) => {
     const output = `${row}\nInvalidConfigError: invalid fixture configuration`;
     const { commandPath, counterPath } = writeCommand("openclaw-ci-live-passed-row-", [
-      `printf '%b\\n' ${JSON.stringify(output)}`,
+      `printf '%b\\n' ${bashPrintfValue(output)}`,
       "exit 42",
     ]);
 
@@ -184,7 +188,7 @@ describe("scripts/ci-live-command-retry.sh", () => {
     ["successful first attempt", "HTTP 503\n", 0],
   ])("preserves status and invocation count for %s", (_label, output, status) => {
     const { commandPath, counterPath } = writeCommand("openclaw-ci-live-status-", [
-      `printf '%b' ${JSON.stringify(output)}`,
+      `printf '%b' ${bashPrintfValue(output)}`,
       `exit ${status}`,
     ]);
 

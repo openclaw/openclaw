@@ -17,7 +17,6 @@ import type {
   CodexConfigWriteResponse,
   CodexExperimentalFeatureListParams,
   CodexExperimentalFeatureListResponse,
-  CodexHooksListParams,
   CodexHooksListResponse,
   CodexInstalledApp,
   CodexPluginDetail,
@@ -36,6 +35,7 @@ import type {
 } from "./protocol-control-plane.js";
 import type { JsonObject, JsonValue } from "./protocol-json.js";
 import type * as CodexMcpProtocol from "./protocol-mcp.js";
+import type { CodexSessionSource, CodexThreadSourceKind } from "./protocol-session-source.js";
 
 export type {
   CodexConfigReadResponse,
@@ -45,6 +45,14 @@ export type {
   CodexPluginReadResponse,
 } from "./protocol-control-plane.js";
 export type { CodexListMcpServerStatusResponse, CodexMcpServerStatus } from "./protocol-mcp.js";
+export {
+  CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES,
+  CODEX_INTERACTIVE_THREAD_SOURCE_KINDS,
+} from "./protocol-session-source.js";
+export type {
+  CodexSessionSource,
+  CodexSubAgentThreadSpawnSource,
+} from "./protocol-session-source.js";
 export { isRpcResponse } from "./protocol-json.js";
 export type {
   JsonObject,
@@ -246,20 +254,6 @@ export function assertCodexThreadForkParams(value: unknown): CodexThreadForkPara
 
 export type CodexThreadForkResponse = CodexThreadStartResponse;
 
-export const CODEX_INTERACTIVE_THREAD_SOURCE_KINDS = ["cli", "vscode"] as const;
-export const CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES = ["atlas", "chatgpt"] as const;
-
-type CodexThreadSourceKind =
-  | (typeof CODEX_INTERACTIVE_THREAD_SOURCE_KINDS)[number]
-  | "exec"
-  | "appServer"
-  | "subAgent"
-  | "subAgentReview"
-  | "subAgentCompact"
-  | "subAgentThreadSpawn"
-  | "subAgentOther"
-  | "unknown";
-
 export type CodexThreadListParams = JsonObject & {
   cursor?: string | null;
   limit?: number | null;
@@ -342,6 +336,7 @@ type CodexThreadUnarchiveResponse = {
 export type CodexThreadResumeResponse = {
   thread: CodexThread;
   model: string;
+  cwd: string;
   modelProvider?: string | null;
   initialTurnsPage?: CodexInitialTurnsPage | null;
 };
@@ -383,9 +378,7 @@ type CodexThreadInjectItemsParams = JsonObject & {
   items: JsonValue[];
 };
 
-type CodexThreadUnsubscribeParams = JsonObject & {
-  threadId: string;
-};
+type CodexThreadUnsubscribeParams = JsonObject & { threadId: string };
 
 type CodexTurnInterruptParams = JsonObject & {
   threadId: string;
@@ -457,6 +450,9 @@ export type CodexTurn = {
 
 export type CodexThread = {
   id: string;
+  ephemeral?: boolean;
+  cliVersion?: string | null;
+  gitInfo?: { sha?: string | null; branch?: string | null; originUrl?: string | null } | null;
   forkedFromId?: string | null;
   parentThreadId?: string | null;
   sessionId?: string;
@@ -468,11 +464,14 @@ export type CodexThread = {
   preview?: string | null;
   createdAt?: number | null;
   updatedAt?: number | null;
+  recencyAt?: number | null;
   status?: CodexThreadStatus | null;
   canAcceptDirectInput?: boolean | null;
   /** Codex 0.153+: current loaded selection, otherwise latest persisted model. */
   model?: string | null;
   modelProvider?: string | null;
+  /** Native creation-time provenance; unavailable on older or incomplete records. */
+  originator?: string | null;
   cwd?: string | null;
   source?: CodexSessionSource | null;
   threadSource?: string | null;
@@ -486,30 +485,6 @@ export type CodexThreadStatus =
   | { type: "idle" }
   | { type: "systemError" }
   | { type: "active"; activeFlags?: string[] };
-
-export type CodexSubAgentThreadSpawnSource = {
-  parent_thread_id: string;
-  depth?: number;
-  agent_path?: string | null;
-  agent_nickname?: string | null;
-  agent_role?: string | null;
-};
-
-type CodexSubAgentSource =
-  | "review"
-  | "compact"
-  | "memory_consolidation"
-  | { thread_spawn: CodexSubAgentThreadSpawnSource }
-  | { other: string };
-
-export type CodexSessionSource =
-  | "cli"
-  | "vscode"
-  | "exec"
-  | "appServer"
-  | "unknown"
-  | { custom: string }
-  | { subAgent: CodexSubAgentSource };
 
 export type CodexThreadStartedNotification = {
   thread: CodexThread;
@@ -570,13 +545,8 @@ export type CodexDynamicToolCallParams = {
 };
 
 export type CodexDynamicToolCallResponse = {
-  asyncStarted?: boolean;
   contentItems: CodexDynamicToolCallOutputContentItem[];
-  diagnosticTerminalReason?: CodexDynamicToolDiagnosticTerminalReason;
-  diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
-  sideEffectEvidence?: boolean;
   success: boolean;
-  terminate?: boolean;
 };
 
 export type CodexDynamicToolDiagnosticTerminalType = "blocked" | "completed" | "error";
@@ -601,6 +571,11 @@ export type CodexErrorNotification = {
     message?: string;
     codexErrorInfo?: "misalignmentPolicyViolation" | (string & {}) | JsonObject | null;
     additionalDetails?: string | null;
+    misalignment?: {
+      errorType?: string | null;
+      detailedExplanation?: string | null;
+      steer?: { message: string } | null;
+    } | null;
     [key: string]: unknown;
   };
   willRetry?: boolean;
@@ -635,8 +610,12 @@ export type CodexModelListResponse = {
 };
 
 export type CodexGetAccountResponse = {
-  account?: JsonValue;
-  requiresOpenaiAuth?: boolean;
+  account?:
+    | { type: "apiKey" }
+    | { type: "chatgpt"; email: string | null; planType: string }
+    | { type: "amazonBedrock"; usesCodexManagedCredentials?: boolean }
+    | null;
+  requiresOpenaiAuth: boolean;
 };
 
 type CodexModelProviderCapabilitiesReadResponse = {
@@ -669,8 +648,6 @@ export declare namespace v2 {
   export type AppInfo = CodexAppInfo;
   export type AppSummary = CodexAppSummary;
   export type AppsInstalledResponse = CodexAppsInstalledResponse;
-  export type HooksListParams = CodexHooksListParams;
-  export type HooksListResponse = CodexHooksListResponse;
   export type InstalledApp = CodexInstalledApp;
   export type PluginDetail = CodexPluginDetail;
   export type PluginInstalledParams = CodexPluginInstalledParams;

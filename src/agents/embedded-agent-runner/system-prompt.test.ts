@@ -81,9 +81,9 @@ describe("buildEmbeddedSystemPrompt", () => {
         tools: surface === "absent" ? [] : [message],
       });
 
-      expect(prompt.includes("including when it is already installed")).toBe(
-        surface === "available",
-      );
+      expect(
+        prompt.includes("For explicit plugin/skill search/install or missing capability"),
+      ).toBe(surface === "available");
       expect(prompt.includes('message(action="send", clawhub={query:"capability"})')).toBe(
         surface === "available",
       );
@@ -448,6 +448,12 @@ describe("buildEmbeddedSystemPrompt", () => {
       configInput: {
         config: {
           agents: { defaults: { models: { "fixture/configured": { alias: "configured-alias" } } } },
+        },
+        preparedModelRuntime: {
+          isCurrent: () => true,
+          configuredModelAliases: [
+            { alias: "configured-alias", provider: "fixture", model: "configured" },
+          ],
         },
       },
       directHint: false,

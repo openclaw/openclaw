@@ -22,7 +22,7 @@ import {
   signRotation,
   verifyRotation,
 } from "./identity.js";
-import { MemoryReplayStore } from "./replay.js";
+import { MemoryReplayStore } from "./memory-stores.test-support.js";
 
 const now = 1_752_300_000;
 const id = "01JZ0000000000000000000000";

@@ -7,14 +7,15 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { saveCronStore } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
+import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry-state.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
   markTaskLostById,
   markTaskTerminalById,
-  reloadTaskRegistryFromStore,
 } from "../tasks/task-registry.js";
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
@@ -22,7 +23,6 @@ import {
   configureTaskFlowRegistryRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import type {
@@ -118,12 +118,11 @@ async function writeSessionEntries(
   }
 }
 
-function resetTaskCommandRuntime() {
-  taskRegistryMaintenance.stopTaskRegistryMaintenance();
-  taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
+async function resetTaskCommandRuntime() {
+  await taskRegistryMaintenance.stopTaskRegistryMaintenance();
+  taskRegistryMaintenance.configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetConfigRuntimeState();
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   closeOpenClawAgentDatabasesForTest();
@@ -135,11 +134,11 @@ async function withTaskCommandStateDir(
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-command-" },
     async (state) => {
-      resetTaskCommandRuntime();
+      await resetTaskCommandRuntime();
       try {
         await run(state);
       } finally {
-        resetTaskCommandRuntime();
+        await resetTaskCommandRuntime();
       }
     },
   );
@@ -150,9 +149,9 @@ describe("tasks commands", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetTaskCommandRuntime();
     vi.useRealTimers();
-    resetTaskCommandRuntime();
     mocks.callGateway.mockReset();
   });
 
@@ -974,7 +973,7 @@ describe("tasks commands", () => {
         expect(deleteFlow).not.toHaveBeenCalled();
         expect(runtime.log).not.toHaveBeenCalled();
         expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeDefined();
-        reloadTaskRegistryFromStore();
+        await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         expect(getTaskById(staleTask.taskId)?.taskId).toBe(staleTask.taskId);
       });
     },

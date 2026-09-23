@@ -215,7 +215,26 @@ function pathCandidates(file: string): string[] {
     return [path.resolve(file)];
   }
   const resolved = path.win32.resolve(file);
-  return [resolved, resolved.replaceAll("\\", "/")];
+  const candidates = [resolved, resolved.replaceAll("\\", "/")];
+  // path.win32.resolve preserves "\\?\" / "\\.\" namespace markers, but configured
+  // prefixes never carry them; also match the unmarked spelling when one exists.
+  const marker = WINDOWS_NAMESPACE_MARKER_RE.exec(file);
+  if (marker) {
+    const stripped = file.slice(marker[0].length);
+    let unmarked: string | undefined;
+    if (/^UNC[\\/]/iu.test(stripped)) {
+      // "\\?\UNC\server\share" spells "\\server\share" without the marker.
+      unmarked = path.win32.resolve(`\\\\${stripped.slice(4)}`);
+    } else if (/^[A-Za-z]:[\\/]/u.test(stripped)) {
+      unmarked = path.win32.resolve(stripped);
+    }
+    // Device paths ("\\.\pipe\...") and other suffixes without an absolute
+    // unmarked spelling must not be resolved against the working directory.
+    if (unmarked !== undefined) {
+      candidates.push(unmarked, unmarked.replaceAll("\\", "/"));
+    }
+  }
+  return candidates;
 }
 
 function hasPathPrefix(value: string, prefix: PathRedactionPrefix): boolean {
@@ -250,8 +269,9 @@ export function redactPathForSupport(
     return file;
   }
   const candidates = pathCandidates(file);
+  const prefixes = pathRedactionPrefixes(options);
   for (const next of candidates) {
-    for (const prefix of pathRedactionPrefixes(options)) {
+    for (const prefix of prefixes) {
       const suffix = matchPathPrefix(next, prefix);
       if (suffix !== undefined) {
         return `${prefix.label}${suffix}`;
@@ -259,6 +279,21 @@ export function redactPathForSupport(
     }
   }
   return redactSensitiveTextForSupport(candidates[0] ?? file);
+}
+
+// Win32 namespace markers ("\\?\" extended-length, "\\.\" device) can precede a known
+// path prefix in raw fs error text; they must be redacted together with the path they decorate.
+const WINDOWS_NAMESPACE_MARKER_RE = /^\\\\[?.][\\/]/u;
+const WINDOWS_NAMESPACE_MARKER_LENGTH = 4;
+
+function namespaceMarkerLengthBefore(value: string, endIndex: number): number {
+  const start = endIndex - WINDOWS_NAMESPACE_MARKER_LENGTH;
+  if (start < 0) {
+    return 0;
+  }
+  return WINDOWS_NAMESPACE_MARKER_RE.test(value.slice(start, endIndex))
+    ? WINDOWS_NAMESPACE_MARKER_LENGTH
+    : 0;
 }
 
 function replaceKnownPathPrefix(value: string, prefix: PathRedactionPrefix): string {
@@ -272,7 +307,9 @@ function replaceKnownPathPrefix(value: string, prefix: PathRedactionPrefix): str
       next += value.slice(offset);
       break;
     }
-    next += value.slice(offset, index);
+    // Consume a Win32 namespace marker directly preceding the matched prefix so it is
+    // not left orphaned in front of the replacement label.
+    next += value.slice(offset, index - namespaceMarkerLengthBefore(value, index));
     next += prefix.label;
     offset = index + prefix.prefix.length;
   }
@@ -395,6 +432,7 @@ export function redactSupportDiagnosticLine(
 const PUBLIC_ERROR_CODES = new Set([
   ...Array.from(getSystemErrorMap().values(), ([code]) => code),
   "ENOTFOUND",
+  "EOTP",
   "ERESOLVE",
   "E401",
   "E403",
@@ -431,8 +469,26 @@ export function redactPublicSupportDiagnosticLine(
   context: SupportRedactionContext,
 ): string {
   const line = redactSupportDiagnosticLine(value, context);
+  if (
+    [
+      "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.",
+      "Cannot locate the installed updater; run `openclaw doctor` before retrying.",
+      "Managed update handoff requires a user-scope systemd unit; perform a manual system-service update.",
+      "managed update handoff requires a finite restart deadline",
+      "systemd-run is required to launch a transient user scope",
+      "managed update handoff process start identity is unavailable",
+      "managed update handoff returned an invalid readiness response",
+      "managed update handoff helper lease identity is unavailable",
+      "managed update handoff control input closed",
+      "managed update ownership transfer failed",
+      "requester-revoked",
+      "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
+    ].includes(line)
+  ) {
+    return line;
+  }
   const maintenance =
-    /^(?:Error: )?Doctor could not enter maintenance\.(?: Error: The update parent owns Gateway activation\.)?/u.exec(
+    /^(?:(?:Error|DoctorMaintenanceRefusalError): )?Doctor could not enter maintenance\.(?: Error: The update parent owns Gateway activation\.)?/u.exec(
       line,
     );
   if (maintenance) {
@@ -454,13 +510,18 @@ export function redactPublicSupportDiagnosticLine(
   ) {
     return line;
   }
-  const codes = (line.match(/\b(?:E[A-Z0-9_]+)\b/gu) ?? []).filter((code) =>
+  const lines = value
+    .split(/[\r\n\u2028\u2029]/u)
+    .map((entry) => redactSupportDiagnosticLine(entry, context))
+    .join("\n");
+  const codes = (lines.match(/\b(?:E[A-Z0-9_]+)\b/gu) ?? []).filter((code) =>
     normalizeSupportDiagnosticErrorCode(code),
   );
-  const causes =
-    line.match(
-      /\b(?:[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory)\b/gu,
-    ) ?? [];
+  const causes = (
+    lines.match(
+      /\b(?:[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
+    ) ?? []
+  ).map((cause) => cause.replace(/^permission denied$/u, "Permission denied"));
   return truncateUtf16Safe(
     [...new Set([...codes, ...causes])].join("; ") || "[redacted-diagnostic]",
     200,

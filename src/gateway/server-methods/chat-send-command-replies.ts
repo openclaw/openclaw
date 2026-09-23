@@ -1,13 +1,33 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  type ReplyMediaAttachment,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { parseInlineDirectives, sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
 import { sanitizeAssistantDisplayText } from "./chat-assistant-content.js";
 
-type DeliveredReply = {
-  payload: ReplyPayload;
+export type DeliveredChatSendReply = {
+  input: ReplyDispatchOperation;
   kind: "block" | "final";
 };
+
+export function readChatSendReplyPayload(input: ReplyDispatchOperation): ReplyPayload {
+  return input.kind === "raw" ? input.payload : input.plan.payload;
+}
+
+export function replaceChatSendReplyPayload(
+  input: ReplyDispatchOperation,
+  payload: ReplyPayload,
+): ReplyDispatchOperation[] {
+  return input.kind === "raw"
+    ? [{ kind: "raw", payload }]
+    : createStructuredOutboundPayloadPlan([payload]).map((plan) => ({ kind: "prepared", plan }));
+}
 
 function parseReplyInlineDirectives(payload: ReplyPayload) {
   return typeof payload.text === "string" && payload.text.includes("[[")
@@ -25,11 +45,11 @@ function replyMediaDedupeKeys(payload: ReplyPayload): string[] {
 
 function canonicalizeReplyMedia(payload: ReplyPayload): ReplyPayload {
   const mediaUrls = replyMediaUrls(payload);
-  return {
+  return copyReplyPayloadMetadata(payload, {
     ...payload,
     mediaUrl: undefined,
     mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
-  };
+  });
 }
 
 function mergeDefinedReplySemantics(target: ReplyPayload, source: ReplyPayload): ReplyPayload {
@@ -37,14 +57,9 @@ function mergeDefinedReplySemantics(target: ReplyPayload, source: ReplyPayload):
   const sourceReplyToId =
     sanitizeReplyDirectiveId(source.replyToId) ??
     sanitizeReplyDirectiveId(sourceInlineDirectives?.replyToExplicitId);
-  return {
-    ...target,
-    ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
-      ? { trustedLocalMedia: true }
-      : {}),
-    ...(source.sensitiveMedia === true || target.sensitiveMedia === true
-      ? { sensitiveMedia: true }
-      : {}),
+  const mergedMedia = mergeMediaReplySemantics(target, source, sourceInlineDirectives);
+  return copyReplyPayloadMetadata(mergedMedia, {
+    ...mergedMedia,
     ...(source.presentation !== undefined ? { presentation: source.presentation } : {}),
     ...(source.delivery !== undefined ? { delivery: source.delivery } : {}),
     ...(source.interactive !== undefined ? { interactive: source.interactive } : {}),
@@ -55,22 +70,45 @@ function mergeDefinedReplySemantics(target: ReplyPayload, source: ReplyPayload):
     target.replyToCurrent === true
       ? { replyToCurrent: true }
       : {}),
-    ...(source.audioAsVoice === true ||
-    sourceInlineDirectives?.audioAsVoice === true ||
-    target.audioAsVoice === true
-      ? { audioAsVoice: true }
-      : {}),
     ...(source.spokenText !== undefined ? { spokenText: source.spokenText } : {}),
     ...(source.ttsSupplement !== undefined ? { ttsSupplement: source.ttsSupplement } : {}),
     ...(source.isError === true || target.isError === true ? { isError: true } : {}),
     ...(source.channelData !== undefined ? { channelData: source.channelData } : {}),
-  };
+  });
 }
 
-function mergeMediaReplySemantics(target: ReplyPayload, source: ReplyPayload): ReplyPayload {
-  const sourceInlineDirectives = parseReplyInlineDirectives(source);
-  return {
+function mergeMediaReplySemantics(
+  target: ReplyPayload,
+  source: ReplyPayload,
+  sourceInlineDirectives = parseReplyInlineDirectives(source),
+): ReplyPayload {
+  let attachments = target.attachments;
+  if (source.attachments?.length) {
+    const sourceAttachments = new Map<string, ReplyMediaAttachment>();
+    for (const { url, attachment } of collectReplyMediaEntries(source)) {
+      const key = normalizeMediaReferenceForComparison(url);
+      if (attachment && !sourceAttachments.has(key)) {
+        sourceAttachments.set(key, attachment);
+      }
+    }
+    attachments = collectReplyMediaEntries(target).map(({ url, attachment }) => {
+      const sourceAttachment = sourceAttachments.get(normalizeMediaReferenceForComparison(url));
+      if (!sourceAttachment) {
+        return attachment ?? {};
+      }
+      const merged = Object.assign({}, attachment, sourceAttachment);
+      // Equivalent media references may use different spellings in the final and retained block.
+      for (const field of ["path", "url", "mediaUrl", "filePath"] as const) {
+        if (merged[field] !== undefined) {
+          merged[field] = url;
+        }
+      }
+      return merged;
+    });
+  }
+  return copyReplyPayloadMetadata(target, {
     ...target,
+    ...(attachments ? { attachments } : {}),
     ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
       ? { trustedLocalMedia: true }
       : {}),
@@ -82,7 +120,7 @@ function mergeMediaReplySemantics(target: ReplyPayload, source: ReplyPayload): R
     target.audioAsVoice === true
       ? { audioAsVoice: true }
       : {}),
-  };
+  });
 }
 
 function hasMergeableReplySemantics(payload: ReplyPayload): boolean {
@@ -132,57 +170,76 @@ function replyDisplayText(payload: ReplyPayload): string {
   return sanitizeAssistantDisplayText(payload.text) ?? "";
 }
 
-/** Fold command block replies into the final payload list without duplicating text or media. */
-export function selectChatSendFinalReplyPayloads(params: {
-  deliveredReplies: readonly DeliveredReply[];
+/** Folds raw command replies while preserving each prepared reply's ownership. */
+export function selectChatSendFinalReplyInputs(params: {
+  deliveredReplies: readonly DeliveredChatSendReply[];
   foldCommandBlocks: boolean;
   suppressReplies: boolean;
-}): ReplyPayload[] {
+}): ReplyDispatchOperation[] {
   const { deliveredReplies, foldCommandBlocks, suppressReplies } = params;
   const finalPayloadEntries = deliveredReplies.filter((entry) => entry.kind === "final");
   const commandBlockPayloadEntries = foldCommandBlocks
     ? deliveredReplies.filter((entry) => entry.kind === "block")
     : [];
-  const commandBlockPayloadEntriesForDelivery = commandBlockPayloadEntries.map((entry) => ({
+  let commandBlockPayloadEntriesForDelivery = commandBlockPayloadEntries.map((entry) => ({
     kind: entry.kind,
-    payload: canonicalizeReplyMedia(entry.payload),
+    input:
+      entry.input.kind === "raw"
+        ? { kind: "raw" as const, payload: canonicalizeReplyMedia(entry.input.payload) }
+        : entry.input,
   }));
   const sensitiveMediaDedupeKeys = new Set(
-    finalPayloadEntries.flatMap((entry) =>
-      entry.payload.sensitiveMedia === true
-        ? replyMediaDedupeKeys(entry.payload).filter(Boolean)
-        : [],
-    ),
+    finalPayloadEntries.flatMap((entry) => {
+      const payload = readChatSendReplyPayload(entry.input);
+      return payload.sensitiveMedia === true ? replyMediaDedupeKeys(payload).filter(Boolean) : [];
+    }),
   );
   if (sensitiveMediaDedupeKeys.size > 0) {
-    for (const entry of commandBlockPayloadEntriesForDelivery) {
-      if (replyMediaDedupeKeys(entry.payload).some((key) => sensitiveMediaDedupeKeys.has(key))) {
-        entry.payload = { ...entry.payload, sensitiveMedia: true };
-      }
-    }
+    commandBlockPayloadEntriesForDelivery = commandBlockPayloadEntriesForDelivery.flatMap(
+      (entry) => {
+        const payload = readChatSendReplyPayload(entry.input);
+        if (!replyMediaDedupeKeys(payload).some((key) => sensitiveMediaDedupeKeys.has(key))) {
+          return [entry];
+        }
+        const sensitivePayload = { ...payload, sensitiveMedia: true };
+        return replaceChatSendReplyPayload(
+          entry.input,
+          copyReplyPayloadMetadata(payload, sensitivePayload),
+        ).map((input) => ({ kind: entry.kind, input }));
+      },
+    );
   }
   const finalPayloadEntriesForDelivery = foldCommandBlocks
     ? finalPayloadEntries.flatMap((entry) => {
-        const finalMediaUrls = replyMediaUrls(entry.payload);
-        const finalMediaKeys = replyMediaDedupeKeys(entry.payload);
-        const finalDisplayText = replyDisplayText(entry.payload);
+        if (entry.input.kind === "prepared") {
+          return [entry];
+        }
+        const payload = entry.input.payload;
+        const finalMediaUrls = replyMediaUrls(payload);
+        const finalMediaKeys = replyMediaDedupeKeys(payload);
+        const finalDisplayText = replyDisplayText(payload);
         const matchingMediaBlockEntry =
           finalMediaUrls.length > 0
-            ? commandBlockPayloadEntriesForDelivery.find((candidate) =>
-                mediaSetsMatch(replyMediaDedupeKeys(candidate.payload), finalMediaKeys),
+            ? commandBlockPayloadEntriesForDelivery.find(
+                (candidate) =>
+                  candidate.input.kind === "raw" &&
+                  mediaSetsMatch(replyMediaDedupeKeys(candidate.input.payload), finalMediaKeys),
               )
             : undefined;
         const matchingTextBlockEntry = finalDisplayText
           ? commandBlockPayloadEntriesForDelivery.find(
-              (candidate) => replyDisplayText(candidate.payload) === finalDisplayText,
+              (candidate) =>
+                candidate.input.kind === "raw" &&
+                replyDisplayText(candidate.input.payload) === finalDisplayText,
             )
           : undefined;
         const matchingMediaAndTextBlockEntry =
           finalMediaUrls.length > 0 && finalDisplayText
             ? commandBlockPayloadEntriesForDelivery.find(
                 (candidate) =>
-                  replyDisplayText(candidate.payload) === finalDisplayText &&
-                  mediaSetsMatch(replyMediaDedupeKeys(candidate.payload), finalMediaKeys),
+                  candidate.input.kind === "raw" &&
+                  replyDisplayText(candidate.input.payload) === finalDisplayText &&
+                  mediaSetsMatch(replyMediaDedupeKeys(candidate.input.payload), finalMediaKeys),
               )
             : undefined;
         const duplicateBlockEntry =
@@ -193,32 +250,35 @@ export function selectChatSendFinalReplyPayloads(params: {
             : finalMediaUrls.length === 0
               ? matchingTextBlockEntry
               : undefined;
-        if (duplicateBlockEntry) {
-          duplicateBlockEntry.payload = mergeDefinedReplySemantics(
-            duplicateBlockEntry.payload,
-            entry.payload,
-          );
-        } else if (matchingMediaBlockEntry) {
-          matchingMediaBlockEntry.payload = mergeMediaReplySemantics(
-            matchingMediaBlockEntry.payload,
-            entry.payload,
-          );
+        if (duplicateBlockEntry?.input.kind === "raw") {
+          duplicateBlockEntry.input = {
+            kind: "raw",
+            payload: mergeDefinedReplySemantics(duplicateBlockEntry.input.payload, payload),
+          };
+        } else if (matchingMediaBlockEntry?.input.kind === "raw") {
+          matchingMediaBlockEntry.input = {
+            kind: "raw",
+            payload: mergeMediaReplySemantics(matchingMediaBlockEntry.input.payload, payload),
+          };
         }
         const remainingFinalMediaUrls = matchingMediaBlockEntry ? [] : finalMediaUrls;
         if (
           remainingFinalMediaUrls.length === 0 &&
-          ((duplicateBlockEntry && !hasUnmergedReplySemantics(entry.payload)) ||
-            (!duplicateBlockEntry && !finalDisplayText && !hasReplySemantics(entry.payload)))
+          ((duplicateBlockEntry && !hasUnmergedReplySemantics(payload)) ||
+            (!duplicateBlockEntry && !finalDisplayText && !hasReplySemantics(payload)))
         ) {
           return [];
         }
         return [
           {
             ...entry,
-            payload: {
-              ...entry.payload,
-              mediaUrl: undefined,
-              mediaUrls: remainingFinalMediaUrls.length > 0 ? remainingFinalMediaUrls : undefined,
+            input: {
+              kind: "raw" as const,
+              payload: copyReplyPayloadMetadata(payload, {
+                ...payload,
+                mediaUrl: undefined,
+                mediaUrls: remainingFinalMediaUrls.length > 0 ? remainingFinalMediaUrls : undefined,
+              }),
             },
           },
         ];
@@ -228,6 +288,6 @@ export function selectChatSendFinalReplyPayloads(params: {
     return [];
   }
   return [...commandBlockPayloadEntriesForDelivery, ...finalPayloadEntriesForDelivery].map(
-    (entry) => entry.payload,
+    (entry) => entry.input,
   );
 }

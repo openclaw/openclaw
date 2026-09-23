@@ -196,7 +196,7 @@ describe("first-run wizard ownership through the real Gateway store", () => {
             return {
               done: false,
               status: "running",
-              step: { id: "provider-review", type: "note", message: "Review selected provider" },
+              step: { id: "provider-review", type: "confirm", message: "Review selected provider" },
             };
           }
           return sharedResponse(method);

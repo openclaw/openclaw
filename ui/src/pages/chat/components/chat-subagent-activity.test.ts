@@ -11,8 +11,6 @@ import {
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { deriveSubagentActivity } from "./chat-subagent-activity.ts";
 
-const TERMINAL_RETENTION_MS = 60_000;
-
 function makeTask(overrides: Partial<TaskSummary> & { id: string }): TaskSummary {
   return {
     taskId: overrides.id,
@@ -43,7 +41,6 @@ function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksPro
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:current",
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
     }),
     cancellingTaskIds: new Set(),
@@ -67,9 +64,9 @@ function renderStatusRow(overrides: Partial<BackgroundTasksProps>) {
   return container;
 }
 
-function createHost(task: TaskSummary) {
+function createHost(...tasks: TaskSummary[]) {
   const requestUpdate = vi.fn();
-  const request = vi.fn(() => Promise.resolve({ tasks: [task] }));
+  const request = vi.fn(() => Promise.resolve({ tasks }));
   const host: BackgroundTasksHost = {
     sessionKey: "agent:main:current",
     client: { request } as unknown as GatewayBrowserClient,
@@ -89,7 +86,6 @@ function flushAsync() {
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 describe("subagent activity rows", () => {
@@ -103,13 +99,8 @@ describe("subagent activity rows", () => {
       progressSummary: "All runs bind `abc123`, **not final** qualification",
       expected: "All runs bind abc123, not final qualification",
     },
-    { lastToolName: "read_file", expected: "read_file" },
+    { lastToolName: "read_file", expected: "Last tool: read_file" },
     { lastActivity: "Inspecting items[0", expected: "Inspecting items[0" },
-    {
-      status: "completed" as const,
-      terminalSummary: "## Done\n- Read [results](https://example.com/results)",
-      expected: "Done Read results",
-    },
     {
       lastActivity: "Checking foo_bar_baz at ~/.openclaw: 1 < 2 and ~5 files",
       expected: "Checking foo_bar_baz at ~/.openclaw: 1 < 2 and ~5 files",
@@ -121,9 +112,7 @@ describe("subagent activity rows", () => {
       subagentActivity: deriveSubagentActivity({
         tasks: [task],
         sessionKey: "agent:main:current",
-        terminalObservedAtByTask: new Map(),
         canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
-        now: 3_000,
       }),
     });
 
@@ -135,91 +124,102 @@ describe("subagent activity rows", () => {
 
   it.each([
     {
+      title: "Continued review",
+      label: "Continued review",
+      runtime: "cli" as const,
+      childSessionKey: "agent:main:subagent:review",
+      status: "running" as const,
+      description: "Running",
+      moving: true,
+    },
+    {
       title: "  Layout review  ",
       label: "Layout review",
       status: "running" as const,
-      description: "Running — working on this task.",
-    },
-    {
-      title: "Layout review",
-      label: "Layout review",
-      status: "completed" as const,
-      description: "Completed — finished successfully.",
+      description: "Running",
+      moving: true,
     },
     {
       title: "",
       label: "Subagent",
       status: "running" as const,
-      description: "Running — working on this task.",
+      description: "Running",
+      moving: true,
     },
     {
       title: undefined,
       label: "Subagent",
       status: "running" as const,
-      description: "Running — working on this task.",
-    },
-    {
-      title: " \n ",
-      label: "Subagent",
-      status: "failed" as const,
-      description: "Failed — the task ended with an error.",
+      description: "Running",
+      moving: true,
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "queued" as const,
-      description: "Queued — waiting to start.",
+      description: "Queued",
     },
     {
       title: "Layout review",
       label: "Layout review",
-      status: "cancelled" as const,
-      description: "Cancelled — stopped before completion.",
+      status: "running" as const,
+      execution: { state: "waiting" as const },
+      description: "Waiting",
     },
     {
       title: "Layout review",
       label: "Layout review",
-      status: "timed_out" as const,
-      description: "Timed out — reached its time limit.",
+      status: "running" as const,
+      execution: { state: "unknown" as const },
+      description: "Activity unknown",
     },
-  ])("opens $label activity with $status status", ({ title, label, status, description }) => {
-    const task = makeTask({
-      id: "clickable-subagent",
-      title,
-      status,
-      lastActivity: "Checking spacing",
-    });
-    const onOpenTaskDetail = vi.fn();
-    const container = renderStatusRow({
-      tasks: [task],
-      subagentActivity: deriveSubagentActivity({
+    {
+      title: "Layout review",
+      label: "Layout review",
+      status: "running" as const,
+      execution: { state: "queued" as const },
+      description: "Queued",
+    },
+  ])(
+    "opens $label activity with $description",
+    ({ label, description, moving = false, ...taskProps }) => {
+      const task = makeTask({
+        id: "clickable-subagent",
+        ...taskProps,
+        lastActivity: "Checking spacing",
+        terminalSummary: "Checking spacing",
+      });
+      const onOpenTaskDetail = vi.fn();
+      const container = renderStatusRow({
         tasks: [task],
-        sessionKey: "agent:main:current",
-        terminalObservedAtByTask: new Map(),
-        canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
-        now: 3_000,
-      }),
-      onOpenTaskDetail,
-    });
+        subagentActivity: deriveSubagentActivity({
+          tasks: [task],
+          sessionKey: "agent:main:current",
+          canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
+        }),
+        onOpenTaskDetail,
+      });
 
-    const row = container.querySelector<HTMLButtonElement>(
-      '[data-subagent-task-id="clickable-subagent"]',
-    );
-    expect(row?.tagName).toBe("BUTTON");
-    expect(row?.querySelector(".chat-subagent-activity__label")?.textContent).toBe(label);
-    expect(row?.textContent?.replace(/\s+/g, " ").trim()).toBe(`${label} Checking spacing`);
-    expect(container.querySelector("openclaw-tooltip")?.content).toBe(
-      `${label}\n${description}\nChecking spacing`,
-    );
-    expect(row?.querySelector(".chat-subagent-activity__snippet")?.textContent).toBe(
-      "Checking spacing",
-    );
-    expect(row?.getAttribute("aria-label")).toBe(
-      `Open subagent details for ${label}. ${description}`,
-    );
-    row?.click();
-    expect(onOpenTaskDetail).toHaveBeenCalledWith(task);
-  });
+      const row = container.querySelector<HTMLButtonElement>(
+        '[data-subagent-task-id="clickable-subagent"]',
+      );
+      expect(row?.tagName).toBe("BUTTON");
+      expect(row?.querySelector(".chat-subagent-activity__label")?.textContent).toBe(label);
+      expect(row?.textContent?.replace(/\s+/g, " ").trim()).toBe(`${label} Checking spacing`);
+      expect(row?.querySelector(".chat-reading-indicator") !== null).toBe(moving);
+      expect(container.querySelector("openclaw-tooltip")?.content).toBe(
+        `${label}\n${description}\nChecking spacing`,
+      );
+      expect(row?.querySelector(".chat-subagent-activity__snippet")?.textContent).toBe(
+        "Checking spacing",
+      );
+      expect(row?.getAttribute("aria-label")).toBe(
+        `Open subagent details for ${label}. ${description}`,
+      );
+      row?.click();
+      expect(onOpenTaskDetail).toHaveBeenCalledWith(task);
+    },
+  );
 
   it("keeps activity rows non-interactive when no open callback is provided", () => {
     const task = makeTask({ id: "status-only-subagent" });
@@ -228,7 +228,6 @@ describe("subagent activity rows", () => {
       subagentActivity: deriveSubagentActivity({
         tasks: [task],
         sessionKey: "agent:main:current",
-        terminalObservedAtByTask: new Map(),
         canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
       }),
     });
@@ -239,7 +238,7 @@ describe("subagent activity rows", () => {
     expect(row?.hasAttribute("tabindex")).toBe(false);
   });
 
-  it("filters by requester, runtime, and retention while leaving other work in the aggregate", () => {
+  it("shows only ongoing children for the requester and leaves other work in the aggregate", () => {
     const now = 100_000;
     const current = makeTask({
       id: "current-subagent",
@@ -267,52 +266,40 @@ describe("subagent activity rows", () => {
         lastActivity: "Wrong requester",
       }),
       otherRuntime,
-      makeTask({
-        id: "expired-subagent",
-        status: "completed",
-        updatedAt: now - TERMINAL_RETENTION_MS - 1,
-        endedAt: now - TERMINAL_RETENTION_MS - 1,
-        terminalSummary: "Too old",
-      }),
+      ...(["completed", "failed", "cancelled", "timed_out"] as const).map((status) =>
+        makeTask({ id: `terminal-${status}`, status, endedAt: now, updatedAt: now }),
+      ),
+      makeTask({ id: "finished-execution", execution: { state: "finished" } }),
     ];
     const subagentActivity = deriveSubagentActivity({
       tasks,
       sessionKey: "agent:main:current",
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
-      now,
     });
 
-    expect(subagentActivity.rows.map((task) => task.id)).toEqual([
-      "current-subagent",
-      "recent-subagent",
-    ]);
-    expect([...subagentActivity.taskIds]).toEqual(["current-subagent", "recent-subagent"]);
+    expect(subagentActivity.rows.map((task) => task.id)).toEqual(["current-subagent"]);
 
     const container = renderStatusRow({
       tasks: [current, recent, otherRuntime],
       subagentActivity,
     });
-    expect(container.querySelectorAll(".chat-subagent-activity__row")).toHaveLength(2);
+    expect(container.querySelectorAll(".chat-subagent-activity__row")).toHaveLength(1);
     expect(container.textContent).toContain("Reviewing the current session");
-    expect(
-      container
-        .querySelector('[data-subagent-task-id="recent-subagent"]')
-        ?.getAttribute("aria-label"),
-    ).toContain("Completed — finished successfully.");
+    expect(container.querySelector('[data-subagent-task-id="recent-subagent"]')).toBeNull();
+    expect(container.textContent).not.toContain("Review complete");
     expect(container.textContent).not.toContain("Wrong requester");
-    expect(container.textContent).not.toContain("Too old");
     expect(container.querySelector(".chat-tasks-status__link")?.textContent?.trim()).toBe(
       "1 running task",
     );
   });
 
-  it("caps visible rows at five and counts only hidden running work", () => {
+  it("caps visible rows at five and includes waiting and queued children in the overflow", () => {
     const running = Array.from({ length: 7 }, (_, index) =>
       makeTask({
         id: `running-${index}`,
         lastActivity: `Running child ${index}`,
         updatedAt: 10_000 - index,
+        ...(index >= 5 ? { execution: { state: "waiting" as const } } : {}),
       }),
     );
     const queued = Array.from({ length: 2 }, (_, index) =>
@@ -321,9 +308,7 @@ describe("subagent activity rows", () => {
     const subagentActivity = deriveSubagentActivity({
       tasks: [...running, ...queued],
       sessionKey: "agent:main:current",
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
-      now: 20_000,
     });
     const container = renderStatusRow({
       tasks: [...running, ...queued],
@@ -332,9 +317,125 @@ describe("subagent activity rows", () => {
 
     expect(container.querySelectorAll(".chat-subagent-activity__row")).toHaveLength(5);
     expect(container.querySelector(".chat-subagent-activity__overflow")?.textContent?.trim()).toBe(
-      "+2 more working",
+      "+4 more subagents",
     );
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
+  });
+
+  it.each([false, true])(
+    "keeps creation order through activity and wait changes (ISO dates: %s)",
+    async (isoDates) => {
+      const tasks = Array.from({ length: 6 }, (_, index) =>
+        makeTask({
+          id: `running-${index}`,
+          createdAt: isoDates ? new Date(1_000 + index).toISOString() : 1_000 + index,
+          updatedAt: 10_000 - index,
+          status: index === 2 ? "queued" : "running",
+        }),
+      );
+      const { host } = createHost(...tasks.toReversed());
+      createBackgroundTasksProps(host);
+      await flushAsync();
+      const container = document.createElement("div");
+      document.body.append(container);
+      const renderCurrent = () =>
+        render(
+          html`${renderBackgroundTasksStatusRow(createBackgroundTasksProps(host))}`,
+          container,
+        );
+      const rowIds = () =>
+        Array.from(container.querySelectorAll("[data-subagent-task-id]"), (row) =>
+          row.getAttribute("data-subagent-task-id"),
+        );
+      const expected = tasks.slice(0, 5).map((task) => task.id);
+      renderCurrent();
+      expect(rowIds()).toEqual(expected);
+      const firstRow = container.querySelector("[data-subagent-task-id]");
+      for (const index of [5, 2, 1]) {
+        const task = tasks[index];
+        handleBackgroundTasksEvent(host, {
+          action: "upserted",
+          task: {
+            ...task,
+            status: "running",
+            updatedAt: 20_000 + index,
+            execution: {
+              state: "waiting",
+              lastActivityAt: 30_000 + index,
+              wait: { kind: "approval" },
+            },
+            lastActivity: "Waiting for approval",
+          },
+        });
+        renderCurrent();
+        expect(rowIds()).toEqual(expected);
+        expect(container.querySelector("[data-subagent-task-id]")).toBe(firstRow);
+      }
+      expect(
+        container.querySelector(".chat-subagent-activity__overflow")?.textContent?.trim(),
+      ).toBe("+1 more subagents");
+    },
+  );
+
+  it.each(["completed", "failed", "cancelled", "timed_out"] as const)(
+    "removes a %s result immediately and keeps it in Tasks through delivery updates",
+    async (status) => {
+      const tasks = Array.from({ length: 3 }, (_, index) =>
+        makeTask({ id: String(index), createdAt: 1_000 + index, updatedAt: 2_000 + index }),
+      );
+      const { host } = createHost(...tasks);
+      createBackgroundTasksProps(host);
+      await flushAsync();
+      const ids = () =>
+        createBackgroundTasksProps(host).subagentActivity.rows.map((task) => task.id);
+      const finishedFirst = { ...tasks[1], status, endedAt: 100_000, updatedAt: 100_000 };
+      handleBackgroundTasksEvent(host, { action: "upserted", task: finishedFirst });
+      expect(ids()).toEqual(["0", "2"]);
+      handleBackgroundTasksEvent(host, {
+        action: "upserted",
+        task: { ...tasks[2], status: "completed", endedAt: 101_000, updatedAt: 101_000 },
+      });
+      expect(ids()).toEqual(["0"]);
+      handleBackgroundTasksEvent(host, {
+        action: "upserted",
+        task: { ...finishedFirst, updatedAt: 102_000, deliveryStatus: "delivered" },
+      });
+      expect(ids()).toEqual(["0"]);
+      expect(createBackgroundTasksProps(host).tasks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "1", status, deliveryStatus: "delivered" }),
+          expect.objectContaining({ id: "2", status: "completed" }),
+        ]),
+      );
+    },
+  );
+
+  it("keeps ongoing work visible during a completion burst and counts every overflow row", () => {
+    const active = Array.from({ length: 6 }, (_, index) =>
+      makeTask({ id: `active-${index}`, createdAt: 1_000 + index }),
+    );
+    const finished = Array.from({ length: 55 }, (_, index) =>
+      makeTask({
+        id: `finished-${index}`,
+        status: "completed",
+        endedAt: 90_000 + index,
+        updatedAt: 100_000 - index,
+      }),
+    );
+    const presentation = deriveSubagentActivity({
+      tasks: [...active, ...finished],
+      sessionKey: "agent:main:current",
+      canonicalizeSessionKey: (key) => key ?? "",
+    });
+    expect(presentation.rows.map((task) => task.id)).toEqual([
+      "active-0",
+      "active-1",
+      "active-2",
+      "active-3",
+      "active-4",
+    ]);
+    expect(presentation.overflowCount).toBe(1);
+    expect(presentation.taskIds.size).toBe(61);
   });
 
   it("retires live text but retains diff stats through terminal activity", async () => {
@@ -343,12 +444,10 @@ describe("subagent activity rows", () => {
       lastActivity: "Editing the final report",
       diffStat: { files: 2, added: 12, removed: 3 },
     });
-    const { host, requestUpdate } = createHost(running);
+    const { host } = createHost(running);
     createBackgroundTasksProps(host);
     await flushAsync();
 
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    vi.setSystemTime(100_000);
     handleBackgroundTasksEvent(host, {
       action: "upserted",
       task: makeTask({
@@ -356,6 +455,8 @@ describe("subagent activity rows", () => {
         status: "cancelled",
         updatedAt: 100_000,
         endedAt: 100_000,
+        lastToolName: "read_file",
+        progressSummary: "Outdated progress",
       }),
     });
     const props = createBackgroundTasksProps(host);
@@ -370,19 +471,10 @@ describe("subagent activity rows", () => {
     const renderCurrent = () =>
       render(html`${renderBackgroundTasksStatusRow(createBackgroundTasksProps(host))}`, container);
     renderCurrent();
-    expect(
-      container.querySelector(".chat-subagent-activity__row")?.getAttribute("aria-label"),
-    ).toContain("Cancelled — stopped before completion.");
-    expect(container.textContent).not.toContain("Editing the final report");
-    expect(container.querySelector(".chat-diffstat")).toBeNull();
-
-    requestUpdate.mockClear();
-    vi.advanceTimersByTime(TERMINAL_RETENTION_MS - 1);
-    renderCurrent();
-    expect(container.querySelector(".chat-subagent-activity__row")).not.toBeNull();
-    vi.advanceTimersByTime(1);
-    expect(requestUpdate).toHaveBeenCalledOnce();
-    renderCurrent();
     expect(container.querySelector(".chat-subagent-activity__row")).toBeNull();
+    expect(container.textContent).not.toContain("Editing the final report");
+    expect(container.textContent).not.toContain("Outdated progress");
+    expect(container.textContent).not.toContain("read_file");
+    expect(container.querySelector(".chat-diffstat")).toBeNull();
   });
 });

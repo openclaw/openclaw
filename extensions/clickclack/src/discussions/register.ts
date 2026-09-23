@@ -17,12 +17,8 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
   const service = new ClickClackDiscussionService(api.runtime);
   api.registerService({
     id: "clickclack-discussion-session-events",
-    start: ({ gatewayEvents }) => {
-      service.bindGatewayEvents(gatewayEvents);
-    },
-    stop: () => {
-      service.cleanup();
-    },
+    start: ({ gatewayEvents }) => service.bindGatewayEvents(gatewayEvents),
+    stop: () => service.cleanup(),
   });
   api.registerTool((context) =>
     createClickClackDiscussionTool({ service, sessionKey: context.sessionKey }),
@@ -48,7 +44,7 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
     description: "Stops the lifecycle reconciler for managed ClickClack discussions.",
     cleanup: () => {
       unregisterSessionAccess();
-      service.cleanup();
+      return service.cleanup();
     },
   });
 }

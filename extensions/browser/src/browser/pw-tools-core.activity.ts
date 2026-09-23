@@ -2,6 +2,7 @@
  * Page inspection helpers for visible text, observed errors, network requests,
  * and console messages from Playwright page state.
  */
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type {
   BrowserConsoleMessage,
@@ -9,6 +10,10 @@ import type {
   BrowserPageError,
 } from "./pw-session.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
+import {
+  awaitActionWithAbort,
+  createAbortPromiseWithListener,
+} from "./pw-tools-core.interactions.navigation.js";
 
 /** Returns visible page text without evaluating caller-provided JavaScript. */
 export async function getPageTextViaPlaywright(opts: {
@@ -25,23 +30,44 @@ export async function getPageTextViaPlaywright(opts: {
   if (!Number.isSafeInteger(maxChars) || maxChars <= 0) {
     throw new Error("maxChars must be a positive integer.");
   }
-  const page = await getPageForTargetId(opts);
-  let locator = page.locator(opts.selector ?? "body").first();
-  if (!opts.selector) {
-    for (const selector of ["article", "main"]) {
-      const candidate = page.locator(selector).first();
-      if (await candidate.count()) {
-        locator = candidate;
-        break;
+  const timeout = DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
+  const deadline = Date.now() + timeout;
+  const controller = new AbortController();
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, controller.signal])
+    : controller.signal;
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
+  const read = async () => {
+    signal.throwIfAborted();
+    const page = await getPageForTargetId(opts);
+    signal.throwIfAborted();
+    let locator = page.locator(opts.selector ?? "body").first();
+    if (!opts.selector) {
+      for (const selector of ["article", "main"]) {
+        const candidate = page.locator(selector).first();
+        const count = await candidate.count();
+        signal.throwIfAborted();
+        if (count) {
+          locator = candidate;
+          break;
+        }
       }
     }
+    // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- This action reads rendered text, not hidden DOM text.
+    return await locator.innerText({ timeout: Math.max(1, deadline - Date.now()), signal });
+  };
+  try {
+    const text = await withTimeout(awaitActionWithAbort(read(), abortPromise), timeout, {
+      createError: () => {
+        const error = new Error(`Page text extraction timed out after ${timeout}ms`);
+        controller.abort(error);
+        return error;
+      },
+    });
+    return { text: text.slice(0, maxChars), truncated: text.length > maxChars };
+  } finally {
+    cleanup();
   }
-  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- This action reads rendered text, not hidden DOM text.
-  const text = await locator.innerText({
-    timeout: DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
-    signal: opts.signal,
-  });
-  return { text: text.slice(0, maxChars), truncated: text.length > maxChars };
 }
 
 /** Returns captured page errors, optionally clearing the per-page buffer. */

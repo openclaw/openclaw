@@ -1,4 +1,3 @@
-// Matrix plugin module implements actions behavior.
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
@@ -125,6 +124,14 @@ function resolveMatrixActionAccount(params: { cfg: CoreConfig; accountId?: strin
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
   providerOwnedReadGates: true,
+  readAuthorityActions: [
+    "read",
+    "reactions",
+    "list-pins",
+    "emoji-list",
+    "member-info",
+    "channel-info",
+  ],
   describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
     const resolvedCfg = cfg as CoreConfig;
     const account = resolveMatrixActionAccount({ cfg: resolvedCfg, accountId });

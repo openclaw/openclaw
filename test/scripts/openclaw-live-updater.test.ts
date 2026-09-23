@@ -205,10 +205,13 @@ function writeBuild(mirror: string) {
     '<script type="module" src="./assets/app.js"></script>\n',
   );
   writeFileSync(path.join(mirror, "dist/control-ui/assets/app.js"), "// ui\n");
-  writeFileSync(path.join(mirror, "dist", BUILD_STAMP_FILE), `${JSON.stringify({ head })}\n`);
+  writeFileSync(
+    path.join(mirror, "dist", BUILD_STAMP_FILE),
+    `${JSON.stringify({ head, inputsClean: true })}\n`,
+  );
   writeFileSync(
     path.join(mirror, "dist", RUNTIME_POSTBUILD_STAMP_FILE),
-    `${JSON.stringify({ head })}\n`,
+    `${JSON.stringify({ head, inputsClean: true })}\n`,
   );
   writeUpdateCompatibilityBuildFixture(mirror);
   writeUpdateCompatibilityChunks({
@@ -1595,7 +1598,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       requirements: { build: { shouldBuild: true, reason: "git_head_changed" } },
     });
 
-    writeFileSync(buildStamp, `${JSON.stringify({ head })}\n`);
+    writeFileSync(buildStamp, `${JSON.stringify({ head, inputsClean: true })}\n`);
     rmSync(runtimeStamp);
     expect(inspectBuildState(mirror, head)).toMatchObject({
       current: false,

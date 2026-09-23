@@ -51,6 +51,7 @@ vi.mock("../../skills/runtime/refresh.js", () => ({
 
 vi.mock("../../skills/runtime/refresh-state.js", () => ({
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
+  getSkillsSourceVersion: getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));
 

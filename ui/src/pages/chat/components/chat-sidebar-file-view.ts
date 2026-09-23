@@ -5,34 +5,33 @@ import { icons } from "../../../components/icons.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
+import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
+import { detectLineSeparator } from "./file-line-separator.ts";
+
+registerCodeBlocksEnglish();
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
 
-type RetainedFileDraft = {
-  content: string;
-  expectedHash: string;
-};
+const FILE_WRAP_PREFERENCE_KEY = "openclaw.control.fileView.wrap.v1";
 
-const retainedFileDrafts = new Map<string, RetainedFileDraft>();
-
-function retainedFileDraftKey(content: FileSidebarContent): string {
-  return content.draftKey ?? `${content.root ?? ""}\u0000${content.path}`;
-}
-
-export function readFileDraft(content: FileSidebarContent): RetainedFileDraft | undefined {
-  return retainedFileDrafts.get(retainedFileDraftKey(content));
-}
-
-export function setFileDraft(content: FileSidebarContent, draft: RetainedFileDraft | null) {
-  const key = retainedFileDraftKey(content);
-  retainedFileDrafts.delete(key);
-  if (!draft) {
-    return;
+export function loadFileWrapPreference(): boolean {
+  try {
+    return getSafeLocalStorage()?.getItem(FILE_WRAP_PREFERENCE_KEY) === "true";
+  } catch {
+    return false;
   }
-  retainedFileDrafts.set(key, draft);
+}
+
+export function saveFileWrapPreference(wrap: boolean): void {
+  try {
+    getSafeLocalStorage()?.setItem(FILE_WRAP_PREFERENCE_KEY, String(wrap));
+  } catch {
+    // Preference persistence is best effort.
+  }
 }
 
 export function hasUniformLineEndings(content: string): boolean {
@@ -48,7 +47,7 @@ export function computeFileMatches(content: string, query: string): number[] {
     return [];
   }
   return content
-    .split("\n")
+    .split(detectLineSeparator(content) ?? /\r\n?|\n/)
     .flatMap((line, index) =>
       line.toLocaleLowerCase().includes(normalizedQuery) ? [index + 1] : [],
     );
@@ -78,6 +77,7 @@ export type FileViewControls = {
   saveNotice: { kind: "conflict" } | { kind: "error"; message: string } | null;
   saving: boolean;
   searchOpen: boolean;
+  wrap: boolean;
   onCopy: (action: FileCopyAction) => void;
   onDiscard: () => void;
   onEdit: () => void;
@@ -92,7 +92,25 @@ export type FileViewControls = {
   onSearchKeydown: (event: KeyboardEvent) => void;
   onEditorMenuOpenChange: (open: boolean) => void;
   onToggleSearch: () => void;
+  onToggleWrap: () => void;
 };
+
+function renderFileWrapButton(controls: FileViewControls) {
+  const label = t(controls.wrap ? "chat.codeBlock.disableWrap" : "chat.codeBlock.enableWrap");
+  return html`
+    <openclaw-tooltip .content=${label}>
+      <button
+        class="btn btn--sm sidebar-file-view__action sidebar-file-view__wrap"
+        type="button"
+        aria-label=${label}
+        aria-pressed=${String(controls.wrap)}
+        @click=${controls.onToggleWrap}
+      >
+        ${icons.wrapText}
+      </button>
+    </openclaw-tooltip>
+  `;
+}
 
 function renderFileCopyButton(action: FileCopyAction, controls?: FileViewControls) {
   const feedback = controls?.copyFeedback[action];
@@ -127,7 +145,7 @@ export function renderSidebarFile(
   const absolutePath = localEditorFilePath(content, controls?.execNode);
   const matchNumber = controls?.matches.length ? controls.currentMatchIndex + 1 : 0;
   return html`
-    <section class="sidebar-file-view">
+    <section class="sidebar-file-view ${controls?.wrap ? "sidebar-file-view--wrap" : ""}">
       <div class="sidebar-file-view__path-bar">
         <div class="sidebar-file-view__path-field">
           <span class="sidebar-file-view__path" title=${content.path}>${content.path}</span>
@@ -137,6 +155,7 @@ export function renderSidebarFile(
           controls
             ? html`
                 <div class="sidebar-file-view__actions">
+                  ${!controls.htmlPreview || controls.htmlPreview.source ? renderFileWrapButton(controls) : nothing}
                   ${
                     controls.htmlPreview
                       ? html`<button
@@ -189,7 +208,7 @@ export function renderSidebarFile(
                           }
                           <openclaw-tooltip .content=${t("chat.detailPanel.searchInFile")}>
                             <button
-                              class="btn btn--sm sidebar-file-view__action"
+                              class="btn btn--sm sidebar-file-view__action sidebar-file-view__search-toggle"
                               type="button"
                               aria-label=${t("chat.detailPanel.searchInFile")}
                               aria-pressed=${String(controls.searchOpen)}
@@ -236,7 +255,7 @@ export function renderSidebarFile(
       ${
         controls?.searchOpen
           ? html`
-              <div class="file-view__search">
+              <div class="file-view__search" @keydown=${controls.onSearchKeydown}>
                 <input
                   type="search"
                   aria-label=${t("chat.detailPanel.searchInFile")}
@@ -244,9 +263,8 @@ export function renderSidebarFile(
                   .value=${controls.query}
                   @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
                     controls.onSearchInput(event.currentTarget.value)}
-                  @keydown=${controls.onSearchKeydown}
                 />
-                <span class="file-view__search-counter"
+                <span class="file-view__search-counter" role="status"
                   >${matchNumber}/${controls.matches.length}</span
                 >
                 <button

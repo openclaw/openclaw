@@ -1,7 +1,9 @@
+import { isUtf8 } from "node:buffer";
 import { createServer, type IncomingHttpHeaders, type IncomingMessage } from "node:http";
-import { Writable } from "node:stream";
+import { Writable, type Duplex } from "node:stream";
 import { promisify } from "node:util";
 import { zstdCompress, zstdDecompress } from "node:zlib";
+import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 import {
@@ -9,13 +11,38 @@ import {
   isBlockedHostnameOrIp,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { type RawData, WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import {
+  type RawData,
+  rejectWebSocketUpgrade,
+  WebSocket,
+  WebSocketServer,
+} from "openclaw/plugin-sdk/websocket-runtime";
 import { createCodexInferenceContext } from "./inference-context.js";
+import {
+  createUploadAdmission,
+  createUploadBody,
+  MAX_BODY_BYTES,
+  MAX_PENDING_REQUESTS,
+  MAX_UPLOADS,
+} from "./inference-upload.js";
 import { isJsonObject } from "./protocol.js";
 
-const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES = 1024 * 1024;
-const MAX_CONNECTIONS = 16;
+const MAX_WEBSOCKETS = 64;
+// Preserve the former 64 WS + 16 HTTP envelope; uploads no longer own response slots.
+const MAX_RESIDENTS = MAX_WEBSOCKETS + MAX_UPLOADS;
+const REQUEST_TIMEOUT_MS = 30_000;
+const HANDSHAKE_TIMEOUT_MS = 10_000;
+const IDLE_WEBSOCKET_MS = 60_000;
+const OVERLOADED = "Codex inference relay is busy; retry on a fresh connection.";
+const OVERLOAD_HEADERS = { "content-type": "application/json", "retry-after": "1" };
+const OVERLOAD_BODY = JSON.stringify({
+  type: "error",
+  status: 503,
+  // Native treats backend server_is_overloaded as terminal; local saturation must retry.
+  error: { type: "server_error", code: "inference_relay_busy", message: OVERLOADED },
+  headers: { "retry-after": "1" },
+});
 const compress = promisify(zstdCompress);
 const decompress = promisify(zstdDecompress);
 const HOP_HEADERS = new Set([
@@ -31,6 +58,14 @@ const HOP_HEADERS = new Set([
   "content-length",
 ]);
 const FAILURE = "Codex parent-local inference transport failed; retry on a fresh connection.";
+
+type ResidentTicket = {
+  signal: AbortSignal;
+  deadlineAtMs: number;
+  pending: boolean;
+  release: (() => void) | null;
+  retiring: boolean;
+};
 
 /** Private, fixed-destination relay. No upstream credentials or model content are retained. */
 export async function createCodexInferenceProxy(params: {
@@ -50,8 +85,79 @@ export async function createCodexInferenceProxy(params: {
   // Keep the native backend suffix; Codex uses it to select Guardian/backend surfaces.
   const pathPrefix =
     "/" + generateSecureToken({ bytes: 32, redact: true }) + upstream.pathname.replace(/\/$/, "");
-  const active = new Set<AbortController>();
-  const sockets = new Set<WebSocket>();
+  const acquireUpload = createUploadAdmission();
+  const connections = new Set<() => void>();
+  const idleConnections = new Set<() => void>();
+  const residents = createPermitPool(MAX_RESIDENTS);
+  const tickets = new Set<ResidentTicket>();
+  const reclaimIdle = () => {
+    if (tickets.size < MAX_RESIDENTS || idleConnections.size === 0) {
+      return;
+    }
+    let acquired = 0;
+    let waiting = false;
+    let retiring = false;
+    // A logically closed connection still owns its ticket until transport cleanup settles.
+    for (const ticket of tickets) {
+      retiring ||= ticket.retiring;
+      if (ticket.release) {
+        acquired++;
+      } else if (ticket.pending && !ticket.signal.aborted && Date.now() < ticket.deadlineAtMs) {
+        waiting = true;
+      }
+    }
+    if (!retiring && acquired === MAX_RESIDENTS && waiting) {
+      idleConnections.values().next().value?.();
+    }
+  };
+  const reserveResident = (socket: Duplex, signal: AbortSignal, deadlineAtMs: number) => {
+    // Reserve synchronously: acquire() resolves even free grants asynchronously.
+    // Cancelled waiters remain charged while their socket/owner is still closing.
+    if (tickets.size >= MAX_RESIDENTS + MAX_PENDING_REQUESTS) {
+      return null;
+    }
+    const ticket: ResidentTicket = {
+      signal,
+      deadlineAtMs,
+      pending: true,
+      release: null,
+      retiring: false,
+    };
+    tickets.add(ticket);
+    let finished = false;
+    const settle = () => {
+      if (!finished || !socket.closed || ticket.pending || !tickets.delete(ticket)) {
+        return;
+      }
+      socket.off("close", settle);
+      ticket.release?.();
+      ticket.release = null;
+      reclaimIdle();
+    };
+    socket.once("close", settle);
+    const ready = residents.acquire({ signal, deadlineAtMs }).then((release) => {
+      ticket.pending = false;
+      if (release && signal.aborted) {
+        release();
+      } else {
+        ticket.release = release;
+      }
+      settle();
+      reclaimIdle();
+      return ticket.release !== null;
+    });
+    reclaimIdle();
+    return {
+      ready,
+      retireIdle() {
+        ticket.retiring = true;
+      },
+      finish() {
+        finished = true;
+        settle();
+      },
+    };
+  };
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_BODY_BYTES,
@@ -102,14 +208,55 @@ export async function createCodexInferenceProxy(params: {
       throw new Error(FAILURE);
     }
     const prepared = context.prepare(value);
-    const rewritten = Buffer.from(JSON.stringify(prepared.body));
+    // Native already serialized this request. Keep its bytes when the context
+    // owner made no change; malformed UTF-8 keeps the existing replacement path.
+    const rewritten =
+      prepared.body === value && isUtf8(bytes) ? bytes : Buffer.from(JSON.stringify(prepared.body));
     if (rewritten.length > MAX_BODY_BYTES) {
       throw new Error(FAILURE);
     }
-    return { ...prepared, bytes: rewritten };
+    return { bytes: rewritten, assertCurrent: prepared.assertCurrent, signal: prepared.signal };
+  };
+  const prepareHttp = async (
+    req: IncomingMessage,
+    sampling: boolean,
+    signal: AbortSignal,
+    release: () => void,
+  ) => {
+    const wire = await readProxyBody(req, MAX_BODY_BYTES);
+    const encoding = req.headers["content-encoding"];
+    if (encoding && encoding !== "identity" && encoding !== "zstd") {
+      throw new Error(FAILURE);
+    }
+    const decoded =
+      encoding === "zstd" ? await decompress(wire, { maxOutputLength: MAX_BODY_BYTES }) : wire;
+    signal.throwIfAborted();
+    const prepared = prepare(decoded, sampling);
+    const body =
+      prepared.bytes === decoded
+        ? wire
+        : encoding === "zstd"
+          ? await compress(prepared.bytes)
+          : prepared.bytes;
+    prepared.assertCurrent();
+    const requestSignal = AbortSignal.any([signal, ...(prepared.signal ? [prepared.signal] : [])]);
+    return {
+      ...createUploadBody(body, requestSignal, release),
+      assertCurrent: prepared.assertCurrent,
+      signal: requestSignal,
+    };
   };
   const server = createServer((req, res) => {
+    const socket = req.socket;
+    // Native creates a fresh HTTP transport per inference. Closing this response
+    // avoids retaining uncharged keepalive sockets after resident admission ends.
+    res.setHeader("Connection", "close");
     const controller = new AbortController();
+    const signal = AbortSignal.any([lifetime.signal, controller.signal]);
+    const deadlineAtMs = Date.now() + REQUEST_TIMEOUT_MS;
+    let releasePermit: (() => void) | null = null;
+    let resident: ReturnType<typeof reserveResident> = null;
+    let upload: Awaited<ReturnType<typeof prepareHttp>> | undefined;
     let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
     const abort = () => controller.abort();
     req.once("aborted", abort);
@@ -117,41 +264,44 @@ export async function createCodexInferenceProxy(params: {
     void (async () => {
       try {
         const { target, sampling } = resolveTarget(req);
-        if (req.method !== "POST" || active.size >= MAX_CONNECTIONS) {
+        if (req.method !== "POST") {
           throw new Error(FAILURE);
         }
-        active.add(controller);
-        const wire = await readProxyBody(req, MAX_BODY_BYTES);
-        const encoding = req.headers["content-encoding"];
-        if (encoding && encoding !== "identity" && encoding !== "zstd") {
-          throw new Error(FAILURE);
-        }
-        const decoded =
-          encoding === "zstd" ? await decompress(wire, { maxOutputLength: MAX_BODY_BYTES }) : wire;
+        resident = reserveResident(socket, signal, deadlineAtMs);
+        const admitted = resident && (await resident.ready);
+        signal.throwIfAborted();
         assertCurrent();
-        const prepared = prepare(decoded, sampling);
-        // Materialize ArrayBuffer-backed bytes for the web Fetch body contract.
-        const body = Buffer.from(
-          encoding === "zstd" ? await compress(prepared.bytes) : prepared.bytes,
-        );
-        prepared.assertCurrent();
-        const signal = AbortSignal.any([
-          lifetime.signal,
-          controller.signal,
-          ...(prepared.signal ? [prepared.signal] : []),
-        ]);
+        if (!admitted) {
+          res.writeHead(503, OVERLOAD_HEADERS).end(OVERLOAD_BODY);
+          return;
+        }
+        releasePermit = await acquireUpload(signal, deadlineAtMs);
+        signal.throwIfAborted();
+        assertCurrent();
+        if (!releasePermit) {
+          res.writeHead(503, OVERLOAD_HEADERS).end(OVERLOAD_BODY);
+          return;
+        }
+        upload = await prepareHttp(req, sampling, signal, releasePermit);
+        const init: RequestInit & { duplex: "half" } = {
+          method: "POST",
+          headers: { ...relayHeaders(req.headers), "content-length": String(upload.length) },
+          body: upload.body,
+          signal: upload.signal,
+          duplex: "half",
+        };
         guarded = await fetchWithSsrFGuard({
           url: target.toString(),
-          init: { method: "POST", headers: relayHeaders(req.headers), body, signal },
-          signal,
-          beforeRequest: prepared.assertCurrent,
+          init,
+          signal: upload.signal,
+          beforeRequest: upload.assertCurrent,
           requireHttps: true,
           maxRedirects: 0,
           capture: false,
           mode: "trusted_env_proxy",
           auditContext: "codex-parent-local-inference",
         });
-        prepared.assertCurrent();
+        upload.assertCurrent();
         // fetch decodes response content encodings. Never forward stale encoding/length headers.
         const headers = Object.fromEntries(guarded.response.headers);
         delete headers["content-encoding"];
@@ -159,7 +309,7 @@ export async function createCodexInferenceProxy(params: {
         if (!guarded.response.body) {
           res.end();
         } else {
-          await guarded.response.body.pipeTo(Writable.toWeb(res), { signal });
+          await guarded.response.body.pipeTo(Writable.toWeb(res), { signal: upload.signal });
         }
       } catch {
         // Errors can contain headers, bodies, or the private URL: never log/reflect them.
@@ -169,52 +319,119 @@ export async function createCodexInferenceProxy(params: {
           res.destroy();
         }
       } finally {
-        active.delete(controller);
+        upload?.settle();
+        releasePermit?.();
         req.off("aborted", abort);
         res.off("close", abort);
         await guarded?.release().catch(() => undefined);
+        resident?.finish();
       }
     })();
   });
-  server.maxConnections = MAX_CONNECTIONS;
-  server.requestTimeout = 30_000;
-  server.headersTimeout = 10_000;
+  // Leave HTTP/failure-response headroom beyond the separately bounded WS pool.
+  // This last-resort TCP ceiling must not be the normal inference admission limit.
+  server.maxConnections = MAX_WEBSOCKETS + MAX_UPLOADS * 4;
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  server.headersTimeout = HANDSHAKE_TIMEOUT_MS;
   server.on("upgrade", (req, socket, head) => {
     void (async () => {
       let remote: WebSocket | undefined;
       let local: WebSocket | undefined;
       let proxyAgent: ReturnType<typeof createNodeProxyAgent>;
+      let upstreamClosed = Promise.resolve();
+      let finishSetup = () => {};
+      const setupSettled = new Promise<void>((resolve) => {
+        finishSetup = resolve;
+      });
+      let resident: ReturnType<typeof reserveResident> = null;
       const controller = new AbortController();
+      const deadlineAtMs = Date.now() + HANDSHAKE_TIMEOUT_MS;
+      let releasePermit: (() => void) | null = null;
+      let framePending = false;
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+      let closing = false;
       const close = () => {
+        if (closing) {
+          return;
+        }
+        closing = true;
+        if (idleConnections.has(close)) {
+          resident?.retireIdle();
+        }
+        clearTimeout(idleTimer);
+        clearTimeout(handshakeTimer);
+        socket.off("end", close);
+        connections.delete(close);
+        idleConnections.delete(close);
         controller.abort();
-        active.delete(controller);
         remote?.terminate();
         local?.terminate();
         proxyAgent?.destroy();
-        if (remote) {
-          sockets.delete(remote);
-        }
-        if (local) {
-          sockets.delete(local);
-        }
         socket.destroy();
+        // ws can emit close before a CONNECTING request's socket actually closes.
+        // Keep residency until the public request/socket teardown has settled too.
+        void setupSettled
+          .then(() => upstreamClosed)
+          .then(() => {
+            releasePermit?.();
+            releasePermit = null;
+            resident?.finish();
+          });
       };
       try {
         const { target, sampling } = resolveTarget(req);
-        if (!sampling || active.size >= MAX_CONNECTIONS) {
+        if (!sampling) {
           throw new Error(FAILURE);
         }
-        active.add(controller);
+        if (connections.size >= MAX_WEBSOCKETS) {
+          // Prefer reclaiming the oldest proven-idle transport to rejecting new work.
+          idleConnections.values().next().value?.();
+        }
+        if (connections.size >= MAX_WEBSOCKETS) {
+          rejectBusyUpgrade(socket);
+          return;
+        }
+        connections.add(close);
         socket.once("close", close);
         socket.once("error", close);
+        // Raw HTTP upgrades stay half-open after FIN until ws owns the socket.
+        // Cancel pending admission before it can dial for a disconnected caller.
+        socket.once("end", close);
         const signal = AbortSignal.any([lifetime.signal, controller.signal]);
+        resident = reserveResident(socket, signal, deadlineAtMs);
+        const admitted = resident && (await resident.ready);
+        signal.throwIfAborted();
+        assertCurrent();
+        if (!admitted) {
+          rejectBusyUpgrade(socket);
+          return;
+        }
+        // Admission precedes the upstream dial. Complete the real upstream handshake
+        // before local 101 so native auth errors and negotiated headers stay intact.
+        releasePermit = await acquireUpload(signal, deadlineAtMs);
+        signal.throwIfAborted();
+        assertCurrent();
+        if (!releasePermit) {
+          rejectBusyUpgrade(socket);
+          return;
+        }
+        // Queueing, DNS and the remote handshake share one native-compatible deadline.
+        handshakeTimer = setTimeout(close, Math.max(1, deadlineAtMs - Date.now()));
+        handshakeTimer.unref();
+        const assertHandshakeCurrent = () => {
+          assertCurrent();
+          signal.throwIfAborted();
+          if (Date.now() >= deadlineAtMs) {
+            throw new Error(FAILURE);
+          }
+        };
         // Trusted proxies own destination DNS; direct connections retain DNS pinning.
         proxyAgent = createNodeProxyAgent({ mode: "env", targetUrl: target.href });
         const lookup = proxyAgent
           ? undefined
           : (await resolvePinnedHostnameWithPolicy(target.hostname, { signal })).lookup;
-        assertCurrent();
-        signal.throwIfAborted();
+        assertHandshakeCurrent();
         target.protocol = "wss:";
         const headers = relayHeaders(req.headers);
         for (const key of Object.keys(headers)) {
@@ -228,9 +445,23 @@ export async function createCodexInferenceProxy(params: {
           followRedirects: false,
           perMessageDeflate: false,
           maxPayload: MAX_BODY_BYTES,
-          handshakeTimeout: 10_000,
+          handshakeTimeout: Math.max(1, deadlineAtMs - Date.now()),
+          finishRequest(request) {
+            let socketClosed = Promise.resolve();
+            request.once("socket", (upstreamSocket) => {
+              socketClosed = new Promise<void>((resolve) => {
+                upstreamSocket.once("close", () => resolve());
+              });
+            });
+            upstreamClosed = new Promise<void>((resolve) => {
+              request.once("close", () => {
+                void socketClosed.then(resolve);
+              });
+            });
+            // finishRequest replaces ws's default end(), including proxy-agent requests.
+            request.end();
+          },
         });
-        sockets.add(remote);
         remote.once("upgrade", (response) => {
           handshakeHeaders.set(req, relayHeaders(response.headers));
         });
@@ -266,26 +497,48 @@ export async function createCodexInferenceProxy(params: {
         });
         remote.once("open", () => {
           try {
-            assertCurrent();
-            signal.throwIfAborted();
+            assertHandshakeCurrent();
             wss.handleUpgrade(req, socket, head, (accepted) => {
+              clearTimeout(handshakeTimer);
+              socket.off("end", close);
               local = accepted;
-              sockets.add(accepted);
               accepted.once("error", close);
               accepted.once("close", close);
               let releaseFrame = () => {};
-              accepted.on("message", (data, binary) => {
+              const idle = (reclaimable = true) => {
+                framePending = false;
+                idleConnections.delete(close);
+                if (reclaimable) {
+                  idleConnections.add(close);
+                }
+                clearTimeout(idleTimer);
+                idleTimer = setTimeout(close, IDLE_WEBSOCKET_MS);
+                idleTimer.unref();
+                reclaimIdle();
+              };
+              releasePermit?.();
+              releasePermit = null;
+              // A fresh 101 still awaits native's first frame. Pressure may reclaim
+              // cached completed responses, not the handshake it just admitted.
+              idle(false);
+              const forward = async (prepared: ReturnType<typeof prepare>) => {
+                let releaseUpload: (() => void) | null = null;
                 try {
-                  if (binary) {
-                    throw new Error(FAILURE);
-                  }
-                  const prepared = prepare(rawBytes(data), true);
+                  const requestSignal = AbortSignal.any([
+                    signal,
+                    ...(prepared.signal ? [prepared.signal] : []),
+                  ]);
+                  releaseUpload = await acquireUpload(
+                    requestSignal,
+                    Date.now() + REQUEST_TIMEOUT_MS,
+                    prepared.bytes.length,
+                  );
+                  requestSignal.throwIfAborted();
                   prepared.assertCurrent();
-                  // A WS may serve later turns. Replace the old generation's abort listener.
-                  releaseFrame();
-                  const onAbort = () => close();
-                  prepared.signal?.addEventListener("abort", onAbort, { once: true });
-                  releaseFrame = () => prepared.signal?.removeEventListener("abort", onAbort);
+                  if (!releaseUpload) {
+                    accepted.send(OVERLOAD_BODY, { binary: false }, close);
+                    return;
+                  }
                   if (
                     !remote ||
                     remote.readyState !== WebSocket.OPEN ||
@@ -293,11 +546,41 @@ export async function createCodexInferenceProxy(params: {
                   ) {
                     throw new Error(FAILURE);
                   }
+                  const release = releaseUpload;
                   remote.send(prepared.bytes, { binary: false }, (error) => {
+                    // Capture this frame's lease: terminal delivery can allow the next
+                    // frame before an earlier send callback runs.
+                    release();
                     if (error) {
                       close();
                     }
                   });
+                } catch {
+                  releaseUpload?.();
+                  close();
+                }
+              };
+              accepted.on("message", (data, binary) => {
+                try {
+                  if (binary) {
+                    throw new Error(FAILURE);
+                  }
+                  const prepared = prepare(rawBytes(data), true);
+                  prepared.assertCurrent();
+                  // Native serializes response.create calls on a reusable connection.
+                  if (framePending) {
+                    throw new Error(FAILURE);
+                  }
+                  framePending = true;
+                  clearTimeout(idleTimer);
+                  idleConnections.delete(close);
+                  // A WS may serve later turns. Replace the old generation's abort listener.
+                  releaseFrame();
+                  const onAbort = () => close();
+                  const frameSignal = prepared.signal;
+                  frameSignal?.addEventListener("abort", onAbort, { once: true });
+                  releaseFrame = () => frameSignal?.removeEventListener("abort", onAbort);
+                  void forward(prepared);
                 } catch {
                   close();
                 }
@@ -311,9 +594,15 @@ export async function createCodexInferenceProxy(params: {
                   close();
                   return;
                 }
+                // Upload completion does not prove response quiescence. Only a
+                // delivered terminal event makes this retained transport reclaimable.
+                const terminal = !binary && isTerminalResponse(rawBytes(data));
                 accepted.send(data, { binary }, (error) => {
                   if (error) {
                     close();
+                  } else if (terminal && connections.has(close)) {
+                    // Do not evict a transport while its final frame is still buffered.
+                    idle();
                   }
                 });
               });
@@ -324,17 +613,16 @@ export async function createCodexInferenceProxy(params: {
         });
       } catch {
         close();
+      } finally {
+        finishSetup();
       }
     })();
   });
   const close = () => {
     lifetime.abort();
     context.close();
-    for (const controller of active) {
-      controller.abort();
-    }
-    for (const socket of sockets) {
-      socket.terminate();
+    for (const closeConnection of connections) {
+      closeConnection();
     }
     server.close();
     server.closeAllConnections();
@@ -364,6 +652,30 @@ export async function createCodexInferenceProxy(params: {
   } catch (error) {
     close();
     throw error;
+  }
+}
+
+function rejectBusyUpgrade(socket: Duplex) {
+  rejectWebSocketUpgrade(socket, {
+    status: 503,
+    headers: { "Retry-After": "1" },
+    body: { contentType: "application/json", text: OVERLOAD_BODY },
+  });
+}
+
+function isTerminalResponse(bytes: Buffer): boolean {
+  try {
+    const event: unknown = JSON.parse(bytes.toString("utf8"));
+    return (
+      isJsonObject(event) &&
+      (event.type === "response.failed" ||
+        event.type === "response.incomplete" ||
+        (event.type === "response.completed" &&
+          isJsonObject(event.response) &&
+          typeof event.response.id === "string"))
+    );
+  } catch {
+    return false;
   }
 }
 

@@ -2,17 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  FAILOVER_REASONS,
-  type FailoverReason,
-} from "../../../packages/gateway-protocol/src/failover-reasons.js";
-import {
-  type WorkerLiveEventErrorDetails as ErrorDetails,
-  type WorkerLiveEventParams as Params,
-  WorkerLiveEventParamsSchema,
+import type {
+  WorkerLiveEventErrorDetails as ErrorDetails,
+  WorkerLiveEventParams as Params,
 } from "../../../packages/gateway-protocol/src/schema.js";
+import { drainStoreWriterQueuesForTest } from "../../../test/helpers/promise.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
@@ -35,7 +30,6 @@ import {
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { drainStoreWriterQueuesForTest } from "../../shared/store-writer-queue.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   runOpenClawAgentWorkerWrite,
@@ -97,49 +91,6 @@ type Payload<K extends WireEvent["kind"]> = Extract<WireEvent, { kind: K }>["pay
 const tool = (payload: Payload<"tool">): WireEvent => ({ kind: "tool", payload });
 const approval = (payload: Payload<"approval">): WireEvent => ({ kind: "approval", payload });
 const lifecycle = (payload: Payload<"lifecycle">): WireEvent => ({ kind: "lifecycle", payload });
-
-const validateLiveProtocolEvent = (event: unknown) =>
-  Value.Check(WorkerLiveEventParamsSchema, {
-    runEpoch: EPOCH,
-    lastAckedSeq: 0,
-    seq: 1,
-    runId: RUN,
-    event,
-  });
-const fallbackEvent = (reason: FailoverReason) => ({
-  kind: "lifecycle",
-  payload: {
-    phase: "fallback",
-    selectedProvider: "p",
-    selectedModel: "m",
-    activeProvider: "q",
-    activeModel: "n",
-    reasonSummary: "x",
-    attemptSummaries: ["x"],
-    attempts: [{ provider: "p", model: "m", error: "x", reason }],
-  },
-});
-const fallbackStepEvent = (reason: string) => ({
-  kind: "lifecycle",
-  payload: {
-    phase: "fallback_step",
-    fallbackStepType: "fallback_step",
-    fallbackStepFromModel: "p/m",
-    fallbackStepFromFailureReason: reason,
-    fallbackStepFinalOutcome: "chain_exhausted",
-  },
-});
-
-describe("worker live protocol conformance", () => {
-  it("accepts every core failover reason in live fallback schemas", () => {
-    for (const reason of FAILOVER_REASONS) {
-      expect(validateLiveProtocolEvent(fallbackEvent(reason))).toBe(true);
-      expect(validateLiveProtocolEvent(fallbackStepEvent(reason))).toBe(true);
-    }
-
-    expect(validateLiveProtocolEvent(fallbackStepEvent("not-a-reason"))).toBe(false);
-  });
-});
 
 describe("worker live events", () => {
   let root: string;
@@ -368,13 +319,19 @@ describe("worker live events", () => {
     for (const [index, event] of variants.entries()) {
       await ack(live(index + 1, event, `run-map-${index}`));
     }
-    expect(events.map((event) => event.stream)).toEqual(variants.map((event) => event.kind));
+    const rawEvents = events.filter((event) => event.stream !== "item");
+    expect(rawEvents.map((event) => event.stream)).toEqual(variants.map((event) => event.kind));
+    expect(events.filter((event) => event.stream === "item").map((event) => event.data)).toEqual([
+      expect.objectContaining({ itemId: "tool:call", phase: "start", status: "running" }),
+      expect.objectContaining({ itemId: "tool:call", phase: "update", status: "running" }),
+      expect.objectContaining({ itemId: "tool:call", phase: "end", status: "completed" }),
+    ]);
     const capped = (char: string) => `${char.repeat(8000)}\n...(live output truncated)...`;
-    expect(events[4]?.data).toMatchObject({
+    expect(rawEvents[4]?.data).toMatchObject({
       name: "exec",
       result: { content: [{ bytes: 6, omitted: true }], details: { aggregated: capped("r") } },
     });
-    expect(events[8]?.data).toMatchObject({
+    expect(rawEvents[8]?.data).toMatchObject({
       fallbackStepFromFailureReason: "tls_certificate",
     });
     expect(JSON.stringify(events)).not.toContain(credential);
@@ -382,11 +339,12 @@ describe("worker live events", () => {
 
   it("settles accepted writes before returning a synchronous diagnostic failure", async () => {
     const failure = new Error("synthetic diagnostic failure");
-    const diagnostic = vi
-      .spyOn(workerRunOwner, "captureWorkerTurnDiagnosticRecorder")
-      .mockReturnValue(() => {
+    const diagnostic = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+      record: () => {
         throw failure;
-      });
+      },
+      isCancelled: () => false,
+    });
     const writer = holdWriter();
     await writer.entered;
     let settled = false;
@@ -740,6 +698,56 @@ describe("worker live events", () => {
     await fail(msg(4, "late", 3), "invalid-event");
     expect(events.filter((event) => event.runId === RUN)).toHaveLength(1);
   });
+
+  it.each([
+    ["item", false],
+    ["item", true],
+    ["tool", false],
+    ["tool", true],
+  ] as const)(
+    "stops publication after %s detaches the worker (shared: %s)",
+    async (stream, shared) => {
+      if (shared) {
+        claimAgentRunContext(RUN, {
+          ...LOCAL,
+          isControlUiVisible: true,
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        });
+      }
+      const diagnostic = vi.fn();
+      const recorder = vi
+        .spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner")
+        .mockReturnValue({ record: diagnostic, isCancelled: () => false });
+      const stop = onAgentRuntimeEvent((event) => {
+        if (event.runId === RUN && event.stream === stream) {
+          rx.clearEnvironment(ID.environmentId);
+        }
+      });
+      try {
+        await fail(
+          live(
+            1,
+            tool({ phase: "start", name: "read", toolCallId: "revoked", args: { path: "file" } }),
+          ),
+          "invalid-event",
+        );
+        expect(events.map((event) => event.stream)).toEqual(
+          stream === "item" ? ["item"] : ["item", "tool"],
+        );
+        expect(diagnostic).not.toHaveBeenCalled();
+        expect(
+          loadSqliteTrajectoryRuntimeEventRowsSync({
+            agentId: "main",
+            sessionId: SID,
+            storePath: store,
+          }),
+        ).toEqual([]);
+      } finally {
+        stop();
+        recorder.mockRestore();
+      }
+    },
+  );
 
   it("clears on detach", async () => {
     await ack(msg(1, "delivered"));

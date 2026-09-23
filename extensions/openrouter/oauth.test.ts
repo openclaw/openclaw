@@ -108,7 +108,7 @@ function createOpenRouterOAuthContext(params: {
     stop: vi.fn(),
   };
   const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => undefined);
-  const text = vi.fn<(prompt: { message: string; placeholder?: string }) => Promise<string>>(
+  const text = vi.fn<ProviderAuthContext["prompter"]["text"]>(
     async () =>
       params.redirectInput ?? `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1&code=AUTHCODE`,
   );
@@ -222,6 +222,32 @@ describe("OpenRouter OAuth", () => {
       ]);
     },
   );
+
+  it("keeps malformed manual input correctable in the registered OAuth method", async () => {
+    const { ctx, text } = createOpenRouterOAuthContext({ isRemote: true });
+    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse({ key: "fixture-key" }));
+    text.mockImplementationOnce(async ({ validate }) => {
+      for (const value of [
+        "chrome-error://chromewebdata/",
+        "AUTHCODE",
+        "code=AUTHCODE",
+        "state=other&code=AUTHCODE",
+      ]) {
+        expect(validate?.(value)).toEqual(expect.any(String));
+        expect(fetchImpl).not.toHaveBeenCalled();
+      }
+      const input = `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1&code=AUTHCODE`;
+      expect(validate?.(input)).toBeUndefined();
+      return input;
+    });
+    await expect(
+      loginOpenRouterOAuth(ctx, {
+        createState: () => "state-1",
+        fetchImpl,
+      }),
+    ).resolves.toMatchObject({ profiles: [{ credential: { key: "fixture-key" } }] });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
 
   it("builds the documented PKCE authorize URL", async () => {
     const { ctx, openUrl } = createOpenRouterOAuthContext({ isRemote: true });

@@ -108,21 +108,24 @@ describe("Doctor maintenance with managed-flow workers", () => {
           });
           let flowId: string;
           try {
-            const created = await flows.createManaged({
-              controllerId: "tests/doctor",
-              goal: "Complete Doctor repair",
-            });
-            flowId = created.flowId;
-            expect(created.revision).toBe(0);
-            await expect(
-              flows.finish({
-                flowId,
-                expectedRevision: created.revision,
-                stateJson: { completed: true },
-              }),
-            ).resolves.toMatchObject({
-              applied: true,
-              flow: { flowId, status: "succeeded", revision: 1 },
+            flowId = await maintenance!.run(async () => {
+              const created = await flows.createManaged({
+                controllerId: "tests/doctor",
+                goal: "Complete Doctor repair",
+              });
+              const createdFlowId = created.flowId;
+              expect(created.revision).toBe(0);
+              await expect(
+                flows.finish({
+                  flowId: createdFlowId,
+                  expectedRevision: created.revision,
+                  stateJson: { completed: true },
+                }),
+              ).resolves.toMatchObject({
+                applied: true,
+                flow: { flowId: createdFlowId, status: "succeeded", revision: 1 },
+              });
+              return createdFlowId;
             });
           } finally {
             await maintenance?.release();
@@ -166,44 +169,46 @@ describe("Doctor maintenance with managed-flow workers", () => {
           delegate?: ReturnType<typeof stateCoordinator.tryCreateStateLifecycleDelegate>;
         } = {};
         try {
-          await flows.list();
-          const createDelegate = stateCoordinator.tryCreateStateLifecycleDelegate;
-          let failRelease = true;
-          const spy = vi
-            .spyOn(stateCoordinator, "tryCreateStateLifecycleDelegate")
-            .mockImplementation((params) => {
-              const delegate = createDelegate(params);
-              if (!delegate) {
-                return delegate;
-              }
-              receipt.delegate ??= delegate;
-              return {
-                port: delegate.port,
-                get closed() {
-                  return delegate.closed;
-                },
-                release() {
-                  if (failRelease) {
-                    failRelease = false;
-                    throw new Error("Synthetic retained coordinator release failure");
-                  }
-                  delegate.release();
-                },
-              };
-            });
-          let created: ManagedTaskFlowRecord | null;
-          try {
-            created = await flows.tryCreateManaged({
-              controllerId: "tests/doctor",
-              goal: "Retain confirmed result",
-            });
-            expect(created).toMatchObject({ goal: "Retain confirmed result", revision: 0 });
-          } finally {
-            spy.mockRestore();
-          }
-          await closeOpenClawStateDatabaseAsync();
-          expect(receipt.delegate?.closed).toBe(true);
-          expect(await flows.list()).toEqual([created]);
+          await maintenance!.run(async () => {
+            await flows.list();
+            const createDelegate = stateCoordinator.tryCreateStateLifecycleDelegate;
+            let failRelease = true;
+            const spy = vi
+              .spyOn(stateCoordinator, "tryCreateStateLifecycleDelegate")
+              .mockImplementation((params) => {
+                const delegate = createDelegate(params);
+                if (!delegate) {
+                  return delegate;
+                }
+                receipt.delegate ??= delegate;
+                return {
+                  port: delegate.port,
+                  get closed() {
+                    return delegate.closed;
+                  },
+                  release() {
+                    if (failRelease) {
+                      failRelease = false;
+                      throw new Error("Synthetic retained coordinator release failure");
+                    }
+                    delegate.release();
+                  },
+                };
+              });
+            let created: ManagedTaskFlowRecord | null;
+            try {
+              created = await flows.tryCreateManaged({
+                controllerId: "tests/doctor",
+                goal: "Retain confirmed result",
+              });
+              expect(created).toMatchObject({ goal: "Retain confirmed result", revision: 0 });
+            } finally {
+              spy.mockRestore();
+            }
+            await closeOpenClawStateDatabaseAsync();
+            expect(receipt.delegate?.closed).toBe(true);
+            expect(await flows.list()).toEqual([created]);
+          });
         } finally {
           receipt.delegate?.release();
           await maintenance?.release();
@@ -234,62 +239,64 @@ describe("Doctor maintenance with managed-flow workers", () => {
             retained?: Parameters<typeof coordinatorDelegate.createCoordinatorDelegate>[2];
           } = {};
           try {
-            if (!beforeMaintenance) {
-              await flows.list();
-            }
-            const create = coordinatorDelegate.createCoordinatorDelegate;
-            let failRelease = true;
-            const delegate = vi
-              .spyOn(coordinatorDelegate, "createCoordinatorDelegate")
-              .mockImplementation((identity, live, retained, revoke, label) => {
-                if (receipt.retained) {
-                  return create(identity, live, retained, revoke, label);
-                }
-                receipt.retained = retained;
-                return create(
-                  identity,
-                  live,
-                  {
-                    get closed() {
-                      return retained.closed;
+            await maintenance!.run(async () => {
+              if (!beforeMaintenance) {
+                await flows.list();
+              }
+              const create = coordinatorDelegate.createCoordinatorDelegate;
+              let failRelease = true;
+              const delegate = vi
+                .spyOn(coordinatorDelegate, "createCoordinatorDelegate")
+                .mockImplementation((identity, live, retained, revoke, label) => {
+                  if (receipt.retained) {
+                    return create(identity, live, retained, revoke, label);
+                  }
+                  receipt.retained = retained;
+                  return create(
+                    identity,
+                    live,
+                    {
+                      get closed() {
+                        return retained.closed;
+                      },
+                      release() {
+                        if (failRelease) {
+                          failRelease = false;
+                          throw new Error("Synthetic retained release failure");
+                        }
+                        retained.release();
+                      },
                     },
-                    release() {
-                      if (failRelease) {
-                        failRelease = false;
-                        throw new Error("Synthetic retained release failure");
-                      }
-                      retained.release();
-                    },
-                  },
-                  revoke,
-                  label,
-                );
+                    revoke,
+                    label,
+                  );
+                });
+              const send = vi
+                .spyOn(MessagePort.prototype, "postMessage")
+                .mockImplementationOnce(() => {
+                  throw new Error("Synthetic delegate setup failure");
+                });
+              try {
+                await expect(
+                  flows.tryCreateManaged({
+                    controllerId: "tests/doctor",
+                    goal: "Undispatched repair",
+                  }),
+                ).resolves.toBeNull();
+              } finally {
+                send.mockRestore();
+                delegate.mockRestore();
+              }
+              await closeOpenClawStateDatabaseAsync();
+              expect(receipt.retained?.closed).toBe(true);
+              expect(await flows.list()).toEqual([]);
+              const created = await flows.createManaged({
+                controllerId: "tests/doctor",
+                goal: "Continue after setup failure",
               });
-            const send = vi
-              .spyOn(MessagePort.prototype, "postMessage")
-              .mockImplementationOnce(() => {
-                throw new Error("Synthetic delegate setup failure");
-              });
-            try {
-              await expect(
-                flows.tryCreateManaged({
-                  controllerId: "tests/doctor",
-                  goal: "Undispatched repair",
-                }),
-              ).resolves.toBeNull();
-            } finally {
-              send.mockRestore();
-              delegate.mockRestore();
-            }
-            await closeOpenClawStateDatabaseAsync();
-            expect(receipt.retained?.closed).toBe(true);
-            expect(await flows.list()).toEqual([]);
-            const created = await flows.createManaged({
-              controllerId: "tests/doctor",
-              goal: "Continue after setup failure",
+              await closeOpenClawStateDatabaseAsync();
+              expect(await flows.list()).toEqual([created]);
             });
-            await closeOpenClawStateDatabaseAsync();
-            expect(await flows.list()).toEqual([created]);
           } finally {
             receipt.retained?.release();
             await maintenance?.release();

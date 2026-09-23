@@ -1,13 +1,21 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   PendingApprovalSnapshot,
   SessionApprovalEvent,
-  SessionApprovalReplay,
 } from "../../packages/gateway-protocol/src/index.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveApprovalSourceStreamKey } from "./approval-session-audience.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import type { OperatorApprovalLifecycleEvent } from "./exec-approval-manager.js";
-import { canAccessOperatorApproval } from "./operator-approval-authorization.js";
+import type {
+  ExecApprovalManager,
+  OperatorApprovalLifecycleEvent,
+} from "./exec-approval-manager.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
+import {
+  canAccessOperatorApproval,
+  canReviewOperatorApproval,
+} from "./operator-approval-authorization.js";
 import { projectOperatorApprovalSnapshot } from "./operator-approval-snapshot.js";
 import {
   expireDueOperatorApprovals,
@@ -16,14 +24,17 @@ import {
 } from "./operator-approval-store.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import type { GatewayClient } from "./server-methods/types.js";
+import type { GatewayClient, PreparedSessionApprovalReplay } from "./server-methods/types.js";
 
 const MAX_SESSION_APPROVAL_REPLAY = 1_000;
 type ApprovalSessionClient = GatewayClient & { invalidated?: boolean };
 
 type OperatorApprovalSessionEventRuntime = {
   publish: (event: OperatorApprovalLifecycleEvent) => void;
-  replay: (sessionKey: string, client: GatewayClient | null) => SessionApprovalReplay;
+  replay: (
+    sessionKey: string,
+    client: GatewayClient | null,
+  ) => Promise<PreparedSessionApprovalReplay>;
 };
 
 function resolveApprovalSourceStreamKeyForRecord(record: OperatorApprovalRecord): string | null {
@@ -43,10 +54,15 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   controlUiBasePath?: string;
   databaseOptions?: OpenClawStateDatabaseOptions;
   now?: () => number;
-  reconcileTerminal?: (record: OperatorApprovalRecord) => boolean;
+  reconcileTerminal?: (record: OperatorApprovalRecord) => boolean | Promise<boolean>;
+  getLiveManager?: (
+    kind: OperatorApprovalRecord["kind"],
+  ) => Pick<ExecApprovalManager<unknown>, "runtimeEpoch" | "getLiveSnapshot"> | undefined;
+  isCurrent?: () => boolean;
 }): OperatorApprovalSessionEventRuntime {
   const controlUiBasePath = normalizeControlUiBasePath(params.controlUiBasePath);
   const now = params.now ?? Date.now;
+  let publicationRevision = 0;
 
   const canAccessRecord = (client: GatewayClient | null, record: OperatorApprovalRecord): boolean =>
     canAccessOperatorApproval({
@@ -78,6 +94,38 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   };
 
   const publish = (event: OperatorApprovalLifecycleEvent): void => {
+    publicationRevision += 1;
+    const source = event.record.source;
+    const pending = event.phase === "pending" && event.record.status === "pending";
+    const manager = params.getLiveManager?.(event.record.kind);
+    const live = pending ? manager?.getLiveSnapshot(event.record.id) : undefined;
+    const request = asOptionalObjectRecord(live?.request);
+    const livePending = Boolean(
+      manager?.runtimeEpoch === event.record.runtimeEpoch &&
+      live &&
+      live.resolvedAtMs === undefined &&
+      live.expiresAtMs > now() &&
+      request?.runId === source.runId &&
+      request?.sessionId === source.sessionId &&
+      request?.sessionKey === source.sessionKey,
+    );
+    if (
+      params.getLiveManager &&
+      params.isCurrent?.() !== false &&
+      source.runId &&
+      source.sessionId &&
+      (pending ? livePending : event.record.status !== "pending")
+    ) {
+      // Only the approval owner emits these transitions. Tool-result approval
+      // text can arrive after resolution and cannot re-open an attention request.
+      emitAgentEvent({
+        runId: source.runId,
+        sessionId: source.sessionId,
+        ...(source.sessionKey ? { sessionKey: source.sessionKey } : {}),
+        stream: "execution",
+        data: { approval: { id: event.record.id, state: pending ? "pending" : "resolved" } },
+      });
+    }
     const approval = projectOperatorApprovalSnapshot(event.record, controlUiBasePath);
     if (!approval || event.record.audienceSessionKeys.length === 0) {
       return;
@@ -115,31 +163,67 @@ export function createOperatorApprovalSessionEventRuntime(params: {
 
   return {
     publish,
-    replay: (sessionKey, client) => {
+    replay: async (sessionKey, client) => {
       const snapshotAtMs = now();
-      const expired = expireDueOperatorApprovals({
+      if (!canReviewOperatorApproval(client)) {
+        return {
+          replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals: [], truncated: false },
+          isCurrent: () => !canReviewOperatorApproval(client),
+        };
+      }
+      const scopes = [...(client?.connect.scopes ?? [])];
+      const deviceId = client?.connect.device?.id;
+      const reviewerDeviceId = scopes.includes(ADMIN_SCOPE) ? undefined : deviceId?.trim();
+      const assertCurrent = () => {
+        if (
+          params.isCurrent?.() === false ||
+          client?.invalidated ||
+          !canReviewOperatorApproval(client) ||
+          scopes.join("\0") !== client?.connect.scopes?.join("\0") ||
+          (!scopes.includes(ADMIN_SCOPE) && deviceId !== client?.connect.device?.id)
+        ) {
+          throw new Error("Operator approval replay authority is no longer current");
+        }
+      };
+      assertCurrent();
+      const expired = await expireDueOperatorApprovals({
         nowMs: snapshotAtMs,
         databaseOptions: params.databaseOptions,
       });
       // A replay read can be the first observer after a suspended timer. Emit
       // the durable timeout tombstone before returning the authoritative set.
       for (const record of expired.records) {
-        if (params.reconcileTerminal?.(record) !== true) {
+        const reconciled = await params.reconcileTerminal?.(record);
+        if (reconciled !== true) {
           publish({ phase: "terminal", record });
         }
       }
+      assertCurrent();
       const approvals: PendingApprovalSnapshot[] = [];
-      const records = listPendingOperatorApprovals({
-        audienceSessionKey: sessionKey,
-        recordFilter: (record) => canAccessRecord(client, record),
-        limit: MAX_SESSION_APPROVAL_REPLAY + 1,
-        nowMs: snapshotAtMs,
-        databaseOptions: params.databaseOptions,
-      });
+      let revision: number;
+      let records: OperatorApprovalRecord[];
+      do {
+        revision = publicationRevision;
+        records = await listPendingOperatorApprovals({
+          audienceSessionKey: sessionKey,
+          reviewerDeviceId,
+          limit: MAX_SESSION_APPROVAL_REPLAY + 1,
+          nowMs: snapshotAtMs,
+          databaseOptions: params.databaseOptions,
+        });
+        assertCurrent();
+      } while (revision !== publicationRevision);
+      const isCurrent = () => {
+        assertCurrent();
+        return revision === publicationRevision;
+      };
       const truncated = records.length > MAX_SESSION_APPROVAL_REPLAY;
       for (const record of records) {
         if (approvals.length === MAX_SESSION_APPROVAL_REPLAY) {
-          return { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated: true };
+          return {
+            replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated: true },
+            isCurrent,
+          };
         }
         const approval = projectOperatorApprovalSnapshot(record, controlUiBasePath);
         if (approval?.status === "pending") {
@@ -150,7 +234,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
           });
         }
       }
-      return { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated };
+      return { replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated }, isCurrent };
     },
   };
 }

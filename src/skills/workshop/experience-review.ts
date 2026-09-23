@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -276,7 +277,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     recordSkillExperienceReviewOutcome(foregroundPromptContext.agentId, workspaceDir, {
       attemptedAtMs,
       outcome: "failed",
-      error: String(error).slice(0, 300),
+      error: truncateUtf16Safe(String(error), 300),
     });
     throw error;
   } finally {

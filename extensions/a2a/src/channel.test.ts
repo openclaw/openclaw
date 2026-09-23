@@ -1,5 +1,6 @@
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { a2aChannelPlugin } from "./channel.js";
 import { a2aPluginConfigSchema } from "./config-schema.js";
@@ -101,16 +102,93 @@ describe("A2A channel configuration", () => {
 });
 
 describe("A2A channel message adapter", () => {
-  it("backs its only declared capability with an authenticated JSON-RPC send and receipt", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: "response-id",
-          result: { task: { id: "task-42" } },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+  it.each(["preferred", "legacy"] as const)(
+    "checks authority after transport preparation through the %s registered send",
+    async (surface) => {
+      const guardedFetch = ssrfRuntime.fetchWithSsrFGuard;
+      let markLookupStarted: (() => void) | undefined;
+      const lookupStarted = new Promise<void>((resolve) => {
+        markLookupStarted = resolve;
+      });
+      let finishLookup: ((addresses: Array<{ address: string; family: 4 }>) => void) | undefined;
+      const lookupFinished = new Promise<Array<{ address: string; family: 4 }>>((resolve) => {
+        finishLookup = resolve;
+      });
+      const lookupFn: NonNullable<Parameters<typeof guardedFetch>[0]["lookupFn"]> = vi.fn(
+        async () => {
+          markLookupStarted?.();
+          return await lookupFinished;
+        },
+      );
+      vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementationOnce(
+        async (params) => await guardedFetch({ ...params, lookupFn }),
+      );
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response('{"jsonrpc":"2.0","result":{}}'));
+      const cfg: A2aCoreConfig = {
+        channels: {
+          a2a: {
+            peers: {
+              hermes: {
+                token: "test-inbound-token",
+                url: "https://peer.example.test/a2a/v1",
+              },
+            },
+          },
+        },
+      };
+      let current = true;
+      const assertDirectAdapterHandoff = vi.fn(() => {
+        if (!current) {
+          throw new Error("source authority revoked");
+        }
+      });
+
+      try {
+        const send =
+          surface === "preferred"
+            ? a2aChannelPlugin.message?.send?.text?.({
+                cfg,
+                accountId: "default",
+                to: "hermes",
+                text: "hello",
+                assertDirectAdapterHandoff,
+              })
+            : a2aChannelPlugin.outbound?.sendText?.({
+                cfg,
+                to: "hermes",
+                text: "hello",
+                assertDirectAdapterHandoff,
+              });
+        if (!send) {
+          throw new Error(`expected ${surface} A2A text sender`);
+        }
+        await lookupStarted;
+        current = false;
+        finishLookup?.([{ address: "93.184.216.34", family: 4 }]);
+
+        await expect(send).rejects.toThrow("source authority revoked");
+        expect(lookupFn).toHaveBeenCalledOnce();
+        expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it("keeps authority current through preferred and legacy registered sends", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "response-id",
+            result: { task: { id: "task-42" } },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
     );
 
     try {
@@ -133,6 +211,7 @@ describe("A2A channel message adapter", () => {
         throw new Error("expected A2A channel message adapter with text sender");
       }
       expect(adapter.send?.media).toBeUndefined();
+      const assertDirectAdapterHandoff = vi.fn();
 
       await verifyChannelMessageAdapterCapabilityProofs({
         adapterName: "a2aChannelMessageAdapter",
@@ -144,6 +223,7 @@ describe("A2A channel message adapter", () => {
               accountId: "default",
               to: "hermes",
               text: "hello",
+              assertDirectAdapterHandoff,
             });
             expect(fetchSpy).toHaveBeenCalledOnce();
             const [url, request] = fetchSpy.mock.calls[0] ?? [];
@@ -171,9 +251,27 @@ describe("A2A channel message adapter", () => {
               kind: "text",
               platformMessageId: "task-42",
             });
+            expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
           },
         },
       });
+
+      const legacySendText = a2aChannelPlugin.outbound?.sendText;
+      if (!legacySendText) {
+        throw new Error("expected A2A legacy outbound text sender");
+      }
+      const assertLegacyHandoff = vi.fn();
+      fetchSpy.mockClear();
+      await expect(
+        legacySendText({
+          cfg,
+          to: "hermes",
+          text: "legacy hello",
+          assertDirectAdapterHandoff: assertLegacyHandoff,
+        }),
+      ).resolves.toMatchObject({ channel: "a2a", messageId: "task-42" });
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(assertLegacyHandoff).toHaveBeenCalledOnce();
     } finally {
       fetchSpy.mockRestore();
     }

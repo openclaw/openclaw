@@ -17,6 +17,7 @@ import {
   pollLocatorText,
   replaceGatewayClient,
   waitForCommittedChatRoute,
+  waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -38,6 +39,132 @@ function holdRecoveryDigest() {
 }
 
 suite.define(() => {
+  it.each(["cancelled", "failed", "unconfirmed"] as const)(
+    "keeps a deleted Incognito first prompt readable through %s settlement",
+    async (outcome) => {
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const sessionKey = "agent:cloud:cancelled-incognito-startup";
+        const message = "keep my interrupted first prompt";
+        const diagnostic = "Worker cleanup could not be confirmed";
+        const gateway = await installMockGateway(page, {
+          defaultAgentId: "cloud",
+          workspaceGit: true,
+          deferredMethods: [
+            "sessions.dispatch",
+            ...(outcome === "unconfirmed" ? ["sessions.send", "chat.history"] : []),
+          ],
+          methodResponses: {
+            "agents.list": createCloudAgentsListResponse(),
+            "environments.list": {
+              environments: [],
+              profiles: [{ id: "aws", providerId: "crabbox" }],
+            },
+            "worktrees.branches": {
+              branches: [{ kind: "local", name: "main" }],
+              defaultBranch: "main",
+              repositoryStatus: "git",
+            },
+            "sessions.create": { key: sessionKey, sessionId: "incognito-startup" },
+            "sessions.list": createdSessionListResult(sessionKey),
+            "sessions.describe": { session: { sessionId: "incognito-startup" } },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("environments.list");
+        await page.locator("#new-session-where-trigger").click();
+        await page
+          .locator("wa-popover.new-session-page__where-popover")
+          .getByRole("button", { name: "aws", exact: true })
+          .click();
+        await page.getByRole("switch", { name: "Incognito" }).click();
+        await page.locator(".new-session-page__message").fill(message);
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        await gateway.waitForRequest("sessions.dispatch");
+        await waitForCommittedChatRoute(page);
+        const route = page.url();
+        await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
+        if (outcome === "unconfirmed") {
+          await gateway.resolveDeferred("sessions.dispatch", {
+            placement: { state: "active", environmentId: "uncertain-worker" },
+          });
+          await gateway.waitForRequest("sessions.send");
+        }
+        await gateway.setSessionsListResponse({
+          ...createdSessionListResult(sessionKey),
+          sessions: [],
+          count: 0,
+        });
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey,
+          sessionId: "incognito-startup",
+          agentId: "cloud",
+          reason: "delete",
+        });
+        const retained = page.locator("openclaw-pending-session-create");
+        await pollLocatorText(retained).toContain(message);
+        const working = retained.locator(".chat-working-indicator");
+        await pollLocatorText(working).toContain(
+          outcome === "unconfirmed" ? "Sending message" : "Provisioning environment",
+        );
+        expect(await retained.textContent()).not.toContain("temporary session was cleaned up");
+        expect(page.url()).toBe(route);
+        expect(await retained.locator("textarea").count()).toBe(0);
+        if (outcome === "cancelled") {
+          await gateway.setMethodResponse("sessions.describe", { session: null });
+          await gateway.resolveDeferred("sessions.dispatch", {});
+          await pollLocatorText(retained).toContain("Your prompt is kept here");
+          await expect.poll(() => working.count()).toBe(0);
+          expect(await retained.getByRole("button").count()).toBe(0);
+          expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+          await captureUiProof(suite, page, "interrupted-incognito-prompt.png");
+        } else {
+          await gateway.rejectDeferred(
+            outcome === "unconfirmed" ? "sessions.send" : "sessions.dispatch",
+            {
+              code: outcome === "unconfirmed" ? "UNAVAILABLE" : "INVALID_REQUEST",
+              message: diagnostic,
+            },
+          );
+          await pollLocatorText(retained.getByRole("alert")).toContain(diagnostic);
+          await expect.poll(() => working.count()).toBe(0);
+          expect(await retained.textContent()).not.toContain("temporary session was cleaned up");
+          const action = retained.getByRole("button", {
+            name: outcome === "unconfirmed" ? "Check delivery" : "Retry",
+            exact: true,
+          });
+          await action.waitFor({ state: "visible" });
+          await captureUiProof(suite, page, `deleted-startup-${outcome}.png`);
+          if (outcome === "failed") {
+            await gateway.deferNext("sessions.dispatch");
+          }
+          await action.click();
+          if (outcome === "unconfirmed") {
+            await gateway.waitForRequest("chat.history");
+            await gateway.resolveDeferred("chat.history", { messages: [] });
+            await pollLocatorText(retained.getByRole("alert")).toContain(
+              "No matching user message",
+            );
+            expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+          } else {
+            await expect
+              .poll(async () => (await gateway.getRequests("sessions.dispatch")).length)
+              .toBe(2);
+            await pollLocatorText(working).toContain("Provisioning environment");
+            await gateway.rejectDeferred("sessions.dispatch", {
+              code: "INVALID_REQUEST",
+              message: diagnostic,
+            });
+            await pollLocatorText(retained.getByRole("alert")).toContain(diagnostic);
+            expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+          }
+        }
+        await pollLocatorText(retained).toContain(message);
+        expect(page.url()).toBe(route);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      });
+    },
+  );
+
   it.each([
     { historyFails: false, disconnect: false, replaceClient: false, coldScope: false },
     { historyFails: true, disconnect: false, replaceClient: false, coldScope: false },
@@ -47,7 +174,7 @@ suite.define(() => {
   ])(
     "keeps cloud startup visible through failure ($historyFails, disconnect: $disconnect, replacement: $replaceClient, cold scope: $coldScope)",
     async ({ historyFails, disconnect, replaceClient, coldScope }) => {
-      const context = await suite.browser.newContext({
+      const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
         permissions: ["clipboard-read", "clipboard-write"],
@@ -137,7 +264,7 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
         const failedGroup = page.locator(".chat-group.user", { hasText: message });
         await failedGroup.waitFor({ state: "visible" });
-        expect(await failedGroup.locator(".chat-send-status").textContent()).toContain("Not sent");
+        await pollLocatorText(failedGroup.locator(".chat-send-status")).toContain("Not sent");
         await expectPastedPngImage(failedGroup.locator("img.chat-message-image"));
         if (disconnect) {
           await gateway.setOnline(false);
@@ -162,7 +289,8 @@ suite.define(() => {
           const composerDisabled = await page
             .locator(".agent-chat__composer-combobox textarea")
             .isDisabled();
-          await pane.getByRole("status", { name: "Loading chat", exact: true }).waitFor();
+          await failedGroup.waitFor({ state: "visible" });
+          await pollLocatorText(pane.locator(".chat-working-indicator")).toContain("Reconnecting");
           expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);
           await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
             "The initial message is unresolved.",
@@ -229,7 +357,7 @@ suite.define(() => {
           }
         }
         await failedGroup.waitFor({ state: "visible" });
-        expect(await failedGroup.locator(".chat-send-status").textContent()).toContain("Not sent");
+        await pollLocatorText(failedGroup.locator(".chat-send-status")).toContain("Not sent");
         await expectPastedPngImage(failedGroup.locator("img.chat-message-image"));
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(disconnect ? 1 : 0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
@@ -261,14 +389,14 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         }
       } finally {
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     },
   );
   it.each(["none", "accepted", "invalid"] as const)(
     "resumes an unrelated offline queue after recovery releases it (%s)",
     async (recoveryKind) => {
-      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const context = await suite.newBrowserContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
       const sessionKey = "agent:main:release-recovery";
       const message = "original accepted turn";
@@ -298,6 +426,7 @@ suite.define(() => {
         const pane = page.locator(".chat-pane-cache__pane--active");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isDisabled()).toBe(false);
+        await waitForGatewayRecoveryScope(page);
         const owner = await page.evaluate(() => {
           const app = document.querySelector("openclaw-app") as HTMLElement & {
             runtime: { context: ApplicationContext };
@@ -407,7 +536,7 @@ suite.define(() => {
         }
       } finally {
         runtime?.release();
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     },
   );

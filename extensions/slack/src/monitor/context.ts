@@ -1,4 +1,3 @@
-// Slack plugin module implements context behavior.
 import type { App } from "@slack/bolt";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
@@ -6,11 +5,12 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
+  SlackSlashCommandConfig,
   SessionScope,
   DmPolicy,
+  GroupPolicy,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { logVerbose, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -25,9 +25,8 @@ import type { SlackMessageEvent } from "../types.js";
 import { createSlackAgentViewState } from "./agent-view-state.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 import { createSlackAssistantThreadContextStore } from "./assistant-thread-context.js";
-import { resolveSlackChannelConfig } from "./channel-config.js";
+import { resolveSlackChannelConfig, type SlackChannelConfigEntries } from "./channel-config.js";
 import { normalizeSlackChannelType } from "./channel-type.js";
-import type { SlackMonitorContext, SlackChannelInfo } from "./context-types.js";
 import type { SlackIdentityHealth, SlackInstallationIdentity } from "./enterprise-install.js";
 import type { SlackEventScope } from "./event-scope.js";
 import { readLruMapEntry, writeLruMapEntry } from "./lru-map-cache.js";
@@ -41,7 +40,6 @@ import {
 } from "./suggested-prompts.js";
 import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
 
-export type { SlackMonitorContext } from "./context-types.js";
 export { buildSlackAssistantThreadMetadata } from "./assistant-thread-context.js";
 export type { SlackAssistantThreadContext } from "./assistant-thread-context.js";
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
@@ -51,6 +49,41 @@ type SlackChannelCacheEntry = {
   info: SlackChannelInfo;
   metadataLoaded: boolean;
 };
+
+type SlackChannelInfo = {
+  name?: string;
+  type?: SlackMessageEvent["channel_type"];
+  topic?: string;
+  purpose?: string;
+};
+
+type SlackChannelPolicyContext = {
+  accountId: string;
+  dmEnabled: boolean;
+  groupDmEnabled: boolean;
+  groupDmChannels: string[];
+  installationIdentity: SlackInstallationIdentity;
+  channelsConfig?: SlackChannelConfigEntries;
+  channelsConfigKeys: string[];
+  defaultRequireMention: boolean;
+  allowNameMatching: boolean;
+  groupPolicy: GroupPolicy;
+};
+
+type SlackSessionStatusParams = {
+  channelId: string;
+  threadTs?: string;
+  status: "processing" | "active" | "suspended";
+  title?: string;
+  eventScope?: SlackEventScope;
+};
+
+type SlackSessionTitleParams = Omit<SlackSessionStatusParams, "status"> & {
+  threadTs: string;
+  title: string;
+};
+
+type SlackUserInfo = { name?: string; imageUrl?: string; error?: unknown };
 
 const SLACK_CHANNEL_CACHE_MAX_ENTRIES = 1024;
 const SLACK_USER_CACHE_MAX_ENTRIES = 2048;
@@ -63,7 +96,7 @@ const SLACK_AVATAR_SSRF_POLICY = {
 const SLACK_CHANNEL_DENIAL_WARNING_TTL_MS = 5 * 60_000;
 const SLACK_CHANNEL_DENIAL_WARNING_MAX_ENTRIES = 1024;
 
-export function createSlackMonitorContext(params: {
+export type CreateSlackMonitorContextParams = {
   cfg: OpenClawConfig;
   accountId: string;
   botToken: string;
@@ -91,20 +124,22 @@ export function createSlackMonitorContext(params: {
   groupDmEnabled: boolean;
   groupDmChannels: Array<string | number> | undefined;
   defaultRequireMention?: boolean;
-  channelsConfig?: SlackMonitorContext["channelsConfig"];
-  groupPolicy: SlackMonitorContext["groupPolicy"];
+  channelsConfig?: SlackChannelConfigEntries;
+  groupPolicy: GroupPolicy;
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
-  replyToMode: SlackMonitorContext["replyToMode"];
-  threadHistoryScope: SlackMonitorContext["threadHistoryScope"];
-  threadInheritParent: SlackMonitorContext["threadInheritParent"];
-  slashCommand: SlackMonitorContext["slashCommand"];
+  replyToMode: "off" | "first" | "all" | "batched";
+  threadHistoryScope: "thread" | "channel";
+  threadInheritParent: boolean;
+  slashCommand: Required<SlackSlashCommandConfig>;
   textLimit: number;
   typingReaction: string;
   mediaMaxBytes: number;
-}): SlackMonitorContext {
-  const channelHistories = new Map<string, HistoryEntry[]>();
+};
+
+function createSlackMonitorContextFields(params: CreateSlackMonitorContextParams) {
+  let identity = { teamId: params.teamId, apiAppId: params.apiAppId };
   const logger = getChildLogger({ module: "slack-auto-reply" });
   const channelCache = new Map<string, SlackChannelCacheEntry>();
   const userCache = new Map<string, { name?: string; imageUrl?: string }>();
@@ -120,8 +155,8 @@ export function createSlackMonitorContext(params: {
   });
   const agentViewState = createSlackAgentViewState({
     accountId: params.accountId,
-    getTeamId: () => ctx.teamId,
-    getApiAppId: () => ctx.apiAppId,
+    getTeamId: () => identity.teamId,
+    getApiAppId: () => identity.apiAppId,
     warn: (action, error) =>
       logger.warn({ error: formatSlackError(error) }, `Slack Agent View state failed to ${action}`),
   });
@@ -179,7 +214,7 @@ export function createSlackMonitorContext(params: {
   const resolveSlackSystemEventRoute = createSlackSystemEventRouteResolver({
     cfg: params.cfg,
     accountId: params.accountId,
-    getTeamId: () => ctx.teamId,
+    getTeamId: () => identity.teamId,
     mainKey: params.mainKey,
     threadInheritParent: params.threadInheritParent,
     recallSlackChannelType,
@@ -223,7 +258,10 @@ export function createSlackMonitorContext(params: {
     }
   };
 
-  const resolveUserName = async (userId: string, eventScope?: SlackEventScope) => {
+  const resolveUserName = async (
+    userId: string,
+    eventScope?: SlackEventScope,
+  ): Promise<SlackUserInfo> => {
     const cacheKey = scopedKey(userId, eventScope);
     const cached = readLruMapEntry(userCache, cacheKey);
     if (cached) {
@@ -288,7 +326,7 @@ export function createSlackMonitorContext(params: {
   };
 
   const sessionTitles = new Map<string, string>();
-  const recordSlackSessionTitle: SlackMonitorContext["recordSlackSessionTitle"] = (p) => {
+  const recordSlackSessionTitle = (p: SlackSessionTitleParams) => {
     writeLruMapEntry(
       sessionTitles,
       scopedKey(`${p.channelId}:${p.threadTs}`, p.eventScope),
@@ -296,7 +334,7 @@ export function createSlackMonitorContext(params: {
       1024,
     );
   };
-  const updateSessionStatus: SlackMonitorContext["setSlackSessionStatus"] = async (p) => {
+  const updateSessionStatus = async (p: SlackSessionStatusParams) => {
     const key = scopedKey(`${p.channelId}:${p.threadTs}`, p.eventScope);
     const previousTitle = readLruMapEntry(sessionTitles, key);
     const client = p.eventScope?.client ?? params.app.client;
@@ -307,12 +345,12 @@ export function createSlackMonitorContext(params: {
       runtime: params.runtime,
     });
     if (!updated.ok || p.status !== "processing" || !p.threadTs || p.title === undefined) {
-      return;
+      return updated.ok;
     }
     const title = truncateUtf16Safe(p.title, 200);
     // A user rename received while the status request was in flight wins.
     if (readLruMapEntry(sessionTitles, key) !== previousTitle) {
-      return;
+      return true;
     }
     // setStatus only names newly created sessions. Rename existing sessions once
     // per display-name change; inbound user renames update this same cache.
@@ -331,6 +369,7 @@ export function createSlackMonitorContext(params: {
         recordSlackSessionTitle({ ...p, threadTs: p.threadTs, title });
       }
     }
+    return true;
   };
 
   const setSlackSuggestedPrompts = (input: SlackSuggestedPromptsInput) =>
@@ -341,7 +380,7 @@ export function createSlackMonitorContext(params: {
     });
 
   function isChannelAllowed(
-    this: SlackMonitorContext,
+    this: SlackChannelPolicyContext,
     p: {
       teamId?: string;
       channelId?: string;
@@ -459,23 +498,21 @@ export function createSlackMonitorContext(params: {
           ? raw.team.id
           : "";
 
-    if (ctx.apiAppId && incomingApiAppId && incomingApiAppId !== ctx.apiAppId) {
+    if (identity.apiAppId && incomingApiAppId && incomingApiAppId !== identity.apiAppId) {
       logVerbose(
-        `slack: drop event with api_app_id=${incomingApiAppId} (expected ${ctx.apiAppId})`,
+        `slack: drop event with api_app_id=${incomingApiAppId} (expected ${identity.apiAppId})`,
       );
       return true;
     }
-    if (ctx.teamId && incomingTeamId && incomingTeamId !== ctx.teamId) {
-      logVerbose(`slack: drop event with team_id=${incomingTeamId} (expected ${ctx.teamId})`);
+    if (identity.teamId && incomingTeamId && incomingTeamId !== identity.teamId) {
+      logVerbose(`slack: drop event with team_id=${incomingTeamId} (expected ${identity.teamId})`);
       return true;
     }
     return false;
   };
 
   const channelRuntime = params.channelRuntime as PluginRuntime["channel"] | undefined;
-  const ctx: SlackMonitorContext = {
-    readRuntimeContext: () => readPolicy(),
-    isRuntimePolicyCurrent: () => false,
+  const fields = {
     cfg: params.cfg,
     accountId: params.accountId,
     botToken: params.botToken,
@@ -495,7 +532,6 @@ export function createSlackMonitorContext(params: {
     },
     historyLimit: params.historyLimit,
     dmHistoryLimit: Math.max(0, params.dmHistoryLimit ?? 0),
-    channelHistories,
     sessionScope: params.sessionScope,
     mainKey: params.mainKey,
     dmEnabled: params.dmEnabled,
@@ -537,6 +573,34 @@ export function createSlackMonitorContext(params: {
     recordSlackManagedViewThread: agentViewState.recordManagedThread,
     isSlackManagedViewThread: agentViewState.isManagedThread,
   };
-  const readPolicy = createSlackRuntimeContextReader(ctx, params.lookupToken ?? params.botToken);
+  return {
+    fields,
+    bindIdentity(next: { teamId: string; apiAppId: string }) {
+      identity = next;
+    },
+  };
+}
+
+type SlackMonitorContextFields = ReturnType<typeof createSlackMonitorContextFields>["fields"];
+
+export type SlackMonitorContext = SlackMonitorContextFields & {
+  readRuntimeContext: () => Promise<SlackMonitorContext>;
+  isRuntimePolicyCurrent: () => boolean;
+};
+
+export function createSlackMonitorContext(
+  params: CreateSlackMonitorContextParams,
+): SlackMonitorContext {
+  const built = createSlackMonitorContextFields(params);
+  const ctx: SlackMonitorContext = {
+    ...built.fields,
+    readRuntimeContext: async () => ctx,
+    isRuntimePolicyCurrent: () => false,
+  };
+  built.bindIdentity(ctx);
+  ctx.readRuntimeContext = createSlackRuntimeContextReader(
+    ctx,
+    params.lookupToken ?? params.botToken,
+  );
   return ctx;
 }

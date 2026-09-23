@@ -1,21 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
+import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   resolveUsableAgentCredentialModes,
   type AgentCredentialMap,
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { resolvePublishedModelCatalogOwner } from "../../agents/prepared-model-catalog-owner.js";
 import type { GetPublishedPreparedModelCatalogOwnerParams } from "../../agents/prepared-model-catalog.js";
 import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import type { ChatMetadataRuntimeDeps } from "./chat-metadata-facts.js";
 import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { ChatMetadataProjectionFacts } from "./chat-metadata-session-projection.js";
 
 export function connectChatMetadataAccount(profileId: string): string {
   return connectUserModelAccount({
@@ -135,11 +139,11 @@ export function createChatMetadataOwner(
       routeVariants: api ? [model] : [],
     },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
-    createStores: () => ({
-      authStorage: { getAll: () => credentials } as never,
-      modelRegistry: {} as never,
-    }),
+    createStores() {
+      throw new Error("Chat metadata must not create executable model stores");
+    },
   };
   setPreparedModelRuntimeAuthStore(owner, authStore);
   return owner;
@@ -171,31 +175,17 @@ export function createChatMetadataHarness(
   const getAuthStoreRevision = vi.fn(() => authStoreRevision);
   const getSkillsVersion = vi.fn(() => skillsVersion);
   const getPluginRegistryVersion = vi.fn(() => pluginRegistryVersion);
-  const buildCommands = vi.fn(async () => ({
-    commands: [{ name: `command-${skillsVersion}-${pluginRegistryVersion}` }],
-  }));
-  const buildProjection = vi.fn(
-    async ({
-      facts,
-    }: {
-      facts: {
-        authStore: AuthProfileStore;
-        modelCatalog: ModelCatalogSnapshot;
-        owner: PreparedModelRuntimeSnapshot;
-      };
-    }) => {
-      const modelCatalog = facts.modelCatalog;
-      return {
-        modelCatalog: modelCatalog.entries,
-        models: modelCatalog.entries,
-      };
-    },
+  const buildCommands = vi.fn(
+    async (_params: Parameters<ChatMetadataRuntimeDeps["buildCommands"]>[0]) => ({
+      commands: [{ name: `command-${skillsVersion}-${pluginRegistryVersion}` }],
+    }),
   );
+  const buildProjection = vi.fn(async ({ facts }: { facts: ChatMetadataProjectionFacts }) => ({
+    modelCatalog: facts.modelCatalog.entries,
+    models: facts.modelCatalog.entries,
+  }));
   const readProjection = vi.fn(
-    (projection: {
-      modelCatalog: ModelCatalogEntry[];
-      models?: import("../../../packages/gateway-protocol/src/index.js").ModelChoice[];
-    }) => projection,
+    (projection: { modelCatalog: ModelCatalogEntry[]; models?: ModelChoice[] }) => projection,
   );
   const context = {
     getRuntimeConfig: () => config,
@@ -204,12 +194,14 @@ export function createChatMetadataHarness(
         params?.readOnly === false && owner.loadFullModelCatalog
           ? await owner.loadFullModelCatalog()
           : owner.modelCatalog;
+      const resolved = resolvePublishedModelCatalogOwner(owner);
       return {
         ...modelCatalog,
-        agentId: owner.agentId,
-        agentDir: owner.agentDir,
-        workspaceDir: owner.workspaceDir,
-        config: owner.config,
+        agentId: resolved.agentId,
+        agentDir: resolved.agentDir,
+        workspaceDir: resolved.workspaceDir,
+        config: resolved.config,
+        catalogComplete: isPreparedModelCatalogFull(modelCatalog),
       };
     },
     logGateway: {
@@ -218,7 +210,7 @@ export function createChatMetadataHarness(
       warn: vi.fn(),
       error: vi.fn(),
     },
-  } as unknown as GatewayRequestContext;
+  };
   const runtime = createGatewayChatMetadataRuntime({
     getConfig: () => config,
     getContext: () => context,

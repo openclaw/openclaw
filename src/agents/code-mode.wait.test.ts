@@ -11,7 +11,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
-import * as worker from "./code-mode-worker.js";
+import * as worker from "./code-mode-executor.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -40,9 +40,9 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("marks yield suspensions and resumes the snapshot with wait", async () => {
@@ -106,31 +106,34 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       const requested = createDeferred();
       const decision = createDeferred();
       const resumed = createDeferred();
-      const runWorker = worker.runCodeModeWorker;
+      const runWorker = worker.runCodeModeExecutor;
       const continuationBudgets: number[] = [];
       let restoreCharged = false;
       const workerSpy = vi
-        .spyOn(worker, "runCodeModeWorker")
+        .spyOn(worker, "runCodeModeExecutor")
         .mockImplementation(async (...args) => {
-          const inlineHost = args[4];
+          const inlineHost = args[1].inlineHost;
           if (!inlineHost) {
             return await runWorker(...args);
           }
           const isResume = isRecord(args[0]) && args[0].kind === "resume";
-          return await runWorker(args[0], args[1], args[2], args[3], {
-            ...inlineHost,
-            onBoundary: async (...boundaryArgs) => {
-              if (mode === "yield" && isResume && !restoreCharged) {
-                // Charge active restore/guest time before entering the blocked host wait.
-                restoreCharged = true;
-                await vi.advanceTimersByTimeAsync(100);
-                resumed.resolve();
-              }
-              const command = await inlineHost.onBoundary(...boundaryArgs);
-              if (command.kind === "continue") {
-                continuationBudgets.push(command.timeoutMs);
-              }
-              return command;
+          return await runWorker(args[0], {
+            ...args[1],
+            inlineHost: {
+              ...inlineHost,
+              onBoundary: async (...boundaryArgs) => {
+                if (mode === "yield" && isResume && !restoreCharged) {
+                  // Charge active restore/guest time before entering the blocked host wait.
+                  restoreCharged = true;
+                  await vi.advanceTimersByTimeAsync(100);
+                  resumed.resolve();
+                }
+                const command = await inlineHost.onBoundary(...boundaryArgs);
+                if (command.kind === "continue") {
+                  continuationBudgets.push(command.timeoutMs);
+                }
+                return command;
+              },
             },
           });
         });
@@ -578,6 +581,71 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(testing.activeRuns.size).toBe(2);
     expect(new Set([...testing.activeRuns.values()].map((state) => state.replayId)).size).toBe(2);
   });
+
+  it.each(["complete", "repark"] as const)(
+    "keeps an admitted wait alive past snapshot idle expiry until it can %s",
+    async (outcome) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const { ctx } = createCodeModeHarness();
+      const timeoutMs = 10_000;
+      const config = {
+        tools: { codeMode: { enabled: true, timeoutMs, snapshotTtlSeconds: 1 } },
+      };
+      const tools = createCodeModeTools({ ...ctx, config, runtimeConfig: config });
+      const started = createDeferred<AbortSignal | undefined>();
+      const completion = createDeferred();
+      const target = pluginToolWithExecute(
+        "slow_action",
+        "Complete one action",
+        async (_toolCallId, _input, signal) => {
+          started.resolve(signal);
+          await completion.promise;
+          return jsonResult({ delivered: true });
+        },
+      );
+      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
+      const exec = expectDefined(tools[0], "exec");
+      const wait = expectDefined(tools[1], "wait");
+
+      try {
+        const execution = exec.execute("idle-expiry-exec", {
+          code: "return await slow_action({});",
+        });
+        const toolSignal = expectDefined(await started.promise, "nested tool cancellation signal");
+        // Exhaust only the host call budget; the real worker parks its unresolved tool.
+        await vi.advanceTimersByTimeAsync(timeoutMs);
+        const first = resultDetails(await execution);
+        expect(first.status).toBe("waiting");
+
+        await vi.advanceTimersByTimeAsync(500);
+        const waiting = wait.execute("idle-expiry-wait", { runId: first.runId });
+        await vi.advanceTimersByTimeAsync(outcome === "complete" ? 600 : timeoutMs);
+        expect(toolSignal.aborted).toBe(false);
+
+        if (outcome === "complete") {
+          completion.resolve();
+          expect(resultDetails(await waiting)).toMatchObject({
+            status: "completed",
+            value: { delivered: true },
+          });
+        } else {
+          const parked = resultDetails(await waiting);
+          expect(parked).toMatchObject({ status: "waiting", runId: first.runId });
+          await vi.advanceTimersByTimeAsync(999);
+          expect(toolSignal.aborted).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+          expect(toolSignal.aborted).toBe(true);
+          await expect(
+            wait.execute("idle-expiry-late-wait", { runId: parked.runId }),
+          ).rejects.toThrow("code mode run is unavailable or expired");
+        }
+        expect(target.execute).toHaveBeenCalledOnce();
+        expect(testing.activeRuns.size).toBe(0);
+      } finally {
+        completion.resolve();
+      }
+    },
+  );
 
   it.each(["exec", "wait"])(
     "preserves accepted output when %s snapshot expiry would exceed the Date range",

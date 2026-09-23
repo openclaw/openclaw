@@ -84,6 +84,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   stopReason?: "stop" | "aborted";
   abortMeta?: GatewayInjectedAbortMeta;
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
+  contextFreeCommand?: true;
   now?: number;
   config?: OpenClawConfig;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
@@ -135,6 +136,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
+    ...(params.contextFreeCommand === true
+      ? { excludeFromContext: true, __openclaw: { contextFreeCommand: true } }
+      : {}),
     ...(params.abortMeta
       ? {
           openclawAbort: {

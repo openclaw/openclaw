@@ -7,12 +7,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import "../../components/agent-select-registration.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/modal-dialog.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
+import "../../components/modal-dialog.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import {
   renderSettingsEmpty,
@@ -23,7 +22,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
-import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
@@ -41,6 +40,7 @@ import { renderSkillDiscovery } from "./discovery-view.ts";
 import { renderSkillStateStatus, verdictForSkill } from "./skill-status.ts";
 import type { SkillDetailTab, SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
+registerSkillsBrowserEnglish();
 registerSkillLibraryEnglish();
 
 function safeExternalHref(raw?: string): string | null {
@@ -192,7 +192,11 @@ export function renderSkills(props: SkillsProps) {
                         ? t("skillsPage.disconnected")
                         : t("skillsPage.empty"),
                     )
-                  : groups.map((group) => renderSkillGroup(group, props))
+                  : repeat(
+                      groups,
+                      (group) => group.id,
+                      (group) => renderSkillGroup(group, props),
+                    )
             }
           `,
       { wide: true, carapace: props.surface === "discovery" },
@@ -239,7 +243,6 @@ function renderSkillsToolbar(
       })),
       onChange: (value) => props.onStatusFilterChange(value),
     })}
-    ${renderSkillsAgentSelector(props)}
     <label class="plugins-field skills-toolbar__search">
       <span>${t("common.search")}</span>
       <input
@@ -263,45 +266,6 @@ function renderSkillsToolbar(
       ${props.loading ? t("common.loading") : t("common.refresh")}
     </button>
   </div>`;
-}
-
-function renderSkillsAgentSelector(props: SkillsProps) {
-  const agents = listSelectableAgents(props.agentsList?.agents ?? []);
-  const selectedAgentId = agents.some((agent) => agent.id === props.selectedAgentId)
-    ? (props.selectedAgentId ?? "")
-    : agents.some((agent) => agent.id === props.agentsList?.defaultId)
-      ? (props.agentsList?.defaultId ?? "")
-      : (agents[0]?.id ?? "");
-  return html`
-    ${
-      agents.length > 1
-        ? html`
-            <div class="plugins-field skills-toolbar__agent">
-              <span>${t("usage.filters.agent")}</span>
-              <openclaw-agent-select
-                class="agent-select--settings"
-                name="skills-agent"
-                .options=${agents.map((agent) => {
-                  const label = normalizeAgentLabel(agent);
-                  return {
-                    value: agent.id,
-                    label:
-                      agent.id === props.agentsList?.defaultId
-                        ? t("skillsPage.defaultAgent", { name: label })
-                        : label,
-                    agent,
-                  };
-                })}
-                .value=${selectedAgentId}
-                .accessibleLabel=${t("usage.filters.agent")}
-                .disabled=${skillControlsLocked(props) || !props.connected}
-                .onSelect=${props.onAgentChange}
-              ></openclaw-agent-select>
-            </div>
-          `
-        : nothing
-    }
-  `;
 }
 
 function renderClawHubDetailDialog(props: SkillsProps) {
@@ -347,7 +311,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
         <div class="skill-reader-dialog__body clawhub-skill-detail__body">
           ${
             props.clawhubDetailLoading
-              ? html`<div class="muted">${t("common.loading")}</div>`
+              ? html`<div class="muted" role="status">${t("common.loading")}</div>`
               : props.clawhubDetailError
                 ? html`<div class="callout danger skill-reader-dialog__error" role="alert">
                     <span aria-hidden="true">${icons.alertTriangle}</span>
@@ -422,7 +386,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                         </button>
                       </div>
                     `
-                  : html`<div class="muted">${t("skillsPage.notFound")}</div>`
+                  : html`<div class="muted" role="status">${t("skillsPage.notFound")}</div>`
           }
         </div>
       </div>
@@ -593,7 +557,10 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
 
           ${
             message
-              ? html`<div class="callout ${message.kind === "error" ? "danger" : "success"}">
+              ? html`<div
+                  class="callout ${message.kind === "error" ? "danger" : "success"}"
+                  role=${message.kind === "error" ? "alert" : "status"}
+                >
                   ${formatUiExternalText(message.message)}
                 </div>`
               : nothing
@@ -602,7 +569,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             skill.primaryEnv
               ? html`
                   <div style="display: grid; gap: 8px;">
-                    <div class="field">
+                    <label class="field">
                       <span
                         >${t("skillsPage.apiKey")}
                         <span class="muted" style="font-weight: normal; font-size: 0.88em;"
@@ -617,7 +584,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                         @input=${(e: Event) =>
                           props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
                       />
-                    </div>
+                    </label>
                     ${(() => {
                       const href = safeExternalHref(skill.homepage);
                       return href
@@ -729,9 +696,9 @@ function renderInstalledSkillCard(skill: SkillStatusEntry, props: SkillsProps) {
   if (content === undefined) {
     const error = props.skillCardErrors[skill.skillKey];
     if (error) {
-      return html`<div class="callout danger">${error}</div>`;
+      return html`<div class="callout danger" role="alert">${error}</div>`;
     }
-    return html`<div class="muted" style="font-size: 13px;">
+    return html`<div class="muted" role="status" style="font-size: 13px;">
       ${
         props.skillCardLoadingKey === skill.skillKey
           ? t("skillsPage.loadingSkillCard")
@@ -749,4 +716,3 @@ function renderInstalledSkillCard(skill: SkillStatusEntry, props: SkillsProps) {
     </article>
   `;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

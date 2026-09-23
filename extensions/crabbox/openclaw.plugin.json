@@ -20,8 +20,27 @@
   },
   "commandAliases": [{ "name": "crabbox", "kind": "cli" }],
   "contracts": {
-    "workerProviders": ["crabbox"]
+    "workerProviders": ["crabbox"],
+    "tools": ["crabbox"]
   },
+  "skills": ["./skills"],
+  "toolMetadata": {
+    "crabbox": { "profiles": ["coding"] }
+  },
+  "configGroups": [
+    {
+      "id": "sandbox",
+      "title": "Sandbox",
+      "order": 10,
+      "properties": ["sandbox"]
+    },
+    {
+      "id": "warm-images",
+      "title": "Warm images",
+      "order": 20,
+      "properties": ["warmImages"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

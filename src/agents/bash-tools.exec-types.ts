@@ -66,6 +66,8 @@ export type ExecToolDefaults = {
   processToolAvailabilityRef?: { value?: boolean };
   scopeKey?: string;
   sessionKey?: string;
+  /** Executing session when tool policy is borrowed from a different session. */
+  runSessionKey?: string;
   /** Stable agent run that owns any approval created by this tool. */
   runId?: string;
   /** Exact admitted execution instance that owns secret-egress proxy access. */

@@ -7,11 +7,12 @@ import type {
 } from "openclaw/plugin-sdk/embedding-providers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterAll, afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
@@ -53,11 +54,13 @@ type ProviderCall = {
 };
 
 type ProviderControls = {
+  beforeEmbedBatch: (() => Promise<void>) | null;
   beforeEmbedQuery: ((options?: EmbeddingProviderCallOptions) => Promise<void>) | null;
   embedQueryCalls: number;
   embeddedQueryTexts: string[];
   embedBatchCalls: number;
   embeddedBatchTexts: string[];
+  embedBatchPermanentFailure: Error | null;
   embedBatchInputCalls: number;
   embeddedBatchInputs: EmbeddingInput[][];
   providerRuntimeBatchCalls: string[][];
@@ -116,11 +119,13 @@ export type ManagerIndexFixture = {
 };
 
 const providerState = vi.hoisted(() => ({
+  beforeEmbedBatch: null as ProviderControls["beforeEmbedBatch"],
   beforeEmbedQuery: null as ProviderControls["beforeEmbedQuery"],
   embedQueryCalls: 0,
   embeddedQueryTexts: [] as string[],
   embedBatchCalls: 0,
   embeddedBatchTexts: [] as string[],
+  embedBatchPermanentFailure: null as Error | null,
   embedBatchInputCalls: 0,
   embeddedBatchInputs: [] as EmbeddingInput[][],
   providerRuntimeBatchCalls: [] as string[][],
@@ -271,6 +276,7 @@ vi.mock("./embeddings.js", async (importOriginal) => {
             return embedText(text);
           },
           embedBatch: async (inputs: EmbeddingInput[]) => {
+            await providerState.beforeEmbedBatch?.();
             if (providerId === "gemini" || providerId === "fallback-provider") {
               const structuredInputs = inputs.filter(
                 (input): input is Exclude<EmbeddingInput, string> =>
@@ -295,6 +301,9 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                   return embedText(input.text);
                 });
               }
+            }
+            if (providerState.embedBatchPermanentFailure !== null) {
+              throw providerState.embedBatchPermanentFailure;
             }
             const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
             providerState.embedBatchCalls += 1;
@@ -383,6 +392,7 @@ export function createManagerIndexFixture(deps: {
   let workspace = "";
   let memory = "";
   let state: OpenClawTestState;
+  let workerState: OpenClawTestState | undefined;
   const managers = new Set<MemoryIndexManager>();
 
   const resetManager = (manager: MemoryIndexManager): void => {
@@ -517,6 +527,20 @@ export function createManagerIndexFixture(deps: {
     return manager.status().fts?.available ? manager : null;
   };
 
+  beforeAll(async () => {
+    workerState = await createOpenClawTestState({
+      prefix: "openclaw-mem-worker-fixture-",
+      layout: "state-only",
+      applyEnv: false,
+    });
+    // A file-owned store keeps shared SQLite workers available across complete case cleanup.
+    await createPluginStateKeyedStoreForTests<boolean>("memory-core", {
+      namespace: "index-fixture-worker",
+      maxEntries: 1,
+      env: workerState.env,
+    }).register("ready", true);
+  });
+
   afterEach(async () => {
     vi.useRealTimers();
     await Promise.all(Array.from(managers).map((manager) => manager.close()));
@@ -527,14 +551,20 @@ export function createManagerIndexFixture(deps: {
     managers.clear();
   });
 
+  afterAll(async () => {
+    await workerState?.cleanup();
+  });
+
   beforeEach(async () => {
     vi.useRealTimers();
     clearRegistry();
     providerState.beforeEmbedQuery = null;
+    providerState.beforeEmbedBatch = null;
     providerState.embedQueryCalls = 0;
     providerState.embeddedQueryTexts = [];
     providerState.embedBatchCalls = 0;
     providerState.embeddedBatchTexts = [];
+    providerState.embedBatchPermanentFailure = null;
     providerState.embedBatchInputCalls = 0;
     providerState.embeddedBatchInputs = [];
     providerState.providerRuntimeBatchCalls = [];

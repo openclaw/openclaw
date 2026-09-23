@@ -34,6 +34,7 @@ type InitiateContext = Pick<
   | "config"
   | "coreSession"
   | "storePath"
+  | "stateRuntime"
   | "webhookUrl"
   | "streamSessionIssuer"
   | "mutationQueue"
@@ -48,6 +49,7 @@ type SpeakContext = Pick<
   | "provider"
   | "config"
   | "storePath"
+  | "stateRuntime"
   | "transcriptWaiters"
   | "maxDurationTimers"
   | "endCallOperations"
@@ -63,6 +65,7 @@ type ConversationContext = Pick<
   | "provider"
   | "config"
   | "storePath"
+  | "stateRuntime"
   | "activeTurnCalls"
   | "transcriptWaiters"
   | "maxDurationTimers"
@@ -80,6 +83,7 @@ type EndCallContext = Pick<
   | "providerCallIdMap"
   | "provider"
   | "storePath"
+  | "stateRuntime"
   | "transcriptWaiters"
   | "maxDurationTimers"
   | "endCallOperations"
@@ -224,7 +228,7 @@ export async function initiateCall(
   ctx.pendingCallAdmissions.add(callId);
   try {
     await ctx.mutationQueue.enqueue("state", async () => {
-      await persistCallRecord(ctx.storePath, callRecord);
+      await persistCallRecord(ctx.storePath, callRecord, ctx.stateRuntime);
       ctx.activeCalls.set(callId, callRecord);
       ctx.pendingCallAdmissions.delete(callId);
     });
@@ -280,7 +284,7 @@ export async function initiateCall(
       }
       const next = copyCallRecord(callRecord);
       next.providerCallId = result.providerCallId;
-      await persistCallRecord(ctx.storePath, next);
+      await persistCallRecord(ctx.storePath, next, ctx.stateRuntime);
       Object.assign(callRecord, next);
       ctx.providerCallIdMap.set(result.providerCallId, callId);
     });

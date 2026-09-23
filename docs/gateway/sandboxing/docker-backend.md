@@ -42,6 +42,21 @@ OpenClaw also creates Docker sandbox containers with an init process and
 mounted read-only at `/agent`; write operations to the agent workspace are
 rejected, while the configured tmpfs paths remain writable.
 
+File tools require a host-backed bind mount. A tmpfs or image volume can hide
+files below a workspace bind; file tools report those paths as container-only
+instead of reading the hidden host files. Use `exec` to access that storage.
+A deeper explicit bind restores file-tool access when it is visible in the
+container. Mount destinations reached through symlinks, or stacked mounts with
+different backing storage, also require `exec` when their host projection cannot
+be established from the container's mount table.
+
+For recently used containers, changes to bind sources or access modes, or to
+tmpfs destinations or read-only modes below a bind, require scoped recreation.
+Other tmpfs options, such as size, mode, and uid, keep the normal configuration
+change behavior: a hot container stays running with a recreation notice, while
+a stopped or expired container is replaced. Recreate explicitly to apply those
+options immediately.
+
 To expose host GPUs, set `agents.defaults.sandbox.docker.gpus` (or the per-agent override) to a value like `"all"` or `"device=GPU-uuid"`. This is passed to the selected container engine's Docker-compatible `--gpus` flag and requires compatible host GPU setup. Podman requires version 5.0 or newer for this option.
 
 <Warning>

@@ -1,8 +1,17 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
+import {
+  AsyncWorkScope,
+  getAsyncWorkSignal,
+  trackAsyncWork,
+} from "../../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -69,6 +78,26 @@ function createHarness() {
   };
 }
 
+async function bindCompletionToLaunch(
+  parentKind: "absent" | "released",
+  launch: AsyncWorkScope,
+  complete: () => Promise<void>,
+) {
+  const bind = () => launch.run(() => AsyncLocalStorage.bind(complete));
+  if (parentKind === "absent") {
+    return bind();
+  }
+  const parent = tryBeginGatewayRootWorkAdmission("collector-launch");
+  if (!parent) {
+    throw new Error("Expected an admitted collector launch");
+  }
+  try {
+    return await parent.run(async () => bind());
+  } finally {
+    parent.release();
+  }
+}
+
 describe("subagent completion rejection ownership", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
@@ -79,6 +108,118 @@ describe("subagent completion rejection ownership", () => {
     vi.useRealTimers();
     resetGatewayWorkAdmission();
   });
+
+  it.each(["absent", "released"] as const)(
+    "captures a collector result after its launch scope closes with %s parent",
+    async (parentKind) => {
+      const h = createHarness();
+      const launch = new AsyncWorkScope();
+      const entered = createDeferredCore();
+      const finishCapture = createDeferredCore();
+      const finishCleanup = createDeferredCore();
+      const tails: Promise<void>[] = [];
+      let completionSignal: AbortSignal | undefined;
+      let settled = false;
+      let cleanupFinished = false;
+      h.completeSubagentRun.mockImplementation(async () => {
+        completionSignal = getAsyncWorkSignal();
+        tails.push(
+          trackAsyncWork(async () => {
+            await finishCleanup.promise;
+            cleanupFinished = true;
+          }),
+        );
+        entered.resolve();
+        await finishCapture.promise;
+        h.entry.completion = { required: false, resultText: "result-1", capturedAt: 2 };
+      });
+      const invoke = await bindCompletionToLaunch(parentKind, launch, () =>
+        h.runtime.completeSubagentRunWithRecovery(
+          { ...h.request, outcome: { status: "ok" }, reason: SUBAGENT_ENDED_REASON_COMPLETE },
+          "subagent-wait",
+        ),
+      );
+      await launch.drain();
+      const completion = invoke().then(
+        () => {
+          settled = true;
+          return { status: "fulfilled" as const };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { status: "rejected" as const, error };
+        },
+      );
+      try {
+        await Promise.race([entered.promise, completion]);
+        expect(h.completeSubagentRun).toHaveBeenCalledOnce();
+        expect(completionSignal).toBeDefined();
+        expect(completionSignal).not.toBe(launch.signal);
+        expect(completionSignal?.aborted).toBe(false);
+        expect(settled).toBe(false);
+        expect(h.entry.completion?.resultText).toBeUndefined();
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        finishCapture.resolve();
+        await expect(completion).resolves.toEqual({ status: "fulfilled" });
+        expect(h.entry.completion?.resultText).toBe("result-1");
+        expect(cleanupFinished).toBe(false);
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        finishCleanup.resolve();
+        await Promise.all(tails);
+        expect(h.scheduleSweep).not.toHaveBeenCalled();
+        expect(h.resumeRun).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      } finally {
+        finishCapture.resolve();
+        finishCleanup.resolve();
+        await completion;
+        await Promise.allSettled(tails);
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await launch.drain();
+      }
+    },
+  );
+
+  it.each(["current", "replacement", "generation"] as const)(
+    "defers retired-launch completion during restart and rechecks the %s owner",
+    async (change) => {
+      const h = createHarness();
+      const launch = new AsyncWorkScope();
+      h.completeSubagentRun.mockResolvedValue(undefined);
+      const invoke = await bindCompletionToLaunch("released", launch, () =>
+        h.runtime.completeSubagentRunWithRecovery(h.request, "subagent-wait"),
+      );
+      await launch.drain();
+      try {
+        markGatewayRestartDraining();
+        await invoke();
+        expect(h.completeSubagentRun).not.toHaveBeenCalled();
+        expect(h.retryTimers.size).toBe(1);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        expect(h.warn).toHaveBeenCalledWith("subagent completion deferred during gateway restart", {
+          source: "subagent-wait",
+          runId: h.entry.runId,
+        });
+        if (change === "replacement") {
+          h.runs.set(h.entry.runId, { ...h.entry });
+        } else if (change === "generation") {
+          h.entry.generation = 2;
+        }
+        resetGatewayWorkAdmission();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(h.completeSubagentRun).toHaveBeenCalledTimes(change === "current" ? 1 : 0);
+        expect(h.retryTimers.size).toBe(0);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        for (const timer of h.retryTimers) {
+          clearTimeout(timer);
+        }
+        h.retryTimers.clear();
+        resetGatewayWorkAdmission();
+        await launch.drain();
+      }
+    },
+  );
 
   it.each([
     { kind: "error", reason: SUBAGENT_ENDED_REASON_ERROR },

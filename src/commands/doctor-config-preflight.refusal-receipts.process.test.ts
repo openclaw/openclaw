@@ -1,12 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
+  createBuiltRuntime,
   createSourceRuntime,
   runIsolatedModuleScript,
 } from "./doctor-config-preflight.process.test-support.js";
+import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
@@ -19,7 +23,22 @@ describe("Doctor preflight refusal receipts", () => {
     fs.mkdirSync(path.join(stateDir, "tui"), { recursive: true });
     fs.writeFileSync(configPath, configRaw);
     fs.writeFileSync(path.join(stateDir, "tui", "last-session.json"), "not json\n");
-    const runtimeRoot = createSourceRuntime(root);
+    const entry = doctorConfigRuntimeEntrypoints.preflight;
+    const preparedPreflightUrl = resolveRuntimeWorkerUrl(entry);
+    const compiled = preparedPreflightUrl.pathname.endsWith(".js");
+    const runtimeRoot = compiled
+      ? createBuiltRuntime(root, fileURLToPath(new URL("../", preparedPreflightUrl)))
+      : createSourceRuntime(root);
+    const preflightUrl = resolveRuntimeWorkerUrl({
+      ...entry,
+      ...(compiled
+        ? { root: runtimeRoot }
+        : {
+            currentModuleUrl: pathToFileURL(
+              path.join(runtimeRoot, "src", "commands", "doctor-config-runtime.test-support.ts"),
+            ).href,
+          }),
+    }).href;
     const { stdout } = await runIsolatedModuleScript(
       {
         PATH: process.env.PATH,
@@ -31,7 +50,7 @@ describe("Doctor preflight refusal receipts", () => {
         NO_COLOR: "1",
       },
       `
-      import { runDoctorConfigPreflight } from "./src/commands/doctor-config-preflight.ts";
+      import { runDoctorConfigPreflight } from ${JSON.stringify(preflightUrl)};
       try {
         await runDoctorConfigPreflight({ doctorOnlyStateMigrations: true, migrateLegacyConfig: false });
         console.log("RECEIPTS:" + JSON.stringify({ completed: true }));
@@ -83,6 +102,11 @@ describe("Doctor preflight refusal receipts", () => {
       expect(receipt).toMatchObject({
         outcome: "refused",
         refusal: { code: "blocked-by-prior-refusal" },
+        originatingRefusal: {
+          stepId: "tui-last-session",
+          code: "step-refused",
+          message: receipts[blocker]?.refusal?.message,
+        },
       });
     }
     expect(new Set(receipts.map((receipt) => receipt.id)).size).toBe(receipts.length);

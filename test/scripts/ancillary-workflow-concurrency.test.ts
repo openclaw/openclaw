@@ -81,7 +81,9 @@ type Job = {
 type Workflow = {
   name: string;
   on: {
-    pull_request: { types: string[] };
+    pull_request?: { types: string[] };
+    pull_request_target?: { types: string[] };
+    issues?: { types: string[] };
     workflow_dispatch?: unknown;
     push?: { branches: string[] };
   };
@@ -90,13 +92,14 @@ type Workflow = {
 };
 type Github = {
   workflow: string;
-  event_name: "pull_request" | "workflow_dispatch" | "push";
+  event_name: "pull_request" | "pull_request_target" | "issues" | "workflow_dispatch" | "push";
   run_id: number;
   sha: string;
   ref: string;
   event: {
     action?: string;
     pull_request?: { number: number; draft: boolean; head: { sha: string } };
+    changes?: Partial<Record<"title" | "base" | "body", unknown>>;
   };
 };
 
@@ -136,8 +139,12 @@ function refEvent(
 }
 
 function subscribes(workflow: Workflow, github: Github): boolean {
-  if (github.event_name === "pull_request") {
-    return workflow.on.pull_request.types.includes(github.event.action!);
+  if (
+    github.event_name === "pull_request" ||
+    github.event_name === "pull_request_target" ||
+    github.event_name === "issues"
+  ) {
+    return workflow.on[github.event_name]?.types.includes(github.event.action!) ?? false;
   }
   if (github.event_name === "push") {
     return workflow.on.push?.branches.includes(github.ref.replace(/^refs\/heads\//u, "")) ?? false;
@@ -525,6 +532,115 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       expectDraftSkipped(converted);
     });
   }
+});
+
+describe("Labeler admission", () => {
+  const workflow = parse(readFileSync(".github/workflows/labeler.yml", "utf8")) as Workflow;
+  const bodyChange = { body: { from: "Previous description" } };
+
+  function event(
+    runId: number,
+    action: string,
+    changes?: Github["event"]["changes"],
+    draft = false,
+  ): Github {
+    const github = pr(workflow, runId, action, draft);
+    return {
+      ...github,
+      event_name: "pull_request_target",
+      ref: "refs/heads/main",
+      event: { ...github.event, changes },
+    };
+  }
+
+  it("preserves running labeling when a body-only edit skips its job", async () => {
+    const queue = new Admission();
+    const active = await queue.admit(workflow, event(100, "synchronize"));
+    const edited = await queue.admit(workflow, event(101, "edited", bodyChange));
+
+    expect(active.state).toBe("running");
+    expect(active.cancelRequested).toBe(false);
+    expect(edited.state).toBe("skipped");
+    expect(edited.group).not.toBe(active.group);
+    expect(edited.eligibility?.jobs.label).toBe(false);
+    await queue.release(active);
+    expect(active.state).toBe("completed");
+  });
+
+  it("preserves pending labeling when a body-only edit arrives during cancellation", async () => {
+    const queue = new Admission();
+    const old = await queue.admit(workflow, event(100, "synchronize"));
+    const pending = await queue.admit(workflow, event(101, "synchronize"));
+    expect(pending.state).toBe("pending");
+    expect(old.cancelRequested).toBe(true);
+
+    const edited = await queue.admit(workflow, event(102, "edited", bodyChange));
+    expect(pending.state).toBe("pending");
+    expect(edited.state).toBe("skipped");
+    await queue.release(old);
+    expect(old.state).toBe("cancelled");
+    expect(pending.state).toBe("running");
+    expect(pending.cancelRequested).toBe(false);
+  });
+
+  it.each([
+    { action: "opened", changes: undefined },
+    { action: "reopened", changes: undefined },
+    { action: "synchronize", changes: undefined },
+    { action: "edited", changes: { title: { from: "Old title" } } },
+    { action: "edited", changes: { base: { ref: { from: "old-base" } } } },
+    { action: "edited", changes: { ...bodyChange, title: { from: "Old title" } } },
+  ])("retains useful $action replacement for $changes", async ({ action, changes }) => {
+    const queue = new Admission();
+    const old = await queue.admit(workflow, event(100, "synchronize"));
+    const pending = await queue.admit(workflow, event(101, "synchronize"));
+    const latest = await queue.admit(workflow, event(102, action, changes));
+
+    expect([old.group, pending.group, latest.group]).toEqual(Array(3).fill("Labeler-123"));
+    expect(old.cancelRequested).toBe(true);
+    expect(pending.state).toBe("cancelled");
+    await queue.release(old);
+    expect(latest.state).toBe("running");
+    expect(latest.eligibility?.jobs.label).toBe(true);
+  });
+
+  it("keeps ignored edits unique without changing draft labeling", async () => {
+    const queue = new Admission();
+    const active = await queue.admit(workflow, event(100, "opened", undefined, true));
+    const body = await queue.admit(workflow, event(101, "edited", bodyChange));
+    const other = await queue.admit(workflow, event(102, "edited"));
+
+    expect(active.group).toBe("Labeler-123");
+    expect(active.state).toBe("running");
+    expect(active.cancelRequested).toBe(false);
+    expect([body.state, other.state]).toEqual(["skipped", "skipped"]);
+    expect(new Set([active.group, body.group, other.group]).size).toBe(3);
+  });
+
+  it.each(["workflow_dispatch", "issues"] as const)(
+    "retains the non-cancelling ref group for %s",
+    async (eventName) => {
+      const queue = new Admission();
+      const github: Github = {
+        ...refEvent(workflow, "workflow_dispatch", 200),
+        event_name: eventName,
+        event: { action: "edited" },
+      };
+      const active = await queue.admit(workflow, github);
+      const pending = await queue.admit(workflow, { ...github, run_id: 201 });
+      const latest = await queue.admit(workflow, { ...github, run_id: 202 });
+
+      expect([active.group, pending.group, latest.group]).toEqual(
+        Array(3).fill("Labeler-refs/heads/main"),
+      );
+      expect(active.cancelRequested).toBe(false);
+      expect(pending.state).toBe("cancelled");
+      expect(latest.state).toBe("pending");
+      await queue.release(active);
+      expect(active.state).toBe("completed");
+      expect(latest.state).toBe("running");
+    },
+  );
 });
 
 it("isolates supported useful, passive, manual and push events across all nine workflows", () => {

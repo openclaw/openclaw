@@ -39,6 +39,30 @@ struct ChatCatalogProjectionTests {
         #expect(!model.selectedModelSupportsFastMode)
     }
 
+    @Test(arguments: [false, true])
+    func `manual policy keeps current pinned model controls but removes choices`(supportsFastMode: Bool) throws {
+        let model = try self.viewModel(
+            """
+            {"id":"choice","name":"Choice","provider":"fixture","manualSelectionAllowed":false,
+             "supportsFastMode":\(supportsFastMode),"thinkingLevels":[{"id":"high","label":"Deep"}]}
+            """)
+        model.sessionDefaults = .init(modelProvider: "fixture", model: "other", contextTokens: nil)
+        model.sessions = try [JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(
+            #"{"key":"main","model":"choice","modelProvider":"fixture"}"#.utf8))]
+        model.modelChoices += try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(
+            #"{"models":[{"id":"allowed","name":"Allowed","provider":"fixture","manualSelectionAllowed":true}]}"#
+                .utf8))
+        model.syncSelectedModel()
+        model.syncThinkingLevelOptions()
+        #expect(model.modelChoices.count == 2)
+        #expect(model.selectedModelSupportsFastMode == supportsFastMode)
+        #expect(model.thinkingLevelOptions == [.init(id: "high", label: "Deep")])
+        #expect(!model.canSelectModel("fixture/choice"))
+        #expect(model.canSelectModel("fixture/allowed"))
+        #expect(model.canSelectModel(OpenClawChatViewModel.defaultModelSelectionID))
+        #expect(model.modelPickerSections.providers.flatMap(\.models).map(\.selectionID) == ["fixture/allowed"])
+    }
+
     @Test func `catalog thinking labels and default reach the picker together`() throws {
         let model = try self
             .viewModel(
@@ -122,11 +146,12 @@ struct ChatCatalogProjectionTests {
         #expect(request.params["includeDetails"]?.value as? Bool == true)
     }
 
-    @Test func `failed catalog refresh preserves supplied rows and failure guidance`() throws {
+    @Test func `failed catalog refresh preserves supplied rows without a picker warning`() throws {
         let catalog = try OpenClawChatGatewayPayloadCodec.decodeModelCatalog(Data(
             #"{"models":[{"id":"choice","name":"Choice","provider":"fixture"}],"refreshFailed":true}"#.utf8))
         #expect(catalog.refreshFailed)
         #expect(catalog.choices.map(\.selectionID) == ["fixture/choice"])
+        #expect(catalog.message == nil)
     }
 
     @Test func `background thinking uses its own model profile`() throws {

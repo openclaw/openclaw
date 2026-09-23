@@ -8,10 +8,7 @@ import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
-import {
-  createModelCatalogIdentityKeyResolver,
-  resolveModelCatalogIdentityKey,
-} from "./openai-model-routes.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.catalog-contract.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
@@ -118,7 +115,7 @@ export function prepareCapturedRuntimeFacts(
       ...facts.modelCatalog.entries,
       ...params.templateModelRegistry.getAll().map(modelCatalogRowToEntry),
     ],
-    resolveModelCatalogIdentityKey,
+    createModelCatalogIdentityKeyResolver(),
   );
   return { ...facts, modelCatalog: { ...facts.modelCatalog, entries, routeVariants: entries } };
 }

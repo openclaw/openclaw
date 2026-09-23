@@ -47,6 +47,39 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     );
   });
 
+  it.each([
+    { configuredProvider: "copilot", expectedProvider: "copilot", matches: true },
+    { configuredProvider: "different-provider", expectedProvider: "copilot", matches: false },
+    { configuredProvider: undefined, expectedProvider: "copilot", matches: false },
+    { configuredProvider: undefined, expectedProvider: "openai", matches: true },
+    { configuredProvider: null, expectedProvider: "openai", matches: true },
+  ])(
+    "uses native capabilities only for matching configured identity ($configuredProvider / $expectedProvider)",
+    async ({ configuredProvider, expectedProvider, matches }) => {
+      const request = vi.fn(async (method: string) =>
+        method === "config/read"
+          ? { config: { model_provider: configuredProvider } }
+          : { webSearch: true },
+      );
+      const client = { request } as unknown as CodexAppServerClient;
+      const clientFactory = vi.fn(async () => client);
+      const result = await resolveCodexProviderWebSearchSupport({
+        clientFactory,
+        appServer,
+        authProfileId: undefined,
+        agentDir: "/tmp/agent",
+        config: undefined,
+        modelProviderOverride: undefined,
+        expectedNativeModelProvider: expectedProvider,
+        signal: new AbortController().signal,
+      });
+      expect(result).toBe(matches ? "supported" : "unknown");
+      expect(request.mock.calls.map(([method]) => method)).toEqual(
+        matches ? ["config/read", "modelProvider/capabilities/read"] : ["config/read"],
+      );
+    },
+  );
+
   it("forwards one prepared auth handoff to capability startup", async () => {
     const { clientFactory } = createClientFactory(true);
     const preparedAuth = {

@@ -7,7 +7,8 @@ import {
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   enqueueDraftEvent,
-  resetLaneState,
+  prepareAnswerLaneForToolProgress,
+  retireAnswerLane,
   rotateAnswerLaneAfterToolProgress,
   rotateAnswerLaneForNewMessage,
 } from "./bot-message-dispatch-draft.js";
@@ -76,7 +77,7 @@ function buildTelegramCompactionProgressLine(
 export function createProgressState(
   config: TurnConfig,
   draftState: TelegramProgressDraftState,
-  prepareAnswerLaneForToolProgress: () => Promise<void>,
+  getTurn: () => Turn,
 ): TelegramProgressStateSlice {
   const progressState = {
     finalAnswerDeliveryStarted: false,
@@ -84,6 +85,7 @@ export function createProgressState(
     verboseProgressActive: () => false,
   };
   const progressCompositor = createChannelProgressDraftCompositor({
+    preparedItems: true,
     entry: config.telegramCfg,
     mode: config.streamMode,
     active: Boolean(draftState.answerLane.stream),
@@ -93,9 +95,9 @@ export function createProgressState(
     commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
     updateOnLineChange: true,
-    shouldStartNow: (line) => typeof line !== "string" && line?.kind === "tool",
+    shouldStartNow: (line) => typeof line !== "string" && Boolean(line?.toolName),
     update: async (streamText, options) => {
-      await prepareAnswerLaneForToolProgress();
+      await prepareAnswerLaneForToolProgress(getTurn());
       draftState.answerLane.lastPartialText = streamText;
       draftState.answerLane.hasStreamedMessage = true;
       draftState.answerLane.finalized = false;
@@ -111,15 +113,7 @@ export function createProgressState(
         await draftState.answerLane.stream?.flush();
       }
     },
-    deleteCurrent: async () => {
-      // clear waits for in-flight sends and stops the stream. Reopen only after
-      // that stop so a cleared card cannot consume the next progress update.
-      await draftState.answerLane.stream?.clear();
-      draftState.answerLane.stream?.forceNewMessage();
-      draftState.answerLane.lastPartialText = "";
-      draftState.answerLane.hasStreamedMessage = false;
-      draftState.answerLane.finalized = false;
-    },
+    deleteCurrent: async () => await retireAnswerLane(getTurn(), "clear"),
   });
   return Object.assign(progressState, {
     progressCompositor,
@@ -208,8 +202,7 @@ export async function teardownProgressWindow(turn: Turn): Promise<void> {
     await rotateAnswerLaneAfterToolProgress(turn);
     return;
   }
-  await turn.answerLane.stream?.clear();
-  resetLaneState(turn, turn.answerLane);
+  await retireAnswerLane(turn, "clear");
 }
 
 export async function handleToolStart(
@@ -217,26 +210,13 @@ export async function handleToolStart(
   payload: CallbackPayload<"onToolStart">,
 ): Promise<boolean> {
   const toolName = payload.name?.trim();
-  let rendered = false;
-  const progressPromise = enqueueDraftEvent(turn, async () => {
-    if (
-      payload.phase !== "update" &&
-      turn.answerLane.stream &&
-      turn.streamMode !== "progress" &&
-      !turn.activeAnswerDraftIsToolProgressOnly
-    ) {
-      // A tool invalidates unaccepted answer text, including pending lazy previews.
-      // Serialize with partials so earlier text cannot arrive after retirement.
-      await rotateAnswerLaneForNewMessage(turn);
-      turn.progressCompositor.resetActivity();
-    }
-    rendered = await pushProgressEvent(turn, () => turn.progressCompositor.pushToolEvent(payload));
-  });
+  const progressPromise = pushProgressEvent(turn, () =>
+    turn.progressCompositor.pushToolEvent(payload),
+  );
   if (turn.statusReactionController && toolName) {
     await turn.statusReactionController.setTool(toolName);
   }
-  await progressPromise;
-  return rendered;
+  return await progressPromise;
 }
 
 export async function handleCompactionStart(turn: Turn): Promise<boolean> {
@@ -271,21 +251,28 @@ export async function handleItemEvent(
   turn: Turn,
   payload: CallbackPayload<"onItemEvent">,
 ): Promise<boolean> {
-  if (payload.kind === "preamble") {
-    let rendered = false;
-    if (turn.streamMode === "progress") {
-      rendered = await turn.progressCompositor.pushPreambleHeadline(payload.progressText, {
-        itemId: payload.itemId,
-      });
+  let rendered = false;
+  await enqueueDraftEvent(turn, async () => {
+    if (turn.finalAnswerDeliveryStarted || turn.finalAnswerDelivered) {
+      return;
     }
-    if (turn.streamMode === "progress" && turn.progressCompositor.commentaryProgressEnabled) {
-      rendered ||= await turn.progressCompositor.pushCommentaryProgress(payload.progressText, {
-        itemId: payload.itemId,
-      });
+    if (
+      payload.phase === "start" &&
+      payload.kind === "tool" &&
+      turn.answerLane.stream &&
+      turn.streamMode !== "progress" &&
+      !turn.activeAnswerDraftIsToolProgressOnly
+    ) {
+      // A new operation invalidates unaccepted answer text before its progress can render.
+      await rotateAnswerLaneForNewMessage(turn);
+      turn.progressCompositor.resetActivity();
     }
-    return rendered;
-  }
-  return await pushProgressEvent(turn, () => turn.progressCompositor.pushItemEvent(payload));
+    rendered =
+      payload.kind === "preamble"
+        ? await turn.progressCompositor.pushItemEvent(payload)
+        : await pushProgressEvent(turn, () => turn.progressCompositor.pushItemEvent(payload));
+  });
+  return rendered;
 }
 
 export async function handlePlanUpdate(
@@ -305,20 +292,4 @@ export async function handleApprovalEvent(
   payload: CallbackPayload<"onApprovalEvent">,
 ): Promise<boolean> {
   return await pushProgressEvent(turn, () => turn.progressCompositor.pushApprovalEvent(payload));
-}
-
-export async function handleCommandOutput(
-  turn: Turn,
-  payload: CallbackPayload<"onCommandOutput">,
-): Promise<boolean> {
-  return await pushProgressEvent(turn, () =>
-    turn.progressCompositor.pushCommandOutputEvent(payload),
-  );
-}
-
-export async function handlePatchSummary(
-  turn: Turn,
-  payload: CallbackPayload<"onPatchSummary">,
-): Promise<boolean> {
-  return await pushProgressEvent(turn, () => turn.progressCompositor.pushPatchEvent(payload));
 }

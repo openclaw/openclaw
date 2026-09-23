@@ -12,11 +12,13 @@ import {
 import {
   buildCodexOpenClawPromptContext,
   buildCodexWatchedSessionsContext,
-  buildCodexWorkspaceBootstrapContext,
-  getCodexWorkspaceMemoryToolNames,
   readMirroredSessionHistoryMessages,
   renderCodexSkillsCollaborationInstructions,
 } from "./attempt-context.js";
+import {
+  buildCodexWorkspaceBootstrapContext,
+  getCodexWorkspaceMemoryToolNames,
+} from "./attempt-workspace-context.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
@@ -75,6 +77,7 @@ export async function prepareCodexAttemptContext(
     const messages = await readMirroredSessionHistoryMessages({
       ...activeTranscriptTarget,
       signal: connection.runAbortController.signal,
+      contextTokenBudget: effectiveContextTokenBudget,
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
     connection.runAbortController.signal.throwIfAborted();
@@ -165,6 +168,8 @@ export async function prepareCodexAttemptContext(
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,
+    agentWorkspaceDeveloperInstructions:
+      connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions,
     resolvedWorkspace: runtimeParams.bootstrapWorkspaceDir ?? resolvedWorkspace,
     executionWorkspace: resolvedWorkspace,
     effectiveWorkspace,
@@ -176,12 +181,7 @@ export async function prepareCodexAttemptContext(
       isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow),
     sandboxed: sandbox?.enabled === true,
   });
-  // A thread keeps the bounded agent-workspace snapshot captured at creation.
-  // Workspace edits take effect only in the next session.
-  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions
-    ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
-      workspaceBootstrapContext.threadDeveloperInstructions)
-    : undefined;
+  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,

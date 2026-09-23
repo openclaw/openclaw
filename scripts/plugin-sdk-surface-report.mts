@@ -158,8 +158,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-lifecycle": 23,
   // +1: shared ingress error factory projected through the deprecated message barrel.
   // +1: shared ingress retention defaults projected through the deprecated message barrel.
-  // +1: WhatsApp ack-policy bridge counted via channel-message's wildcard re-export.
-  // Rendering helpers also flow through this shipped wildcard compatibility barrel.
+  // +1: WhatsApp ack-policy bridge counted through the channel-message legacy facade.
+  // Rendering helpers also remain available through this shipped legacy facade.
   "channel-message": 136,
   // +2: Slack progress-draft render bridge (function + mode type).
   "channel-outbound": 2,
@@ -204,7 +204,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: typed feature contracts, backend registration, and native Control UI hosting.
       // +1: public provider-owned asynchronous embedding batch contract.
       // +1: runtime-neutral WebSocket client/server adapter for bundled and external plugins.
-      154,
+      // +1: approved host-owned workspace access runtime entrypoint.
+      // +1: passive docked link-reader contracts.
+      // +1: typed decision provider contract.
+      // +1: shared Code Mode executor contract for the bundled QuickJS owner.
+      158,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -371,10 +375,32 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical credential-value functions through the narrow secret-input surface.
       // +1: shared removed-model choice recovery text for channel consumers.
       // +2: shared stored-account key selection and its plugin-owned policy type.
+      // +3: prepared outbound planning, its plan type, and inbound delivery on channel-outbound only.
       // +1: shared per-connection webhook request ordering for channel listeners.
       // +1: approved shared widget CDN policy for core and channel presenters.
       // +13: runtime-neutral WebSocket client/server, stream, data, and option contracts.
-      4479,
+      // +2: approved process-diagnostics predicate and lightweight subsystem logger.
+      // +1: approved shared native-command argument-menu applicability predicate.
+      // +4: shared activity projectors and complete-preamble admission, including the shipped barrel.
+      // -1: keep complete-preamble admission off the deprecated compatibility facade.
+      // +1: preserve opaque host reply metadata through Telegram recovery text clones.
+      // +1: canonical media/attachment associations for recovered-final filtering.
+      // +4: approved workspace access exports; later stack exports belong to their consumers.
+      // +6: passive link-reader descriptor, metadata, document, preview, and request types.
+      // +1: shared workspace bootstrap file policy.
+      // +2: typed workspace unavailability and its structural classifier.
+      // +1: preserve accepted modifier media selection during transcript recovery.
+      // +13: twelve decision contract types and one prepared plugin secret reader.
+      // +6: shared delivery facts, source-reply detection, argument sanitization, and media comparison.
+      // +1: workspace Memory file client.
+      // +2: prepare admitted input attachments and bind a workspace transfer adapter.
+      // +1: approved host workspace Skill resource reader.
+      // +1: approved terminal-reply classifier for A2A task completion.
+      // +1: approved native workspace worker argv resolver for node adapters.
+      // +35: shared Code Mode executor/guest protocol and source/output implementation helpers.
+      // +3: approved shared preview lifecycle factory and delivery/lifecycle types.
+      // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
+      4569,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -510,9 +536,30 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: prepared model-specific runtime choice reader.
       // +2: canonical env-value reader and managed SecretRef marker constructor.
       // +1: shared stored-account key selection for channel readers and writers.
+      // +2: prepared outbound planning and inbound delivery; deprecated channel-message stays frozen.
       // +1: shared per-connection webhook request ordering for channel listeners.
       // +4: runtime-neutral WebSocket client/server and stream constructors.
-      2643,
+      // +2: approved process-diagnostics predicate and lightweight subsystem logger.
+      // +1: approved shared native-command argument-menu applicability predicate.
+      // +4: shared activity projectors and complete-preamble admission, including the shipped barrel.
+      // -1: keep complete-preamble admission off the deprecated compatibility facade.
+      // +1: preserve opaque host reply metadata through Telegram recovery text clones.
+      // +1: canonical media/attachment associations for recovered-final filtering.
+      // +3: approved workspace access callables; later stack exports belong to their consumers.
+      // +1: shared workspace bootstrap file policy.
+      // +1: workspace unavailability classifier.
+      // +1: preserve accepted modifier media selection during transcript recovery.
+      // +1: prepared plugin capability secret reader.
+      // +6: shared delivery facts, source-reply detection, argument sanitization, and media comparison.
+      // +1: workspace Memory file client.
+      // +2: prepare admitted input attachments and bind a workspace transfer adapter.
+      // +1: approved host workspace Skill resource reader.
+      // +1: approved terminal-reply classifier for A2A task completion.
+      // +1: approved native workspace worker argv resolver for node adapters.
+      // +6: shared Code Mode source preparation, output capture, and source-location helpers.
+      // +1: approved shared preview lifecycle factory.
+      // +1: approved canonical resolveConfigPath callable for pre-config native browser admission.
+      2681,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -540,7 +587,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: infra-runtime now names its error exports explicitly.
       // -1: infra-runtime excludes the internal system-event receipt API.
       // -1: infra-runtime re-exports number coercion directly from its canonical owner.
-      50,
+      // -1: channel-message pins its published compatibility exports explicitly.
+      // -1: infra-runtime pins its existing diagnostics type-query surface.
+      48,
       env,
     ),
   };
@@ -786,16 +835,24 @@ export function collectPluginSdkSurfaceReport() {
   const deprecatedBarrelMissingFromInventory = [...deprecatedBarrelEntrypointSet].filter(
     (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
   );
-  const deprecatedBarrelWithoutWildcard = [...deprecatedBarrelEntrypointSet].filter(
+  const deprecatedBarrelWithoutReexports = [...deprecatedBarrelEntrypointSet].filter(
     (entrypoint) => {
-      const source = fs.readFileSync(entrypointPath(entrypoint), "utf8");
-      return !/^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
+      const source = exportStatsProgram?.getSourceFile(entrypointPath(entrypoint));
+      // Frozen facades retain named reexports without inheriting new APIs through a wildcard.
+      return !source?.statements.some(
+        (statement) =>
+          ts.isExportDeclaration(statement) &&
+          statement.moduleSpecifier !== undefined &&
+          (!statement.exportClause ||
+            ts.isNamespaceExport(statement.exportClause) ||
+            statement.exportClause.elements.length > 0),
+      );
     },
   );
   return {
     allStats,
     deprecatedBarrelMissingFromInventory,
-    deprecatedBarrelWithoutWildcard,
+    deprecatedBarrelWithoutReexports,
     deprecatedMissingFromPublic,
     leakedForbiddenExports,
     localOnlyMissingFromInventory,
@@ -864,9 +921,9 @@ export function evaluatePluginSdkSurfaceReport(
       `deprecated barrel entrypoints missing from inventory: ${report.deprecatedBarrelMissingFromInventory.join(", ")}`,
     );
   }
-  if (report.deprecatedBarrelWithoutWildcard.length > 0) {
+  if (report.deprecatedBarrelWithoutReexports.length > 0) {
     failures.push(
-      `deprecated barrel entrypoints without wildcard exports: ${report.deprecatedBarrelWithoutWildcard.join(", ")}`,
+      `deprecated barrel entrypoints without reexports: ${report.deprecatedBarrelWithoutReexports.join(", ")}`,
     );
   }
   return failures;

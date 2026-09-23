@@ -73,13 +73,15 @@ internal data class WearLaunchState(
   val navigationRequest: WearNavigationRequest? = null,
   val nextRequestId: Int = 0,
 ) {
-  fun next(intent: Intent?): WearLaunchState {
+  fun next(intent: Intent?): WearLaunchState = navigate(consumeWearLaunchTarget(intent))
+
+  fun navigate(target: WearLaunchTarget): WearLaunchState {
     val requestId = nextRequestId + 1
     return copy(
       navigationRequest =
         WearNavigationRequest(
           id = requestId,
-          target = consumeWearLaunchTarget(intent),
+          target = target,
         ),
       nextRequestId = requestId,
     )
@@ -134,6 +136,7 @@ class MainActivity : ComponentActivity() {
             speaker = remember { WearReplySpeaker(applicationContext) },
             initialPage = initialPage,
             navigationRequest = navigationRequest,
+            onMessageSubmitted = { launchState = launchState.navigate(WearLaunchTarget.Chat) },
             onNavigationRequestHandled = { requestId ->
               launchState = launchState.handled(requestId)
             },
@@ -178,6 +181,7 @@ internal fun OpenClawWearApp(
   initialPage: WearHomePage = WearHomePage.Chat,
   navigationRequest: WearNavigationRequest? = null,
   onNavigationRequestHandled: (Int) -> Unit = {},
+  onMessageSubmitted: () -> Unit = {},
 ) {
   val state by viewModel.state.collectAsState()
   val snapshot = state.toConversationSnapshot()
@@ -243,6 +247,7 @@ internal fun OpenClawWearApp(
     awaitingReply = true
     interaction = WearInteractionState.SENDING
     speaker.stop()
+    onMessageSubmitted()
   }
 
   val speechLauncher =
@@ -451,6 +456,7 @@ internal fun OpenClawWearApp(
     AppScaffold {
       OpenClawWearScreens(
         snapshot = snapshot,
+        readReply = viewModel::readReply,
         failure = failure,
         loading = state.loading,
         interaction = resolvedInteraction,

@@ -43,7 +43,7 @@ export function formatPortalResult(
 ): AgentToolResult<PortalSummary | PortalListResult | PortalCloseResult> {
   const text =
     outcome.action === "open"
-      ? `Portal available at ${outcome.result.url}. Pass PUBLIC_URL=${outcome.result.publicUrl} and PORT=${outcome.result.port} when starting the dev server. The operator can see it in the Control UI Portals page.`
+      ? `Portal route allocated at ${outcome.result.url}. Pass PUBLIC_URL=${outcome.result.publicUrl} and PORT=${outcome.result.port} when starting the dev server. Open it in the Control UI Portals page to verify browser access and application rendering; allocation does not prove either. Remote access requires private portal ingress or a reachable direct listener.`
       : outcome.action === "list"
         ? `${outcome.result.portals.length} active portal${outcome.result.portals.length === 1 ? "" : "s"}. The operator can see them in the Control UI Portals page.`
         : `Portal ${outcome.id} closed. The Control UI Portals page has been updated.`;
@@ -63,6 +63,8 @@ export function createPortalTool(options: PortalToolOptions = {}): AnyAgentTool 
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
+      const environmentId = readToolStringParam(params, "environmentId");
+      const environment = environmentId ? { environmentId } : {};
       if (action === "list") {
         // portal.list redacts the bearer URL for read-scope callers. Least-privilege
         // resolution would make every list call read-scope, hiding the URL from a
@@ -70,14 +72,14 @@ export function createPortalTool(options: PortalToolOptions = {}): AnyAgentTool 
         // write authority this tool already requires so the listing stays usable.
         const result = await callGatewayRequest<PortalListResult>({
           method: "portal.list",
-          params: {},
+          params: environment,
           scopes: [PORTAL_URL_SCOPE],
         });
         return formatPortalResult({ action: "list", result });
       }
       if (action === "close") {
         const id = readToolStringParam(params, "id", { required: true });
-        const result = await callGateway<PortalCloseResult>("portal.close", { id });
+        const result = await callGateway<PortalCloseResult>("portal.close", { id, ...environment });
         return formatPortalResult({ action: "close", id, result });
       }
       if (action !== "open") {
@@ -97,6 +99,7 @@ export function createPortalTool(options: PortalToolOptions = {}): AnyAgentTool 
         throw new ToolInputError("path must start with /");
       }
       const portal = await callGateway<PortalSummary>("portal.open", {
+        ...environment,
         port,
         ...(title !== undefined ? { title } : {}),
         ...(description !== undefined ? { description } : {}),

@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusResult, ModelCatalogResult } from "../api/types.ts";
-import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
+import {
+  invalidateChatMetadataForSessionEvent,
+  invalidateChatMetadataStore,
+} from "../lib/chat/chat-metadata-cache.ts";
 import { peekChatMetadata, beginChatMetadataPublication } from "../lib/chat/chat-metadata-store.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { loadModelCatalog, peekModelCatalog } from "../lib/model-catalog-store.ts";
@@ -162,6 +165,55 @@ it("keeps the pending catalog across unrelated session changes", async () => {
     state.sessions.dispose();
   }
 });
+
+it.each(["automatic", "explicit", "remounted startup"])(
+  "refreshes a changed session projection through the catalog owner after %s metadata",
+  async (mode) => {
+    vi.useFakeTimers();
+    const model = { id: "model", name: "Initial", provider: "example" };
+    const currentModel = { ...model, name: "Current direct catalog" };
+    const metadata = createDeferred<{ commands: never[]; models: (typeof model)[] }>();
+    let changed = false;
+    const request = createGatewayRequestMock((method) => {
+      if (method === "chat.metadata") {
+        return changed ? metadata.promise : Promise.resolve({ commands: [], models: [model] });
+      }
+      return Promise.resolve({ models: [changed ? currentModel : model] });
+    });
+    const client = createTestGatewayClient(request);
+    const state = makeChatHost({ client }) as ChatPageHost;
+    state.connected = true;
+    state.sessionKey = "agent:main:projection";
+    const scope = { agentId: "main", sessionKey: state.sessionKey };
+    try {
+      await refreshChatMetadata(state);
+      changed = true;
+      invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
+      if (mode === "remounted startup") {
+        retireChatMetadataRequests(state);
+        const startup = refreshChatMetadata(state, { automatic: true, startup: true });
+        await vi.advanceTimersByTimeAsync(2_500);
+        await startup;
+        beginChatMetadataPublication(client, scope).publish({
+          commands: [],
+          models: [currentModel],
+        });
+      } else {
+        const pending = mode === "explicit" ? refreshChatMetadata(state) : undefined;
+        await vi.advanceTimersByTimeAsync(2_500);
+        metadata.resolve({ commands: [], models: [currentModel] });
+        await pending;
+      }
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(state.chatModelCatalog).toEqual([currentModel]);
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
+    } finally {
+      metadata.resolve({ commands: [], models: [currentModel] });
+      retireChatMetadataRequests(state);
+      state.sessions.dispose();
+    }
+  },
+);
 
 it.each(["config.changed", "chat.metadata.changed"])(
   "refreshes the retained pane after repair without changing conversation state (%s)",
@@ -444,6 +496,7 @@ describe.each(["command-metadata", "patch", "reset"])("session metadata event %s
   ])(
     "refreshes only the matching $agentId/$key scope",
     async ({ key, eventKey, otherKey, agentId }) => {
+      vi.useFakeTimers();
       const request = vi.fn().mockResolvedValue({ commands: [], models: [] });
       const client = { request } as unknown as GatewayBrowserClient;
       const hello = {
@@ -510,6 +563,7 @@ describe.each(["command-metadata", "patch", "reset"])("session metadata event %s
           event: "sessions.changed",
           payload: { key: eventKey, agentId, reason },
         });
+        await vi.advanceTimersByTimeAsync(2_500);
         await vi.waitFor(() =>
           expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
             before + 1,

@@ -1,6 +1,6 @@
-// Telegram plugin module implements conversation route behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  getSessionBindingService,
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
   type ConfiguredBindingRouteResult,
@@ -44,6 +44,9 @@ type TelegramConversationRouteResult = {
   route: TelegramResolvedRoute;
   bindingMode: TelegramConversationBindingMode;
   bindingOwnerAvailable: boolean;
+  runtimeBinding?: NonNullable<
+    ReturnType<typeof resolveRuntimeConversationBindingRoute>["bindingRecord"]
+  >;
 };
 
 type ResolveTelegramConversationRouteParams = {
@@ -55,22 +58,6 @@ type ResolveTelegramConversationRouteParams = {
   senderId?: string | number | null;
   topicAgentId?: string | null;
 };
-
-export function buildTelegramConversationRouteContext(params: {
-  chatId: number | string;
-  isGroup: boolean;
-  threadSpec: TelegramThreadSpec;
-  senderId?: string | number | null;
-  resolvedThreadId?: number;
-}) {
-  return {
-    ConversationRouteContextObserved: true,
-    ConversationRoutePeerId: params.isGroup
-      ? buildTelegramConversationId({ chatId: params.chatId, thread: params.threadSpec })
-      : resolveTelegramDirectPeerId(params),
-    ThreadParentId: buildTelegramParentPeer(params)?.id,
-  };
-}
 
 function resolveTelegramConversationRouteWithRuntimePolicy(
   params: ResolveTelegramConversationRouteParams,
@@ -186,6 +173,14 @@ function resolveTelegramConversationRouteWithRuntimePolicy(
     route,
     bindingMode,
     bindingOwnerAvailable: runtimeRoute.bindingOwnerAvailable ?? true,
+    ...(runtimeRoute.bindingRecord
+      ? {
+          runtimeBinding: {
+            ...runtimeRoute.bindingRecord,
+            conversation: { ...runtimeRoute.bindingRecord.conversation },
+          },
+        }
+      : {}),
   };
 }
 
@@ -200,6 +195,27 @@ export function inspectTelegramConversationRoute(
   params: ResolveTelegramConversationRouteParams,
 ): TelegramConversationRouteResult {
   return resolveTelegramConversationRouteWithRuntimePolicy(params, false);
+}
+
+/** Extend only the inspected binding after native command authorization. */
+export function touchTelegramConversationRoute(inspected: TelegramConversationRouteResult): void {
+  const captured = inspected.runtimeBinding;
+  if (!captured) {
+    return;
+  }
+  const bindings = getSessionBindingService();
+  const current = bindings.resolveByConversation(captured.conversation);
+  if (
+    !current ||
+    current.bindingId !== captured.bindingId ||
+    current.targetSessionKey !== captured.targetSessionKey ||
+    current.targetKind !== captured.targetKind ||
+    current.boundAt !== captured.boundAt ||
+    current.status !== captured.status
+  ) {
+    throw new Error("Telegram command route changed; send a new request.");
+  }
+  bindings.touch(captured.bindingId, undefined, captured.conversation);
 }
 
 export function resolveTelegramConversationBaseSessionKey(

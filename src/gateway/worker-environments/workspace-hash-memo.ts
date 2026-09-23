@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
-import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 
 export type WorkspaceHashMetrics = {
   contentHashCount: number;
@@ -28,6 +27,7 @@ type RemoteWorkspaceHashMetrics = WorkspaceHashMetrics & {
 };
 
 export const MAX_WORKSPACE_HASH_MEMO_BYTES = 8 * 1024 * 1024;
+export const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 25_000;
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const WORKER_HASH_IDENTITY_PATTERN = /^worker:\d+:\d+:\d+:\d+:\d+$/u;
@@ -40,7 +40,7 @@ const remoteWorkspaceManifestEnvelopeSchema = z
       .array(
         z.tuple([z.string().regex(WORKER_HASH_IDENTITY_PATTERN), z.string().regex(SHA256_PATTERN)]),
       )
-      .max(MAX_RECONCILIATION_ENTRIES),
+      .max(MAX_WORKSPACE_HASH_MEMO_ENTRIES),
     metrics: z
       .object({
         contentHashCount: z.number().finite().nonnegative(),
@@ -200,7 +200,7 @@ export function serializeRemoteWorkspaceHashMemo(
   maxBytes = MAX_WORKSPACE_HASH_MEMO_BYTES,
 ): string {
   return JSON.stringify(
-    selectWorkerWorkspaceHashMemoEntries(memo, MAX_RECONCILIATION_ENTRIES, maxBytes),
+    selectWorkerWorkspaceHashMemoEntries(memo, MAX_WORKSPACE_HASH_MEMO_ENTRIES, maxBytes),
   );
 }
 

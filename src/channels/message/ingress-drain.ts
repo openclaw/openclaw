@@ -10,6 +10,7 @@ import {
   retainGatewayRootWorkAdmissionContinuation,
   runOutsideGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   createIngressDrainOwnerId,
   deregisterLiveIngressDrainInstance,
@@ -366,7 +367,7 @@ export function createChannelIngressDrain<
       },
       onDeferredHeartbeat: () => {
         // A cleared watchdog marks adoption finalization or retired ownership.
-        if (state.phase === "deferred" && state.stallTimer) {
+        if ((state.phase === "dispatching" || state.phase === "deferred") && state.stallTimer) {
           armStallWatchdog(state);
         }
       },
@@ -450,8 +451,10 @@ export function createChannelIngressDrain<
     // settles; when the inherited root is already released, dispatch outside it
     // so the dead lease cannot make session admission refuse the turn as
     // draining. A real restart drain still refuses both paths at admission.
+    // Dispatches and queued followups outlive the pump's async work scope.
+    // Leave that scope so its closure cannot reject their later tracked work.
     const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
-    state.task = (async () => {
+    state.task = runOutsideAsyncWorkScope(async () => {
       try {
         const result = await (releaseRootWork
           ? options.dispatchClaimedEvent(claim, lifecycle)
@@ -522,7 +525,7 @@ export function createChannelIngressDrain<
       } finally {
         releaseRootWork?.();
       }
-    })();
+    });
 
     activeByClaim.set(activeClaimKey(claim), state);
     laneOwnerByKey.set(laneKey, state);

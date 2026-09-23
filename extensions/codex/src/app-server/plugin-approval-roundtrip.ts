@@ -151,7 +151,7 @@ export async function waitForPluginApprovalDecision(params: {
 /** Converts a gateway exec approval decision into the app-server approval outcome enum. */
 export function mapExecDecisionToOutcome(
   decision: ExecApprovalDecision | null | undefined,
-): AppServerApprovalOutcome {
+): Exclude<AppServerApprovalOutcome, "cancelled"> {
   switch (decision) {
     case "allow-once":
       return "approved-once";

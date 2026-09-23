@@ -217,8 +217,7 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
     cwd,
   });
 
-  // Packaged app: prefer bundled resources, then support legacy alongside-executable layout.
-  addCandidate(candidates, execDir ? path.join(execDir, "../Resources/control-ui") : null);
+  // Support legacy packaged runtimes that place assets alongside the executable.
   addCandidate(candidates, execDir ? path.join(execDir, "control-ui") : null);
   if (moduleDir) {
     // dist/<bundle>.js -> dist/control-ui

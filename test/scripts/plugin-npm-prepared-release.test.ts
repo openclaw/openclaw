@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
   consumePreparedNpmPackage,
@@ -33,6 +33,8 @@ const version = "2026.9.2-beta.1";
 const roots: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -499,7 +501,7 @@ describe("prepared npm registry readback", () => {
     const params = {
       packageName: name,
       version,
-      publishTag: "beta",
+      publishTags: ["beta"],
       route: "npm-oidc",
       tarballPath,
       allowMissing: true,
@@ -554,16 +556,71 @@ describe("prepared npm registry readback", () => {
     expect(tarballReads).toBe(2);
   });
 
-  it("reports pending verification rather than absence after accepted publication", async () => {
+  it.each(["version", "package"])(
+    "waits for %s propagation before verifying exact bytes",
+    async (missing) => {
+      vi.useFakeTimers();
+      const { params, packument, bytes } = registryFixture();
+      let registryReads = 0;
+      let tarballReads = 0;
+      const result = verifyPreparedNpmRegistry({
+        ...params,
+        allowMissing: false,
+        fetchImpl: async (input: string) => {
+          if (input.endsWith(".tgz")) {
+            tarballReads += 1;
+            return new Response(bytes);
+          }
+          if (++registryReads <= 18) {
+            return missing === "package"
+              ? new Response(null, { status: 404 })
+              : Response.json({ ...packument, versions: {} });
+          }
+          return Response.json(packument);
+        },
+      });
+      const verified = expect(result).resolves.toEqual({ alreadyPublished: true });
+      await vi.advanceTimersByTimeAsync(180_000);
+      await verified;
+      expect(tarballReads).toBe(1);
+    },
+  );
+
+  it.each([undefined, "25000"])("bounds pending verification with timeout %s", async (timeout) => {
+    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_NPM_READBACK_TIMEOUT_MS", timeout);
+    const budget = timeout === undefined ? 900_000 : Number(timeout);
+    const { params, packument } = registryFixture();
+    const reads: number[] = [];
+    const started = Date.now();
+    const result = verifyPreparedNpmRegistry({
+      ...params,
+      allowMissing: false,
+      fetchImpl: async () => {
+        reads.push(Date.now() - started);
+        return Response.json({ ...packument, versions: {} });
+      },
+    });
+    const rejected = expect(result).rejects.toThrow(
+      "verification pending. Retry readback, not publication.",
+    );
+    await vi.advanceTimersByTimeAsync(budget);
+    await rejected;
+    expect(reads).toEqual(
+      Array.from({ length: Math.ceil(budget / 10_000) }, (_, index) => index * 10_000),
+    );
+  });
+
+  it.each(["0", "-1", "NaN", "1.5"])("rejects invalid readback timeout %s", async (timeout) => {
+    vi.stubEnv("OPENCLAW_NPM_READBACK_TIMEOUT_MS", timeout);
     const { params, packument } = registryFixture();
     await expect(
       verifyPreparedNpmRegistry({
         ...params,
         allowMissing: false,
-        remainingReadbacks: 0,
-        fetchImpl: async () => Response.json({ ...packument, versions: {} }),
+        fetchImpl: async () => Response.json(packument),
       }),
-    ).rejects.toThrow("verification pending. Retry readback, not publication.");
+    ).rejects.toThrow("OPENCLAW_NPM_READBACK_TIMEOUT_MS");
   });
 
   it.each(["integrity", "bytes", "selector", "removed-oidc-package"])(
@@ -571,6 +628,7 @@ describe("prepared npm registry readback", () => {
     async (fault) => {
       const { bytes, packument, params } = registryFixture();
       let tarballReads = 0;
+      let registryReads = 0;
       if (fault === "integrity") {
         packument.versions[version].dist.shasum = "0".repeat(40);
       }
@@ -580,6 +638,7 @@ describe("prepared npm registry readback", () => {
       await expect(
         verifyPreparedNpmRegistry({
           ...params,
+          allowMissing: fault === "removed-oidc-package",
           fetchImpl: async (input: string) => {
             if (fault === "removed-oidc-package") {
               return new Response("missing", { status: 404 });
@@ -590,10 +649,12 @@ describe("prepared npm registry readback", () => {
                 new Uint8Array(fault === "bytes" ? Buffer.from("changed bytes") : bytes),
               );
             }
+            registryReads += 1;
             return Response.json(packument);
           },
         }),
       ).rejects.toThrow();
+      expect(registryReads).toBe(fault === "removed-oidc-package" ? 0 : 1);
       expect(tarballReads).toBe(fault === "bytes" || fault === "selector" ? 1 : 0);
     },
   );

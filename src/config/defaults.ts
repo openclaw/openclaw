@@ -29,6 +29,7 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 
 type WarnState = { warned: boolean };
 type ProviderPolicyDefaultsOptions = {
+  env?: NodeJS.ProcessEnv;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 };
@@ -507,7 +508,7 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+export function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (env.ANTHROPIC_API_KEY?.trim() || env.ANTHROPIC_OAUTH_TOKEN?.trim()) {
     return true;
   }
@@ -540,14 +541,15 @@ export function applyContextPruningDefaults(
   if (!cfg.agents?.defaults) {
     return cfg;
   }
-  if (!hasAnthropicDefaultSignal(cfg, process.env)) {
+  const env = options.env ?? process.env;
+  if (!hasAnthropicDefaultSignal(cfg, env)) {
     return cfg;
   }
   return (
     applyProviderConfigDefaultsForConfig({
       provider: "anthropic",
       config: cfg,
-      env: process.env,
+      env,
       manifestRegistry: options.manifestRegistry,
       loadManifestRegistry: options.loadManifestRegistry,
     }) ?? cfg

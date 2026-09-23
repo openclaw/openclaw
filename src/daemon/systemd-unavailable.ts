@@ -1,5 +1,33 @@
 /** Classifies systemd/systemctl unavailable errors into user-facing categories. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ServiceInspectionReason } from "./service-inspection-error.js";
+import type { GatewayServiceEnv } from "./service-types.js";
+
+/** Failed user routes alone cannot distinguish a missing manager from a missing session bus. */
+export async function resolveUnavailableSystemdInspectionReason(
+  reason: "systemd-user-bus-unavailable" | "systemd-busctl-unavailable",
+  env: GatewayServiceEnv,
+  deadline: number,
+): Promise<ServiceInspectionReason> {
+  const { execFileUtf8 } = await import("./exec-file.js");
+  const timeout = Math.floor(deadline - performance.now());
+  if (timeout <= 0) {
+    return reason;
+  }
+  const result = await execFileUtf8("systemctl", ["--system", "is-system-running"], {
+    env: { ...process.env, ...env },
+    timeout,
+    killSignal: "SIGKILL",
+  });
+  return (reason === "systemd-busctl-unavailable" &&
+    result.termination === "error" &&
+    result.errorCode === "ENOENT") ||
+    (result.termination === "exit" &&
+      (result.stdout.trim() === "offline" ||
+        result.stderr.includes("System has not been booted with systemd")))
+    ? "service-manager-unavailable"
+    : reason;
+}
 
 export type SystemdUnavailableKind =
   | "missing_systemctl"

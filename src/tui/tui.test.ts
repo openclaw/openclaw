@@ -8,8 +8,8 @@ import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
+import { beginTuiShutdown } from "./tui-shutdown.js";
 import {
-  beginTuiShutdown,
   createBackspaceDeduper,
   createDeferredTuiFinish,
   createTuiConnectionLineage,

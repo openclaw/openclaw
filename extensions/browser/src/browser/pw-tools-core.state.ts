@@ -4,7 +4,6 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CDPSession, Page } from "playwright-core";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
-import { bindPlaywrightCdpSend } from "./pw-cdp-send.js";
 import type { PageState } from "./pw-session-contracts.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import {
@@ -46,10 +45,10 @@ function resolvePageEmulationSession(page: Page, state: PageState): Promise<CDPS
 async function withPageEmulationCdpClient<T>(params: {
   page: Page;
   state: PageState;
-  run: (send: ReturnType<typeof bindPlaywrightCdpSend>, session: CDPSession) => Promise<T>;
+  run: (send: CDPSession["send"], session: CDPSession) => Promise<T>;
 }): Promise<T> {
   const session = await resolvePageEmulationSession(params.page, params.state);
-  return await params.run(bindPlaywrightCdpSend(session), session);
+  return await params.run(session.send.bind(session), session);
 }
 
 export async function setViewportSizeOnPage(page: Page, state: PageState, viewport: DeviceSize) {

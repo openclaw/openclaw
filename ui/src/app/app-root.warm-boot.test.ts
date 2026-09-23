@@ -83,6 +83,31 @@ describe("warm boot app root", () => {
     expect(container.querySelector("openclaw-app-shell")).toBeNull();
   });
 
+  it("keeps saved-sign-in recovery reachable after auth fails without admitting other routes", async () => {
+    const { snapshot, container, draw } = createWarmSurface();
+    const gateway = runtime!.context.gateway;
+    let stored = true;
+    gateway.hasStoredDeviceToken = () => stored;
+    snapshot.phase = "offline";
+    snapshot.lastError = "Authentication rejected";
+    snapshot.lastErrorCode = "AUTH_TOKEN_MISMATCH";
+    draw();
+    const gate = container.querySelector("openclaw-login-gate") as unknown as {
+      props: { onOpenGatewaySettings: () => void };
+    };
+    expect(gate).not.toBeNull();
+    gate.props.onOpenGatewaySettings();
+    await vi.waitFor(() =>
+      expect(runtime!.context.router.getState().matches[0]?.routeId).toBe("connection"),
+    );
+    draw();
+    expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
+    expect(container.querySelector("openclaw-login-gate")).toBeNull();
+    stored = false;
+    draw();
+    expect(container.querySelector("openclaw-login-gate")).not.toBeNull();
+  });
+
   it("keeps cold first connections on the existing splash", () => {
     const { container, draw } = createWarmSurface(false);
     draw();

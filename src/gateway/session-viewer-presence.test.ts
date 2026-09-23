@@ -134,7 +134,7 @@ async function seedColdStore(count: number, prompt = ""): Promise<string[]> {
       },
     );
   }
-  // Fresh read-only handles expose repeated admission work hidden by a warm writer.
+  // Close the native handle while preserving its unchanged physical database validation.
   expect(
     closeOpenClawAgentDatabaseByPath(resolveOpenClawAgentSqlitePath({ agentId: "main" })),
   ).toBe(true);
@@ -142,7 +142,7 @@ async function seedColdStore(count: number, prompt = ""): Promise<string[]> {
 }
 
 describe("presence projection store admission", () => {
-  it("bounds a cold fanout to one metadata census per store, including repeated watches and recipients", async () => {
+  it("reuses physical validation for cold fanout, including repeated watches and recipients", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const prompt = "unused presence prompt ".repeat(4096);
       const watchedSessions = (await seedColdStore(64, prompt)).slice(0, 8);
@@ -170,7 +170,7 @@ describe("presence projection store admission", () => {
           const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ");
           return normalized.includes('from "session_nodes"') && !normalized.includes(" where ");
         });
-        expect(censuses).toHaveLength(1);
+        expect(censuses).toHaveLength(0);
         const preparedQueries = prepare.mock.calls.length;
         expect(project(recipient())).toEqual(presence);
         expect(prepare).toHaveBeenCalledTimes(preparedQueries);

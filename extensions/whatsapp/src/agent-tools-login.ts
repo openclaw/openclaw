@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements agent tools login behavior.
 import {
   optionalPositiveIntegerSchema,
   readPositiveIntegerParam,
@@ -41,6 +40,7 @@ export function createWhatsAppLoginTool(
     }),
     execute: async (_toolCallId, args, signal) => {
       const beforeCredentialPersistence = async () => {
+        context.assertInvocationCurrent?.();
         if (!signal || signal.aborted) {
           throw new Error("WhatsApp login authority is no longer active.");
         }
@@ -125,5 +125,8 @@ export function createWhatsAppLoginTool(
 }
 
 export function registerWhatsAppLoginTool(api: OpenClawPluginApi): void {
-  api.registerTool((context) => createWhatsAppLoginTool(context), { name: "whatsapp_login" });
+  api.registerTool(
+    { contextVersion: 2, create: (context) => createWhatsAppLoginTool(context) },
+    { name: "whatsapp_login" },
+  );
 }

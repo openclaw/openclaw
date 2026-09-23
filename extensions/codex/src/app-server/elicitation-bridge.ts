@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
+import { codexAppIdentityKey } from "./app-identity.js";
 import {
   createCodexElicitationResponse,
   type CodexElicitationResponse,
@@ -262,25 +263,34 @@ function resolvePluginElicitation(params: {
     readFirstString(requestParams, PLUGIN_APP_ID_META_KEYS);
   const connectorId = readFirstString(meta, PLUGIN_CONNECTOR_ID_META_KEYS);
   const isCodexConnectorApproval = isCodexConnectorApprovalElicitation(requestParams, meta);
-  if (isCodexConnectorApproval && appId && connectorId && appId !== connectorId) {
+  if (
+    isCodexConnectorApproval &&
+    appId &&
+    connectorId &&
+    codexAppIdentityKey(appId) !== codexAppIdentityKey(connectorId)
+  ) {
     return { kind: "decline", reason: "app_id_connector_id_mismatch" };
   }
   if (appId) {
     if (!context) {
       return { kind: "decline", reason: "missing_policy_context" };
     }
-    const entry = context.apps[appId];
-    if (entry?.source === "account" && !isCodexConnectorApproval) {
+    const matches = Object.entries(context.apps)
+      .filter(([id]) => codexAppIdentityKey(id) === codexAppIdentityKey(appId))
+      .map(([, entry]) => entry);
+    if (matches.some((entry) => entry.source === "account") && !isCodexConnectorApproval) {
       return { kind: "decline", reason: "account_app_source_mismatch" };
     }
-    return uniquePluginMatch(entry ? [entry] : [], "app_id");
+    return uniquePluginMatch(matches, "app_id");
   }
   if (isCodexConnectorApproval && connectorId) {
     if (!context) {
       return { kind: "decline", reason: "missing_policy_context" };
     }
-    const entry = context.apps[connectorId];
-    return uniquePluginMatch(entry ? [entry] : [], "connector_id");
+    const matches = Object.entries(context.apps)
+      .filter(([id]) => codexAppIdentityKey(id) === codexAppIdentityKey(connectorId))
+      .map(([, entry]) => entry);
+    return uniquePluginMatch(matches, "connector_id");
   }
 
   const serverName = readNonBlankStringField(requestParams, "serverName");
@@ -403,8 +413,14 @@ async function buildPluginPolicyElicitationResponse(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   signal?: AbortSignal;
 }): Promise<CodexElicitationResponse> {
-  const mode = resolvePluginDestructiveApprovalMode(params.entry);
-  if (mode === "deny") {
+  const mode =
+    params.entry.destructiveApprovalMode ??
+    (params.entry.allowDestructiveActions ? "allow" : "deny");
+  const meta = isJsonObject(params.requestParams._meta) ? params.requestParams._meta : {};
+  // Hosted apps have their destructive ceiling enforced in the thread's tool
+  // config before dispatch. A remaining native prompt can require consent for
+  // an allowed read; plugin-provided MCP servers still use the decline policy.
+  if (mode === "deny" && !isCodexConnectorApprovalElicitation(params.requestParams, meta)) {
     logPluginElicitationDecline("destructive_actions_disabled", params.requestParams);
     return createCodexElicitationResponse("decline");
   }
@@ -414,28 +430,22 @@ async function buildPluginPolicyElicitationResponse(params: {
     return createCodexElicitationResponse("decline");
   }
   const response = buildElicitationResponse(approvalPrompt, "approved-once");
-  if (response.action === "accept") {
-    if (mode === "allow") {
-      return response;
-    }
-    const outcome = await requestPluginApprovalOutcome({
-      hostCapabilities: params.paramsForRun.hostCapabilities,
-      title: approvalPrompt.title,
-      description: approvalPrompt.description,
-      allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
-      toolName: "codex_mcp_tool_approval",
-      signal: params.signal,
-    });
-    return buildElicitationResponse(approvalPrompt, outcome);
+  if (response.action !== "accept") {
+    logPluginElicitationDecline("unmappable_schema", params.requestParams);
+    return createCodexElicitationResponse("decline");
   }
-  logPluginElicitationDecline("unmappable_schema", params.requestParams);
-  return createCodexElicitationResponse("decline");
-}
-
-function resolvePluginDestructiveApprovalMode(
-  entry: CodexAppPolicyContextEntry,
-): "allow" | "deny" | "auto" | "ask" {
-  return entry.destructiveApprovalMode ?? (entry.allowDestructiveActions ? "allow" : "deny");
+  if (mode === "allow") {
+    return response;
+  }
+  const outcome = await requestPluginApprovalOutcome({
+    hostCapabilities: params.paramsForRun.hostCapabilities,
+    title: approvalPrompt.title,
+    description: approvalPrompt.description,
+    allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
+    toolName: "codex_mcp_tool_approval",
+    signal: params.signal,
+  });
+  return buildElicitationResponse(approvalPrompt, outcome);
 }
 
 function allowedPluginPolicyApprovalDecisions(

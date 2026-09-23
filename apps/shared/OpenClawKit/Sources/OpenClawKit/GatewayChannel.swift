@@ -35,11 +35,6 @@ extension String {
 }
 
 public actor GatewayChannelActor {
-    struct PendingRequest {
-        let continuation: CheckedContinuation<GatewayFrame, Error>
-        var timeoutTask: Task<Void, Never>?
-    }
-
     nonisolated static func resolveRequestTimeoutMs(_ timeoutMs: Double?, defaultMs: Double) -> Double? {
         timeoutMs == 0 ? nil : (timeoutMs ?? defaultMs)
     }
@@ -77,6 +72,7 @@ public actor GatewayChannelActor {
     private var tickIntervalMs: Double = 30000
     private var lastAuthSource: GatewayAuthSource = .none
     private var lastAuthBinding: (generation: UInt64, binding: GatewayAuthBinding)?
+    private var acceptedHTTPBearer: (generation: UInt64, token: String?)?
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     // Remote gateways (tailscale/wan) can take longer to deliver connect.challenge.
@@ -150,9 +146,19 @@ public actor GatewayChannelActor {
         return self.lastAuthBinding?.binding
     }
 
+    /// Native HTTP adapters reuse the credential accepted by this exact socket,
+    /// including stored device tokens that the hello response does not reissue.
+    public func httpResourceBearer(ifCurrentConnectionGeneration expectedGeneration: UInt64) -> String? {
+        guard self.authBinding(ifCurrentConnectionGeneration: expectedGeneration) != nil,
+              self.acceptedHTTPBearer?.generation == expectedGeneration
+        else { return nil }
+        return self.acceptedHTTPBearer?.token
+    }
+
     public func shutdown() async {
         self.shouldReconnect = false
         self.connected = false
+        self.acceptedHTTPBearer = nil
         self.activeConnectAttemptID = nil
         self.automaticReconnectRequested = false
         self.connectAttemptTask?.cancel()
@@ -996,6 +1002,7 @@ extension GatewayChannelActor {
                 }
             }
         }
+        self.acceptedHTTPBearer = (connectionGeneration, selectedAuth.httpResourceBearer(hello: ok, role: role))
         self.lastTick = Date()
         // Keep arbitrary push/lifecycle callbacks off the connect critical path.
         // Clients needing immediate hello state get a dedicated short admission.
@@ -1077,6 +1084,7 @@ extension GatewayChannelActor {
         // receive failure. Only the owner notifies lifecycle cleanup or reconnects.
         self.disconnectedConnectionGeneration = connectionGeneration
         self.connected = false
+        self.acceptedHTTPBearer = nil
         self.activeConnectAttemptID = nil
         if shouldReconnect {
             self.automaticReconnectRequested = true
@@ -1451,13 +1459,14 @@ extension GatewayChannelActor {
                         }
                     }
                     self.pending[payload.id] = request
+                    let transportLifetime = request.transportLifetime
                     Task {
                         guard !cancellationGate.isCancelled else {
                             self.finishRequest(id: payload.id, result: .failure(CancellationError()))
                             return
                         }
                         do {
-                            try await task.send(.data(payload.data))
+                            try await task.sendRequest(.data(payload.data), lifetime: transportLifetime)
                         } catch is CancellationError {
                             // Cancellation owns only this request. Treating it as socket loss
                             // starts disconnect cleanup and can reject an immediate safe retry.
@@ -1635,6 +1644,7 @@ extension GatewayChannelActor {
         guard let request = self.pending.removeValue(forKey: id) else { return }
         // A deadline belongs to its pending request, including after caller cancellation or disconnect.
         request.timeoutTask?.cancel()
+        request.transportLifetime.finish()
         request.continuation.resume(with: result)
     }
 

@@ -159,6 +159,15 @@ export class SessionOrganizerController {
     await operations?.stopCloudWorker(this.host, session, scope);
   }
 
+  async setSessionInvolvement(session: SidebarRecentSession, hidden: boolean): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.setSessionInvolvement(this.host, session, hidden, scope);
+  }
+
   async assignSessionOwner(
     session: SidebarRecentSession,
     owner: Pick<SessionOwnerOption, "type" | "id">,
@@ -278,7 +287,7 @@ export class SessionOrganizerController {
   }
 
   /** Insert `entry` into the freshest canonical order at the captured drop slot. */
-  private writeSidebarEntryAt(
+  writeSidebarEntryAt(
     entry: string,
     targetEntry: string | undefined,
     position: "before" | "after" | undefined,
@@ -575,7 +584,7 @@ export class SessionOrganizerController {
     this.saveCollapsedSessionSections(collapsed);
   }
 
-  private async reorderSidebarSection(
+  async reorderSidebarSection(
     sourceSectionId: string,
     targetSectionId: string,
     position: "before" | "after",

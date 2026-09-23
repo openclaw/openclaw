@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,
@@ -37,7 +38,7 @@ describe("memory recall metadata", () => {
       const insertChunk = db.prepare(
         `INSERT INTO memory_index_chunks
          (id, path, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, 'MEMORY.md', 1, 1, 'h', 'm', ?, '[]', 2)`,
+         VALUES (?, 'MEMORY.md', 1, 1, 'h', 'm', ?, X'', 2)`,
       );
       const insertMetadata = db.prepare(
         `INSERT INTO memory_index_chunk_recall_metadata
@@ -105,60 +106,79 @@ describe("memory recall metadata", () => {
     }
   });
 
-  it("bounds fetched bodies when unrelated projects precede a curated candidate", () => {
-    const db = new DatabaseSync(":memory:");
-    try {
-      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-      const body = "foreign fact ".repeat(320);
-      const insertChunk = db.prepare(
-        `INSERT INTO memory_index_chunks
-         (id, path, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, 'MEMORY.md', 1, 1, 'h', 'm', ?, '[]', 2)`,
-      );
-      const insertMetadata = db.prepare(
-        `INSERT INTO memory_index_chunk_recall_metadata
-         (chunk_id, importance, triggers, project_key) VALUES (?, ?, 'recall', ?)`,
-      );
-      const insertProvenance = db.prepare(
-        `INSERT INTO memory_index_chunk_provenance
-         (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'owner', 'interactive', 2)`,
-      );
-      for (let index = 0; index < 2_000; index += 1) {
-        const id = `foreign-${index}`;
-        insertChunk.run(id, body);
-        insertMetadata.run(id, 10, `other/${index}`);
-        insertProvenance.run(id);
-      }
-      insertChunk.run("selected", "the selected fact");
-      insertMetadata.run("selected", 1, "project/current");
-      insertProvenance.run("selected");
+  it.each([
+    {
+      scope: "project",
+      projectKey: "project/current",
+      maxSelects: 2,
+      maxRows: 65,
+      maxBodyMultiples: 128,
+    },
+    { scope: "global trigger", projectKey: null, maxSelects: 1, maxRows: 1, maxBodyMultiples: 1 },
+  ])(
+    "bounds fetched bodies when unrelated projects precede a $scope candidate",
+    ({ projectKey, maxSelects, maxRows, maxBodyMultiples }) => {
+      const db = new DatabaseSync(":memory:");
+      try {
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+        const body = "foreign fact ".repeat(320);
+        const insertChunk = db.prepare(
+          `INSERT INTO memory_index_chunks
+           (id, path, start_line, end_line, hash, model, text, embedding, updated_at)
+           VALUES (?, 'MEMORY.md', 1, 1, 'h', 'm', ?, X'', 2)`,
+        );
+        const insertMetadata = db.prepare(
+          `INSERT INTO memory_index_chunk_recall_metadata
+           (chunk_id, importance, triggers, project_key) VALUES (?, ?, 'recall', ?)`,
+        );
+        const insertProvenance = db.prepare(
+          `INSERT INTO memory_index_chunk_provenance
+           (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'owner', 'interactive', 2)`,
+        );
+        for (let index = 0; index < 2_000; index += 1) {
+          const id = `foreign-${index}`;
+          insertChunk.run(id, body);
+          insertMetadata.run(id, 10, `other/${index}`);
+          insertProvenance.run(id);
+        }
+        insertChunk.run("selected", "the selected fact");
+        insertMetadata.run("selected", 1, projectKey);
+        insertProvenance.run("selected");
 
-      let fetchedBodyBytes = 0;
-      const prepare = db.prepare.bind(db);
-      const spy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-        const statement = prepare(sql);
-        const iterate = statement.iterate.bind(statement);
-        vi.spyOn(statement, "iterate").mockImplementation(function* (...values) {
-          for (const row of iterate(...values)) {
-            if (typeof row.text === "string") {
-              fetchedBodyBytes += Buffer.byteLength(row.text);
-            }
-            yield row;
-          }
-          return undefined;
-        });
-        return statement;
-      });
-      expect(readCuratedProjectMemoryCandidates(db, 1, ["project/current"])).toEqual([
-        expect.objectContaining({ id: "selected", text: "the selected fact" }),
-      ]);
-      expect(fetchedBodyBytes).toBeLessThan(Buffer.byteLength(body) * 128);
-      expect(spy.mock.calls.length).toBeLessThanOrEqual(2);
-      spy.mockRestore();
-    } finally {
-      db.close();
-    }
-  });
+        const reads = trackSqliteStatementExecutions(db, ["candidates"], (sql) =>
+          sql.startsWith("select") && sql.includes('from "memory_index_chunks"')
+            ? "candidates"
+            : null,
+        );
+        try {
+          const results =
+            projectKey === null
+              ? readCuratedMemoryTriggerCandidates(db, 1, [])
+              : readCuratedProjectMemoryCandidates(db, 1, [projectKey]);
+          expect(results).toEqual([
+            expect.objectContaining({
+              id: "selected",
+              text: "the selected fact",
+              project_key: projectKey,
+            }),
+          ]);
+          expect(reads.counts.candidates).toBeLessThanOrEqual(maxSelects);
+          expect(reads.rowCounts.candidates).toBeLessThanOrEqual(maxRows);
+          // The shared tracker counts all returned text, including metadata.
+          expect(reads.textBytes.candidates).toBeGreaterThanOrEqual(
+            Buffer.byteLength("the selected fact"),
+          );
+          expect(reads.textBytes.candidates).toBeLessThan(
+            Buffer.byteLength(body) * maxBodyMultiples,
+          );
+        } finally {
+          reads.restore();
+        }
+      } finally {
+        db.close();
+      }
+    },
+  );
 
   it("stores recall metadata in a rollback-safe additive table", () => {
     const db = new DatabaseSync(":memory:");
@@ -187,6 +207,7 @@ describe("memory recall metadata", () => {
           .all()
           .map((row) => (row as { name: string }).name),
       ).toEqual([
+        "chunk_rowid",
         "id",
         "path",
         "source",
@@ -201,7 +222,7 @@ describe("memory recall metadata", () => {
       const insertChunk = db.prepare(
         `INSERT INTO memory_index_chunks
          (id, path, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'm', ?, '[]', 2)`,
+         VALUES (?, ?, ?, ?, ?, 'm', ?, X'', 2)`,
       );
       const insertMetadata = db.prepare(
         `INSERT INTO ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE}

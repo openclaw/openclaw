@@ -39,7 +39,10 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
 import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
+import {
+  acknowledgeWorkerTurnFinishing,
+  type WorkerTurnExecutionIdentityCapability,
+} from "./placement-turn-claim-events.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 import type { WorkerTranscriptCommitOutcome } from "./transcript-commit-store.js";
@@ -47,6 +50,7 @@ import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
 import {
   serializeWorkerSessionToolResult,
   workerSessionToolErrorResult,
+  type WorkerSessionToolExecutor,
 } from "./worker-session-tool-result.js";
 import {
   createWorkerComputerRpc,
@@ -117,33 +121,7 @@ type WorkerTurnRpcOptions = {
   liveEvents?: Pick<WorkerLiveEventReceiver, "apply">;
   placementStore?: WorkerSessionPlacementGate;
   executeComputer?: WorkerComputerExecutor;
-  executeSessionTool?: (
-    params:
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "skill_workshop";
-          request: WorkerSkillWorkshopParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "sessions_spawn";
-          request: WorkerSessionsSpawnParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "sessions_send";
-          request: WorkerSessionsSendParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "portal";
-          request: WorkerPortalParams;
-          signal?: AbortSignal;
-        },
-  ) => Promise<WorkerSessionToolResult>;
+  executeSessionTool?: WorkerSessionToolExecutor;
   inference: ReturnType<typeof createWorkerInferenceManager>;
   isStopping: () => boolean;
   now: () => number;
@@ -558,6 +536,11 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
           claim: placement,
           liveSeq: result.result.ackedSeq,
         });
+        acknowledgeWorkerTurnFinishing(
+          identity,
+          result.result.ackedSeq,
+          () => validateLiveEvent(identity, request) === undefined,
+        );
         // A gap fill can ACK a previously buffered terminal event. Fence from
         // the observed high-water marks, not only from the request carrying it.
         terminalTurnFences.set(

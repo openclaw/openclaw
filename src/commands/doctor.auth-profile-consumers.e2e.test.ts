@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn } from "@lydell/node-pty";
 import { afterEach, describe, expect, it } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { loadPersistedSharedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -15,6 +14,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { spawnTerminalPty } from "../process/terminal-pty.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -45,29 +45,41 @@ function runDoctor(env: NodeJS.ProcessEnv) {
 
 async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolean) {
   closeOpenClawAgentDatabasesForTest();
-  const child = spawn(process.execPath, ["openclaw.mjs", "doctor"], {
+  const ptyEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries({
+    ...env,
+    NODE_ENV: undefined,
+    VITEST: undefined,
+    OPENCLAW_NO_RESPAWN: "1",
+    TERM: "xterm-256color",
+    NO_COLOR: "1",
+  })) {
+    if (value !== undefined) {
+      ptyEnv[key] = value;
+    }
+  }
+  const deadline = performance.now() + 60_000;
+  const child = await spawnTerminalPty({
+    file: process.execPath,
+    args: ["openclaw.mjs", "doctor"],
     cwd: fileURLToPath(new URL("../../", import.meta.url)),
     cols: 240,
     rows: 40,
     name: "xterm-256color",
-    env: {
-      ...env,
-      NODE_ENV: undefined,
-      VITEST: undefined,
-      OPENCLAW_NO_RESPAWN: "1",
-      TERM: "xterm-256color",
-      NO_COLOR: "1",
-    },
+    env: ptyEnv,
   });
   let output = "";
   let answeredThrough = 0;
   let importsAccepted = 0;
   let failure: string | undefined;
   const exitCode = await new Promise<number>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      failure = "Interactive Doctor did not exit";
-      child.kill();
-    }, 60_000);
+    const timeout = setTimeout(
+      () => {
+        failure = "Interactive Doctor did not exit";
+        child.kill();
+      },
+      Math.max(0, deadline - performance.now()),
+    );
     child.onData((data) => {
       output += data;
       if (failure) {

@@ -150,7 +150,7 @@ export function createWorkerSessionPlacementGate(
         return;
       }
       const pending = store
-        .listPendingWorkspaceResults()
+        .listPendingWorkspaceResults(claim.sessionId)
         .find(
           (candidate) =>
             candidate.sessionId === claim.sessionId &&

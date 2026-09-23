@@ -64,6 +64,13 @@ Notes:
 
 Other URI schemes (for example `ftp://`) return `details.error = "unsupported_pdf_reference"`. Remote `http(s)` URLs are rejected when the tool runs sandboxed. With workspace-only file policy enabled, local paths outside allowed roots are rejected; managed inbound refs and replayed paths under OpenClaw's inbound media store are still allowed.
 
+`data:` URLs are unsupported. Files identified as other document types, such as
+plain text or JSON, are rejected before model dispatch.
+
+Relative paths resolve from the task's working directory, including selected Git
+worktrees. Local reads use the session's approved filesystem root; see
+[Local media files](/tools/media-overview#local-media-files).
+
 ## Execution modes
 
 ### Native provider mode
@@ -80,7 +87,7 @@ Limits:
 Used for every other provider.
 
 1. Extract text from the selected pages (up to `agents.defaults.pdfMaxPages`, default `20`) via the bundled `document-extract` plugin, which uses the `clawpdf` package (PDFium WebAssembly) for text and image extraction.
-2. If the extracted text is shorter than `200` characters, render the same pages to PNG images. The render budget is `4,000,000` pixels total, shared across all pages needing images (allocated proportionally per remaining page, not per page), so text pages that already have enough text skip rendering entirely.
+2. For each selected page with fewer than `200` characters of extracted text, render that page to a PNG image. A text-rich page does not suppress image fallback for other selected pages. The render budget is `4,000,000` pixels total, shared across all pages needing images (allocated proportionally per remaining page, not per page), so text pages that already have enough text skip rendering entirely.
 3. Send the extracted text (and any rendered images) plus the prompt to the selected model.
 
 Details:

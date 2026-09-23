@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   describeTelegramDispatch,
+  emitToolStart,
   createContext,
   createDraftStream,
   createSequencedDraftStream,
@@ -27,7 +28,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver(
           { text: "A".repeat(4000) + "B".repeat(4000) },
           { kind: "final" },
@@ -75,7 +76,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver({ text: "block after progress" }, { kind: "block" });
         return { queuedFinal: true };
       },

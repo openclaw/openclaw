@@ -126,7 +126,6 @@ describe("cron CLI delivery suppression readback", () => {
           const sessionKey = `agent:main:cron:${job.id}:run:${sessionId}`;
           const now = Date.now();
           const dispatch = await dispatchCronDelivery({
-            cfg: {},
             cfgWithAgentDefaults: {},
             deps: {},
             job,
@@ -137,7 +136,6 @@ describe("cron CLI delivery suppression readback", () => {
             lifecycleRevision: randomUUID(),
             sessionUpdatedAt: now,
             runStartedAt: now,
-            runEndedAt: now,
             timeoutMs: 5_000,
             resolvedDelivery:
               phase === "delivery-error" || phase === "required-delivery-error"
@@ -166,11 +164,14 @@ describe("cron CLI delivery suppression readback", () => {
             abortSignal,
             isAborted: () => abortSignal?.aborted === true,
             abortReason: () => "fixture aborted",
-            withRunSession: (result) => ({ ...result, sessionId, sessionKey }),
           });
+          const failure = dispatch.disposition?.kind === "error" ? dispatch.disposition : undefined;
           return {
-            status: "ok",
-            ...dispatch.result,
+            status: failure ? "error" : "ok",
+            error: failure?.error,
+            errorKind: failure?.errorKind,
+            sessionId,
+            sessionKey,
             delivered: dispatch.delivered,
             deliveryAttempted: dispatch.deliveryAttempted,
             deliveryError: dispatch.deliveryError,

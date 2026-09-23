@@ -9,7 +9,6 @@ import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-ru
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
   mapSandboxSkillEntriesForPrompt,
-  mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
 
@@ -98,18 +97,23 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
 
   it("maps materialized read paths while preserving original file identities", () => {
     expect(
-      mapSandboxSkillUsagePaths({
-        paths: [
-          {
-            readPath: "/state/sandbox-skills/skills/demo/SKILL.md",
-            skillFile: "/agent-workspace/skills/demo/SKILL.md",
-            skillName: "demo",
-            skillSource: "workspace",
-          },
-        ],
-        skillsWorkspaceDir: "/state/sandbox-skills",
-        skillsPromptWorkspaceDir: "/workspace/.openclaw/sandbox-skills",
-      }),
+      resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          enabled: true,
+          workspaceAccess: "rw",
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: "/state/sandbox-skills",
+          skillUsagePaths: [
+            {
+              readPath: "/state/sandbox-skills/skills/demo/SKILL.md",
+              skillFile: "/agent-workspace/skills/demo/SKILL.md",
+              skillName: "demo",
+              skillSource: "workspace",
+            },
+          ],
+        },
+        skillsAnchorWorkspace: "/workspace",
+      }).skillUsagePaths,
     ).toEqual([
       {
         readPath: "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",

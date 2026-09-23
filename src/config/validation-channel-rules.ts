@@ -14,7 +14,7 @@ import {
   evaluateDmPolicyAllowFromDependency,
 } from "./zod-schema.core.js";
 
-export const bundledChannelSchemaById = new Map<string, unknown>(
+const bundledChannelSchemaById = new Map<string, unknown>(
   GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).map(
     (entry) => [entry.channelId, entry.schema] as const,
   ),

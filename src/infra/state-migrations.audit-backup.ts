@@ -23,67 +23,6 @@ import {
   readLegacyAuditSourcePrefixSnapshotForBackup,
 } from "./state-migrations.audit-recovery.js";
 
-const LEGACY_AUDIT_LOGICAL_PATHS = [
-  { directory: "logs", basename: "config-audit.jsonl" },
-  // system-agent.jsonl never shipped in a stable, but beta installs that ran
-  // its import left backup artifacts this list must keep recognizing.
-  { directory: "audit", basename: "system-agent.jsonl" },
-  { directory: "audit", basename: "crestodian.jsonl" },
-] as const;
-
-export async function hasLegacyAuditBackupSources(stateDir: string): Promise<boolean> {
-  for (const logical of LEGACY_AUDIT_LOGICAL_PATHS) {
-    let entries: string[];
-    try {
-      entries = await fs.readdir(path.join(stateDir, logical.directory));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-    const escaped = logical.basename.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-    const sourcePattern = new RegExp(
-      `^(?:${escaped}|\\.${escaped}\\.doctor-importing(?:\\.(?:[2-9]|[1-9][0-9]+))?|${escaped}\\.migrated(?:\\.(?:[2-9]|[1-9][0-9]+))?\\.raw(?:\\.doctor-scrub-(?:progress|restore|staging))?)$`,
-      "u",
-    );
-    if (entries.some((entry) => sourcePattern.test(entry))) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function isLegacyAuditMigrationBackupPath(sourcePath: string, stateDir: string): boolean {
-  const relativePath = path.relative(path.resolve(stateDir), path.resolve(sourcePath));
-  if (!relativePath || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
-    return false;
-  }
-  const directory = path.dirname(relativePath);
-  const basename = path.basename(relativePath);
-  for (const logical of LEGACY_AUDIT_LOGICAL_PATHS) {
-    if (directory !== logical.directory) {
-      continue;
-    }
-    if (basename === logical.basename) {
-      return true;
-    }
-    const escaped = logical.basename.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-    const claimPattern = new RegExp(
-      `^\\.${escaped}\\.doctor-importing(?:\\.(?:[2-9]|[1-9][0-9]+))?$`,
-      "u",
-    );
-    const rawPattern = new RegExp(
-      `^${escaped}\\.migrated(?:\\.(?:[2-9]|[1-9][0-9]+))?\\.raw(?:\\.doctor-scrub-(?:progress|restore|staging))?$`,
-      "u",
-    );
-    if (claimPattern.test(basename) || rawPattern.test(basename)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 type LegacyAuditBackupCheckpoint = {
   key: string;
   value: LegacyAuditRawCheckpoint;

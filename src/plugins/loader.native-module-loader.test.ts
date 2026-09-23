@@ -224,8 +224,9 @@ describe("createPluginModuleLoader", () => {
 
   it("loads published pre-split SDK bridge imports (doctor repair, WhatsApp ack, Slack render)", () => {
     const pluginRoot = writePreSplitSdkBridgeConsumerFixture();
-    const [entrypoint] = publishedSdkBridgeEntrypoints;
-    const hostRoot = createCompiledSdkHost(entrypoint, (prefix) => tempDirs.make(prefix));
+    const hostRoot = createCompiledSdkHost(publishedSdkBridgeEntrypoints, (prefix) =>
+      tempDirs.make(prefix),
+    );
     const hasCompiledSdk = hostRoot !== undefined;
     if (hasCompiledSdk) {
       vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", hostRoot);

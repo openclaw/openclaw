@@ -42,6 +42,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { noteDisabledBeforeSetup } from "./channel-setup-fallback.js";
 import {
   ensureChannelSetupPluginInstalledWithNavigation as runPluginInstallWithNavigation,
   runScopedChannelStep as runNavigationScope,
@@ -805,24 +806,12 @@ export async function setupChannels(
         }
         resumingDisabledChannel = true;
       } else {
-        await prompter.note(
-          t("wizard.channels.disabledBeforeSetup", {
-            channel,
-            hint: deferredDisabledHint,
-          }),
-          t("wizard.channels.setupTitle"),
-        );
+        await noteDisabledBeforeSetup(prompter, channel, deferredDisabledHint);
         return "done";
       }
       deferredDisabledHint = resolveConfigDisabledHint(channel);
       if (deferredDisabledHint) {
-        await prompter.note(
-          t("wizard.channels.disabledBeforeSetup", {
-            channel,
-            hint: deferredDisabledHint,
-          }),
-          t("wizard.channels.setupTitle"),
-        );
+        await noteDisabledBeforeSetup(prompter, channel, deferredDisabledHint);
         return "done";
       }
     }
@@ -866,10 +855,7 @@ export async function setupChannels(
         // cannot be silently reinstalled/re-enabled through this path.
         const disabledHint = resolveConfigDisabledHint(channel);
         if (disabledHint) {
-          await prompter.note(
-            t("wizard.channels.disabledBeforeSetup", { channel, hint: disabledHint }),
-            t("wizard.channels.setupTitle"),
-          );
+          await noteDisabledBeforeSetup(prompter, channel, disabledHint);
           return "done";
         }
         const workspaceDir = resolveWorkspaceDir();
@@ -902,59 +888,43 @@ export async function setupChannels(
       }
       await refreshStatus(channel);
     } else {
-      // Neither discovery bucket yielded an entry for this channel. This can
-      // happen when `channels.<id>` in user config carries stale fields (e.g.
-      // `appId`, tokens) left over from a previous install: `isStatically-
-      // ChannelConfigured` returns true, which removes the channel from the
-      // `installableCatalogEntries` bucket, while a missing/pruned plugin on
-      // disk keeps it out of `installedCatalogEntries`. Before falling back
-      // to the bundled-plugin enable path, consult the catalog directly so
-      // users with a stale config entry for an externalized channel (qqbot,
-      // imessage, discord, whatsapp, ...) still get auto-install instead
-      // of a dead-end "plugin not available" note.
+      // Discovery omits loaded catalog plugins from both buckets. Reuse them
+      // without reinstalling or enabling by channel ID: the plugin owner may
+      // have a different ID. Non-catalog setup plugins still need activation.
       const fallbackCatalogEntry = getTrustedChannelPluginCatalogEntry(channel, {
         cfg: next,
         workspaceDir: resolveWorkspaceDir(),
       });
       if (fallbackCatalogEntry?.install?.npmSpec) {
-        // Preserve the same disabled-config guard used by
-        // `enableBundledPluginForSetup` so an operator-disabled channel
-        // cannot be silently reinstalled/re-enabled through this path. This
-        // mirrors the guard that was previously enforced inside the
-        // bundled-enable fallback.
         const disabledHint = resolveConfigDisabledHint(channel);
         if (disabledHint) {
-          await prompter.note(
-            t("wizard.channels.disabledBeforeSetup", { channel, hint: disabledHint }),
-            t("wizard.channels.setupTitle"),
-          );
+          await noteDisabledBeforeSetup(prompter, channel, disabledHint);
           return "done";
         }
-        const workspaceDir = resolveWorkspaceDir();
-        const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation(channel, {
-          cfg: next,
-          entry: fallbackCatalogEntry,
-          runtime,
-          workspaceDir,
-          autoConfirmSingleSource: true,
-        });
-        if (installOutcome.status === "back") {
-          return returnToSelection();
-        }
-        const result = installOutcome.value;
-        next = result.cfg;
-        if (!result.installed) {
-          return "retry_selection";
-        }
-        if (installOutcome.persistentEffectStarted) {
-          cfgOnBack = next;
+        if (!getVisibleChannelPlugin(channel)) {
+          const workspaceDir = resolveWorkspaceDir();
+          const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation(channel, {
+            cfg: next,
+            entry: fallbackCatalogEntry,
+            runtime,
+            workspaceDir,
+            autoConfirmSingleSource: true,
+          });
+          if (installOutcome.status === "back") {
+            return returnToSelection();
+          }
+          const result = installOutcome.value;
+          next = result.cfg;
+          if (!result.installed) {
+            return "retry_selection";
+          }
+          if (installOutcome.persistentEffectStarted) {
+            cfgOnBack = next;
+          }
         }
         await refreshStatus(channel);
-      } else {
-        const enabled = await enableBundledPluginForSetup(channel);
-        if (!enabled) {
-          return "done";
-        }
+      } else if (!(await enableBundledPluginForSetup(channel))) {
+        return "done";
       }
     }
 

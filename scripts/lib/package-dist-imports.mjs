@@ -1,11 +1,11 @@
-// Scans packaged dist JavaScript for relative imports and missing closure entries.
+// Scans packaged JavaScript for relative imports and missing closure entries.
 import { createRequire } from "node:module";
 import path from "node:path";
 import { visitModuleSpecifiers } from "./guard-inventory-utils.mjs";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
-const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
+const JS_FILE_RE = /\.(?:cjs|js|mjs)$/u;
 
 function normalizePackagePath(value) {
   return value.replace(/\\/gu, "/").replace(/^package\//u, "");
@@ -57,7 +57,7 @@ function appendImportEdges(source, importerPath, imports) {
   );
 }
 
-/** Collect missing-file errors for relative imports inside package dist files. */
+/** Collect missing-file errors for relative imports inside package files. */
 export function collectPackageDistImportErrors(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const fileSet = new Set(files);
@@ -84,7 +84,7 @@ export function collectPackageDistImports(params) {
   const imports = [];
 
   for (const importerPath of files) {
-    if (!JS_DIST_FILE_RE.test(importerPath) || importerPath.includes("/node_modules/")) {
+    if (!JS_FILE_RE.test(importerPath) || /(?:^|\/)node_modules\//u.test(importerPath)) {
       continue;
     }
     const source = params.readText(importerPath);

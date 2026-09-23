@@ -250,6 +250,12 @@ function lspAbortError(signal?: AbortSignal): Error {
     : createAbortError("LSP request aborted", { cause: signal?.reason });
 }
 
+function throwIfLspAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw lspAbortError(signal);
+  }
+}
+
 function lspSessionDisposedError(): Error {
   return new Error("LSP session disposed");
 }
@@ -368,19 +374,28 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
   }
 }
 
-async function initializeSession(session: LspSession): Promise<LspServerCapabilities> {
-  const result = (await sendRequest(session, "initialize", {
-    processId: process.pid,
-    rootUri: null,
-    capabilities: {
-      textDocument: {
-        hover: { contentFormat: ["plaintext", "markdown"] },
-        completion: { completionItem: { snippetSupport: false } },
-        definition: {},
-        references: {},
+async function initializeSession(
+  session: LspSession,
+  signal?: AbortSignal,
+): Promise<LspServerCapabilities> {
+  const result = (await sendRequest(
+    session,
+    "initialize",
+    {
+      processId: process.pid,
+      rootUri: null,
+      capabilities: {
+        textDocument: {
+          hover: { contentFormat: ["plaintext", "markdown"] },
+          completion: { completionItem: { snippetSupport: false } },
+          definition: {},
+          references: {},
+        },
       },
     },
-  })) as { capabilities?: LspServerCapabilities } | undefined;
+    signal,
+  )) as { capabilities?: LspServerCapabilities } | undefined;
+  throwIfLspAborted(signal);
 
   // Send initialized notification
   session.process.stdin?.write(
@@ -567,10 +582,12 @@ function formatLspResult(
 export async function createBundleLspToolRuntime(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  abortSignal?: AbortSignal;
   reservedToolNames?: Iterable<string>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   dependencies?: BundleLspRuntimeDependencies;
 }): Promise<BundleLspToolRuntime> {
+  throwIfLspAborted(params.abortSignal);
   const dependencies = params.dependencies ?? defaultBundleLspRuntimeDependencies;
   const loaded = dependencies.loadLspConfig({
     workspaceDir: params.workspaceDir,
@@ -595,6 +612,7 @@ export async function createBundleLspToolRuntime(params: {
 
   try {
     for (const [serverName, rawServer] of Object.entries(loaded.lspServers)) {
+      throwIfLspAborted(params.abortSignal);
       const launch = resolveStdioMcpServerLaunchConfig(rawServer);
       if (!launch.ok) {
         logWarn(`bundle-lsp: skipped server "${serverName}" because ${launch.reason}.`);
@@ -604,11 +622,16 @@ export async function createBundleLspToolRuntime(params: {
       let session: LspSession | undefined;
 
       try {
-        session = createLspSession(serverName, await dependencies.spawnServerProcess(launchConfig));
+        session = createLspSession(
+          serverName,
+          await dependencies.spawnServerProcess(launchConfig, { abortSignal: params.abortSignal }),
+        );
         registerActiveLspSession(session);
         attachLspProcessHandlers(session);
+        throwIfLspAborted(params.abortSignal);
 
-        const capabilities = await initializeSession(session);
+        const capabilities = await initializeSession(session, params.abortSignal);
+        throwIfLspAborted(params.abortSignal);
         session.capabilities = capabilities;
         sessions.push(session);
 
@@ -641,9 +664,12 @@ export async function createBundleLspToolRuntime(params: {
         } else if (error instanceof OwnedStdioCleanupError) {
           recordAgentCleanupFailure();
         }
-        logWarn(
-          `bundle-lsp: failed to start server "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}): ${String(error)}`,
-        );
+        if (!params.abortSignal?.aborted || error instanceof OwnedStdioCleanupError) {
+          logWarn(
+            `bundle-lsp: failed to start server "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}): ${String(error)}`,
+          );
+        }
+        throwIfLspAborted(params.abortSignal);
       }
     }
 

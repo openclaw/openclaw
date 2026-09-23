@@ -1,4 +1,11 @@
 import { STAGED_INPUT_PATHS_JS } from "../../media/staged-inputs.js";
+import {
+  MATERIALIZED_SANDBOX_SKILLS_WORKSPACE,
+  isManagedSandboxSkillsPath as managedSandboxSkillsPath,
+} from "../../shared/sandbox-workspace-paths.js";
+
+// Serialized helpers must close over local names, never loader-generated imports.
+const isManagedSandboxSkillsPath = managedSandboxSkillsPath;
 
 const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
   "__pycache__",
@@ -28,6 +35,9 @@ const WORKER_ATTACHMENT_DIRECTORY_RE = new RegExp(`^${WORKER_ATTACHMENT_DIRECTOR
 // Derived caches and runtime attachment copies are not workspace edits. Keep
 // sync, manifest, divergence, apply, and recovery on this single predicate.
 export function isDerivedWorkspacePath(relativePath: string, retainedInput = false): boolean {
+  if (isManagedSandboxSkillsPath(relativePath)) {
+    return true;
+  }
   if (retainedInput) {
     return false;
   }
@@ -43,6 +53,7 @@ export function isDerivedWorkspacePath(relativePath: string, retainedInput = fal
 }
 
 export const DERIVED_WORKSPACE_RSYNC_EXCLUDES = [
+  `/${MATERIALIZED_SANDBOX_SKILLS_WORKSPACE}`,
   ...DERIVED_WORKSPACE_DIRECTORY_NAMES,
   ...DERIVED_WORKSPACE_FILE_NAMES,
   ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `*${suffix}`),
@@ -51,6 +62,8 @@ export const DERIVED_WORKSPACE_RSYNC_EXCLUDES = [
 
 export const WORKSPACE_PATH_EXCLUSIONS_JS = `
 ${STAGED_INPUT_PATHS_JS}
+const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE = ${JSON.stringify(MATERIALIZED_SANDBOX_SKILLS_WORKSPACE)};
+const isManagedSandboxSkillsPath = ${isManagedSandboxSkillsPath.toString()};
 const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
 const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
 const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};

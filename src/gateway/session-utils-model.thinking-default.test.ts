@@ -60,6 +60,29 @@ describe("Gateway captured thinking defaults", () => {
     ],
   };
 
+  it("projects the agent-specific model default above shared model and global defaults", () => {
+    const ref = `${provider}/reasoner`;
+    const profile = resolveGatewayModelThinkingProfile({
+      cfg: {
+        agents: {
+          defaults: {
+            thinkingDefault: "medium",
+            models: { [ref]: { params: { thinking: "low" } } },
+          },
+          entries: { main: { models: { [ref]: { params: { thinking: "off" } } } } },
+        },
+      },
+      agentId: "main",
+      provider,
+      model: "reasoner",
+      agentRuntime: "openclaw",
+      providerPolicySource: captured,
+      modelCatalog: [{ provider, id: "reasoner", name: "Reasoner", reasoning: true }],
+    });
+
+    expect(profile.thinkingDefault).toBe("off");
+  });
+
   it.each([
     { name: "captured", source: captured, expected: "low" },
     { name: "active", source: "active" as const, expected: "medium" },
@@ -191,7 +214,7 @@ describe.each([false, true])("Gateway thinking catalog indexed=%s", (indexed) =>
     );
     expect(profile.thinkingDefault).toBe(scenario.expected);
     expect(logicalPolicy).toHaveBeenCalledTimes(scenario.configured ? 0 : 1);
-    expect(donorPolicy).toHaveBeenCalledTimes(2);
+    expect(donorPolicy).toHaveBeenCalledTimes(1);
   });
 
   it("retains an authoritative absent policy across all default and clamp reads", () => {

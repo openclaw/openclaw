@@ -2,6 +2,7 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -56,6 +57,11 @@ const runMemoryFlushIfNeededMock = vi.fn();
 const executeAgentTurnMock = vi.fn();
 const resetReplyRunSessionMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
+const compactEmbeddedAgentSessionMock = vi.fn();
+
+vi.mock("../../agents/embedded-agent.js", () => ({
+  compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
+}));
 
 vi.mock("./agent-runner-utils.js", async () => {
   const actual =
@@ -483,6 +489,109 @@ describe("runReplyAgent runtime config", () => {
       clearMemoryPluginState();
     }
   });
+
+  it.each(["success", "failure", "abort", "operation abort", "no compaction"] as const)(
+    "keeps preflight compaction live and stops its heartbeat after %s",
+    async (outcome) => {
+      const memory = await vi.importActual<typeof import("./agent-runner-memory.js")>(
+        "./agent-runner-memory.js",
+      );
+      runSessionCompactionIfNeededMock.mockImplementation(memory.runSessionCompactionIfNeeded);
+      await withTestDir({ prefix: "openclaw-preflight-heartbeat-" }, async (tempDir) => {
+        const { replyParams, followupRun } = createDirectRuntimeReplyParams({
+          shouldFollowup: false,
+          isActive: false,
+        });
+        const sessionKey = "agent:main:telegram:default:direct:test";
+        const sessionEntry: SessionEntry = {
+          sessionId: "session-1",
+          updatedAt: 1,
+          totalTokens: outcome === "no compaction" ? 100 : 95_000,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+        };
+        const storePath = join(tempDir, "sessions.json");
+        await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, sessionEntry);
+        followupRun.run.provider = "anthropic";
+        followupRun.run.model = "claude-sonnet-4-6";
+        const abort = new AbortController();
+        const operationAbort = new AbortController();
+        const lifecycle = {
+          admission: "exclusive" as const,
+          abortSignal: abort.signal,
+          onAdopted: vi.fn(),
+          onDeferred: vi.fn(),
+          onDeferredHeartbeat: vi.fn(),
+          deferredHeartbeatIntervalMs: 100,
+          onAbandoned: vi.fn(),
+        };
+        followupRun.turnAdoptionLifecycle = lifecycle;
+        replyParams.opts = { turnAdoptionLifecycle: lifecycle };
+        replyParams.sessionKey = sessionKey;
+        replyParams.sessionEntry = sessionEntry;
+        replyParams.sessionStore = { [sessionKey]: sessionEntry };
+        replyParams.storePath = storePath;
+        replyParams.replyOperation = createMockReplyOperation({
+          key: "test",
+          sessionId: "session-1",
+          abortSignal: operationAbort.signal,
+        }).replyOperation;
+        resolveQueuedReplyExecutionConfigMock.mockResolvedValue(
+          withTestModelContextTokens({
+            cfg: {},
+            followupRun,
+            defaultModel: replyParams.defaultModel,
+            contextTokens: 100_000,
+          }),
+        );
+        runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry, outcome: "skipped" });
+        const entered = createDeferred();
+        const release = createDeferred();
+        compactEmbeddedAgentSessionMock.mockReset().mockImplementation(async () => {
+          entered.resolve();
+          await release.promise;
+          if (outcome === "failure") {
+            throw new Error("Preflight compaction required but failed: test failure");
+          }
+          return { ok: true, compacted: true, result: { tokensAfter: 42 } };
+        });
+        vi.useFakeTimers();
+        const pending = runReplyAgent(replyParams);
+        try {
+          if (outcome === "no compaction") {
+            await pending;
+            await vi.advanceTimersByTimeAsync(500);
+            expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+            expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
+            return;
+          }
+          await entered.promise;
+          await vi.advanceTimersByTimeAsync(350);
+          expect(lifecycle.onAdopted).not.toHaveBeenCalled();
+          expect(lifecycle.onDeferredHeartbeat.mock.calls.length).toBeGreaterThanOrEqual(2);
+          if (outcome === "abort" || outcome === "operation abort") {
+            (outcome === "abort" ? abort : operationAbort).abort();
+            lifecycle.onDeferredHeartbeat.mockClear();
+            await vi.advanceTimersByTimeAsync(500);
+            expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
+          }
+          release.resolve();
+          await pending;
+          lifecycle.onDeferredHeartbeat.mockClear();
+          await vi.advanceTimersByTimeAsync(500);
+          expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
+          if (outcome === "success") {
+            expect(lifecycle.onAdopted).toHaveBeenCalledOnce();
+            expect(executeAgentTurnMock).toHaveBeenCalledOnce();
+          }
+        } finally {
+          release.resolve();
+          await Promise.allSettled([pending]);
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
 
   it("keeps the compacted session when preflight recovers an exhausted memory flush", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({

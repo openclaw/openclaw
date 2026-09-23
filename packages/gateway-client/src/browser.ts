@@ -6,6 +6,7 @@ export * from "./gateway-origin-scope.js";
 export * from "./connect-auth.js";
 export * from "./model-catalog-connect.js";
 export * from "./protocol-client.js";
+export { isGatewayProtocolResponseError } from "./protocol-request.js";
 export * from "./reconnect-policy.js";
 export * from "./session-projection.js";
 export * from "./session-subscriptions.js";

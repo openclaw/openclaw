@@ -26,6 +26,7 @@ describe("persistAgentSession", () => {
       // A guarded write can decline persistence after rereading disk; local
       // memory must be cleared too so later turns do not reuse stale entries.
       const persisted = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -80,6 +81,7 @@ describe("persistAgentSession", () => {
       const sessionStore = { [sessionKey]: staleEntry };
 
       const persisted = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -126,6 +128,7 @@ describe("persistAgentSession", () => {
       const sessionStore = { [sessionKey]: initialEntry };
 
       const persisted = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -164,6 +167,7 @@ describe("persistAgentSession", () => {
       const sessionStore = { [sessionKey]: staleEntry };
 
       const persisted = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -195,6 +199,7 @@ describe("persistAgentSession", () => {
       const sessionStore = { [sessionKey]: staleEntry };
 
       const first = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -202,6 +207,7 @@ describe("persistAgentSession", () => {
         entry: staleEntry,
       });
       const second = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,
@@ -234,6 +240,7 @@ describe("persistAgentSession", () => {
       };
 
       const persisted = await persistAgentSession({
+        agentId: "main",
         sessionStore,
         sessionKey,
         storePath,

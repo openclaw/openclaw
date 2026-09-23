@@ -1,17 +1,10 @@
 /** Executes an already-prepared model without importing model/auth preparation. */
-import {
-  reasoningTagTextPolicy,
-  supportsOpenAIReasoningEffort,
-} from "@openclaw/ai/internal/openai";
+import { reasoningTagTextPolicy } from "@openclaw/ai/internal/openai";
 import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
 import {
   prepareHeadersForSimpleCompletion,
   prepareModelForSimpleCompletion,
 } from "@openclaw/ai/transports";
-import {
-  resolveClaudeOpus5ModelIdentity,
-  resolveClaudeSonnet5ModelIdentity,
-} from "@openclaw/llm-core";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -21,15 +14,8 @@ import {
   getModelLlmRuntime,
 } from "../llm/model-runtime-binding.js";
 import { completeSimple } from "../llm/stream.js";
-import type {
-  AssistantMessage,
-  Model,
-  ModelThinkingLevel,
-  SimpleStreamOptions,
-  ThinkingLevel as SimpleCompletionThinkingLevel,
-} from "../llm/types.js";
+import type { AssistantMessage, Model, SimpleStreamOptions } from "../llm/types.js";
 import type { ResolvedProviderAuth } from "./model-auth.js";
-import { isOpenAIProvider } from "./openai-routing.js";
 
 type SimpleCompletionModelOptions = {
   headers?: Record<string, string>;
@@ -37,7 +23,7 @@ type SimpleCompletionModelOptions = {
   maxTokens?: number;
   temperature?: number;
   serviceTier?: SimpleStreamOptions["serviceTier"];
-  reasoning?: ThinkLevel | SimpleCompletionThinkingLevel;
+  reasoning?: ThinkLevel;
   strictReasoningTags?: boolean;
   signal?: AbortSignal;
 };
@@ -88,9 +74,10 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
     completionModel = bindModelLlmRuntime(completionModel, runtime);
   }
   const { reasoning: rawReasoning, strictReasoningTags, ...options } = params.options ?? {};
-  const reasoning = normalizeSimpleCompletionReasoning(rawReasoning, completionModel);
+  const reasoning =
+    rawReasoning === "adaptive" ? "medium" : rawReasoning === "ultra" ? "max" : rawReasoning;
   const headers = prepareHeadersForSimpleCompletion(completionModel, options);
-  const completionOptions = {
+  const completionOptions: SimpleStreamOptions = {
     ...options,
     ...(reasoning ? { reasoning } : {}),
     apiKey: params.auth.apiKey,
@@ -105,27 +92,4 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
     completionOptions,
     params.assertCurrent,
   );
-}
-
-function normalizeSimpleCompletionReasoning(
-  reasoning: SimpleCompletionModelOptions["reasoning"],
-  model: Model,
-): ModelThinkingLevel | undefined {
-  switch (reasoning) {
-    case undefined:
-      return undefined;
-    case "off":
-      return resolveClaudeSonnet5ModelIdentity(model) || resolveClaudeOpus5ModelIdentity(model)
-        ? "off"
-        : undefined;
-    case "adaptive":
-      return "medium";
-    case "ultra":
-    case "max":
-      return isOpenAIProvider(model.provider) && supportsOpenAIReasoningEffort(model, "max")
-        ? "max"
-        : "xhigh";
-    default:
-      return reasoning;
-  }
 }

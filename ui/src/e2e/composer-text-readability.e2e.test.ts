@@ -36,6 +36,24 @@ suite.define(() => {
         expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
         expect(await textarea.evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
 
+        // Moving the caret is still editing, even when the last line stays in place.
+        const lastLineKeys = [
+          "ArrowLeft",
+          "ArrowRight",
+          process.platform === "darwin" ? "Alt+ArrowLeft" : "Control+ArrowLeft",
+          process.platform === "darwin" ? "Alt+ArrowRight" : "Control+ArrowRight",
+          "Shift+ArrowLeft",
+          "ArrowRight",
+          process.platform === "darwin" ? "Meta+ArrowLeft" : "Home",
+          process.platform === "darwin" ? "Meta+ArrowRight" : "End",
+          "ArrowDown",
+        ];
+        for (const key of lastLineKeys) {
+          await textarea.press(key);
+          expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage), key).toBe("none");
+        }
+        await page.screenshot({ path: `${artifactDir}/last-line-navigation.png` });
+
         const typingScrollTop = await textarea.evaluate((el) => el.scrollTop);
         await textarea.hover();
         await page.mouse.wheel(0, -80);
@@ -46,13 +64,20 @@ suite.define(() => {
           .poll(() => textarea.evaluate((el) => getComputedStyle(el).maskImage))
           .not.toBe("none");
         await page.screenshot({ path: `${artifactDir}/scrolling-draft.png` });
-        // Typing again after scrolling must clear the fade before native caret scrolling.
+        // Keyboard navigation must also enter editing protection after pointer browsing.
+        await textarea.press("ArrowLeft");
+        expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
+        await page.mouse.wheel(0, -80);
+        await expect
+          .poll(() => textarea.evaluate((el) => getComputedStyle(el).maskImage))
+          .not.toBe("none");
+        // Typing after browsing still clears the fade before native caret scrolling.
         await textarea.press("y");
         await expect
           .poll(() => textarea.evaluate((el) => getComputedStyle(el).maskImage))
           .toBe("none");
 
-        await textarea.press("ControlOrMeta+Home");
+        await textarea.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
         await expect
           .poll(() =>
             textarea.evaluate((el) => ({
@@ -61,11 +86,14 @@ suite.define(() => {
             })),
           )
           .toEqual({ caret: 0, firstLineVisible: true });
-        expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage)).not.toBe("none");
-        await textarea.press("ArrowDown");
+        expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
+        for (const key of ["ArrowDown", "PageDown", "PageUp"]) {
+          await textarea.press(key);
+          expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage), key).toBe("none");
+        }
         await textarea.press("x");
         expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
-        await textarea.press("ControlOrMeta+End");
+        await textarea.press(process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End");
         await textarea.press("Shift+Enter");
         await textarea.press("x");
         expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");

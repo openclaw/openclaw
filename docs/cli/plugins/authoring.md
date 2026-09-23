@@ -38,6 +38,10 @@ The scaffold writes TypeScript source but generates metadata from the built
 `plugins build --check` in CI to fail when generated metadata is stale without
 rewriting files.
 
+Tool and provider scaffolds compile `src/index.ts` and its imported modules into
+`dist`, leaving independent test files out of the package. Feature scaffolds also
+include their separate browser entry in TypeScript checks.
+
 ### Feature scaffold and artifacts
 
 Use `--type feature` for a typed backend operation, agent tool, native page,

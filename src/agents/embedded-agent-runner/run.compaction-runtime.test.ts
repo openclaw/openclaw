@@ -454,7 +454,14 @@ describe("embedded compaction recovery authority", () => {
           if (!recorder) {
             throw new Error("Recovery must attach its private accounting recorder");
           }
-          recorder.recordCompaction?.(committed.result?.tokensAfter);
+          if (!committed.result) {
+            throw new Error("Fixture compaction must report its committed context usage");
+          }
+          recorder.recordCompaction?.({
+            tokensBefore: committed.result.tokensBefore,
+            tokensAfter: committed.result.tokensAfter,
+            compactionKind: "context-engine",
+          });
           fixture.updates.mockClear();
           childSignal = params.abortSignal;
           if (failure === "throw") {

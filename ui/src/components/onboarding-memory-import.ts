@@ -6,7 +6,6 @@ import type {
   MigrationsMemoryApplyResult,
   MigrationsMemoryPlanResult,
 } from "../../../packages/gateway-protocol/src/schema/migrations.js";
-import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
@@ -57,7 +56,7 @@ function setGuardDone() {
 }
 
 class OnboardingMemoryImport extends OpenClawLightDomElement {
-  @property({ attribute: false }) context?: ApplicationContext<RouteId>;
+  @property({ attribute: false }) context?: ApplicationContext;
   @property({ type: Boolean }) active = false;
 
   @state() private selectedByProvider: Record<string, boolean> = {};
@@ -65,7 +64,7 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
   @state() private results: Record<string, ProviderResult> = {};
   @state() private done = false;
   @state() private closed = false;
-  private agentsListRequest: ApplicationContext<RouteId>["agents"] | undefined;
+  private agentsListRequest: ApplicationContext["agents"] | undefined;
 
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(

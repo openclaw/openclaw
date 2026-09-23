@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./router-outlet.ts";
+import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 
 type RouteId = "page" | "next";
 type TestContext = { label: string };
@@ -271,7 +272,7 @@ describe("openclaw-router-outlet", () => {
     router.stop();
   });
 
-  it("waits out a restarting gateway before falling back to revalidation", async () => {
+  it("keeps asset recovery retryable after the reachability wait expires", async () => {
     vi.useFakeTimers();
     let loadCount = 0;
     const fetchMock = vi.fn<typeof fetch>(
@@ -310,7 +311,8 @@ describe("openclaw-router-outlet", () => {
 
     const alert = outlet.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Importing a module script failed.");
-    expect(alert?.textContent).toContain("Reload to get the latest panel");
+    expect(alert?.textContent).toContain("Check your connection, then reload");
+    expect(alert?.textContent).not.toContain("updated in the background");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(loadCount).toBe(1);
     const button = outlet.querySelector<HTMLButtonElement>("button");
@@ -327,14 +329,60 @@ describe("openclaw-router-outlet", () => {
     expect(loadCount).toBe(1);
     expect(button?.disabled).toBe(true);
 
-    // Past the bounded wait it still degrades to revalidation instead of
-    // navigating into a fatal error page against an unreachable gateway.
+    // Failed asset imports require document recovery; a timed-out probe leaves
+    // the existing error and manual reload available instead of retrying the module.
     await vi.advanceTimersByTimeAsync(35_000);
     vi.runAllTicks();
     await settleOutlet(outlet);
-    expect(loadCount).toBe(2);
+    expect(loadCount).toBe(1);
+    expect(button?.disabled).toBe(false);
+    expect(outlet.querySelector('[role="alert"]')).not.toBeNull();
     expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
     outlet.remove();
     router.stop();
+  });
+
+  it("keeps a failed CSS route behind a blocked reload and reports its existing owner guard", async () => {
+    const blocked = vi.fn();
+    const releaseGuard = registerControlUiReloadGuard(() => false, blocked);
+    let moduleLoads = 0;
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => {
+            moduleLoads += 1;
+            if (moduleLoads === 1) {
+              return Promise.reject(new Error("Unable to preload CSS for /assets/agents.css"));
+            }
+            // Vite remembers a failed CSS dependency as seen, so a repeated
+            // component import can succeed without the required stylesheet.
+            return { render: () => html`<div data-testid="unstyled-page">Agents</div>` };
+          },
+          loader: (context) => ({ label: context.label }),
+        }),
+      ],
+    });
+    const context = { label: "offline" };
+    const outlet = createOutlet(router, context);
+    try {
+      await expect(router.navigate("page", context)).rejects.toThrow("Unable to preload CSS");
+      await settleOutlet(outlet);
+      const button = outlet.querySelector<HTMLButtonElement>("button");
+      button?.click();
+      await settleOutlet(outlet);
+      expect(blocked).toHaveBeenCalled();
+      expect(moduleLoads).toBe(1);
+      expect(outlet.querySelector('[data-testid="unstyled-page"]')).toBeNull();
+      expect(outlet.querySelector('[role="alert"]')?.textContent).toContain(
+        "Unable to preload CSS",
+      );
+      expect(button?.disabled).toBe(false);
+    } finally {
+      releaseGuard();
+      outlet.remove();
+      router.stop();
+    }
   });
 });

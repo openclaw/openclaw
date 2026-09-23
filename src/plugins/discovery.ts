@@ -25,6 +25,8 @@ import {
   recordPluginCandidateInstallOwner,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
+import { inspectPluginLoadPath, pluginPathFailureDiagnostic } from "./discovery-availability.js";
+import { addMissingRequiredPluginDiagnostics } from "./discovery-required-plugins.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
@@ -355,55 +357,6 @@ function mergeCandidateInstallOwner(
     recordPluginCandidateInstallOwner(existing, undefined, true);
   } else if (candidateOwner) {
     recordPluginCandidateInstallOwner(existing, candidateOwner);
-  }
-}
-
-function addMissingRequiredPluginDiagnostics(
-  result: PluginDiscoveryResult,
-  params: { env: NodeJS.ProcessEnv },
-): void {
-  const candidateIds = new Set(result.candidates.map((candidate) => candidate.idHint));
-  const seen = new Set<string>();
-  let configuredFileManifestIds: Set<string> | undefined;
-  for (const candidate of result.candidates) {
-    for (const requiredPluginId of candidate.requiredPluginIds ?? []) {
-      if (candidateIds.has(requiredPluginId) || requiredPluginId === candidate.idHint) {
-        continue;
-      }
-      if (!configuredFileManifestIds) {
-        configuredFileManifestIds = new Set();
-        // Explicit files keep filename hints; only a validated root manifest
-        // can establish their canonical identity for a missing dependency.
-        for (const configuredCandidate of result.candidates) {
-          if (configuredCandidate.origin !== "config" || configuredCandidate.packageDir) {
-            continue;
-          }
-          const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
-            origin: configuredCandidate.origin,
-            rootDir: configuredCandidate.rootDir,
-            env: params.env,
-          });
-          const manifest = resolveCandidateManifest(configuredCandidate.rootDir, rejectHardlinks);
-          if (manifest) {
-            configuredFileManifestIds.add(manifest.manifest.id);
-          }
-        }
-      }
-      if (configuredFileManifestIds.has(requiredPluginId)) {
-        continue;
-      }
-      const key = `${candidate.idHint}\0${requiredPluginId}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      result.diagnostics.push({
-        level: "warn",
-        pluginId: candidate.idHint,
-        source: candidate.requiredPluginSource ?? candidate.source,
-        message: `plugin "${candidate.idHint}" requires plugin "${requiredPluginId}"; install "${requiredPluginId}" to use it`,
-      });
-    }
   }
 }
 
@@ -1090,11 +1043,15 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
       );
     } catch (err) {
-      diagnostics.push({
-        level: "warn",
-        message: `failed to read extensions dir: ${params.dir} (${String(err)})`,
-        source: params.dir,
-      });
+      diagnostics.push(
+        params.origin === "config"
+          ? pluginPathFailureDiagnostic(params.dir, params.origin, err)
+          : {
+              level: "warn",
+              message: `failed to read extensions dir: ${params.dir} (${String(err)})`,
+              source: params.dir,
+            },
+      );
       return;
     }
 
@@ -1166,16 +1123,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     scanFiles?: boolean;
   }) {
     const resolved = resolveUserPath(params.rawPath, env);
-    if (!pluginCacheExistsSync(resolved)) {
-      diagnostics.push({
-        level: "error",
-        message: `plugin path not found: ${resolved}`,
-        source: resolved,
-      });
-      return;
-    }
-
-    const stat = pluginCacheStatSync(resolved);
+    const stat = inspectPluginLoadPath(resolved, params.origin, diagnostics);
     if (!stat) {
       return;
     }

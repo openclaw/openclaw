@@ -51,8 +51,10 @@ export function coordinateWorkerPlacementDispatch(
   service: WorkerPlacementDispatchService,
   admitDispatch: WorkerPlacementDispatchAdmission,
   recoverInitialPlacement?: (placement: WorkerProvisioningDispatchPlacement) => Promise<void>,
+  reportReconciliation?: (operation: () => Promise<void>) => Promise<void>,
 ): WorkerPlacementDispatchService & {
   isPlacementOperationInFlight(sessionId: string): boolean;
+  getPendingDeviceDispatchCount(deviceId: string, excludeSessionId?: string): number;
   waitForInitialPlacement(
     this: void,
     placement: WorkerDispatchPlacement,
@@ -75,6 +77,7 @@ export function coordinateWorkerPlacementDispatch(
   );
   type ReconciliationSweep = Extract<PlacementFence, { kind: "maintenance" }> & {
     full: boolean;
+    recoveryReady: Promise<void>;
     acceptingJoins: boolean;
     joinedRecoveries: Set<Promise<void>>;
   };
@@ -128,15 +131,31 @@ export function coordinateWorkerPlacementDispatch(
       return existing.promise;
     }
     const predecessor = placementFence;
+    const recoveryReady = createDeferredCore();
     const sweep: ReconciliationSweep = {
       kind: "maintenance",
       predecessor,
       admission: { admitted: false, reclaims: new Set() },
       dispatchCohort: predecessor?.dispatchCohort ?? [...activeDispatches],
       full,
+      recoveryReady: recoveryReady.promise,
       promise: Promise.resolve(),
       acceptingJoins: true,
       joinedRecoveries: new Set(),
+    };
+    const settleRecoveries = () => {
+      // Late recoveries queue behind this fence instead of joining its report.
+      sweep.acceptingJoins = false;
+      recoveryReady.resolve();
+      return Promise.allSettled(sweep.joinedRecoveries);
+    };
+    const execute = async () => {
+      recoveryReady.resolve();
+      try {
+        await operation();
+      } finally {
+        await settleRecoveries();
+      }
     };
     const current = (async () => {
       try {
@@ -145,11 +164,10 @@ export function coordinateWorkerPlacementDispatch(
         }
         await waitForDispatchIdle();
         await enterMaintenance(sweep.admission);
-        await operation();
+        // Reserve and admit the sweep before its reporting reader can yield.
+        await (reportReconciliation ? reportReconciliation(execute) : execute());
       } finally {
-        // Close admission before draining so late recoveries queue behind the existing fence.
-        sweep.acceptingJoins = false;
-        await Promise.allSettled(sweep.joinedRecoveries);
+        await settleRecoveries();
         reconciliationSweeps.delete(sweep);
         if (placementFence === sweep) {
           placementFence = undefined;
@@ -295,6 +313,24 @@ export function coordinateWorkerPlacementDispatch(
   };
   return {
     isPlacementOperationInFlight: (sessionId) => operationsInFlight.has(sessionId),
+    getPendingDeviceDispatchCount(deviceId, excludeSessionId) {
+      let count = 0;
+      for (const [sessionId, operations] of operationsInFlight) {
+        if (sessionId === excludeSessionId) {
+          continue;
+        }
+        for (const operation of operations) {
+          if (
+            operation.kind === "dispatch" &&
+            operation.request.executionMode === "worker-turn" &&
+            operation.request.deviceId === deviceId
+          ) {
+            count += 1;
+          }
+        }
+      }
+      return count;
+    },
     async waitForInitialPlacement(placement, signal) {
       signal?.throwIfAborted();
       const pending = pendingOperations(placement.sessionId);
@@ -532,6 +568,8 @@ export function coordinateWorkerPlacementDispatch(
           // Recovery waits for every admitted dispatch and older exclusive operation,
           // including later dispatches admitted while the original cohort was active.
           await waitForDispatchIdle();
+          // Reporting must capture its baseline before a joined recovery can write.
+          await sweep.recoveryReady;
           await enterMaintenance(sweep.admission);
           await recover();
         })();

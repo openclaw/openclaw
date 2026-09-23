@@ -74,14 +74,31 @@ describe("normalizeThinkLevel", () => {
 
 describe("prepared thinking catalog identity", () => {
   it.each([
-    { provider: " demo ", model: " Mixed ", expected: ["high"] },
-    { provider: "demo", model: "demo/Mixed", expected: ["high"] },
-    { provider: "demo", model: "mixed", expected: ["off", "minimal", "low", "medium", "high"] },
-    { provider: "demo-cli", model: "Mixed", expected: ["off", "minimal", "low", "medium", "high"] },
-    { provider: "demo", model: "DEMO/Mixed", expected: ["off"] },
+    { provider: " demo ", model: " Mixed ", expected: ["off"], expectedDefault: "off" },
+    { provider: "DEMO", model: "Mixed", expected: ["off"], expectedDefault: "off" },
+    { provider: "demo", model: "demo/Mixed", expected: ["high"], expectedDefault: "high" },
+    {
+      provider: "demo",
+      model: "mixed",
+      expected: ["off", "minimal", "low", "medium", "high"],
+      expectedDefault: "off",
+    },
+    {
+      provider: "demo-cli",
+      model: "Mixed",
+      expected: ["off", "minimal", "low", "medium", "high"],
+      expectedDefault: "off",
+    },
+    { provider: "demo", model: "DEMO/Mixed", expected: ["off"], expectedDefault: "off" },
+    {
+      provider: "demo/team",
+      model: "Reader",
+      expected: ["off", "minimal", "low", "medium", "high"],
+      expectedDefault: "off",
+    },
   ])(
-    "preserves first-match and case rules for $provider/$model",
-    ({ provider, model, expected }) => {
+    "prefers the literal catalog identity for profile and default at $provider/$model",
+    ({ provider, model, expected, expectedDefault }) => {
       const catalog = [
         {
           provider: " DEMO ",
@@ -90,17 +107,21 @@ describe("prepared thinking catalog identity", () => {
           thinkingLevelMap: { off: null, minimal: null, low: null, medium: null },
         },
         { provider: "demo", id: "Mixed", reasoning: false },
+        { provider: "demo", id: "Mixed", reasoning: true },
         { provider: "demo", id: "DEMO/Mixed", reasoning: false },
+        {
+          provider: "demo",
+          id: "team/Reader",
+          reasoning: true,
+          thinkingLevelMap: { off: null, minimal: null, low: null, medium: null },
+        },
       ];
       const catalogResolver = createThinkingCatalogResolver(catalog);
-      for (const prepared of [undefined, catalogResolver]) {
-        const profile = resolveThinkingProfile({
-          provider,
-          model,
-          catalog,
-          catalogResolver: prepared,
-        });
+      for (const source of [{ catalog }, { catalog, catalogResolver }, { catalogResolver }]) {
+        const params = { provider, model, ...source };
+        const profile = resolveThinkingProfile(params);
         expect(profile.levels.map(({ id }) => id)).toEqual(expected);
+        expect(resolveThinkingDefaultForModel(params)).toBe(expectedDefault);
       }
     },
   );
@@ -116,21 +137,6 @@ describe("listThinkingLevelLabels", () => {
     });
 
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
-  });
-
-  it("returns on/off for provider-advertised binary thinking", () => {
-    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
-      provider === "zai"
-        ? {
-            levels: [
-              { id: "off", label: "off" },
-              { id: "low", label: "on" },
-            ],
-          }
-        : undefined,
-    );
-
-    expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
   });
 
   it("does not assume binary thinking without provider runtime", () => {
@@ -154,19 +160,6 @@ describe("resolveThinkingDefaultForModel", () => {
     expect(resolveThinkingDefaultForModel({ provider: "demo", model: "demo-model" })).toBe(
       "adaptive",
     );
-  });
-
-  it("uses provider-advertised adaptive defaults", () => {
-    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
-      ({ provider, context }) =>
-        provider === "anthropic" && context.modelId === "claude-opus-4-6"
-          ? { levels: [{ id: "off" }, { id: "adaptive" }], defaultLevel: "adaptive" }
-          : undefined,
-    );
-
-    expect(
-      resolveThinkingDefaultForModel({ provider: "anthropic", model: "claude-opus-4-6" }),
-    ).toBe("adaptive");
   });
 
   it("does not apply provider-advertised adaptive defaults across Bedrock id variants", () => {

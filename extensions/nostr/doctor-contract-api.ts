@@ -79,11 +79,11 @@ async function readJsonFile(filePath: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
 }
 
-async function listLegacyFiles(params: {
+async function listLegacyFiles<T>(params: {
   stateDir: string;
   prefix: string;
-  parse: (value: unknown) => unknown;
-}): Promise<Array<{ accountId: string; filePath: string; value: unknown }>> {
+  parse: (value: unknown) => T | null;
+}): Promise<Array<{ accountId: string; filePath: string; value: T }>> {
   const dir = path.join(params.stateDir, "nostr");
   let entries: Dirent[];
   try {
@@ -92,7 +92,7 @@ async function listLegacyFiles(params: {
     return [];
   }
   const suffix = ".json";
-  const files: Array<{ accountId: string; filePath: string; value: unknown }> = [];
+  const files: Array<{ accountId: string; filePath: string; value: T }> = [];
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.startsWith(params.prefix) || !entry.name.endsWith(suffix)) {
       continue;
@@ -132,129 +132,84 @@ async function ensureStoreCapacity(params: {
   return existingKeys;
 }
 
+function createNostrStateMigration(options: {
+  namespace: string;
+  label: string;
+  parse: (value: unknown) => unknown;
+}): PluginDoctorStateMigration {
+  return {
+    id: `nostr-${options.namespace}-json-to-plugin-state`,
+    label: options.label,
+    async detectLegacyState(params) {
+      const files = await listLegacyFiles({
+        stateDir: params.stateDir,
+        prefix: `${options.namespace}-`,
+        parse: options.parse,
+      });
+      if (files.length === 0) {
+        return null;
+      }
+      return {
+        preview: [
+          `- ${options.label}: ${files.length} ${files.length === 1 ? "account" : "accounts"} -> plugin state (${options.namespace})`,
+        ],
+      };
+    },
+    async migrateLegacyState(params) {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const files = await listLegacyFiles({
+        stateDir: params.stateDir,
+        prefix: `${options.namespace}-`,
+        parse: options.parse,
+      });
+      const store = params.context.openPluginStateKeyedStore<unknown>({
+        namespace: options.namespace,
+        maxEntries: MAX_NOSTR_STATE_ENTRIES,
+      });
+      const existingKeys = await ensureStoreCapacity({
+        files,
+        store,
+        maxEntries: MAX_NOSTR_STATE_ENTRIES,
+        label: options.label,
+        warnings,
+      });
+      if (!existingKeys) {
+        return { changes, warnings };
+      }
+      let imported = 0;
+      for (const file of files) {
+        if (!existingKeys.has(file.accountId)) {
+          await store.register(file.accountId, file.value);
+          existingKeys.add(file.accountId);
+          imported++;
+        }
+        await archiveLegacyStateSource({
+          filePath: file.filePath,
+          label: options.label,
+          changes,
+          warnings,
+        });
+      }
+      if (imported > 0) {
+        changes.unshift(
+          `Migrated ${imported} Nostr ${options.namespace} ${imported === 1 ? "entry" : "entries"} -> plugin state`,
+        );
+      }
+      return { changes, warnings };
+    },
+  };
+}
+
 export const stateMigrations: PluginDoctorStateMigration[] = [
-  {
-    id: "nostr-bus-state-json-to-plugin-state",
+  createNostrStateMigration({
+    namespace: BUS_STATE_NAMESPACE,
     label: "Nostr bus state",
-    async detectLegacyState(params) {
-      const files = await listLegacyFiles({
-        stateDir: params.stateDir,
-        prefix: "bus-state-",
-        parse: parseBusState,
-      });
-      if (files.length === 0) {
-        return null;
-      }
-      return {
-        preview: [
-          `- Nostr bus state: ${files.length} ${files.length === 1 ? "account" : "accounts"} -> plugin state (${BUS_STATE_NAMESPACE})`,
-        ],
-      };
-    },
-    async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const files = await listLegacyFiles({
-        stateDir: params.stateDir,
-        prefix: "bus-state-",
-        parse: parseBusState,
-      });
-      const store = params.context.openPluginStateKeyedStore<NostrBusState>({
-        namespace: BUS_STATE_NAMESPACE,
-        maxEntries: MAX_NOSTR_STATE_ENTRIES,
-      });
-      const existingKeys = await ensureStoreCapacity({
-        files,
-        store,
-        maxEntries: MAX_NOSTR_STATE_ENTRIES,
-        label: "Nostr bus state",
-        warnings,
-      });
-      if (!existingKeys) {
-        return { changes, warnings };
-      }
-      let imported = 0;
-      for (const file of files) {
-        if (!existingKeys.has(file.accountId)) {
-          await store.register(file.accountId, file.value as NostrBusState);
-          existingKeys.add(file.accountId);
-          imported++;
-        }
-        await archiveLegacyStateSource({
-          filePath: file.filePath,
-          label: "Nostr bus state",
-          changes,
-          warnings,
-        });
-      }
-      if (imported > 0) {
-        changes.unshift(
-          `Migrated ${imported} Nostr bus-state ${imported === 1 ? "entry" : "entries"} -> plugin state`,
-        );
-      }
-      return { changes, warnings };
-    },
-  },
-  {
-    id: "nostr-profile-state-json-to-plugin-state",
+    parse: parseBusState,
+  }),
+  createNostrStateMigration({
+    namespace: PROFILE_STATE_NAMESPACE,
     label: "Nostr profile state",
-    async detectLegacyState(params) {
-      const files = await listLegacyFiles({
-        stateDir: params.stateDir,
-        prefix: "profile-state-",
-        parse: parseProfileState,
-      });
-      if (files.length === 0) {
-        return null;
-      }
-      return {
-        preview: [
-          `- Nostr profile state: ${files.length} ${files.length === 1 ? "account" : "accounts"} -> plugin state (${PROFILE_STATE_NAMESPACE})`,
-        ],
-      };
-    },
-    async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const files = await listLegacyFiles({
-        stateDir: params.stateDir,
-        prefix: "profile-state-",
-        parse: parseProfileState,
-      });
-      const store = params.context.openPluginStateKeyedStore<NostrProfileState>({
-        namespace: PROFILE_STATE_NAMESPACE,
-        maxEntries: MAX_NOSTR_STATE_ENTRIES,
-      });
-      const existingKeys = await ensureStoreCapacity({
-        files,
-        store,
-        maxEntries: MAX_NOSTR_STATE_ENTRIES,
-        label: "Nostr profile state",
-        warnings,
-      });
-      if (!existingKeys) {
-        return { changes, warnings };
-      }
-      let imported = 0;
-      for (const file of files) {
-        if (!existingKeys.has(file.accountId)) {
-          await store.register(file.accountId, file.value as NostrProfileState);
-          existingKeys.add(file.accountId);
-          imported++;
-        }
-        await archiveLegacyStateSource({
-          filePath: file.filePath,
-          label: "Nostr profile state",
-          changes,
-          warnings,
-        });
-      }
-      if (imported > 0) {
-        changes.unshift(
-          `Migrated ${imported} Nostr profile-state ${imported === 1 ? "entry" : "entries"} -> plugin state`,
-        );
-      }
-      return { changes, warnings };
-    },
-  },
+    parse: parseProfileState,
+  }),
 ];

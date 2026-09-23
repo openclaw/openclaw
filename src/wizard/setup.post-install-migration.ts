@@ -198,8 +198,17 @@ async function runPostInstallMigrationOffers(
     const description = describeCandidate(candidate);
     let accepted;
     try {
+      await prompter.note(
+        [
+          candidate.provider.description,
+          "You will review import options and confirm before applying.",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+        `${candidate.provider.label} migration`,
+      );
       accepted = await prompter.confirm({
-        message: `Migrate ${description} into this agent now?`,
+        message: `Review migration from ${description}?`,
         initialValue: false,
       });
     } catch (error) {

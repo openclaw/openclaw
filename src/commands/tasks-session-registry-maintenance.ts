@@ -5,7 +5,7 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
   runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
-import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
+import { loadCronJobsStore, resolveCronJobsStorePath } from "../cron/store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 
@@ -46,10 +46,10 @@ type RunningCronJobIds =
   | { ok: true; ids: Set<string>; count: number }
   | { ok: false; reason: string };
 
-function readRunningCronJobIds(): RunningCronJobIds {
+async function readRunningCronJobIds(): Promise<RunningCronJobIds> {
   try {
     const cronStorePath = resolveCronJobsStorePath();
-    const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
+    const runningJobs = (await loadCronJobsStore(cronStorePath)).jobs.filter(
       (job) => typeof job.state?.runningAtMs === "number",
     );
     // A running detached job may have been retargeted after its session was created. Keep its
@@ -81,7 +81,7 @@ export async function runSessionRegistryMaintenance(params: {
   apply: boolean;
 }): Promise<SessionRegistryMaintenanceSummary> {
   const cfg = getRuntimeConfig();
-  const runningCronJobs = readRunningCronJobIds();
+  const runningCronJobs = await readRunningCronJobIds();
   if (!runningCronJobs.ok) {
     return {
       retentionMs: SESSION_REGISTRY_RETENTION_MS,

@@ -1,12 +1,25 @@
 // Shared daemon install runtime/path helpers for service plan generation.
 import fs from "node:fs";
 import path from "node:path";
-import { resolvePreferredBunPath, resolvePreferredNodePath } from "../daemon/runtime-paths.js";
+import {
+  resolvePinnedDaemonRuntimePath,
+  resolvePreferredBunPath,
+  resolvePreferredNodePath,
+} from "../daemon/runtime-paths.js";
+import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
   emitNodeRuntimeWarning,
   type DaemonInstallWarnFn,
 } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
+
+export type GatewayInstallPlan = {
+  programArguments: string[];
+  workingDirectory?: string;
+  environment: Record<string, string | undefined>;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+};
 
 /** Detect source-checkout dev mode from the current CLI entrypoint. */
 function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
@@ -25,13 +38,19 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
   runtimePath?: string;
+  pinnedRuntimePath?: string;
   wrapperPath?: string;
 }): Promise<{ devMode: boolean; runtimePath?: string }> {
   const devMode = params.devMode ?? resolveGatewayDevMode();
   if (params.wrapperPath?.trim()) {
     return { devMode, runtimePath: params.runtimePath };
   }
+  const pinnedRuntimePath =
+    params.pinnedRuntimePath === undefined
+      ? undefined
+      : await resolvePinnedDaemonRuntimePath(params.pinnedRuntimePath, params.runtime, params.env);
   const runtimePath =
+    pinnedRuntimePath ??
     params.runtimePath ??
     (params.runtime === "bun"
       ? await resolvePreferredBunPath({ env: params.env, runtime: params.runtime })
@@ -138,7 +157,14 @@ function resolveDaemonOpenClawBinDir(
     }
     const candidateRealpath = safeRealpathSync(candidate, realpathSync);
     if (argvRealpath && candidateRealpath && candidateRealpath !== argvRealpath) {
-      continue;
+      // Update invokes dist/index.js; the same installation's shim targets openclaw.mjs.
+      const activeRoot = resolveOpenClawPackageRootSync({ argv1: argvRealpath });
+      if (
+        !activeRoot ||
+        resolveOpenClawPackageRootSync({ argv1: candidateRealpath }) !== activeRoot
+      ) {
+        continue;
+      }
     }
     addUniquePathDir(dirs, segment);
   }

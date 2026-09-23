@@ -1,8 +1,8 @@
 // Shared subagent tool test harness for gateway/config dependency overrides.
-import { vi } from "vitest";
+import { beforeEach, vi } from "vitest";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
-import { testing as subagentAnnounceTesting } from "./subagents/announce/subagent-announce.js";
+import { announceTesting as subagentAnnounceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
 
 type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]>;
 
@@ -39,7 +39,7 @@ function applySharedSubagentTestDeps() {
   });
 }
 
-applySharedSubagentTestDeps();
+beforeEach(applySharedSubagentTestDeps);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: callGatewayForTest,

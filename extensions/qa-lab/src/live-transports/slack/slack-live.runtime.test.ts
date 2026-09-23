@@ -422,6 +422,22 @@ describe("Slack live QA runtime helpers", () => {
     ).toBeUndefined();
   });
 
+  it.each(["slack-allowlist-block", "slack-channel-disabled-warning", "slack-mention-gating"])(
+    "keeps the %s negative observation inside its flow deadline",
+    (scenarioId) => {
+      const scenario = testing.findScenario([scenarioId])[0];
+      const run = scenario?.buildRun("U999999999");
+      if (!scenario || !run || !("expectReply" in run)) {
+        throw new Error(`missing Slack message scenario ${scenarioId}`);
+      }
+      expect(run.expectReply).toBe(false);
+      expect(run.noReplyObservationMs).toBe(8_000);
+      expect(scenario.timeoutMs).toBeGreaterThan(
+        run.noReplyObservationMs ?? Number.POSITIVE_INFINITY,
+      );
+    },
+  );
+
   it("accepts only Codex harness providers for Codex approval scenarios", () => {
     expect(() =>
       testing.assertSlackCodexApprovalModelSupported("openai/gpt-5.6-luna"),
@@ -703,9 +719,11 @@ describe("Slack live QA runtime helpers", () => {
       if (!commentaryMarker || !toolMarker || !outputMarker || !finalMarker || !verifyObserved) {
         throw new Error(`missing Slack progress verifier: ${testCase.id}`);
       }
-      // Progress cards compact command details from the middle, so the QA marker
-      // stays at the command suffix where the real Slack presentation preserves it.
-      expect(input).toContain(`sleep 5; printf '%s\\n' '${outputMarker}' # ${toolMarker}`);
+      // Compact progress cards retain the leading command segment, so keep the
+      // QA marker there instead of in a trailing shell comment that Slack drops.
+      expect(input).toContain(
+        `printf '%s' '${toolMarker}' >/dev/null; sleep 5; printf '%s\\n' '${outputMarker}'`,
+      );
       const messages = [
         {
           channelId: "C123456789",
@@ -750,6 +768,31 @@ describe("Slack live QA runtime helpers", () => {
           messages,
         }),
       ).toContain("verified");
+
+      if (testCase.id === "slack-progress-commentary-omitted") {
+        expect(
+          verifyObserved({
+            finalMessage: { text: finalMarker, ts: "2.000000" },
+            messages: messages.map((message) => {
+              if (message.ts !== "1.500000") {
+                return message;
+              }
+              return Object.assign({}, message, { blockText: ["Exec — sleep 5"] });
+            }),
+          }),
+        ).toContain("verified");
+        expect(
+          verifyObserved({
+            finalMessage: { text: finalMarker, ts: "2.000000" },
+            messages: messages.map((message) => {
+              if (message.ts !== "1.500000") {
+                return message;
+              }
+              return Object.assign({}, message, { blockText: ["Run — `sleep 5`"] });
+            }),
+          }),
+        ).toContain("verified");
+      }
     }
   });
 

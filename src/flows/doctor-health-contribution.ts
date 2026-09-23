@@ -1,12 +1,13 @@
 import { normalizeUpdatePostInstallDoctorWarnings } from "../infra/update-doctor-result.js";
 import type {
   DoctorContributionHealthCheck,
+  DoctorHealthCheckContext,
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
 import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
-import type { HealthFinding } from "./health-checks.js";
+import type { HealthFinding, HealthRepairContext } from "./health-checks.js";
 
 export function createDoctorHealthContribution(params: {
   id: string;
@@ -15,7 +16,7 @@ export function createDoctorHealthContribution(params: {
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
   hint?: string;
   required?: true;
-  updatePolicy?: DoctorHealthContribution["updatePolicy"];
+  updateWork?: DoctorHealthContribution["updateWork"];
   run?: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution {
   const healthChecks = normalizeHealthChecks(params.id, params.healthChecks);
@@ -36,7 +37,7 @@ export function createDoctorHealthContribution(params: {
     healthChecks,
     healthCheckIds,
     ...(params.required ? { required: true as const } : {}),
-    ...(params.updatePolicy ? { updatePolicy: params.updatePolicy } : {}),
+    ...(params.updateWork ? { updateWork: params.updateWork } : {}),
     run:
       params.run ??
       ((ctx) =>
@@ -98,18 +99,17 @@ async function runStructuredDoctorHealthContribution(params: {
   const workspaceDir = resolveDoctorWorkspaceDir(params.ctx.cfg, params.ctx.env);
   const dryRun = !params.ctx.prompter.shouldRepair;
   const configBeforeRepair = JSON.stringify(params.ctx.cfg);
-  const result = await runDoctorHealthRepairs(
-    {
-      mode: "fix",
-      runtime: params.ctx.runtime,
-      cfg: params.ctx.cfg,
-      cwd: workspaceDir,
-      configPath: params.ctx.configPath,
-      dryRun,
-      allowExecSecretRefs: params.ctx.options.allowExec === true,
-    },
-    { checks: params.checks, dryRun },
-  );
+  const context: HealthRepairContext & DoctorHealthCheckContext = {
+    mode: "fix",
+    runtime: params.ctx.runtime,
+    cfg: params.ctx.cfg,
+    cwd: workspaceDir,
+    configPath: params.ctx.configPath,
+    dryRun,
+    allowExecSecretRefs: params.ctx.options.allowExec === true,
+    agentDatabaseRefusals: params.ctx.agentDatabaseRefusals,
+  };
+  const result = await runDoctorHealthRepairs(context, { checks: params.checks, dryRun });
   params.ctx.cfg = result.config;
   renderStructuredHealthFindings(params.ctx, result.findings);
   // Display retains original findings; finalization records only unresolved warnings.
@@ -137,14 +137,21 @@ export function recordDoctorHealthWarnings(
   ctx: DoctorHealthFlowContext,
   findings: readonly HealthFinding[],
   warnings: readonly string[] = [],
+  options?: { prepend?: boolean },
 ): void {
-  ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings([
-    ...(ctx.updateWarnings ?? []),
+  const existing = ctx.updateWarnings ?? [];
+  const added = [
     ...findings
       .filter((finding) => finding.severity === "warning")
-      .map((finding) => `${finding.checkId}: ${finding.message}`),
+      .map(
+        (finding) =>
+          `${finding.checkId}${finding.errorCode ? ` [${finding.errorCode}]` : ""}: ${finding.message}`,
+      ),
     ...warnings,
-  ]);
+  ];
+  ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings(
+    options?.prepend ? [...added, ...existing] : [...existing, ...added],
+  );
 }
 
 export function renderStructuredHealthFindings(

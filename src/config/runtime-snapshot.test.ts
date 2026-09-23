@@ -1,5 +1,7 @@
 // Verifies runtime config snapshots preserve normalized public settings.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   cloneConfigWithResolutionFacts,
   createConfigResolutionFacts,
@@ -30,6 +32,7 @@ import {
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
 import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
+import { captureRuntimeConfig } from "./runtime-source-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
 function resetRuntimeConfigState(): void {
@@ -139,6 +142,37 @@ describe("runtime snapshot state", () => {
 
     expect(first).not.toBe(second);
     expect(hashRuntimeConfigValue({ logging: { level: "info" } })).toBe(first);
+  });
+
+  it.each([false, true])("hashes one immutable fleet only once (captured: %s)", (captured) => {
+    const source = {
+      agents: {
+        entries: Object.fromEntries(
+          Array.from({ length: 200 }, (_, index) => [`agent-${index}`, { name: `${index}` }]),
+        ),
+      },
+    };
+    const keys = vi.spyOn(Object, "keys");
+    try {
+      const config = captured ? captureRuntimeConfig(source) : freezeJsonSnapshot(source);
+      const first = hashRuntimeConfigValue(config);
+      for (let index = 0; index < 200; index += 1) {
+        expect(hashRuntimeConfigValue(config)).toBe(first);
+      }
+      expect(keys.mock.calls.filter(([value]) => value === config.agents?.entries)).toHaveLength(1);
+    } finally {
+      keys.mockRestore();
+    }
+  });
+
+  it("rehashes mutable descendants of a shallow-frozen config", () => {
+    const config = Object.freeze({ gateway: { port: 18789 } });
+    const before = hashRuntimeConfigValue(config);
+    config.gateway.port = 19001;
+    expect(hashRuntimeConfigValue(config)).not.toBe(before);
+    expect(hashRuntimeConfigValue(config)).toBe(
+      hashRuntimeConfigValue({ gateway: { port: 19001 } }),
+    );
   });
 
   it.each([false, true])(
@@ -280,8 +314,8 @@ describe("runtime snapshot state", () => {
 
   it("refreshes both snapshots from disk after a write when source + runtime snapshots exist", async () => {
     const notifyCommittedWrite = vi.fn();
-    const loadFreshConfig = vi.fn<() => OpenClawConfig>(() => ({
-      gateway: { auth: { mode: "token" } },
+    const loadFreshConfig = vi.fn<() => Promise<{ config: OpenClawConfig }>>(async () => ({
+      config: { gateway: { auth: { mode: "token" } } },
     }));
     const nextSourceConfig: OpenClawConfig = {
       gateway: { auth: { mode: "token" } },
@@ -292,9 +326,8 @@ describe("runtime snapshot state", () => {
 
     await finalizeRuntimeSnapshotWrite({
       nextSourceConfig,
-      hadRuntimeSnapshot: true,
       hadBothSnapshots: true,
-      loadFreshConfig,
+      freshConfig: loadFreshConfig,
       notifyCommittedWrite,
       formatRefreshError: (error) => String(error),
       createRefreshError: (detail, cause) => new Error(detail, { cause }),
@@ -308,15 +341,14 @@ describe("runtime snapshot state", () => {
 
   it("refreshes a plain runtime snapshot after writes without restoring a source snapshot", async () => {
     const notifyCommittedWrite = vi.fn();
-    const loadFreshConfig = vi.fn(() => ({ gateway: { port: 19002 } }));
+    const loadFreshConfig = vi.fn(async () => ({ config: { gateway: { port: 19002 } } }));
 
     setRuntimeConfigSnapshot({ gateway: { port: 18789 } });
 
     await finalizeRuntimeSnapshotWrite({
       nextSourceConfig: { gateway: { port: 19002 } },
-      hadRuntimeSnapshot: true,
       hadBothSnapshots: false,
-      loadFreshConfig,
+      freshConfig: loadFreshConfig,
       notifyCommittedWrite,
       formatRefreshError: (error) => String(error),
       createRefreshError: (detail, cause) => new Error(detail, { cause }),
@@ -330,8 +362,8 @@ describe("runtime snapshot state", () => {
 
   it("keeps the last-known-good runtime snapshot active while specialized refresh is pending", async () => {
     const notifyCommittedWrite = vi.fn();
-    const loadFreshConfig = vi.fn<() => OpenClawConfig>(() => ({
-      gateway: { auth: { mode: "token" } },
+    const loadFreshConfig = vi.fn<() => Promise<{ config: OpenClawConfig }>>(async () => ({
+      config: { gateway: { auth: { mode: "token" } } },
     }));
     let releaseRefresh: (() => void) | undefined;
     const refreshPending = new Promise<boolean>((resolve) => {
@@ -346,7 +378,11 @@ describe("runtime snapshot state", () => {
       refresh: async ({ sourceConfig }) => {
         expect(sourceConfig.gateway?.auth).toEqual({ mode: "token" });
         expect(getRuntimeConfigSnapshot()?.gateway?.auth).toBeUndefined();
-        return await refreshPending;
+        const handled = await refreshPending;
+        if (handled) {
+          setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
+        }
+        return handled;
       },
     });
 
@@ -355,9 +391,8 @@ describe("runtime snapshot state", () => {
         gateway: { auth: { mode: "token" } },
         ...createProviderConfigFixture(),
       },
-      hadRuntimeSnapshot: true,
       hadBothSnapshots: true,
-      loadFreshConfig,
+      freshConfig: loadFreshConfig,
       notifyCommittedWrite,
       formatRefreshError: (error) => String(error),
       createRefreshError: (detail, cause) => new Error(detail, { cause }),
@@ -374,7 +409,49 @@ describe("runtime snapshot state", () => {
     await writePromise;
 
     expect(notifyCommittedWrite).toHaveBeenCalledTimes(1);
+    expect(getRuntimeConfigSnapshot()?.gateway?.auth).toEqual({ mode: "token" });
   });
+
+  it.each(["reload", "declined refresh"] as const)(
+    "fences a pending %s without a caller-supplied authority guard",
+    async (phase) => {
+      const initial: OpenClawConfig = { gateway: { port: 18789 } };
+      const replacement: OpenClawConfig = { gateway: { port: 19002 } };
+      const candidate: OpenClawConfig = { gateway: { port: 19001 } };
+      setRuntimeConfigSnapshot(initial, initial);
+      const release = createDeferredCore();
+      if (phase === "declined refresh") {
+        setRuntimeConfigSnapshotRefreshHandler({
+          refresh: () => release.promise.then(() => false),
+        });
+      }
+      const notifyCommittedWrite = vi.fn();
+      const pending = finalizeRuntimeSnapshotWrite({
+        nextSourceConfig: candidate,
+        hadBothSnapshots: true,
+        freshConfig: () =>
+          phase === "reload"
+            ? release.promise.then(() => ({ config: candidate }))
+            : Promise.resolve({ config: candidate }),
+        notifyCommittedWrite,
+        formatRefreshError: String,
+        createRefreshError: (detail, cause) => new Error(detail, { cause }),
+      });
+      try {
+        expect(getRuntimeConfigSnapshot()).toBe(initial);
+        setRuntimeConfigSnapshot(replacement, replacement);
+        const rejected = expect(pending).rejects.toThrow("superseded");
+        release.resolve();
+        await rejected;
+        expect(getRuntimeConfigSnapshot()).toBe(replacement);
+        expect(getRuntimeConfigSourceSnapshot()).toBe(replacement);
+        expect(notifyCommittedWrite).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await pending.catch(() => {});
+      }
+    },
+  );
 
   it("notifies registered write listeners with committed runtime snapshots", () => {
     const seen: Array<{ configPath: string; runtimeConfig: OpenClawConfig }> = [];
@@ -453,14 +530,13 @@ describe("runtime snapshot state", () => {
     setRuntimeConfigSnapshot(activeConfig);
     const notifyCommittedWrite = vi.fn();
     const refresh = vi.fn(async () => true);
-    const loadFreshConfig = vi.fn(() => ({ gateway: { port: 19001 } }));
+    const loadFreshConfig = vi.fn(async () => ({ config: { gateway: { port: 19001 } } }));
     setRuntimeConfigSnapshotRefreshHandler({ refresh });
 
     await finalizeRuntimeSnapshotWrite({
       nextSourceConfig: { gateway: { port: 19001 } },
-      hadRuntimeSnapshot: true,
       hadBothSnapshots: false,
-      loadFreshConfig,
+      freshConfig: loadFreshConfig,
       notifyCommittedWrite,
       deferRuntimeActivation: true,
       formatRefreshError: (error) => String(error),

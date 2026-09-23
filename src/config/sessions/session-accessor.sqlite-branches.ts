@@ -1,5 +1,4 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -16,23 +15,28 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import { readSessionBranchSummaries } from "./session-accessor.sqlite-branch-summaries.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
-  getSessionKysely,
   normalizeSqliteSessionKey,
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  readSessionTranscriptHotWatermark,
+  type SessionTranscriptWatermark,
+} from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type {
   SessionBranchListParams,
   SessionBranchListResult,
   SessionBranchSummary,
 } from "./session-accessor.types.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import {
+  assertSessionTranscriptHot,
+  SessionTranscriptColdError,
+} from "./session-cold-storage-state.js";
 
-const SESSION_BRANCH_CACHE_MAX_ENTRIES = 32;
+const SESSION_BRANCH_CACHE_MAX_ENTRIES = 64;
 
-type SessionBranchWatermark = { generation: string | null; maxSeq: number | null };
-type SessionBranchCacheEntry = SessionBranchWatermark & {
+type SessionBranchCacheEntry = SessionTranscriptWatermark & {
   branches: SessionBranchSummary[];
   identity: OpenClawAgentDatabaseIdentity;
 };
@@ -45,11 +49,12 @@ export type SessionBranchSummaryReadRequest = {
   lifecycleRevision?: string;
 };
 export type SessionBranchSummaryReadResult =
-  | ({ status: "ok"; branches: SessionBranchSummary[] } & SessionBranchWatermark)
+  | ({ status: "ok"; branches: SessionBranchSummary[] } & SessionTranscriptWatermark)
   | { status: "missing-session" | "failed" };
 
 // Host and worker isolates share this policy, each retaining only their compact derived results.
 const sessionBranchCache = new Map<string, SessionBranchCacheEntry>();
+const pendingBranchReads = new Map<string, Promise<SessionBranchSummaryReadResult>>();
 
 function sessionBranchCacheKey(databasePath: string, sessionId: string): string {
   return `${databasePath}\0${sessionId}`;
@@ -62,7 +67,7 @@ function cloneSessionBranchSummaries(branches: readonly SessionBranchSummary[]) 
 function readCachedSessionBranchSummaries(
   database: OpenClawAgentReadOnlyDatabase,
   sessionId: string,
-  watermark: SessionBranchWatermark,
+  watermark: SessionTranscriptWatermark,
 ): SessionBranchSummary[] | undefined {
   const cacheKey = sessionBranchCacheKey(database.path, sessionId);
   const cached = sessionBranchCache.get(cacheKey);
@@ -82,7 +87,7 @@ function readCachedSessionBranchSummaries(
 function cacheSessionBranchSummaries(
   database: OpenClawAgentReadOnlyDatabase,
   sessionId: string,
-  snapshot: SessionBranchWatermark & { branches: SessionBranchSummary[] },
+  snapshot: SessionTranscriptWatermark & { branches: SessionBranchSummary[] },
 ): void {
   const cacheKey = sessionBranchCacheKey(database.path, sessionId);
   sessionBranchCache.delete(cacheKey);
@@ -93,28 +98,6 @@ function cacheSessionBranchSummaries(
     identity: readOpenClawAgentDatabaseIdentity(database).identity,
   });
   pruneMapToMaxSize(sessionBranchCache, SESSION_BRANCH_CACHE_MAX_ENTRIES);
-}
-
-function readSessionBranchWatermark(
-  database: Pick<OpenClawAgentReadOnlyDatabase, "db">,
-  sessionId: string,
-): SessionBranchWatermark {
-  const db = getSessionKysely(database.db);
-  const maxSeq = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => eb.fn.max<number>("seq").as("max_seq"))
-      .where("session_id", "=", sessionId),
-  )?.max_seq;
-  const generation = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_rewrite_watermarks")
-      .select("generation")
-      .where("session_id", "=", sessionId),
-  )?.generation;
-  return { generation: generation ?? null, maxSeq: maxSeq ?? null };
 }
 
 function readSessionBranchSnapshot(
@@ -147,7 +130,7 @@ function readSessionBranchSnapshot(
       }
       assertSessionTranscriptHot(database.db, expected.sessionId);
       // The watermark and rows must describe the same snapshot, even when a peer appends.
-      const watermark = readSessionBranchWatermark(database, expected.sessionId);
+      const watermark = readSessionTranscriptHotWatermark(database, expected.sessionId);
       const cached = readCachedSessionBranchSummaries(database, expected.sessionId, watermark);
       const branches = cached ?? readSessionBranchSummaries(database, expected.sessionId);
       if (!cached) {
@@ -218,47 +201,63 @@ export async function listSessionBranches(
         revoke: () => controller.abort(new Error("Session branch read was revoked")),
         close: () => completion.promise,
       });
-      return await readRestoredSessionTranscript(
-        { ...params, agentId: resolved.agentId, sessionId: selected.sessionId },
-        async (): Promise<SessionBranchListResult> => {
-          assertCurrent();
-          const watermark = readSessionBranchWatermark(database, selected.sessionId);
-          const cached = readCachedSessionBranchSummaries(database, selected.sessionId, watermark);
-          let snapshot: SessionBranchSummaryReadResult;
-          if (cached) {
-            snapshot = { status: "ok", ...watermark, branches: cached };
-          } else if (typeof claim.identity === "symbol") {
-            // Incognito transcripts live only in this process's in-memory database.
-            snapshot = readSessionBranchSnapshot(database, expected);
-          } else {
+      const watermark = readSessionTranscriptHotWatermark(database, selected.sessionId);
+      const cached = readCachedSessionBranchSummaries(database, selected.sessionId, watermark);
+      let snapshot: SessionBranchSummaryReadResult;
+      if (cached) {
+        snapshot = { status: "ok", ...watermark, branches: cached };
+      } else if (typeof claim.identity === "symbol") {
+        // Incognito transcripts live only in this process's in-memory database.
+        snapshot = readSessionBranchSnapshot(database, expected);
+      } else {
+        const request = {
+          database: { agentId: database.agentId, path: database.path },
+          databaseIdentity: claim.identity,
+          ...expected,
+        };
+        // New transcripts, lifecycles, or database claims must never join an older snapshot.
+        const key = JSON.stringify([request, claim.incarnation, watermark]);
+        let pending = pendingBranchReads.get(key);
+        if (!pending) {
+          pending = (async () => {
             const { runSessionBranchSummaryWorkerRequest } =
-              await import("./session-transcript-worker-runtime.js");
-            assertCurrent();
-            snapshot = await runSessionBranchSummaryWorkerRequest(
-              {
-                database: { agentId: database.agentId, path: database.path },
-                databaseIdentity: claim.identity,
-                ...expected,
-              },
-              controller.signal,
-            );
-          }
-          assertCurrent();
-          const current = readSessionEntryRow(database, sourceKey)?.entry;
-          if (
-            current?.sessionId !== expected.sessionId ||
-            current.lifecycleRevision !== expected.lifecycleRevision
-          ) {
-            return { status: "failed" };
-          }
-          if (snapshot.status !== "ok") {
-            return snapshot;
-          }
-          // Keep the worker's exact watermark; an append during the read invalidates the next lookup.
-          cacheSessionBranchSummaries(database, selected.sessionId, snapshot);
-          return { status: "ok", branches: cloneSessionBranchSummaries(snapshot.branches) };
-        },
-      );
+              await import("./session-transcript-read-worker-runtime.js");
+            const read = () => {
+              assertCurrent();
+              return runSessionBranchSummaryWorkerRequest(request, controller.signal);
+            };
+            try {
+              return await read();
+            } catch (error) {
+              if (!(error instanceof SessionTranscriptColdError)) {
+                throw error;
+              }
+              // The archive worker retains restoration and commit authority; hot reads never enter it.
+              return readRestoredSessionTranscript(
+                { ...params, agentId: resolved.agentId, sessionId: selected.sessionId },
+                read,
+                { assertCurrent },
+              );
+            }
+          })().finally(() => pendingBranchReads.delete(key));
+          pendingBranchReads.set(key, pending);
+        }
+        snapshot = await pending;
+      }
+      assertCurrent();
+      const current = readSessionEntryRow(database, sourceKey)?.entry;
+      if (
+        current?.sessionId !== expected.sessionId ||
+        current.lifecycleRevision !== expected.lifecycleRevision
+      ) {
+        return { status: "failed" };
+      }
+      if (snapshot.status !== "ok") {
+        return snapshot;
+      }
+      // Keep the worker's exact watermark; an append during the read invalidates the next lookup.
+      cacheSessionBranchSummaries(database, selected.sessionId, snapshot);
+      return { status: "ok", branches: cloneSessionBranchSummaries(snapshot.branches) };
     } finally {
       try {
         claim.release();

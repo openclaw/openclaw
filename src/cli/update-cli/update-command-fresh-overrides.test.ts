@@ -10,6 +10,7 @@ import {
 } from "../../infra/package-update-steps.test-support.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import * as shared from "./shared.js";
 import * as execution from "./update-command-execution.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
@@ -49,7 +50,7 @@ it.each([false, true])(
         name: "openclaw",
         version: "2026.9.4",
         type: "module",
-        openclaw: { schemaVersions: { state: 17, agent: 20 } },
+        openclaw: { schemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 } },
       }),
     );
     await writePackageDistInventory(candidate);
@@ -89,7 +90,6 @@ it.each([false, true])(
         tag: artifact,
         timeoutMs: 30_000,
         startedAt: params.startedAt,
-        jsonMode: true,
         progress: params.progress,
         nodeRunner: process.execPath,
         managedServiceEnv: run.env,
@@ -123,7 +123,7 @@ it.each([false, true])(
       expect(
         result.steps.some(
           (step) =>
-            step.name === "local package overrides" && step.advisory?.message.includes(recoveryDir),
+            step.name === "local-package-overrides" && step.advisory?.message.includes(recoveryDir),
         ),
       ).toBe(true);
       finishUpdateRun(run.runId, { status: "succeeded" }, { env: run.env });

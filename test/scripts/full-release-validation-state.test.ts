@@ -382,7 +382,7 @@ describe("full release execution plan", () => {
     const bytes = readFileSync(output, "utf8");
     const sealed = JSON.parse(bytes);
     expect(sealed.sourceAdmission).toEqual(sourceAdmission);
-    const restore = () =>
+    const restore = (attempt = "2") =>
       spawnSync(process.execPath, [SCRIPT, "plan"], {
         encoding: "utf8",
         timeout: 10_000,
@@ -395,7 +395,7 @@ describe("full release execution plan", () => {
           CANDIDATE_REQUEST_JSON: JSON.stringify(canonicalCandidateRequest()),
           GITHUB_REF_NAME: "release-ci/tooling",
           GITHUB_REPOSITORY: "openclaw/openclaw",
-          GITHUB_RUN_ATTEMPT: "2",
+          GITHUB_RUN_ATTEMPT: attempt,
           GITHUB_RUN_ID: "77",
           GITHUB_SHA: SHA,
           RELEASE_PROFILE: "stable",
@@ -405,6 +405,9 @@ describe("full release execution plan", () => {
       });
     const restored = restore();
     expect(restored.status, restored.stderr).toBe(0);
+    expect(readFileSync(output, "utf8")).toBe(bytes);
+    const third = restore("3");
+    expect(third.status, third.stderr).toBe(0);
     expect(readFileSync(output, "utf8")).toBe(bytes);
     delete sealed.sourceAdmissionContract;
     delete sealed.sourceAdmission;
@@ -659,7 +662,7 @@ describe("full release execution plan", () => {
     },
   );
 
-  it.each(["2026.8.1", "2026.9.1"])(
+  it.each(["2026.8.1", "2026.9.1", "2026.9.5"])(
     "omits only the owner-waived Telegram child for %s",
     (version) => {
       const input = {
@@ -731,7 +734,7 @@ describe("full release execution plan", () => {
     ).toThrow(/Telegram waiver/u);
   });
 
-  it.each(["2026.8.1", "2026.9.1"])(
+  it.each(["2026.8.1", "2026.9.1", "2026.9.5"])(
     "seals the Telegram waiver and exact version %s into the immutable plan",
     (version) => {
       const waiver = { telegramWaiver: `${version}-owner-approved`, targetVersion: version };

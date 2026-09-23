@@ -16,6 +16,7 @@ source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 openclaw_resolve_frozen_typed_onboarding_contract "$TARGET_ROOT_DIR" "$ROOT_DIR"
 SCENARIO_PATH="$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_SCENARIO_PATH"
 ONBOARD_ASSERTIONS="$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTIONS_PATH"
+ONBOARD_ASSERTION_FILES="$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTION_FILES_PATH"
 ONBOARD_MOCK_OPENAI_CONFIG="$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_MOCK_CONFIG_PATH"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-release-typed-onboarding-e2e" OPENCLAW_RELEASE_TYPED_ONBOARDING_E2E_IMAGE)"
@@ -60,6 +61,7 @@ if ! docker_e2e_run_with_harness \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$SCENARIO_PATH:/app/scripts/e2e/lib/release-typed-onboarding/scenario.sh:ro" \
   -v "$ONBOARD_ASSERTIONS:/app/scripts/e2e/lib/release-scenarios/assertions.mjs:ro" \
+  -v "$ONBOARD_ASSERTION_FILES:/app/scripts/e2e/lib/release-assertion-files.mjs:ro" \
   -v "$ONBOARD_MOCK_OPENAI_CONFIG:/app/scripts/e2e/lib/fixtures/mock-openai-config.mjs:ro" \
   -i "$IMAGE_NAME" bash -E scripts/e2e/lib/release-typed-onboarding/scenario.sh >"$run_log" 2>&1; then
   docker_e2e_print_log "$run_log"

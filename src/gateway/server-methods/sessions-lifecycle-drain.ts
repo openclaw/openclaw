@@ -1,3 +1,10 @@
+import {
+  ErrorCodes,
+  GatewayErrorDetailCodes,
+  errorShape,
+  type ErrorShape,
+  type SessionWorkspaceRecoveryRequiredErrorDetails,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 // Session-owned cancellation and authoritative lifecycle drains.
 import {
@@ -32,15 +39,14 @@ import {
 } from "../worker-environments/inference-control-internal.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "../worker-environments/placement-workspace-result.js";
 import {
   prepareSessionWorkerPlacementArchiveCheck,
   prepareSessionWorkerPlacementMutationCheck,
   prepareSessionWorkerPlacementStop,
 } from "../worker-environments/session-placement-lifecycle.js";
-import {
-  abortChatRunsForSessionKeyWithPartials,
-  hasGatewaySessionAbortOwner,
-} from "./chat-abort-runtime.js";
+import { hasGatewaySessionAbortOwner } from "./chat-abort-authorization.js";
+import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type LifecyclePlacementService = NonNullable<
@@ -67,6 +73,12 @@ export type SessionLifecycleDrain = {
   release(): void;
   hasAuthoritativeWork(): boolean;
 };
+
+export class SessionLifecycleWorkspaceRecoveryError extends Error {
+  constructor(readonly error: ErrorShape) {
+    super(error.message);
+  }
+}
 
 function hasAuthoritativeSessionWork(
   params: SessionLifecycleParams,
@@ -207,6 +219,37 @@ export async function prepareSessionLifecycleDrain(
     }
 
     params.authorize?.();
+    if (params.sessionId) {
+      const placements = params.context.workerSessionPlacementService;
+      const placement = placements?.getMany([params.sessionId]).get(params.sessionId);
+      const pending = placements?.listPendingWorkspaceResults?.(params.sessionId)[0];
+      if (
+        pending &&
+        pending.workspaceAcceptedAtMs === null &&
+        isCurrentWorkerWorkspacePendingResultOwner(placement, pending) &&
+        params.context.workerPlacementRunnerAvailabilityReader?.read(placement)?.status ===
+          "offline"
+      ) {
+        const details: SessionWorkspaceRecoveryRequiredErrorDetails = {
+          code: GatewayErrorDetailCodes.SESSION_WORKSPACE_RECOVERY_REQUIRED,
+          cause: "device_offline",
+          recoveryAction: "continue_on_gateway",
+          sessionId: params.sessionId,
+          source: {
+            generation: placement.generation,
+            environmentId: placement.environmentId,
+            ownerEpoch: placement.activeOwnerEpoch,
+          },
+        };
+        throw new SessionLifecycleWorkspaceRecoveryError(
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Session ${params.sessionKey} has an unrecovered workspace result on an offline device. Reconnect the device to preserve its workspace, or use Continue on Gateway and accept that unsynced files may be lost.`,
+            { details, retryable: false },
+          ),
+        );
+      }
+    }
     const { released: admittedWork } = startSessionWorkAdmissionInterruption({
       scope: params.storePath,
       identities: params.lifecycleIdentities,

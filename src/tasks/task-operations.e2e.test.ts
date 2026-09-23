@@ -17,19 +17,18 @@ import { setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRunningTaskRunCore, recordTaskRunProgressByRunIdCore } from "./task-executor.js";
-import { createTaskRecord, getTaskById, reloadTaskRegistryFromStore } from "./task-registry.js";
+import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
+import { createTaskRecord, getTaskById } from "./task-registry.js";
 import {
   configureTaskRegistryMaintenance,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
 
@@ -75,12 +74,10 @@ function requireTask(taskId: string) {
   return task;
 }
 
-function resetTaskOperationsRuntime(): void {
-  stopTaskRegistryMaintenance();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+async function resetTaskOperationsRuntime(): Promise<void> {
+  await stopTaskRegistryMaintenance();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryControlRuntimeForTests();
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   resetSystemEventsForTest();
@@ -89,9 +86,9 @@ function resetTaskOperationsRuntime(): void {
 }
 
 describe("task operations product boundary", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await resetTaskOperationsRuntime();
     vi.useRealTimers();
-    resetTaskOperationsRuntime();
   });
 
   it("runs persisted task operations through CLI, chat, notification, audit, and maintenance", async () => {
@@ -107,7 +104,7 @@ describe("task operations product boundary", () => {
         },
       },
       async () => {
-        resetTaskOperationsRuntime();
+        await resetTaskOperationsRuntime();
         const clearHeartbeat = setHeartbeatWakeHandler(async () => ({
           status: "ran",
           durationMs: 0,
@@ -158,7 +155,7 @@ describe("task operations product boundary", () => {
           }
 
           resetTaskRegistryForTests({ persist: false });
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(requireTask(operatorTask.taskId)).toMatchObject({
             runId: "run-a07-operator",
             status: "running",
@@ -214,7 +211,7 @@ describe("task operations product boundary", () => {
           });
 
           resetTaskRegistryForTests({ persist: false });
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(requireTask(operatorTask.taskId)).toMatchObject({
             notifyPolicy: "state_changes",
             progressSummary: "Indexed 3 records",
@@ -280,7 +277,7 @@ describe("task operations product boundary", () => {
           expect(cancel.exits).toEqual([1]);
           expect(cancel.logs).toEqual([]);
           resetTaskRegistryForTests({ persist: false });
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(requireTask(operatorTask.taskId)).toMatchObject({
             status: "running",
           });
@@ -292,7 +289,7 @@ describe("task operations product boundary", () => {
           expect(retainedShow.logs.join("\n")).toContain("status: running");
         } finally {
           clearHeartbeat();
-          resetTaskOperationsRuntime();
+          await resetTaskOperationsRuntime();
         }
       },
     );

@@ -74,7 +74,7 @@ it.each(["overview", "channels", "cron"] as const)(
         },
         config: {
           ...props.config,
-          form: {
+          configForm: {
             agents: {
               defaults: {
                 workspace: "/tmp/agents",
@@ -118,7 +118,9 @@ it.each([
     container,
   );
 
-  const save = container.querySelector<HTMLButtonElement>(".agent-identity-editor__actions button");
+  const save = container.querySelector<HTMLButtonElement>(
+    ".agent-identity-editor__actions button.primary",
+  );
   expect(save?.textContent?.trim()).toBe(text);
   expect(save?.disabled).toBe(true);
 });
@@ -129,16 +131,17 @@ it("shows inherited skills in the Agent Context overview", () => {
     renderAgents(
       createProps({
         config: {
-          form: {
+          configForm: {
             agents: {
               defaults: { skills: ["github", "weather"] },
               entries: { beta: {} },
             },
           },
-          loading: false,
-          saving: false,
-          dirty: false,
-          error: null,
+          configSnapshot: null,
+          configLoading: false,
+          configSaving: false,
+          configFormDirty: false,
+          lastError: null,
         },
       }),
     ),
@@ -167,16 +170,17 @@ describe("fallback field", () => {
       renderAgents(
         createProps({
           config: {
-            form: {
+            configForm: {
               agents: {
                 defaults: { model: { primary, fallbacks: [existingFallback] } },
                 entries: { alpha: {}, beta: {} },
               },
             },
-            loading: false,
-            saving: false,
-            dirty: false,
-            error: null,
+            configSnapshot: null,
+            configLoading: false,
+            configSaving: false,
+            configFormDirty: false,
+            lastError: null,
           },
           modelCatalog: catalog,
           onModelFallbacksChange,
@@ -228,7 +232,7 @@ describe("fallback field", () => {
           agents: [{ id: "alpha" }, { id: "beta", model: { primary: caseDistinct } }],
         },
         config: {
-          form: {
+          configForm: {
             agents: {
               defaults: {
                 model: { primary: primaryAlias },
@@ -237,10 +241,11 @@ describe("fallback field", () => {
               entries: { alpha: {}, beta: {} },
             },
           },
-          loading: false,
-          saving: false,
-          dirty: false,
-          error: null,
+          configSnapshot: null,
+          configLoading: false,
+          configSaving: false,
+          configFormDirty: false,
+          lastError: null,
         },
         modelCatalog: [
           { provider: "custom", id: "model-a", name: "Lowercase model" },

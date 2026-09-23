@@ -9,6 +9,7 @@ describe("plugins cli lazy runtime boundary", () => {
 
   afterEach(() => {
     vi.doUnmock("./plugins-cli.runtime.js");
+    vi.doUnmock("./plugins-marketplace-list-command.js");
     vi.doUnmock("./plugins-authoring-command.js");
     vi.resetModules();
   });
@@ -19,7 +20,6 @@ describe("plugins cli lazy runtime boundary", () => {
       runtimeLoaded();
       return {
         runPluginMarketplaceEntriesCommand: vi.fn(),
-        runPluginMarketplaceListCommand: vi.fn(),
         runPluginMarketplaceRefreshCommand: vi.fn(),
         runPluginsDisableCommand: vi.fn(),
         runPluginsDoctorCommand: vi.fn(),
@@ -86,6 +86,10 @@ describe("plugins cli lazy runtime boundary", () => {
       runtimeLoaded();
       return {};
     });
+    vi.doMock("./plugins-marketplace-list-command.js", () => {
+      runtimeLoaded();
+      return {};
+    });
 
     const { registerPluginsCli } = await import("./plugins-cli.js");
     const program = new Command();
@@ -116,11 +120,14 @@ describe("plugins cli lazy runtime boundary", () => {
     const { registerPluginsCli } = await import("./plugins-cli.js");
     const program = new Command();
     registerPluginsCli(program);
-    await program.parseAsync(["plugins", "reload", "demo", "--accept-capabilities", "--json"], {
-      from: "user",
-    });
+    await program.parseAsync(
+      ["plugins", "reload", "demo", "other", "--accept-capabilities", "--json"],
+      {
+        from: "user",
+      },
+    );
     expect(reload).toHaveBeenCalledWith(
-      "demo",
+      ["demo", "other"],
       expect.objectContaining({ acceptCapabilities: true, json: true }),
     );
   });
@@ -132,7 +139,6 @@ describe("plugins cli lazy runtime boundary", () => {
       runtimeLoaded();
       return {
         runPluginMarketplaceEntriesCommand: vi.fn(),
-        runPluginMarketplaceListCommand: vi.fn(),
         runPluginMarketplaceRefreshCommand: vi.fn(),
         runPluginsDisableCommand: vi.fn(),
         runPluginsDoctorCommand: vi.fn(),
@@ -175,7 +181,6 @@ describe("plugins cli lazy runtime boundary", () => {
     const runPluginMarketplaceEntriesCommand = vi.fn().mockResolvedValue(undefined);
     vi.doMock("./plugins-cli.runtime.js", () => ({
       runPluginMarketplaceEntriesCommand,
-      runPluginMarketplaceListCommand: vi.fn(),
       runPluginMarketplaceRefreshCommand: vi.fn(),
       runPluginsDisableCommand: vi.fn(),
       runPluginsDoctorCommand: vi.fn(),
@@ -202,7 +207,6 @@ describe("plugins cli lazy runtime boundary", () => {
     const runPluginMarketplaceRefreshCommand = vi.fn().mockResolvedValue(undefined);
     vi.doMock("./plugins-cli.runtime.js", () => ({
       runPluginMarketplaceEntriesCommand: vi.fn(),
-      runPluginMarketplaceListCommand: vi.fn(),
       runPluginMarketplaceRefreshCommand,
       runPluginsDisableCommand: vi.fn(),
       runPluginsDoctorCommand: vi.fn(),

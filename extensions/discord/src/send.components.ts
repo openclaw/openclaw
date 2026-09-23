@@ -1,4 +1,3 @@
-// Discord plugin module implements send.components behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -24,6 +23,7 @@ import {
   type MessagePayloadObject,
   type RequestClient,
 } from "./internal/discord.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import type { DiscordReplyReference } from "./reply-reference.js";
 import { sendMessageDiscord } from "./send.outbound.js";
@@ -227,6 +227,16 @@ async function buildDiscordComponentPayload(params: {
 }
 
 export async function sendDiscordComponentMessage(
+  to: string,
+  spec: DiscordComponentMessageSpec,
+  opts: DiscordComponentSendOpts,
+): Promise<DiscordSendResult> {
+  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, () =>
+    sendDiscordComponentMessageInternal(to, spec, opts),
+  );
+}
+
+async function sendDiscordComponentMessageInternal(
   to: string,
   spec: DiscordComponentMessageSpec,
   opts: DiscordComponentSendOpts,

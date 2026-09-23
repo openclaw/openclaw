@@ -3,6 +3,7 @@ import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
+import { isGitHubHost } from "./github-link-eligibility.ts";
 import {
   decodeGitHubPathSegment,
   parseGitHubItemPath,
@@ -21,6 +22,7 @@ import {
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
+import { installMarkdownHumanMentions } from "./markdown-human-mentions.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
@@ -47,11 +49,6 @@ const BARE_URL_CLASS = "markdown-bare-url";
 // generated label exactly like linkify output.
 const CODE_SPAN_LINK_MARKUP = "code-span-url";
 const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
-
-function isGitHubHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  return host === "github.com" || host === "www.github.com";
-}
 
 // Inline-code file links are rendered by the code_inline rule, which runs after
 // every core rule. The core rule therefore parks the resolved target here so the
@@ -738,5 +735,6 @@ export function createMarkdownParser(): MarkdownItParser {
     });
   };
 
+  installMarkdownHumanMentions(markdownParser);
   return markdownParser;
 }

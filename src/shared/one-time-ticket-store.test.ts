@@ -87,6 +87,33 @@ describe("one-time ticket store", () => {
     expect(store.consume(minted.token)).toBeUndefined();
   });
 
+  it("preserves an unclaimed ticket when the requesting owner does not match", () => {
+    const requester = new AbortController();
+    const store = createOneTimeTicketStore<string>({ ttlMs: 100 });
+    const { token } = store.mint("original", { revokeSignal: requester.signal });
+
+    expect(store.consume(token, Date.now(), (owner) => owner === "other")).toBeUndefined();
+    expect(getEventListeners(requester.signal, "abort")).toHaveLength(1);
+    expect(store.consume(token, Date.now(), (owner) => owner === "original")).toBe("original");
+    expect(store.consume(token)).toBeUndefined();
+    expect(getEventListeners(requester.signal, "abort")).toHaveLength(0);
+  });
+
+  it("does not redeem a ticket revoked while its owner is being checked", () => {
+    const requester = new AbortController();
+    const store = createOneTimeTicketStore<string>({ ttlMs: 100 });
+    const { token } = store.mint("original", { revokeSignal: requester.signal });
+
+    expect(
+      store.consume(token, Date.now(), () => {
+        requester.abort();
+        return true;
+      }),
+    ).toBeUndefined();
+    expect(store.size).toBe(0);
+    expect(getEventListeners(requester.signal, "abort")).toHaveLength(0);
+  });
+
   it.each(["", " ", "a".repeat(47), "a".repeat(49), "A".repeat(48), "g".repeat(48)])(
     "rejects malformed token %j without consuming another ticket",
     (token) => {

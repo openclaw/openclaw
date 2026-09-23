@@ -158,13 +158,15 @@ download_file() {
     if [[ "$DOWNLOADER" == "curl" ]]; then
         if [[ "$redirect_mode" == "deny" ]]; then
             curl -fsSL --max-redirs 0 --proto '=https' --tlsv1.2 \
+                --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
                 --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
                 --retry 3 --retry-delay 1 --retry-connrefused \
                 -o "$output" "$url"
             return
         fi
-        # Bound post-connect stalls without imposing a total download duration.
+        # Bound connection and transfer stalls without a total download duration.
         curl -fsSL --proto '=https' --tlsv1.2 \
+            --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
             --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
             --retry 3 --retry-delay 1 --retry-connrefused \
             -o "$output" "$url"
@@ -2653,7 +2655,7 @@ ensure_pnpm() {
     local repo_dir="${1:-$PWD}"
     local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
     spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.3.4"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.4.0"
     version="${spec#pnpm@}"
     version="${version%%+*}"
     pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1

@@ -110,6 +110,7 @@ describe("sidebar preference persistence", () => {
     expect(loadSettings().sidebarEntries).toEqual([
       "route:agents-home",
       "route:dashboards",
+      "route:systems",
       "route:cron",
       "route:plugins",
     ]);

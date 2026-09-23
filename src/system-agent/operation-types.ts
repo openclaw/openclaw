@@ -42,6 +42,8 @@ export type SystemAgentOperation =
   | {
       kind: "create-agent";
       agentId: string;
+      name?: string;
+      purpose?: string;
       role?: AgentRoleId;
       workspace?: string;
       model?: string;

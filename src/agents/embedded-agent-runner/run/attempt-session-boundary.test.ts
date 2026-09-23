@@ -1,5 +1,4 @@
 import path from "node:path";
-import { Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
@@ -15,6 +14,7 @@ import {
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
 } from "../../../config/sessions/session-transcript-reconcile.js";
+import { useReconcileWorkerObserver } from "../../../config/sessions/session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "../../../config/sessions/session-transcript-reconcile.worker.js";
 import {
   SessionTranscriptWriterClaimReboundError,
@@ -30,6 +30,14 @@ import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+
+vi.mock("node:worker_threads", async () =>
+  (
+    await import("../../../config/sessions/session-transcript-reconcile.test-support.js")
+  ).createObservedWorkerThreads(),
+);
+
+const observer = useReconcileWorkerObserver();
 
 function createActiveSession(messages: AgentMessage[] = []) {
   const reset = vi.fn();
@@ -51,6 +59,7 @@ function createSessionManager(
     getHeader: () => ({ version: 3 }),
     getLeafEntry: () => undefined,
     getSessionTarget: () => undefined,
+    getSessionId: () => "session-boundary",
     ...overrides,
   } as unknown as ReturnType<typeof guardSessionManager>;
 }
@@ -82,7 +91,7 @@ async function withPersistedOrphanBoundary(
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const seed = SessionManager.open(target, state.workspaceDir);
     if (options.parent) {
-      seed.appendModelChange("openai", "gpt-5.5");
+      await seed.appendModelChange("openai", "gpt-5.5");
     }
     const orphanId = seed.appendMessage({
       role: "user",
@@ -95,8 +104,8 @@ async function withPersistedOrphanBoundary(
         : {}),
     });
     if (options.metadata) {
-      seed.appendThinkingLevelChange("low");
-      seed.appendModelChange("openai", "gpt-5.5");
+      await seed.appendThinkingLevelChange("low");
+      await seed.appendModelChange("openai", "gpt-5.5");
     }
     const manager = guardSessionManager(
       SessionManager.openBounded(target, {
@@ -287,28 +296,25 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         const claimed = createDeferred();
         const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptScope(target));
         let releaseWorker: (() => void) | undefined;
-        startSessionTranscriptIndexReconcile({
-          ...databaseOptions,
-          createWorker: (filename, options) => {
-            const worker = new Worker(filename, options);
-            const postMessage = worker.postMessage.bind(worker);
-            let claiming = false;
-            worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
-              claiming = message.type === "plan-start";
-            });
-            // Hold the real worker after the owner claims the dirty projection.
-            // No fixture sleeps or database mutation decides the ordering.
-            worker.postMessage = (message: unknown, transferList) => {
-              if (claiming && !releaseWorker) {
-                releaseWorker = () => postMessage(message, transferList);
-                claimed.resolve();
-                return;
-              }
-              postMessage(message, transferList);
-            };
-            return worker;
-          },
-        });
+        observer.onTask = ({ port, observeMessage }) => {
+          const postMessage = port.postMessage.bind(port);
+          let claiming = false;
+          observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
+            claiming = message.type === "plan-start" && message.plan.sessionId === target.sessionId;
+          });
+          // Hold the real worker after the owner claims the dirty projection.
+          // No fixture sleeps or database mutation decides the ordering.
+          port.postMessage = (message: unknown, transferList) => {
+            const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
+            if (claiming && !releaseWorker) {
+              releaseWorker = () => postMessage(message, options);
+              claimed.resolve();
+              return;
+            }
+            postMessage(message, options);
+          };
+        };
+        startSessionTranscriptIndexReconcile(databaseOptions);
         const controller = new AbortController();
         input.abortSignal = controller.signal;
         const messages = input.activeSession.agent.state.messages;

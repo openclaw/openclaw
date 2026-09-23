@@ -40,6 +40,7 @@ import {
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -116,13 +117,13 @@ const defaultRegistry = createRegistry([
   },
 ]);
 
-function expectChannels(call: Record<string, unknown>, channel: string) {
+function expectChannels(call: Record<string, unknown>, channel: string | undefined) {
   expect(call.channel).toBe(channel);
   expect(call.messageChannel).toBe(channel);
 }
 
 async function expectAgentRoutingCall(params: {
-  channel: string;
+  channel: string | undefined;
   deliver: boolean;
   to?: string;
   fromEnd?: number;
@@ -203,15 +204,21 @@ afterAll(() => {
 });
 
 describe("gateway server agent", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.mocked(agentCommandMock).mockClear();
     testState.allowFrom = undefined;
     setRegistry(defaultRegistry);
+    await useTempSessionStorePath();
+    await writeSessionStore({ entries: {} });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     testState.allowFrom = undefined;
     setRegistry(emptyRegistry);
+    for (const dir of gwSessionTempDirs) {
+      await releaseGatewaySessionStoreFixture(dir);
+    }
+    cleanupTempDirs(gwSessionTempDirs);
   });
 
   test(
@@ -412,7 +419,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
     await expectAgentRoutingCall({
-      channel: "webchat",
+      channel: undefined,
       deliver: true,
       runId: "idem-agent-multi-configured-best-effort",
     });

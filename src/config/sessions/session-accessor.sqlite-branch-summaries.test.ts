@@ -1,16 +1,15 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
   listSessionBranches,
   loadSessionEntry,
@@ -21,13 +20,16 @@ import { readSessionBranchSummariesInWorker } from "./session-accessor.sqlite-br
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
 import type { SessionBranchListResult } from "./session-accessor.types.js";
+import { prepareTranscriptPayload } from "./transcript-payload.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  for (const stateDir of tempDirs.dirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
+  tempDirs.cleanup();
 });
 
 function message(
@@ -337,7 +339,8 @@ it("uses one snapshot for navigation and lazy headline reads", async () => {
         vi.spyOn(connection, "prepare").mockImplementation((sqlText) => {
           if (
             !changed &&
-            sqlText.includes('select "event_json" from "transcript_events"') &&
+            sqlText.includes('from "transcript_events"') &&
+            sqlText.includes('as "event_json"') &&
             sqlText.includes('"seq" = ?')
           ) {
             changed = true;
@@ -347,9 +350,12 @@ it("uses one snapshot for navigation and lazy headline reads", async () => {
                 writer,
                 getSessionKysely(writer)
                   .updateTable("transcript_events")
-                  .set({
-                    event_json: JSON.stringify(message("root", null, "replacement headline")),
-                  })
+                  .set(
+                    prepareTranscriptPayload(
+                      writer,
+                      JSON.stringify(message("root", null, "replacement headline")),
+                    ),
+                  )
                   .where("session_id", "=", scope.sessionId)
                   .where("seq", "=", 2),
               );

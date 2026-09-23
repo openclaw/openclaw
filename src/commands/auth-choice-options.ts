@@ -1,4 +1,5 @@
 // Builds provider-aware auth-choice options and grouped onboarding menus.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSetupFlowContributions } from "../flows/provider-flow.js";
@@ -50,6 +51,7 @@ function resolveProviderChoiceOptions(params?: {
       {},
       { value: contribution.option.value as AuthChoice, label: contribution.option.label },
       { providerId: contribution.providerId },
+      contribution.option.modelTarget ? { modelTarget: contribution.option.modelTarget } : {},
       contribution.option.hint ? { hint: contribution.option.hint } : {},
       contribution.option.assistantPriority !== undefined
         ? { assistantPriority: contribution.option.assistantPriority }
@@ -99,6 +101,7 @@ export function formatAuthChoiceChoicesForCli(params?: {
 function buildAuthChoiceOptions(params: {
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;
+  detectedProviderIds?: ReadonlySet<string>;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -115,8 +118,17 @@ function buildAuthChoiceOptions(params: {
     optionByValue.set(option.value, option);
   }
 
+  const detectedProviders = new Set(
+    [...(params.detectedProviderIds ?? [])].map(normalizeProviderId),
+  );
   const options: AuthChoiceOption[] = Array.from(optionByValue.values())
     .toSorted(compareOptionLabels)
+    .filter(
+      (option) =>
+        option.assistantVisibility !== "detected-only" ||
+        (option.providerId !== undefined &&
+          detectedProviders.has(normalizeProviderId(option.providerId))),
+    )
     .filter((option) =>
       params.assistantVisibleOnly ? option.assistantVisibility !== "manual-only" : true,
     );
@@ -132,6 +144,7 @@ function buildAuthChoiceOptions(params: {
 export function buildAuthChoiceGroups(params: {
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;
+  detectedProviderIds?: ReadonlySet<string>;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -168,9 +181,10 @@ export function buildAuthChoiceGroups(params: {
     });
   }
   const groups = Array.from(groupsById.values())
-    .map((group) =>
-      Object.assign({}, group, { options: [...group.options].toSorted(compareAssistantOptions) }),
-    )
+    .map((group) => {
+      group.options = group.options.toSorted(compareAssistantOptions);
+      return group;
+    })
     .toSorted(compareAuthChoiceGroups);
 
   const skipOption = params.includeSkip

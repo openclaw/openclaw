@@ -84,15 +84,17 @@ describe("chat pane companion connection lifecycle", () => {
       hello: null,
     });
 
-    expect(threads.view("agent:main:current", "main").exchanges).toEqual([
-      { question: "Earlier question", answer: "Earlier answer", ts: 1 },
+    expect(threads.view("agent:main:current", "main").turns).toMatchObject([
+      { question: "Earlier question", status: "answered", answer: "Earlier answer", ts: 1 },
+      { question: "current question", status: "pending" },
     ]);
     expect(threads.view("agent:main:other", "main").draft).toBe("other draft");
     await pending;
     expect(threads.view("agent:main:current", "main")).toMatchObject({
-      exchanges: [{ question: "Earlier question", answer: "Earlier answer", ts: 1 }],
-      failedQuestion: "current question",
-      pendingQuestion: null,
+      turns: [
+        { question: "Earlier question", status: "answered", answer: "Earlier answer", ts: 1 },
+        { question: "current question", status: "failed", hint: "unavailable", retryable: true },
+      ],
     });
 
     pane.connectedClient = client;
@@ -110,12 +112,10 @@ describe("chat pane companion connection lifecycle", () => {
       "main",
     );
     expect(threads.view("agent:main:current", "main")).toMatchObject({
-      exchanges: [
-        { question: "Earlier question", answer: "Earlier answer", ts: 1 },
-        { question: "current question", answer: "Recovered answer", ts: 2 },
+      turns: [
+        { question: "Earlier question", status: "answered", answer: "Earlier answer", ts: 1 },
+        { question: "current question", status: "answered", answer: "Recovered answer", ts: 2 },
       ],
-      failedQuestion: null,
-      pendingQuestion: null,
     });
     await vi.waitFor(() => expect(state.chatModelsLoading).toBe(false));
     expect(consoleError).not.toHaveBeenCalled();
@@ -150,13 +150,11 @@ describe("chat pane companion connection lifecycle", () => {
     });
 
     expect(threads.view("agent:main:current", "main")).toMatchObject({
-      exchanges: [],
-      failedQuestion: null,
-      pendingQuestion: null,
+      turns: [],
     });
     expect(threads.view("agent:main:other", "main").draft).toBe("");
     resolveAnswer({ answer: "late answer", ts: 3 });
     await pending;
-    expect(threads.view("agent:main:current", "main").exchanges).toEqual([]);
+    expect(threads.view("agent:main:current", "main").turns).toMatchObject([]);
   });
 });

@@ -43,7 +43,14 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    assertDirectAdapterHandoff,
+    onPlatformSendDispatch,
+  }) => {
     if (action === "upload-file") {
       throw new Error(
         "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel.",
@@ -72,13 +79,19 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         allowEmpty: true,
       });
       const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
-      const space = await resolveGoogleChatOutboundSpace({ account, target: to });
+      const space = await resolveGoogleChatOutboundSpace({
+        account,
+        target: to,
+        assertDirectAdapterHandoff,
+      });
 
       const sent = await sendGoogleChatMessage({
         account,
         space,
         text: content,
         thread: threadId ?? undefined,
+        assertDirectAdapterHandoff,
+        onPlatformSendDispatch,
       });
       return jsonResult({ ok: true, to: space, ...sent });
     }

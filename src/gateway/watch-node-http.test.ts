@@ -20,8 +20,8 @@ import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
 } from "../infra/device-pairing-approval.js";
+import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
 import { listNodePairing } from "../infra/device-pairing-node.js";
-import { withDevicePairingLock } from "../infra/device-pairing-state.js";
 import { loadDevicePairSetupCompletionRecord } from "../infra/device-pairing-store.js";
 import { revokeDeviceToken, verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
@@ -32,7 +32,7 @@ import {
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   type DeviceBootstrapProfile,
 } from "../shared/device-bootstrap-profile.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
@@ -68,7 +68,7 @@ afterEach(async () => {
   // Handlers enqueue connection history; drain that writer before closing its database.
   await withDevicePairingLock(async () => {});
   for (const databasePath of databasePaths) {
-    closeOpenClawStateDatabaseByPath(databasePath);
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
   }
   await tempDirs.cleanup();
   cleanups.length = 0;
@@ -473,26 +473,7 @@ describe("watch node HTTP transport", () => {
       bootstrapToken: issued.token,
     });
     const connected = await readJson(connectResponse);
-    const invoke = nodeRegistry.invoke({
-      nodeId: identity.deviceId,
-      command: "device.info",
-      timeoutMs: 2_000,
-    });
-    const pollResponse = await fetch(`${baseUrl}/poll`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
-    });
-    const polled = await readJson(pollResponse);
-    const event = polled.event as { payload: { id: string } };
-    const currentCheck = vi.spyOn(nodeRegistry, "isConnectionCurrentPairingState");
-    currentCheck.mockClear();
-    const partial = startPartialJsonRequest({
-      url: `${baseUrl}/result`,
-      authorization: `Bearer ${String(connected.sessionToken)}`,
-    });
-    partial.request.write(`{"id":${JSON.stringify(event.payload.id)},"ok":`);
-    await vi.waitFor(() => expect(currentCheck).toHaveBeenCalledTimes(1));
-
+    // Prepare the pending request before starting the invoke's two-second budget.
     const paired = await getPairedDevice(identity.deviceId, baseDir);
     const repair = await requestDevicePairing(
       {
@@ -504,6 +485,33 @@ describe("watch node HTTP transport", () => {
       },
       baseDir,
     );
+    const invoke = nodeRegistry.invoke({
+      nodeId: identity.deviceId,
+      command: "device.info",
+      timeoutMs: 2_000,
+    });
+    const pollResponse = await fetch(`${baseUrl}/poll`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
+    });
+    const polled = await readJson(pollResponse);
+    const event = polled.event as { payload: { id: string } };
+    const initialPairingCheck = createDeferred<boolean>();
+    const checkCurrentPairing = nodeRegistry.isConnectionCurrentPairingState.bind(nodeRegistry);
+    const currentCheck = vi
+      .spyOn(nodeRegistry, "isConnectionCurrentPairingState")
+      .mockImplementationOnce((connId) => {
+        const current = checkCurrentPairing(connId);
+        void current.then(initialPairingCheck.resolve, initialPairingCheck.reject);
+        return current;
+      });
+    const partial = startPartialJsonRequest({
+      url: `${baseUrl}/result`,
+      authorization: `Bearer ${String(connected.sessionToken)}`,
+    });
+    partial.request.write(`{"id":${JSON.stringify(event.payload.id)},"ok":`);
+    await expect(initialPairingCheck.promise).resolves.toBe(true);
+    expect(currentCheck).toHaveBeenCalledTimes(1);
     await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
     partial.request.end(`true,"payloadJSON":"{\\"model\\":\\"stale\\"}"}`);
 

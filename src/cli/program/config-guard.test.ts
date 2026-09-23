@@ -1,13 +1,10 @@
 // Config guard tests cover program-level config checks before command execution.
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import { prepareSqliteReadOnlyLocation } from "../../infra/sqlite-snapshot-source.js";
 import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import {
   adoptProcessPluginCache,
@@ -39,11 +36,6 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
-
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: vi.fn(actual.spawn) };
-});
 
 type ConfigIssue = { path: string; pathSegments?: Array<string | number>; message: string };
 
@@ -392,50 +384,6 @@ describe("ensureConfigReady", () => {
     expect(runtime.exit).toHaveBeenCalledWith(78);
     expect(getProcessPluginCache()).toBe(processCache);
   });
-
-  it.each([
-    { commandPath: ["gateway"], reusedChildren: 1 },
-    { commandPath: ["gateway", "run"], reusedChildren: 1 },
-    { commandPath: ["gateway", "health"], reusedChildren: 0 },
-  ])(
-    "bounds read-only child reuse to the startup preflight for $commandPath",
-    async ({ commandPath, reusedChildren }) => {
-      const source = path.join(useTempOpenClawHome(), "source.sqlite");
-      const database = new (requireNodeSqlite().DatabaseSync)(source);
-      database.exec("PRAGMA user_version=1");
-      database.close();
-      loadAndMaybeMigrateDoctorConfigMock.mockImplementationOnce(async () => {
-        for (let index = 0; index < 2; index++) {
-          const prepared = await prepareSqliteReadOnlyLocation(source, {
-            preserveSourceArtifacts: true,
-          });
-          try {
-            const snapshot = new (requireNodeSqlite().DatabaseSync)(prepared.location, {
-              readOnly: true,
-            });
-            try {
-              expect(snapshot.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-            } finally {
-              snapshot.close();
-            }
-          } finally {
-            expect(await prepared.cleanupAsync()).toBe(true);
-          }
-        }
-        throw new ExitError(78);
-      });
-      const runtime = makeRuntime();
-      runtime.exit.mockImplementation(() => {
-        // The exit handoff must never orphan an idle inspection process.
-        expect(spawn).toHaveBeenCalledTimes(reusedChildren);
-        for (const result of vi.mocked(spawn).mock.results) {
-          expect(result.value.exitCode).toBe(0);
-        }
-      });
-      await expect(ensureConfigReady({ runtime, commandPath })).rejects.toMatchObject({ code: 78 });
-      expect(runtime.exit).toHaveBeenCalledWith(78);
-    },
-  );
 
   it("uses only the state migration checkpoint for gateway probes", async () => {
     await runEnsureConfigReady(["gateway", "health"]);

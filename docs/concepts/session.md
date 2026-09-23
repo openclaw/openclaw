@@ -212,6 +212,11 @@ When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
 A completed reply or a later user message closes that turn to replay.
 
+Messages sent while restart recovery is waiting to start stay pending. Once
+recovery starts, they follow the session's normal message queue policy. You do
+not need to resend a message just because recovery is waiting for capacity.
+Stopping or replacing the session still cancels pending work.
+
 If automatic recovery is exhausted, the transcript remains available. Use
 **Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
 to start a replacement session.
@@ -268,6 +273,11 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
+Ordinary entry writes also arm background maintenance at the next age boundary,
+with a periodic recheck every 30 minutes while the store remains open. This lets
+eligible sessions age out without further traffic. Writes that cannot change
+age or count maintenance outcomes skip candidate scans.
+
 `maxEntries` defaults to 5000 unarchived session rows. Archived rows do not consume
 the cap. Existing explicit limits remain unchanged.
 When pressure exceeds the cap, cleanup archives the oldest eligible ordinary
@@ -277,9 +287,11 @@ removed. Pinned root sessions, active or admitted work, model-locked sessions, a
 durable external conversation pointers are protected; the unarchived total can
 therefore remain above the cap when protected rows alone exceed it.
 
-Only root sessions can be pinned; child/subagent sessions live in their parent's
-tree and reject pin requests. Existing child pins disappear and no longer protect
-the session from maintenance.
+Root sessions and sessions auto-parented to the agent's Home root can be pinned;
+genuine child sessions and subagent runs reject pin requests. Persistent child
+sessions retain their sidebar nesting; subagent runs appear in transcript activity
+and Tasks views. Existing child pins disappear and no longer protect the session
+from maintenance.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
@@ -316,6 +328,32 @@ exhausted. Sessions without a recorded archive reason remain protected.
 After skipping a history generation or archived session, disk-budget cleanup
 rechecks physical usage before considering another deletion. A measurement
 failure stops the sweep.
+
+Background disk-budget checks run at most every 30 minutes on entry writes.
+Delete and reset operations can request a check sooner, but repeated requests
+coalesce to at most one forced check per minute per store. If cleanup exhausts
+eligible history and the store remains over budget, automatic checks back off
+for 30 minutes and log one warning until the pressure clears or the budget changes.
+The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
+and deleting unneeded sessions. Checks resume on subsequent activity;
+`openclaw sessions cleanup --enforce` remains available immediately.
+
+An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
+archives and history instead of deleting more data behind the blocked checkpoint.
+The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before and
+after, and the checkpoint outcome. Automatic and manual budget passes remain
+deferred until the checkpoint owner observes a completed checkpoint; elapsed time
+or a budget change alone does not retry pruning. Normal periodic checkpointing
+continues, and subsequent activity can resume cleanup after recovery, including
+after a system clock correction.
+
+Look for `session history disk budget deferred until a completed WAL checkpoint is observed`
+in the Gateway log. Its checkpoint fields include bounded operation names for
+explicitly tracked readers, connection and thread IDs, and open-transaction flags.
+Collecting these facts does not keep connections open or change worker retirement.
+They do not prove which connection holds the blocking SQLite read mark. Raw native
+statements outside explicit reader tracking, other workers, and other processes
+can remain unidentified. No transcript contents, SQL text, or bound values are included.
 
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with

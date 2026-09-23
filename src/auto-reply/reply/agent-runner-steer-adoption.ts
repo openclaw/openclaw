@@ -175,8 +175,13 @@ export async function runActiveReplySteer(
       return await fallback("terminal source-reply delivery is closed");
     }
     const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, followupRun.prompt, {
+      assertCurrent: followupRun.operatorAuthority?.assertCurrent,
       steeringMode: "all",
-      isInboundUserMessage: true,
+      isInboundUserMessage:
+        followupRun.currentInboundEventKind !== "room_event" &&
+        (followupRun.run.inputProvenance?.kind === undefined ||
+          followupRun.run.inputProvenance.kind === "external_user"),
+      terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: params.toolAuthorityFingerprint,
       ...(params.pendingInputAuthorityFingerprint
         ? { pendingInputAuthorityFingerprint: params.pendingInputAuthorityFingerprint }

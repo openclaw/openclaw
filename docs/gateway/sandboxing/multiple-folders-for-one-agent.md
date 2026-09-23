@@ -59,6 +59,15 @@ This example gives the `research` agent a writable primary workspace, read-only 
 
 Changing `workspaceAccess` does not change an additional bind from `ro` to `rw`, or vice versa. Global and per-agent `docker.binds` are merged. Keep `scope: "agent"` or `"session"` for per-agent binds; `scope: "shared"` ignores all per-agent Docker overrides and uses only global binds.
 
+When multiple binds use the same container destination, the last entry wins,
+including its source and read-only mode. Per-agent entries follow global entries.
+Shell and file tools use that same selection. Managed read-only skill mounts
+remain authoritative at their destinations. Relative file paths and host-path
+aliases resolve through the selected container mount, including nested overrides.
+Workspace-only writes, edits, listing, and patches use the container workspace
+boundary even when an explicit bind replaces its host folder. Additional mount
+read exceptions do not grant writes outside that boundary.
+
 Bind mounts are the supported multi-folder boundary because Docker constructs the container's filesystem view with mount isolation, and the `ro`/`rw` mode applies to every process in the sandbox. That boundary covers `exec`, filesystem tools, child processes, and libraries without duplicating path-authorization checks across each OpenClaw code path. A host-side path allowlist cannot provide the same complete boundary when an allowed shell or dependency can access files directly.
 
 The opt-in `dangerouslyAllowExternalBindSources` only permits sources outside the workspace roots. It does not disable OpenClaw's blocked system, credential, Docker socket, symlink-parent, or reserved-target checks. Prefer the smallest folder, use `ro` unless writes are required, and recreate the sandbox after changing mounts:

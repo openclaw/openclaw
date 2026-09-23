@@ -7,9 +7,11 @@ import { modelsHandlers } from "../gateway/server-methods/models.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog-auth.js";
+import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   HARNESS_ID,
   PLUGIN_ID,
@@ -22,10 +24,11 @@ import {
   writeFixturePlugin,
   writeUnrelatedFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
-import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
+  refreshPreparedModelRuntimeCatalog,
 } from "./prepared-model-runtime.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
@@ -48,6 +51,10 @@ describe("prepared model catalog worker plugin scope", () => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const workspaceDir = path.join(root, "workspace");
     const marker = path.join(root, "worker-marker.txt");
+    const catalogHold = `${marker}.hold`;
+    if (selection.first === "scoped") {
+      fs.writeFileSync(catalogHold, "");
+    }
     const unrelatedMarker = path.join(root, "unrelated-worker-plugin.txt");
     fs.mkdirSync(agentDir, { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
@@ -131,33 +138,35 @@ describe("prepared model catalog worker plugin scope", () => {
       provenance: "configured",
       catalogMode: "static",
     });
-    const authStore = getPreparedModelRuntimeAuthStore(snapshot);
-    if (!authStore) {
-      throw new Error("prepared runtime produced no auth store");
-    }
     const projectSnapshot = async (
       full: boolean,
       providerIds?: readonly string[],
       refresh?: boolean,
     ): Promise<PreparedGatewayModelCatalogSnapshot> => {
       const modelCatalog = full
-        ? await snapshot.loadFullModelCatalog!({ providerIds, refresh })
-        : snapshot.modelCatalog;
-      return {
-        ...modelCatalog,
-        agentId: "main",
-        agentDir,
-        workspaceDir,
-        config,
-        observationConfig: snapshot.observationConfig,
-        isCurrent: snapshot.isCurrent,
-        pluginRegistry: snapshot.pluginRegistry,
-        catalogComplete: full,
-        authModes: snapshot.authModes,
-        authStore,
-        metadataSnapshot: snapshot.metadataSnapshot,
-        authMaterializations: [],
-      };
+        ? await refreshPreparedModelRuntimeCatalog(snapshot, { providerIds, refresh })
+        : snapshot.readFullModelCatalog?.();
+      const owner = materializePreparedModelCatalogOwner(snapshot, modelCatalog);
+      return await loadPreparedGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
+      });
+    };
+    const waitForPublication = async (previous: ModelCatalogSnapshot | undefined) => {
+      await expect
+        .poll(
+          () => {
+            const catalog = snapshot.readFullModelCatalog?.();
+            return Boolean(
+              catalog &&
+              catalog !== previous &&
+              !catalog.pendingProviders?.length &&
+              !catalog.refreshFailed,
+            );
+          },
+          { timeout: 30_000 },
+        )
+        .toBe(true);
     };
     const loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] =
       async (params) => {
@@ -173,15 +182,14 @@ describe("prepared model catalog worker plugin scope", () => {
         } = await projectSnapshot(params?.readOnly === false);
         return publicSnapshot;
       };
-    let published = await projectSnapshot(false);
     registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
       loadDeferred: async (params) =>
-        (published = await projectSnapshot(
+        await projectSnapshot(
           params?.readOnly === false,
           params?.providerDiscoveryProviderIds,
           params?.refreshFullCatalog === true,
-        )),
-      readPrepared: async () => published,
+        ),
+      readPrepared: async () => await projectSnapshot(false),
     });
     const respond = vi.fn();
     const context = Object.assign({} as GatewayRequestContext, {
@@ -201,6 +209,7 @@ describe("prepared model catalog worker plugin scope", () => {
       }
       // The first worker operation must enter through the registered scoped refresh.
       const params = { view: "all", provider: PROVIDER_ID, refresh: true };
+      const previousCatalog = snapshot.readFullModelCatalog?.();
       const refresh = Promise.resolve(
         expectDefined(
           modelsHandlers["models.list"],
@@ -288,7 +297,17 @@ describe("prepared model catalog worker plugin scope", () => {
           });
           const cancelled = path.join(root, "synthetic-auth-cancel.txt");
           await waitForMarker(cancelled);
-          await expect(observedRefresh).rejects.toThrow("superseded");
+          await observedRefresh;
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "UNAVAILABLE",
+              message: expect.stringContaining("superseded"),
+              retryable: true,
+              retryAfterMs: 0,
+            }),
+          );
           expect(settled).toBe(true);
           expect(fs.readFileSync(cancelled, "utf8")).toBe("abort\njoined\n");
           await waitForWorkers();
@@ -299,7 +318,29 @@ describe("prepared model catalog worker plugin scope", () => {
         }
         return;
       }
-      await refresh;
+      try {
+        await refresh;
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({ pendingProviders: [PROVIDER_ID] }),
+          undefined,
+        );
+      } finally {
+        fs.rmSync(catalogHold, { force: true });
+      }
+      await waitForPublication(previousCatalog);
+      respond.mockClear();
+      await expectDefined(
+        modelsHandlers["models.list"],
+        "models.list test invariant",
+      )({
+        req: { type: "req", id: "models-list-scoped-published", method: "models.list" },
+        params: { view: "all", provider: PROVIDER_ID },
+        respond: respond as RespondFn,
+        client: null,
+        isWebchatConnect: () => false,
+        context,
+      });
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -318,6 +359,7 @@ describe("prepared model catalog worker plugin scope", () => {
       expect(fs.existsSync(unrelatedMarker)).toBe(false);
       respond.mockClear();
     }
+    const previousCatalog = snapshot.readFullModelCatalog?.();
     await expectDefined(
       modelsHandlers["models.list"],
       'modelsHandlers["models.list"] test invariant',
@@ -334,7 +376,19 @@ describe("prepared model catalog worker plugin scope", () => {
       isWebchatConnect: () => false,
       context,
     });
-
+    await waitForPublication(previousCatalog);
+    respond.mockClear();
+    await expectDefined(
+      modelsHandlers["models.list"],
+      "models.list test invariant",
+    )({
+      req: { type: "req", id: "models-list-full-published", method: "models.list" },
+      params: { view: "all" },
+      respond: respond as RespondFn,
+      client: null,
+      isWebchatConnect: () => false,
+      context,
+    });
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({

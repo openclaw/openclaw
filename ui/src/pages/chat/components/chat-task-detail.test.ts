@@ -28,7 +28,6 @@ function backgroundTasks(task: TaskSummary): BackgroundTasksProps {
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:main",
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
     }),
     taskDetails: new Map([[task.id, { ...task, prompt: "Inspect the current task." }]]),
@@ -580,7 +579,7 @@ describe("task activity monitor", () => {
   });
 
   it.each([1, 3])(
-    "shows active status, elapsed time, %s tool calls and latest tool without repeating Subagent",
+    "shows active status, elapsed time, %s tool calls and labels the last tool separately",
     async (toolUseCount) => {
       const current = { ...task, title: "Inspect renderer", toolUseCount, lastToolName: "read" };
       const props = backgroundTasks(current);
@@ -593,7 +592,13 @@ describe("task activity monitor", () => {
       expect(meta?.textContent).toContain(
         `${toolUseCount} tool call${toolUseCount === 1 ? "" : "s"}`,
       );
-      expect(meta?.textContent).toContain("read");
+      expect(meta?.textContent).not.toContain("read");
+      expect(container.querySelector(".chat-task-detail__observation")?.textContent).toContain(
+        "Last tool",
+      );
+      expect(container.querySelector(".chat-task-detail__observation")?.textContent).toContain(
+        "read",
+      );
       expect(meta?.textContent).not.toContain("Subagent");
       expect(meta?.querySelector(".chat-tasks-rail__task-pulse")).not.toBeNull();
       expect(meta?.querySelector("openclaw-elapsed-time")).not.toBeNull();
@@ -620,4 +625,74 @@ describe("task activity monitor", () => {
     expect(meta?.textContent).not.toContain("stale-tool");
     expect(meta?.querySelector("openclaw-elapsed-time")).toBeNull();
   });
+
+  it("separates the current operation from the last tool and the activity age", async () => {
+    const { container } = await mount({
+      ...task,
+      lastToolName: "read",
+      execution: {
+        state: "running",
+        currentTool: { name: "exec", startedAt: 4_000 },
+        lastActivityAt: 5_000,
+      },
+    });
+    const observation = container.querySelector(".chat-task-detail__observation");
+    expect(observation?.textContent).toContain("Current tool");
+    expect(observation?.textContent).toContain("exec");
+    expect(observation?.textContent).toContain("Last activity");
+    expect(observation?.textContent).not.toContain("read");
+    expect(observation?.querySelectorAll("openclaw-elapsed-time")).toHaveLength(2);
+  });
+
+  it("shows explicit child dependencies without treating the historical tool as current", async () => {
+    const { container } = await mount({
+      ...task,
+      lastToolName: "read",
+      execution: {
+        state: "waiting",
+        lastActivityAt: 5_000,
+        wait: {
+          kind: "children",
+          pendingCount: 2,
+          dependencies: [
+            { runId: "install-proof", label: "Check installation" },
+            { runId: "update-proof", label: "Check updates" },
+          ],
+        },
+      },
+    });
+    expect(container.textContent).toContain("Waiting for children");
+    expect(container.textContent).toContain("2 children pending");
+    expect(container.textContent).toContain("Check installation");
+    expect(container.textContent).toContain("Check updates");
+    expect(container.textContent).toContain("Last tool");
+    expect(container.textContent).not.toContain("Current tool");
+    expect(container.querySelector(".chat-tasks-rail__task-pulse")).toBeNull();
+  });
+
+  it.each([
+    { deliveryStatus: "pending", expected: "Waiting to send to parent" },
+    { deliveryStatus: "session_queued", expected: "Queued for parent" },
+    { deliveryStatus: "delivered", expected: "Delivered to parent" },
+    { deliveryStatus: "failed", expected: "Delivery failed · result retained" },
+    { deliveryStatus: "dismissed", expected: "Delivery dismissed · result retained" },
+    { deliveryStatus: "parent_missing", expected: "Parent unavailable · result retained" },
+  ] as const)(
+    "keeps completed execution separate from $deliveryStatus delivery",
+    async ({ deliveryStatus, expected }) => {
+      const current: TaskSummary = {
+        ...task,
+        status: "completed",
+        terminalSummary: "The review result is ready.",
+        deliveryStatus,
+        execution: { state: "finished" },
+      };
+      const props = backgroundTasks(current);
+      props.canCancel = true;
+      const { container } = await mount(current, props);
+      expect(container.textContent).toContain(expected);
+      expect(container.textContent).toContain("The review result is ready.");
+      expect(container.querySelector('button[aria-label^="Stop "]')).toBeNull();
+    },
+  );
 });

@@ -1,10 +1,10 @@
-// Runtime-state test helpers hold hoisted mutable mocks shared by gateway
-// Vitest suites and module mocks.
+// Runtime-state test helpers share per-file mutable mocks across Gateway module resets.
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import type { MsgContext } from "../auto-reply/templating.js";
@@ -13,10 +13,10 @@ import type { HooksConfig } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RunCronAgentTurnResult } from "../cron/isolated-agent/run.types.js";
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGatewayTestFileFixture } from "./server-file-fixtures.test-support.js";
 
 /**
- * Hoisted mutable state shared by gateway Vitest module mocks.
+ * File-scoped mutable state shared by Gateway Vitest module mocks.
  */
 export type GetReplyFromConfigFn = (
   ctx: MsgContext,
@@ -40,16 +40,7 @@ type GatewayTestHoistedState = {
   agentDiscoveryMock: {
     enabled: boolean;
     discoverCalls: number;
-    models: Array<{
-      id: string;
-      name?: string;
-      provider: string;
-      contextWindow?: number;
-      contextWindows?: Array<{ id: string; label: string; contextWindow: number }>;
-      contextWindowDefault?: string;
-      reasoning?: boolean;
-      input?: string[];
-    }>;
+    models: Array<Omit<ModelCatalogEntry, "name"> & { name?: string }>;
   };
   cronIsolatedRun: Mock<CronIsolatedRunFn>;
   agentCommand: Mock<AgentCommandFn>;
@@ -97,13 +88,9 @@ type GatewayTestHoistedState = {
   };
 };
 
-const gatewayTestHoisted = vi.hoisted(() => {
-  const key = Symbol.for("openclaw.gatewayTestHelpers.hoisted");
-  const store = globalThis as Record<PropertyKey, unknown>;
-  if (Object.hasOwn(store, key)) {
-    return store[key] as GatewayTestHoistedState;
-  }
-  const created: GatewayTestHoistedState = {
+const gatewayTestHoisted = resolveGatewayTestFileFixture<GatewayTestHoistedState>(
+  Symbol.for("openclaw.gatewayTestHelpers.hoisted"),
+  () => ({
     testTailnetIPv4: { value: undefined },
     agentDiscoveryMock: {
       enabled: false,
@@ -157,12 +144,10 @@ const gatewayTestHoisted = vi.hoisted(() => {
       migrationConfig: null,
       migrationChanges: [],
     },
-  };
-  store[key] = created;
-  return created;
-});
+  }),
+);
 
-/** Returns the singleton state object used by gateway test module mocks. */
+/** Returns this file's shared state object used by Gateway test module mocks. */
 export function getGatewayTestHoistedState(): GatewayTestHoistedState {
   return gatewayTestHoisted;
 }
@@ -182,7 +167,7 @@ export const testState = gatewayTestHoisted.testState;
 export const testIsNixMode = gatewayTestHoisted.testIsNixMode;
 export const embeddedRunMock = gatewayTestHoisted.embeddedRunMock;
 
-export const testConfigRoot = resolveGlobalSingleton(GATEWAY_TEST_CONFIG_ROOT_KEY, () => ({
+export const testConfigRoot = resolveGatewayTestFileFixture(GATEWAY_TEST_CONFIG_ROOT_KEY, () => ({
   value: path.join(os.tmpdir(), `openclaw-gateway-test-${process.pid}-${crypto.randomUUID()}`),
 }));
 

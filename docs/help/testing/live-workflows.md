@@ -12,16 +12,35 @@ When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
+- Progress-card refresh: `OPENCLAW_LIVE_TEST=1 pnpm test:live -- src/gateway/gateway-progress-refresh.live.test.ts`
+  - Requires `OPENAI_API_KEY` and uses `openai/gpt-5.6-luna` with isolated Gateway state.
+  - Completes an earlier turn, then refreshes during a second turn while a command remains held. The original parent must update the card and retain its final reply. A later idle refresh must update the card without adding chat messages or resuming pending work.
 - Live subagent handoff stress:
   `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_SUBAGENT_STRESS=1 pnpm test:live -- src/agents/subagents/announce/subagent-yield-resume.live.test.ts`
   - Requires `OPENAI_API_KEY` and defaults to `openai/gpt-5.6-luna`; select another
     OpenAI model with `OPENCLAW_LIVE_SUBAGENT_E2E_MODEL`.
-  - Uses isolated Gateway state and synthetic files to verify concurrent child
-    completion, one final reply per parent, and operator resume with preserved
-    task identity, parent completion, and idempotent replay.
+  - Pins the OpenClaw agent harness and uses isolated Gateway state, synthetic
+    files, and externally held HTTP responses. It checks concurrent hidden-result
+    fanout, status-only interrogation of a waiting child tree, operator resume
+    with preserved task identity and idempotent replay, child timeout, a live HTTP
+    503 retrieval failure, and cancellation racing an in-flight result after its
+    owner claims the run. Parent reports are checked against held requests,
+    child execution, task delivery state, and hidden results. The 503 case checks
+    that a completed agent turn does not imply a successful retrieval.
+  - Each case incrementally preserves bounded runtime facts, plus final assistant replies, in
+    `.artifacts/qa-e2e/subagent-challenges-*/evidence.json`, including failed runs.
+    Set `OPENCLAW_LIVE_SUBAGENT_EVIDENCE_DIR` to change the output directory.
+    This live lane does not simulate cold process loss; restart and lost-acceptance
+    ownership are covered by `subagent-orphan-recovery.restart-integration.test.ts`.
   - Defaults to two batches of three children. Set
     `OPENCLAW_LIVE_SUBAGENT_STRESS_BATCHES` (1–5) and
     `OPENCLAW_LIVE_SUBAGENT_STRESS_CHILDREN` (1–6) to change the bounded workload.
+- Live Gateway concurrency: dispatch `OpenClaw Performance` on `main` with
+  `mode=gateway-concurrency` and `live_openai_candidate=true`. It runs 96 real
+  turns across 32 agents with 1,000 seeded sessions, concurrent session activity,
+  and load-phase CPU profiles. Dreaming is disabled while ordinary indexing and
+  recaps remain enabled. Results stay in Actions artifacts. See
+  [Gateway concurrency benchmark](/ci/scheduled-workflows#gateway-concurrency-benchmark).
 - Runtime performance reports: dispatch `OpenClaw Performance` with
   `live_openai_candidate=true` for a real `openai/gpt-5.6-luna` agent turn or
   `deep_profile=true` for Kova CPU/heap/trace artifacts. Daily scheduled runs

@@ -9,6 +9,13 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
+import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+  type InternalSessionTranscriptUpdate,
+  type SessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
   readCodexSessionTranscriptEventsBeforeAdmission,
@@ -166,6 +173,71 @@ describe("private session transcript mirror runtime", () => {
       });
       expect(dirtyProjection.messageSeq).toBeUndefined();
     });
+  });
+
+  it("publishes the append's lifecycle after the session row is replaced", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "owned-mirror-session",
+      sessionKey: "agent:main:owned-mirror",
+      storePath,
+    };
+    const entry = {
+      sessionId: scope.sessionId,
+      activeWriterRunId: "mirror-writer",
+      lifecycleRevision: "committed-lifecycle",
+      updatedAt: 1,
+    };
+    await upsertSessionEntryCore(scope, entry);
+    const appended = await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: {
+          ...scope,
+          expectedLifecycleRevision: entry.lifecycleRevision,
+          expectedWriterRunId: entry.activeWriterRunId,
+        },
+        withTranscriptWrite: async (run) => await run(),
+      },
+      () =>
+        withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
+          locked.appendMessageWithMessageSequence({
+            message: { role: "assistant", content: "Committed reply" },
+          }),
+        ),
+    );
+    expect(appended.lifecycleRevision).toBe(entry.lifecycleRevision);
+    expect(appended.messageSeq).toBe(1);
+    const result = appended.result;
+    if (!result) {
+      throw new Error("expected committed mirror reply");
+    }
+    await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement-lifecycle" });
+    const internalUpdates: InternalSessionTranscriptUpdate[] = [];
+    const publicUpdates: SessionTranscriptUpdate[] = [];
+    const offInternal = onInternalSessionTranscriptUpdate((update) => internalUpdates.push(update));
+    const offPublic = onSessionTranscriptUpdate((update) => publicUpdates.push(update));
+    try {
+      await withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
+        locked.publishUpdate({
+          lifecycleRevision: appended.lifecycleRevision,
+          message: result.message,
+          messageId: result.messageId,
+          messageSeq: appended.messageSeq,
+        }),
+      );
+      expect(internalUpdates).toMatchObject([
+        {
+          lifecycleRevision: "committed-lifecycle",
+          messageId: result.messageId,
+          messageSeq: 1,
+        },
+      ]);
+      expect(publicUpdates).toHaveLength(1);
+      expect(publicUpdates[0]).not.toHaveProperty("lifecycleRevision");
+    } finally {
+      offInternal();
+      offPublic();
+    }
   });
 
   it("rejects an admission receipt for a different transcript target", async () => {

@@ -57,10 +57,6 @@ const logoutIcon = strokeIcon(svg` <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-
   <polyline points="16 17 21 12 16 7" />
   <line x1="21" x2="9" y1="12" y2="12" />`);
 
-function profileIdentity(profile: ProviderProfile): string {
-  return profile.email || profile.displayName || profile.profileId;
-}
-
 function profileSource(profile: ProviderProfile): string | undefined {
   switch (profile.source) {
     case "config":
@@ -104,8 +100,6 @@ function profileMeta(profile: ProviderProfile): string {
   }
   if (profile.email && profile.displayName && profile.displayName !== source) {
     parts.push(profile.displayName);
-  } else if (!source && profileIdentity(profile) !== profile.profileId) {
-    parts.push(profile.profileId);
   }
   if (profile.lastUsedAt) {
     parts.push(
@@ -117,8 +111,8 @@ function profileMeta(profile: ProviderProfile): string {
   return parts.join(" · ");
 }
 
-function profileInitials(profile: ProviderProfile): string {
-  const localPart = profileIdentity(profile).split("@")[0] ?? "";
+function profileInitials(identity: string): string {
+  const localPart = identity.split("@")[0] ?? "";
   const words = localPart.split(/[^a-z0-9]+/iu).filter(Boolean);
   const initials =
     words.length > 1
@@ -127,17 +121,21 @@ function profileInitials(profile: ProviderProfile): string {
   return initials.toLocaleUpperCase() || "?";
 }
 
-function profileStatus(profile: ProviderProfile) {
-  if (
-    profile.externallyManaged &&
-    (profile.status === "expired" || profile.status === "expiring")
-  ) {
-    return renderSettingsStatus({ kind: "ok", label: t("modelProviders.status.ready") });
-  }
-  switch (profile.status) {
+function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean) {
+  const status =
+    profile.externallyManaged && (profile.status === "expired" || profile.status === "expiring")
+      ? "ok"
+      : profile.status;
+  switch (status) {
     case "ok":
+      return renderSettingsStatus({
+        kind: providerAuthRejected ? "muted" : "ok",
+        label: t(
+          providerAuthRejected ? "modelProviders.status.configured" : "modelProviders.status.ok",
+        ),
+      });
     case "static":
-      return renderSettingsStatus({ kind: "ok", label: t("modelProviders.status.ready") });
+      return renderSettingsStatus({ kind: "ok", label: t("modelProviders.status.configured") });
     case "expiring":
       return renderSettingsStatus({ kind: "warn", label: t("modelProviders.status.expiring") });
     case "expired":
@@ -354,6 +352,15 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
     return nothing;
   }
   const groups = profileGroups(card, props.profileOrders);
+  // Account numbers follow the saved inventory, not the editable priority order.
+  const identities = new Map(
+    card.profiles.map((profile, index) => [
+      profile.profileId,
+      profile.email ||
+        profile.displayName ||
+        t("modelProviders.profiles.account", { number: String(index + 1) }),
+    ]),
+  );
   const rows = groups.flatMap((group) => group.profiles.map((profile) => ({ group, profile })));
   const reorderOffered = groups.some(
     (group) => !group.lock && group.complete && group.order.length > 1,
@@ -363,7 +370,10 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
   ];
   const additionalCredentialSource = apiKeySource(card);
   return html`
-    <section class="model-providers__profiles" aria-label=${t("modelProviders.profiles.title")}>
+    <section
+      class="model-providers__profiles"
+      aria-label=${`${t("modelProviders.profiles.title")}: ${card.displayName}`}
+    >
       <div class="model-providers__profiles-heading">
         <div class="model-providers__profiles-heading-copy">
           <strong>${t("modelProviders.profiles.title")}</strong>
@@ -417,7 +427,7 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
             const index = order.indexOf(profile.profileId);
             const canMove = props.canMutate && !lock && complete && order.length > 1 && index >= 0;
             const showMoves = !lock && (complete || stored) && order.length > 1;
-            const identity = profileIdentity(profile);
+            const identity = identities.get(profile.profileId)!;
             const meta = profileMeta(profile);
             const logoutProvider = logoutProviderForProfile(card, profile.profileId);
             const logoutLabel = t("modelProviders.logout.actionFor", { account: identity });
@@ -500,12 +510,17 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                   }
                 </span>
                 <span class="model-providers__profile-avatar" aria-hidden="true"
-                  >${profileInitials(profile)}</span
+                  >${profileInitials(identity)}</span
                 >
-                <span class="model-providers__profile-copy">
+                <div class="model-providers__profile-copy">
                   <strong>${identity}</strong>
                   ${meta ? html`<span>${meta}</span>` : nothing}
-                </span>
+                  <details>
+                    <summary>${t("modelProviders.profiles.details")}</summary>
+                    <div>${profile.profileId}</div>
+                    ${profile.expiry ? html`<span>${t("modelProviders.expiresIn", { time: profile.expiry.label })}</span>` : nothing}
+                  </details>
+                </div>
                 ${
                   provider === "openai" && profile.type !== "api_key"
                     ? html`<openclaw-model-account-usage
@@ -515,7 +530,9 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                       ></openclaw-model-account-usage>`
                     : nothing
                 }
-                <span class="model-providers__profile-status">${profileStatus(profile)}</span>
+                <span class="model-providers__profile-status"
+                  >${profileStatus(profile, card.catalogStatus === "auth-rejected")}</span
+                >
                 <span class="model-providers__profile-actions">
                   ${
                     profile.logoutSupported === true && logoutProvider

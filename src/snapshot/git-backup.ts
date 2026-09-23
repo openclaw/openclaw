@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatErrorMessage } from "../infra/errors.js";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import {
   GIT_TIMEOUT_MS,
@@ -42,6 +43,7 @@ type GitBackupCreateResult = {
   pushed: boolean;
   pushWarning?: string;
   manifests: GitBackupManifest[];
+  warnings: string[];
 };
 
 function redactGitBackupText(value: string): string {
@@ -214,7 +216,10 @@ async function assertBackupOwnedScope(scopePath: string): Promise<void> {
   }
 }
 
-async function removeStaleAgentScopes(repositoryPath: string): Promise<void> {
+async function removeStaleAgentScopes(
+  repositoryPath: string,
+  retainedScopes: Set<string>,
+): Promise<void> {
   const agentsPath = path.join(repositoryPath, "agents");
   let entries: string[];
   try {
@@ -227,7 +232,11 @@ async function removeStaleAgentScopes(repositoryPath: string): Promise<void> {
   }
   const scopes = entries.map((entry) => path.join(agentsPath, entry));
   await Promise.all(scopes.map(async (scope) => await assertBackupOwnedScope(scope)));
-  await Promise.all(scopes.map(async (scope) => await fs.rm(scope, { recursive: true })));
+  await Promise.all(
+    scopes
+      .filter((scope) => !retainedScopes.has(path.relative(repositoryPath, scope)))
+      .map(async (scope) => await fs.rm(scope, { recursive: true })),
+  );
 }
 
 async function copyStagedScope(
@@ -288,15 +297,26 @@ export async function createGitBackup(params: {
   const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-backup-"));
   await fs.chmod(stagingRoot, 0o700);
   const manifests: GitBackupManifest[] = [];
+  const warnings: string[] = [];
   try {
-    for (const database of params.databases) {
+    for (const [index, database] of params.databases.entries()) {
       const outputPath = path.join(stagingRoot, gitBackupScopePath(database.identity));
       await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
-      const copyPath = path.join(
-        stagingRoot,
-        `${database.identity.role}-${manifests.length}.sqlite`,
-      );
-      await createOpenClawSnapshotCopy({ database, targetPath: copyPath });
+      const copyPath = path.join(stagingRoot, `${database.identity.role}-${index}.sqlite`);
+      try {
+        await createOpenClawSnapshotCopy({
+          database: { ...database, path: await fs.realpath(database.path) },
+          targetPath: copyPath,
+        });
+      } catch (error) {
+        if (!params.all || database.identity.role !== "agent") {
+          throw error;
+        }
+        warnings.push(
+          `Agent ${database.identity.agentId} degraded; keeping previous backup scope if present: ${sanitizeGitBackupDiagnostic(formatErrorMessage(error))}`,
+        );
+        continue;
+      }
       manifests.push(
         await dumpGitBackupDatabase({
           snapshotPath: copyPath,
@@ -307,11 +327,18 @@ export async function createGitBackup(params: {
       );
       await fs.rm(copyPath, { force: true });
     }
-    if (params.all) {
-      await removeStaleAgentScopes(repositoryPath);
+    if (manifests.length === 0) {
+      throw new Error("No Git backup databases were found for the selected scope.");
     }
-    for (const database of params.databases) {
-      await copyStagedScope(stagingRoot, repositoryPath, database.identity);
+    if (params.all) {
+      // Selection is the configured roster, including agents whose snapshot failed.
+      await removeStaleAgentScopes(
+        repositoryPath,
+        new Set(params.databases.map(({ identity }) => gitBackupScopePath(identity))),
+      );
+    }
+    for (const { identity } of manifests) {
+      await copyStagedScope(stagingRoot, repositoryPath, identity);
     }
   } finally {
     await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -384,6 +411,7 @@ export async function createGitBackup(params: {
     pushed,
     ...(pushWarning ? { pushWarning } : {}),
     manifests,
+    warnings,
   };
 }
 

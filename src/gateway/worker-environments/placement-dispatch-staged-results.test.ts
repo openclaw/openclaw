@@ -2,10 +2,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -240,18 +244,20 @@ describe("staged worker placement result recovery", () => {
       });
       support.testState.prepareInstallation = async () => ({
         ...support.BUNDLE_ARTIFACT,
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
       });
       const environments = support.createService(support.createProvider({ destroy }), {
         tunnelManager: tunnels,
         placementStore: createWorkerSessionPlacementGate(placementStore),
       });
-      const ready = await environments.create(
-        "development",
-        "session-dispatch:session-1:1",
-        undefined,
-        "remote-exec",
-      );
+      const ready = await environments.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "session-dispatch:session-1:1",
+        executionMode: "remote-exec",
+      });
       const attached = await environments.attachSession({
         environmentId: ready.environmentId,
         ownerEpoch: ready.ownerEpoch,
@@ -541,6 +547,7 @@ describe("staged worker placement result recovery", () => {
         expect(originalHarness.environments.destroy).toHaveBeenCalledOnce();
       }
 
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });

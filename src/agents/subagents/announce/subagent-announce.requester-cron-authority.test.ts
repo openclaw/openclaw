@@ -64,7 +64,7 @@ describe("requester continuation automation management", () => {
       const originalCapability = createCronCreatorAuthorityCapability(
         sourceRunId,
         { kind: "unknown" },
-        true,
+        { source: "control-ui-admin" },
       )!;
       await runWithCronCreatorAuthorityCapability(originalCapability, () =>
         withGatewayToolCallerIdentity(
@@ -154,7 +154,7 @@ describe("requester continuation automation management", () => {
           const capability = createCronCreatorAuthorityCapability(
             runId,
             admission.callerOrigin,
-            admission.controlUiAdmin,
+            admission.managementEntitlement,
             admission.isCurrent,
           )!;
           admission.bindRunScope?.(capability);

@@ -61,6 +61,7 @@ Naming and value rules:
 - Names must match `^[A-Z][A-Z0-9_]{0,127}$`.
 - Values are limited to 64 KiB (65,536 UTF-8 bytes). An oversized value exits `2` whether it arrives from stdin, `--value`, or `--value-file`.
 - A `secret` entry may not be empty, because an empty credential cannot be diagnosed later. `get` refuses secret kinds, and listings mask them. `env` entries may be empty.
+- Known redaction placeholders such as `__OPENCLAW_REDACTED__` cannot be stored as values. CLI `set` and `import` skip redacted inputs for existing usable entries with an explicit unchanged message; a placeholder without a usable existing entry exits `2`.
 - `--kind secret|env` overrides automatic kind detection. Otherwise names ending in a common credential suffix such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
 
 ### Set values safely
@@ -89,6 +90,11 @@ openclaw secrets store set TLS_PRIVATE_KEY \
 ```
 
 `set` is idempotent and updates an existing name. Add `--dry-run` to validate and preview the operation without writing. A successful write reminds you to run `openclaw secrets reload` before a config-referenced value can take effect.
+
+`audit` reports previously stored or resolved placeholders as `PLACEHOLDER_VALUE`
+and counts them as unresolved credentials (exit `2`). For a corrupt store-backed
+Gateway token, run `openclaw doctor --fix`, restart the Gateway, and reconnect or
+re-pair devices. See [Gateway token recovery](/cli/doctor/recovery#invalid-gateway-tokens).
 
 Secret egress substitution fails closed until each secret has at least one exact allowed host. Bind or replace hosts with repeatable `--allow-host` flags. This policy-only form does not ask for or replace an existing secret value:
 

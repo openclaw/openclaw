@@ -34,6 +34,8 @@ function seed() {
       stateDir: process.env.OPENCLAW_STATE_DIR,
       source: import.meta.url,
       sharedSource,
+      sourceSha256: createHash("sha256").update(fs.readFileSync(new URL(import.meta.url))).digest("hex"),
+      sharedSourceSha256: createHash("sha256").update(fs.readFileSync(new URL(sharedSource))).digest("hex"),
       argv: process.argv.slice(2),
     }) + "\\n");`;
   const files = {
@@ -52,6 +54,7 @@ function seed() {
     [path.join(sharedRoot, "value.mjs")]:
       `export default ${JSON.stringify(marker)};\nexport const sharedSource = import.meta.url;\n`,
     [path.join(pluginRoot, "index.mjs")]: `import fs from "node:fs";
+import { createHash } from "node:crypto";
 import value, { sharedSource } from "../shared/value.mjs";
 export default {
   id: ${JSON.stringify(pluginId)},
@@ -62,7 +65,9 @@ export default {
 };
 `,
     [path.join(pluginRoot, "doctor-contract-api.mjs")]: `import fs from "node:fs";
+import { createHash } from "node:crypto";
 import value, { sharedSource } from "../shared/value.mjs";
+${observe("doctor-module")}
 export function normalizeCompatibilityConfig({ cfg }) {
   ${observe("doctor-contract")}
   return { config: cfg, changes: [] };

@@ -364,6 +364,11 @@ provider. This is not the separate Cloud Text-to-Speech API path.
 The bundled `google` plugin registers a realtime voice provider backed by the
 Gemini Live API for backend audio bridges such as Voice Call and Google Meet.
 
+Talk and Discord expose Google's prebuilt voices in their voice catalogs. During
+an active Talk or Discord call, use `talk_voice` to select a new voice. OpenClaw
+reconnects with that voice while preserving the conversation and unfinished agent
+work; saved voice defaults stay unchanged. See [Discord voice changes](/channels/discord/voice-follow).
+
 | Setting               | Config path                                                         | Default                                                                               |
 | --------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Model                 | `plugins.entries.voice-call.config.realtime.providers.google.model` | `gemini-3.1-flash-live-preview`                                                       |

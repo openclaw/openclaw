@@ -42,6 +42,12 @@ struct TalkRealtimeTranscriptWriteQueueTests {
 
         #expect(attempts == ["1", "1", "1", "2", "2", "2", "3"])
         #expect(delegate.failedEntryIds == ["2"])
+        do {
+            try await store.flushSuccessfully(voiceSessionId: "voice-1")
+            Issue.record("A replacement must not treat a failed transcript drain as saved history")
+        } catch {
+            #expect(error is PersistError)
+        }
     }
 
     @Test func `shares ordering across transport replacements`() async {

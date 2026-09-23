@@ -7,7 +7,6 @@ import { updateCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
 import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.ts";
 
 let codeBlockRegionSequence = 0;
-const initializedCodeBlocks = new WeakSet<HTMLElement>();
 class MarkdownBlocksDirective extends AsyncDirective {
   private root: HTMLElement | undefined;
   private scanPending = false;
@@ -115,13 +114,15 @@ class MarkdownBlocksDirective extends AsyncDirective {
       if (!viewport || !code) {
         continue;
       }
-      if (!initializedCodeBlocks.has(wrapper)) {
-        initializedCodeBlocks.add(wrapper);
-        const expandButton = wrapper.querySelector<HTMLButtonElement>(".code-block-expand");
-        if (expandButton) {
-          const regionId = `code-block-${++codeBlockRegionSequence}`;
-          viewport.id = regionId;
-          expandButton.setAttribute("aria-controls", regionId);
+      // Short streaming fences gain an Expand control without replacing their
+      // wrapper. Bind the control when it appears, not only on the first scan.
+      const expandButton = wrapper.querySelector<HTMLButtonElement>(".code-block-expand");
+      if (expandButton) {
+        if (!viewport.id) {
+          viewport.id = `code-block-${++codeBlockRegionSequence}`;
+        }
+        if (expandButton.getAttribute("aria-controls") !== viewport.id) {
+          expandButton.setAttribute("aria-controls", viewport.id);
         }
       }
       // A reconnected host reuses initialized DOM but must reacquire observation.

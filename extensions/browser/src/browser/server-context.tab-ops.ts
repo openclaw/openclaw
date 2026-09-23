@@ -88,6 +88,10 @@ type CdpTarget = {
   type?: string;
 };
 
+type ExtensionCdpTarget = CdpTarget & {
+  tabId?: unknown;
+};
+
 /** Normalize a reported CDP WebSocket URL against the configured endpoint. */
 function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | undefined {
   if (!raw) {
@@ -155,12 +159,47 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             : {}),
           ...(options?.signal ? { signal: options.signal } : {}),
         });
-        return pages.filter(isSelectableCdpBrowserTarget).map((p) => ({
-          targetId: p.targetId,
-          title: p.title,
-          url: p.url,
-          type: p.type,
-        }));
+        const webExtensionTabIds =
+          profile.driver === "extension"
+            ? await fetchJson<ExtensionCdpTarget[]>(
+                appendCdpPath(cdpHttpBase, "/json/list"),
+                Math.min(timeoutMs, resolved.remoteCdpTimeoutMs),
+                options?.signal ? { signal: options.signal } : undefined,
+                ssrfPolicy,
+              )
+                .then(
+                  (targets) =>
+                    new Map(
+                      targets.flatMap((target) =>
+                        typeof target.id === "string" &&
+                        typeof target.tabId === "number" &&
+                        Number.isSafeInteger(target.tabId) &&
+                        target.tabId >= 0
+                          ? [[target.id, target.tabId] as const]
+                          : [],
+                      ),
+                    ),
+                )
+                .catch(() => {
+                  options?.signal?.throwIfAborted();
+                  return new Map<string, number>();
+                })
+            : undefined;
+        return pages.filter(isSelectableCdpBrowserTarget).map((p) => {
+          // Correlate only by the relay's exact CDP target id. The native Chrome
+          // tab id is runtime-scoped and must not replace OpenClaw's stable tN alias.
+          const webExtensionTabId = webExtensionTabIds?.get(p.targetId);
+          const tab: BrowserTab = {
+            targetId: p.targetId,
+            title: p.title,
+            url: p.url,
+            type: p.type,
+          };
+          if (webExtensionTabId !== undefined) {
+            tab.webExtensionTabId = webExtensionTabId;
+          }
+          return tab;
+        });
       }
     }
 
@@ -172,7 +211,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         webSocketDebuggerUrl?: string;
         type?: string;
       }>
-    >(appendCdpPath(cdpHttpBase, "/json/list"), undefined, undefined, getCdpControlPolicy());
+    >(
+      appendCdpPath(cdpHttpBase, "/json/list"),
+      options?.timeoutMs,
+      options?.signal ? { signal: options.signal } : undefined,
+      getCdpControlPolicy(),
+    );
     const cdpControlPolicy = getCdpControlPolicy();
     const tabs: BrowserTab[] = [];
     for (const t of raw) {
@@ -202,6 +246,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
 
   const listTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
     const tabs = await readTabs(options);
+    options?.signal?.throwIfAborted();
     // Chrome MCP target identity is authoritative. A replacement tab cannot
     // inherit an alias safely, even when its URL matches the closed tab.
     return assignTabAliases(runtime, tabs, !capabilities.usesChromeMcp);
@@ -318,6 +363,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     }
 
     let createdTargetId: string | undefined;
+    let closeCreatedPage: (() => Promise<void>) | undefined;
     try {
       if (capabilities.usesPersistentPlaywright) {
         const mod = await getPwAiModule({ mode: "strict" });
@@ -331,6 +377,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             ...(opts?.signal ? { signal: opts.signal } : {}),
             ...ssrfPolicyOpts,
           });
+          closeCreatedPage = page.close;
           createdTargetId = page.targetId;
           return adoptValidatedTab(
             await withTabOwnership(
@@ -504,7 +551,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         { ...opts, label: normalizedLabel },
       );
     } catch (openError) {
-      if (createdTargetId) {
+      if (closeCreatedPage) {
+        await closeCreatedPage().catch(() => {});
+      } else if (createdTargetId) {
         // Creation owns the target until a successful handoff. Cleanup must not
         // inherit the caller's abort or replace the original open failure.
         await fetchOk(

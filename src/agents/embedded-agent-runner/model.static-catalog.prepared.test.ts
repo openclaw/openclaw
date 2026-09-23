@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import {
@@ -208,9 +209,9 @@ describe("prepared bundled provider static catalogs", () => {
 
   it("projects heterogeneous prepared rows without rerunning hooks or resolving empty providers", async () => {
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
-    mocks.normalizePluginDiscoveryResult.mockReturnValue({
+    const rawProviders = {
       google: {
-        api: "fixture-api",
+        api: "openai-completions",
         baseUrl: "https://fixture.example/v1",
         authHeader: false,
         maxTokens: 4096,
@@ -223,7 +224,7 @@ describe("prepared bundled provider static catalogs", () => {
             contextWindow: 1_048_576,
             reasoning: false,
             input: ["text", "image"],
-            cost: { input: 0.5 },
+            cost: { input: 0.5, output: 0, cacheRead: 0, cacheWrite: 0 },
             maxTokens: 0,
           },
           {
@@ -233,23 +234,45 @@ describe("prepared bundled provider static catalogs", () => {
             input: [],
             contextWindow: 0,
             contextTokens: 0,
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            maxTokens: 4096,
           },
         ],
       },
       empty: {
+        baseUrl: "https://empty.example/v1",
         request: {
           headers: { "X-Unused": { source: "env", provider: "default", id: "UNUSED_HEADER" } },
         },
         models: [],
       },
-    });
+    } satisfies Record<string, ModelProviderConfig>;
+    // Deliberately sparse plugin rows exercise the consumer's runtime defaults.
+    Reflect.set(rawProviders.google, "api", "fixture-api");
+    const primary = rawProviders.google.models[0];
+    const fallback = rawProviders.google.models[1];
+    if (!primary || !fallback) {
+      throw new Error("Expected both model fixtures");
+    }
+    for (const field of ["output", "cacheRead", "cacheWrite"]) {
+      Reflect.deleteProperty(primary.cost, field);
+    }
+    for (const field of ["reasoning", "cost", "maxTokens"]) {
+      Reflect.deleteProperty(fallback, field);
+    }
+    const { normalizePluginDiscoveryResult } = await vi.importActual<
+      typeof import("../../plugins/provider-discovery.js")
+    >("../../plugins/provider-discovery.js");
+    const result = { providers: rawProviders };
+    const providerConfigs = normalizePluginDiscoveryResult({ provider, result });
 
     const metadataSnapshot = createMetadataSnapshot(["google"]);
     const models = await loadBundledProviderStaticCatalogContextModels({
       cfg,
       metadataSnapshot,
       preparedStaticProviderCatalog: {
-        entries: [{ provider, result: { marker: "prepared-static-result" } as never }],
+        entries: [{ provider, result, providerConfigs }],
       },
     });
 
@@ -290,6 +313,7 @@ describe("prepared bundled provider static catalogs", () => {
     }
     expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledOnce();
     expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
+    expect(mocks.normalizePluginDiscoveryResult).not.toHaveBeenCalled();
   });
 
   it.each(["prepared", "registered"])(
@@ -378,7 +402,28 @@ describe("prepared bundled provider static catalogs", () => {
         metadataSnapshot: createMetadataSnapshot(["anthropic", "google"]),
         preparedStaticProviderCatalog: {
           providers: [provider],
-          entries: [{ provider, result: { marker: "prepared-static-result" } as never }],
+          entries: [
+            {
+              provider,
+              result: undefined,
+              providerConfigs: {
+                google: {
+                  baseUrl: "https://fixture.example/v1",
+                  models: [
+                    {
+                      id: "google-model",
+                      name: "google-model",
+                      contextWindow: 128_000,
+                      reasoning: false,
+                      input: ["text"],
+                      maxTokens: 4096,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
         },
       }),
     ).resolves.toEqual([

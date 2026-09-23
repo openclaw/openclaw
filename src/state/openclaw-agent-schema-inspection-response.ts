@@ -1,52 +1,38 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { z } from "zod";
+import { nativeErrorResponseSchema } from "../infra/native-error-response-schema.js";
+import {
+  restoreNativeErrorResponse,
+  serializeNativeErrorResponse,
+} from "../infra/native-error-response.js";
+import { formatSqliteReadOnlyInspectionFailure } from "../infra/sqlite-error-diagnostics.js";
 import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "./openclaw-state-worker-error.js";
 
-const nativeErrorDetailsSchema = z.object({
-  message: z.string(),
-  code: z.string().optional(),
-  errcode: z.number().optional(),
-});
-
-export const agentSchemaInspectionErrorSchema = nativeErrorDetailsSchema.extend({
-  name: z.string(),
-  cause: nativeErrorDetailsSchema.optional(),
+export const agentSchemaInspectionErrorSchema = nativeErrorResponseSchema.extend({
   stateError: z.unknown().optional(),
 });
 
 type InspectionError = z.infer<typeof agentSchemaInspectionErrorSchema>;
 
-function nativeErrorDetails(error: Error) {
-  // SAFETY: Node's filesystem and SQLite errors attach these optional diagnostic fields.
-  const nativeError = error as Error & { code?: string; errcode?: number };
-  return { message: error.message, code: nativeError.code, errcode: nativeError.errcode };
-}
-
 export function serializeAgentSchemaInspectionError(value: unknown): InspectionError {
   const error = toStringifiedError(value);
   return {
-    name: error.name,
-    ...nativeErrorDetails(error),
-    ...(error.cause instanceof Error ? { cause: nativeErrorDetails(error.cause) } : {}),
+    ...serializeNativeErrorResponse(error),
+    message: formatSqliteReadOnlyInspectionFailure(error),
     stateError: encodeOpenClawStateWorkerError(error),
   };
 }
 
 export function restoreAgentSchemaInspectionError(value: InspectionError): Error {
-  const cause = value.cause
-    ? Object.assign(new Error(value.cause.message), value.cause)
-    : undefined;
-  const error = Object.assign(new Error(value.message, cause ? { cause } : undefined), {
-    name: value.name,
-    code: value.code,
-    errcode: value.errcode,
-  });
+  const error = restoreNativeErrorResponse(value);
   if (value.stateError) {
     retainOpenClawStateWorkerErrorPayload(error, value.stateError);
   }
-  return hydrateOpenClawStateWorkerError(error);
+  const restored = hydrateOpenClawStateWorkerError(error);
+  restored.message = value.message;
+  return restored;
 }

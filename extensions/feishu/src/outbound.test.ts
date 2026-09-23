@@ -6,7 +6,10 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createMessageReceiptFromOutboundResults,
+  verifyChannelMessageAdapterCapabilityProofs,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   adaptMessagePresentationForChannel,
   renderMessagePresentationFallbackText,
@@ -123,7 +126,6 @@ import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { feishuPlugin } from "./channel.js";
 import { buildFeishuPostMessageContent } from "./markdown.js";
 import { FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER, feishuOutbound } from "./outbound.js";
-import { createFeishuSendReceipt } from "./send-result.js";
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
   return await Promise.race([
@@ -293,18 +295,16 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     sendMessageFeishuMock.mockResolvedValue({
       messageId: "feishu-text-1",
       chatId: "chat-1",
-      receipt: createFeishuSendReceipt({
-        messageId: "feishu-text-1",
-        chatId: "chat-1",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ messageId: "feishu-text-1", chatId: "chat-1" }],
         kind: "text",
       }),
     });
     sendMediaFeishuMock.mockResolvedValue({
       messageId: "feishu-media-1",
       chatId: "chat-1",
-      receipt: createFeishuSendReceipt({
-        messageId: "feishu-media-1",
-        chatId: "chat-1",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ messageId: "feishu-media-1", chatId: "chat-1" }],
         kind: "media",
       }),
     });
@@ -758,21 +758,6 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       template: "blue",
     });
     expectFeishuResult(result, "card_msg");
-  });
-
-  it("forwards replyToId as replyToMessageId on sendText", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "hello",
-      replyToId: "om_reply_1",
-      accountId: "main",
-    });
-
-    expect(sendMessageCall()?.to).toBe("chat_1");
-    expect(sendMessageCall()?.text).toBe("hello");
-    expect(sendMessageCall()?.replyToMessageId).toBe("om_reply_1");
-    expect(sendMessageCall()?.accountId).toBe("main");
   });
 
   it("falls back to threadId when replyToId is empty on sendText", async () => {

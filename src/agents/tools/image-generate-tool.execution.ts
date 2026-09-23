@@ -33,6 +33,7 @@ import {
   loadMediaToolReferences,
   resolveMediaToolSandboxConfig,
 } from "./media-tool-shared.js";
+import type { ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
@@ -221,6 +222,8 @@ export async function loadImageGenerationReferences(params: {
   imageInputs: string[];
   maxBytes: number;
   workspaceDir?: string;
+  cwd?: string;
+  fsPolicy?: ToolFsPolicy;
   sandboxConfig: ReturnType<typeof resolveMediaToolSandboxConfig>;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
@@ -237,6 +240,8 @@ export async function loadImageGenerationReferences(params: {
     expectedKind: "image",
     sandbox: params.sandboxConfig,
     workspaceDir: params.workspaceDir,
+    cwd: params.cwd,
+    fsPolicy: params.fsPolicy,
     maxBytes: params.maxBytes,
     ssrfPolicy: params.ssrfPolicy,
     signal: params.signal,

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const busctl = vi.hoisted(() => vi.fn());
 vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
@@ -16,14 +17,29 @@ vi.mock("./systemd-peer-native.js", async (original) => ({
 }));
 
 import { execFileUtf8 } from "./exec-file.js";
+import {
+  assertDaemonRuntimePinDefinition,
+  commitDaemonRuntimePin,
+  readDaemonRuntimePin,
+} from "./runtime-pin-state.js";
+import {
+  hasGatewayServiceEnvironmentOverride,
+  hasGatewayServiceLauncherOverride,
+} from "./service-types.js";
+import {
+  buildSystemdManagerPropertyOutput,
+  buildSystemdUnitPropertyOutput,
+} from "./service.test-helpers.js";
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
 import { readSystemdServiceExecStart } from "./systemd-service-files.js";
+import { buildSystemdUnit } from "./systemd-unit.js";
 import {
   systemdManagerVersionProbe,
   systemdOperatorBusFixtures,
 } from "./systemd-user-bus.test-support.js";
 
+afterEach(() => closeOpenClawStateDatabaseForTest());
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let queryEnv: { HOME: string; XDG_RUNTIME_DIR: string; DBUS_SESSION_BUS_ADDRESS: string };
 const unitName = "openclaw-gateway.service";
@@ -56,6 +72,54 @@ beforeEach(() => {
   vi.mocked(openSystemdUserManager).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("does not infer ownership from expanded specifiers or normalized working directories", async () => {
+  const home = queryEnv.HOME;
+  const unit = path.join(home, ".config/systemd/user", unitName);
+  const workingDirectory = `${home}/Open Claw`;
+  await fs.mkdir(path.dirname(unit), { recursive: true });
+  await fs.writeFile(
+    unit,
+    [
+      "[Service]",
+      "ExecStart=%h/bin/openclaw gateway --unit %n",
+      "WorkingDirectory=-%h/Open Claw",
+      "Environment=OPENCLAW_HOME=%h/openclaw UNIT_NAME=%n",
+    ].join("\n"),
+  );
+  busctl.mockImplementation(async (_env, args: string[]) =>
+    success(
+      args.includes("LoadUnit")
+        ? JSON.stringify({ type: "o", data: ["/unit"] })
+        : args.includes("org.freedesktop.systemd1.Unit")
+          ? buildSystemdUnitPropertyOutput({ fragmentPath: unit })
+          : buildSystemdManagerPropertyOutput({
+              programArguments: [`${home}/bin/openclaw`, "gateway", "--unit", unitName],
+              workingDirectory: `!${workingDirectory}`,
+              environment: [`OPENCLAW_HOME=${home}/openclaw`, `UNIT_NAME=${unitName}`],
+            }),
+    ),
+  );
+
+  const command = await readSystemdServiceExecStart(queryEnv);
+  expect(command).toEqual({
+    programArguments: [`${home}/bin/openclaw`, "gateway", "--unit", unitName],
+    workingDirectory,
+    environment: { OPENCLAW_HOME: `${home}/openclaw`, UNIT_NAME: unitName },
+    environmentValueSources: { OPENCLAW_HOME: "inline", UNIT_NAME: "inline" },
+    managedDefinition: {
+      programArguments: [`${home}/bin/openclaw`, "gateway", "--unit", "%n"],
+      workingDirectory,
+      environment: { OPENCLAW_HOME: `${home}/openclaw`, UNIT_NAME: "%n" },
+      environmentValueSources: { OPENCLAW_HOME: "inline", UNIT_NAME: "inline" },
+    },
+    managedOverrides: {},
+    sourcePath: unit,
+    definitionPaths: [unit],
+  });
+  expect(hasGatewayServiceLauncherOverride(command)).toBe(false);
+  expect(hasGatewayServiceEnvironmentOverride(command, ["UNIT_NAME"])).toBe(false);
+});
 
 describe("ordinary private-manager inspection", () => {
   it.each(["absent", "disconnected"])(
@@ -210,6 +274,7 @@ describe("effective service inspection through legacy busctl", () => {
   let env: Record<string, string>;
   let unit: string;
   let dropIn: string;
+  let loadedDropIns: string[];
   let requiredFile: string;
   let pendingReload: boolean;
   let malformed: boolean;
@@ -225,6 +290,7 @@ describe("effective service inspection through legacy busctl", () => {
     };
     unit = path.join(home, ".config/systemd/user/openclaw-legacy.service");
     dropIn = `${unit}.d/override.conf`;
+    loadedDropIns = [dropIn];
     requiredFile = path.join(home, "required.env");
     await fs.mkdir(path.dirname(dropIn), { recursive: true });
     await fs.writeFile(unit, "[Service]\nExecStart=/local/file gateway\n");
@@ -241,7 +307,7 @@ describe("effective service inspection through legacy busctl", () => {
       }
       if (args.includes("org.freedesktop.systemd1.Unit")) {
         return success(
-          `s ${JSON.stringify(unit)}\nas 1 ${JSON.stringify(dropIn)}\nb ${pendingReload}\ns "loaded"\n`,
+          `s ${JSON.stringify(unit)}\nas ${[loadedDropIns.length, ...loadedDropIns.map((file) => JSON.stringify(file))].join(" ")}\nb ${pendingReload}\ns "loaded"\n`,
         );
       }
       return success(
@@ -257,6 +323,38 @@ describe("effective service inspection through legacy busctl", () => {
       );
     });
   });
+
+  it.each(["none", "resource-only"])(
+    "persists an authored runtime pin with default user cwd and %s drop-ins",
+    async (dropIns) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const planned = {
+        programArguments: ["/usr/bin/node", "gateway", "café", 'quoted "value" \\ path'],
+      };
+      await fs.writeFile(unit, buildSystemdUnit(planned));
+      if (dropIns === "none") {
+        loadedDropIns = [];
+      } else {
+        await fs.writeFile(dropIn, "[Service]\nMemoryMax=1G\n");
+      }
+      const actual = await inspect();
+      expect(actual?.workingDirectory).toBe(env.HOME);
+      expect(() => assertDaemonRuntimePinDefinition(planned, actual)).not.toThrow();
+      expect(hasGatewayServiceLauncherOverride(actual)).toBe(false);
+
+      const scope = {
+        kind: "gateway" as const,
+        env: {
+          ...env,
+          OPENCLAW_STATE_DIR: path.join(env.HOME!, "state"),
+          OPENCLAW_CONFIG_PATH: path.join(env.HOME!, "state", "openclaw.json"),
+        },
+      };
+      const pin = { runtime: "node" as const, path: "/usr/bin/node" };
+      commitDaemonRuntimePin(scope, { expected: readDaemonRuntimePin(scope, null), pin }, actual);
+      expect(readDaemonRuntimePin(scope, await inspect()).pin).toEqual(pin);
+    },
+  );
 
   it.each([false, true])(
     "retains manager data and selected drop-ins with reloadPending=%s",

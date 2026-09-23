@@ -5,6 +5,7 @@ import { readResponseWithLimit } from "../infra/http-body.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { clearNativeGitHubTokenCache } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
 
 const GITHUB_OAUTH_CLIENT_ID = "Ov23liUjOXHi28w2fDlH";
@@ -41,6 +42,7 @@ let verifiedCredentials = new Map<
 const pending = new Map<string, Promise<GitHubCredentialVerificationResult>>();
 
 export function clearGitHubCredentialVerificationCache(): void {
+  clearNativeGitHubTokenCache();
   // Pending probes retain the old map, so clearing cannot be undone by their completion.
   verifiedCredentials = new Map();
   pending.clear();

@@ -1,16 +1,18 @@
 import { execFile } from "node:child_process";
 import { setImmediate } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { pluginRuntimeRetentionEntrypoint } from "./runtime-retention-entrypoint.test-support.js";
 import { disposePluginRegistryInstances, waitForPluginRegistryRetirement } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 it.each([
+  { mode: "loader", name: "releases the predecessor of a live replacement registry" },
   { mode: "registry", name: "releases successors while a retired registry remains reachable" },
   { mode: "cache", name: "releases callback captures while a retired cache remains reachable" },
   { mode: "formatter", name: "finishes cache retirement when a custom stack formatter throws" },
@@ -18,6 +20,10 @@ it.each([
     mode: "instance",
     name: "releases captured source lookups while a retired instance remains reachable",
   },
+  ...["source", "bundled-cjs", "bundled-mjs"].map((kind) => ({
+    mode: `recovery-${kind}`,
+    name: `releases the retired owner and registry while ${kind} recovery remains live`,
+  })),
 ])(
   "$name",
   async ({ mode }) => {
@@ -25,9 +31,7 @@ it.each([
       process.execPath,
       [
         "--expose-gc",
-        "--import",
-        "tsx",
-        fileURLToPath(new URL("./runtime.retention.test-support.ts", import.meta.url)),
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(pluginRuntimeRetentionEntrypoint)),
         mode,
       ],
       { timeout: 20_000 },

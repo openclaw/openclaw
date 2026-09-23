@@ -3,8 +3,6 @@ import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type {
   UserProfile,
-  UsersPrefsGetResult,
-  UsersPrefsSetResult,
   UsersSelfResult,
   UsersSetAvatarResult,
   UsersSetDisplayNameResult,
@@ -21,6 +19,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { invalidateUserPreferences, saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import {
@@ -167,7 +166,11 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
       this.gitCoauthorEnabled = true;
       if (profile.githubIdentity) {
-        const preferences = await client.request<UsersPrefsGetResult>("users.prefs.get", {
+        const { loadUserPreferences } = await import("../../app/user-prefs-request.ts");
+        if (requestId !== this.identityRequestId) {
+          return;
+        }
+        const preferences = await loadUserPreferences(client, profile.id, {
           keys: [GIT_COAUTHOR_PREFERENCE_KEY],
         });
         if (requestId !== this.identityRequestId) {
@@ -256,7 +259,7 @@ export class ProfilePage extends OpenClawLightDomElement {
           break;
         }
         case "git-coauthor": {
-          const result = await client.request<UsersPrefsSetResult>("users.prefs.set", {
+          const result = await saveUserPreferences(client, {
             entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: change.enabled },
           });
           if (!isCurrent()) {
@@ -365,6 +368,9 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private refreshManually() {
     if (this.selfUser && this.canWrite && !this.identityBusy && !this.identityLoading) {
+      if (this.client) {
+        invalidateUserPreferences(this.client);
+      }
       void this.loadIdentity();
     }
   }
@@ -406,7 +412,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     return html`
       <section class="content-header">
         <div>
-          <div class="page-title">${titleForRoute("profile")}</div>
+          <h1 class="page-title">${titleForRoute("profile")}</h1>
           <div class="page-subtitle">
             ${subtitleForRoute("profile")} ${renderLearnMoreLink(PROFILE_DOCS_URL)}
           </div>

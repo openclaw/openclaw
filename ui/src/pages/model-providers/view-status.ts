@@ -1,7 +1,11 @@
 import { html, nothing } from "lit";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
+
+registerModelControlsEnglish();
 
 const AUTH_KIND_I18N: Record<ModelProviderAuthKind, string> = {
   ok: "modelProviders.status.ok",
@@ -68,7 +72,7 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (card.catalogStatus === "unavailable") {
     return renderSettingsStatus({
       kind: "warn",
-      label: t("common.failed"),
+      label: t("modelProviders.status.modelsUnavailable"),
     });
   }
   if (!hasProviderCredentials(card)) {
@@ -89,4 +93,33 @@ export function renderProviderStatus(card: ModelProviderCard) {
         kind: "muted",
         label: t("modelProviders.status.configured"),
       });
+}
+
+export function renderMutationMessage(message: ModelProviderRowMessage | undefined) {
+  if (!message) {
+    return nothing;
+  }
+  return html`
+    <div class="callout ${message.kind}" role=${message.kind === "error" ? "alert" : "status"}>
+      ${message.text}
+    </div>
+    ${message.warning ? html`<div class="callout warning" role="status">${message.warning}</div>` : nothing}
+  `;
+}
+
+export function renderModelProviderConnectAction(
+  props: {
+    onConnect: () => void;
+    connectDisabled: boolean;
+  },
+  primary = false,
+) {
+  return html`<button
+    class=${primary ? "btn primary" : "btn"}
+    data-models-connect
+    ?disabled=${props.connectDisabled}
+    @click=${props.onConnect}
+  >
+    ${t("modelProviders.login.action")}
+  </button>`;
 }

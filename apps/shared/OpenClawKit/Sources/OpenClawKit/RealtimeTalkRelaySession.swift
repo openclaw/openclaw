@@ -179,12 +179,23 @@ public final class RealtimeTalkRelaySession {
         public let provider: String?
         public let model: String?
         public let voice: String?
+        public let supportsVoiceSelection: Bool
+        public let voiceChangeId: String?
 
-        public init(sessionKey: String, provider: String?, model: String?, voice: String?) {
+        public init(
+            sessionKey: String,
+            provider: String?,
+            model: String?,
+            voice: String?,
+            supportsVoiceSelection: Bool = false,
+            voiceChangeId: String? = nil)
+        {
             self.sessionKey = sessionKey
             self.provider = provider
             self.model = model
             self.voice = voice
+            self.supportsVoiceSelection = supportsVoiceSelection
+            self.voiceChangeId = voiceChangeId
         }
     }
 
@@ -247,6 +258,7 @@ public final class RealtimeTalkRelaySession {
     private var outputEnvelope: PCMPlaybackEnvelope?
 
     private var relaySessionId: String?
+    private var serverClose: (sessionId: String, task: Task<Void, Error>)?
     private var hasReceivedReady = false
     private var hasReceivedFailure = false
     private var startupIssue: RealtimeTalkRelayIssue?
@@ -291,6 +303,14 @@ public final class RealtimeTalkRelaySession {
     private var lastSuppressedEchoLogAtMs: Double = 0
     private var outputAudioChunkCount = 0
     private var outputAudioByteCount = 0
+
+    public var voiceSessionId: String? {
+        self.relaySessionId
+    }
+
+    public var isReady: Bool {
+        !self.isClosed && self.hasReceivedReady && !self.hasReceivedFailure && self.relaySessionId != nil
+    }
 
     public init(
         transport: RealtimeTalkRelayTransport,
@@ -342,9 +362,7 @@ public final class RealtimeTalkRelaySession {
             let statusAfterCreate = await self.lifecycleStatus(lifecycleGeneration)
             if statusAfterCreate != .current {
                 if let relaySessionId = createdRelaySessionId {
-                    await Self.closeRelaySession(
-                        transport: self.transport,
-                        relaySessionId: relaySessionId)
+                    try? await self.beginServerClose(relaySessionId: relaySessionId).value
                 }
                 if statusAfterCreate == .routeLost {
                     throw Self.gatewayRouteLostError()
@@ -353,9 +371,7 @@ public final class RealtimeTalkRelaySession {
             }
             if let startupIssue {
                 if let relaySessionId = createdRelaySessionId {
-                    await Self.closeRelaySession(
-                        transport: self.transport,
-                        relaySessionId: relaySessionId)
+                    try? await self.beginServerClose(relaySessionId: relaySessionId).value
                 }
                 throw Self.startupFailureError(startupIssue)
             }
@@ -403,9 +419,7 @@ public final class RealtimeTalkRelaySession {
             let createdRelaySessionId = self.relaySessionId
             self.close(sendClose: false)
             if let createdRelaySessionId {
-                await Self.closeRelaySession(
-                    transport: self.transport,
-                    relaySessionId: createdRelaySessionId)
+                try? await self.beginServerClose(relaySessionId: createdRelaySessionId).value
             }
             throw error
         }
@@ -413,6 +427,12 @@ public final class RealtimeTalkRelaySession {
 
     public func stop() {
         self.close(sendClose: true)
+    }
+
+    /// The close event precedes transcript persistence; replacements must wait for the RPC response.
+    public func stopAndWait() async throws {
+        self.stop()
+        try await self.serverClose?.task.value
     }
 
     private func close(sendClose: Bool) {
@@ -436,9 +456,7 @@ public final class RealtimeTalkRelaySession {
         self.isOutputPaused = false
         self.stopOutputPlayback()
         if sendClose, let relaySessionId = self.relaySessionId {
-            Task { [transport] in
-                await Self.closeRelaySession(transport: transport, relaySessionId: relaySessionId)
-            }
+            self.beginServerClose(relaySessionId: relaySessionId)
         }
         self.relaySessionId = nil
         self.onSpeakingChanged(false)
@@ -459,12 +477,19 @@ public final class RealtimeTalkRelaySession {
         ])
     }
 
-    private nonisolated static func closeRelaySession(
-        transport: RealtimeTalkRelayTransport,
-        relaySessionId: String) async
-    {
-        let payload = ["sessionId": AnyCodable(relaySessionId)]
-        _ = try? await transport.request("talk.session.close", payload, 8000)
+    @discardableResult
+    private func beginServerClose(relaySessionId: String) -> Task<Void, Error> {
+        if let serverClose, serverClose.sessionId == relaySessionId {
+            return serverClose.task
+        }
+        let task = Task { [transport] in
+            let payload = ["sessionId": AnyCodable(relaySessionId)]
+            let response = try await transport.request("talk.session.close", payload, 8000)
+            let result = try JSONDecoder().decode(TalkSessionOkResult.self, from: response)
+            guard result.ok else { throw URLError(.badServerResponse) }
+        }
+        self.serverClose = (relaySessionId, task)
+        return task
     }
 
     public func setInputPaused(_ paused: Bool) throws {
@@ -506,6 +531,12 @@ public final class RealtimeTalkRelaySession {
         }
         if let voice = self.nonEmpty(self.options.voice) {
             payload["voice"] = AnyCodable(voice)
+        }
+        if self.options.supportsVoiceSelection {
+            payload["capabilities"] = AnyCodable(["voice-selection"])
+        }
+        if let voiceChangeId = self.nonEmpty(self.options.voiceChangeId) {
+            payload["voiceChangeId"] = AnyCodable(voiceChangeId)
         }
         let response = try await self.transport.request("talk.session.create", payload, 20000)
         return try JSONDecoder().decode(TalkSessionCreateResult.self, from: response)

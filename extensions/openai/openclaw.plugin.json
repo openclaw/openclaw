@@ -80,6 +80,58 @@
             }
           },
           {
+            "id": "gpt-6-sol",
+            "name": "GPT-6 Sol",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 2,
+              "output": 10,
+              "cacheRead": 0.2,
+              "cacheWrite": 2.5,
+              "tieredPricing": [
+                { "range": [0, 272001], "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+                { "range": [272001], "input": 4, "output": 15, "cacheRead": 0.4, "cacheWrite": 5 }
+              ]
+            },
+            "thinkingLevelMap": { "off": "none", "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false,
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gpt-6-luna",
+            "name": "GPT-6 Luna",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0.1,
+              "output": 0.5,
+              "cacheRead": 0.01,
+              "cacheWrite": 0.125,
+              "tieredPricing": [
+                { "range": [0, 272001], "input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125 },
+                { "range": [272001], "input": 0.2, "output": 0.75, "cacheRead": 0.02, "cacheWrite": 0.25 }
+              ]
+            },
+            "thinkingLevelMap": { "off": "none", "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false,
+              "codeMode": "preferred"
+            }
+          },
+          {
             "id": "gpt-5.6-sol",
             "name": "GPT-5.6 Sol",
             "reasoning": true,
@@ -258,11 +310,10 @@
       "credentialOnly": true,
       "choiceLabel": "ChatGPT Login",
       "choiceHint": "Sign in with your ChatGPT or Codex subscription",
-      "assistantPriority": -40,
+      "assistantPriority": -10,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "ChatGPT/Codex sign-in or API key",
-      "onboardingFeatured": true
+      "groupHint": "ChatGPT/Codex sign-in or API key"
     },
     {
       "provider": "openai",
@@ -276,10 +327,11 @@
       },
       "choiceLabel": "ChatGPT Device Pairing",
       "choiceHint": "Pair your ChatGPT account in browser with a device code",
-      "assistantPriority": -10,
+      "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "ChatGPT/Codex sign-in or API key"
+      "groupHint": "ChatGPT/Codex sign-in or API key",
+      "onboardingFeatured": true
     },
     {
       "provider": "openai",
@@ -341,6 +393,14 @@
       }
     }
   },
+  "configGroups": [
+    {
+      "id": "response-style",
+      "title": "Response style",
+      "order": 10,
+      "properties": ["personality"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

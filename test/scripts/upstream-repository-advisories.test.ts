@@ -206,6 +206,64 @@ describe("published upstream repository advisories", () => {
   );
 
   it.each([
+    {
+      name: "caps the fallback at the patch",
+      versions: ["1.19.0", "1.20.0", "1.21.0"],
+      matched: ["1.19.0"],
+    },
+    {
+      name: "retains partial coverage when only patched versions are installed",
+      versions: ["1.20.0"],
+      matched: [],
+    },
+    {
+      name: "lets reviewed ranges override the cap",
+      versions: ["1.20.0"],
+      matched: ["1.20.0"],
+      reviewed: true,
+    },
+    {
+      name: "ignores ambiguous patch metadata",
+      versions: ["1.20.0"],
+      matched: ["1.20.0"],
+      patched: ">=1.20",
+    },
+    {
+      name: "preserves affected sibling ranges",
+      versions: ["1.20.0"],
+      matched: ["1.20.0"],
+      sibling: true,
+    },
+  ])("$name", async ({ versions, matched, reviewed, patched, sibling }) => {
+    const source = createSourceFetch({
+      page: () =>
+        Response.json([
+          advisory(">= 1.13.0", {
+            vulnerabilities: [
+              { ...vulnerability(">= 1.13.0"), patched_versions: patched ?? ">=1.20.0" },
+              ...(sibling ? [vulnerability(">= 1.19.0, < 1.21.0")] : []),
+            ],
+          }),
+        ]),
+      ...(reviewed ? {} : { reviewed: () => new Response(null, { status: 404 }) }),
+    });
+    const report = await scan(source.fetchImpl, { fixture: versions });
+    expect(report.advisories.flatMap((entry) => entry.matchedVersions)).toEqual(matched);
+    if (matched.length > 0 && !reviewed && !patched && !sibling) {
+      expect(report.advisories[0]?.vulnerable_versions).toBe(">=1.13.0");
+    }
+    if (reviewed) {
+      expect(report.coverage.reconciliations).toMatchObject([
+        { repositoryRange: ">=1.13.0", matchedVersions: ["1.20.0"] },
+      ]);
+    }
+    expect(report.coverage).toMatchObject({
+      status: reviewed ? "checked" : "partial",
+      issues: reviewed ? [] : [{ subject: `fixture#${ADVISORY_ID}`, reason: "request-failed" }],
+    });
+  });
+
+  it.each([
     { name: "unavailable", response: null },
     { name: "wrong identity", response: { ghsa_id: "GHSA-5555-6666-7777" } },
     { name: "unreviewed", response: { github_reviewed_at: null } },
@@ -689,20 +747,75 @@ describe("published upstream repository advisories", () => {
     },
   );
 
-  it("bounds input and total requests instead of silently dropping uninspected packages", async () => {
+  it("reconciles discovered findings before exhausting the bounded discovery budget", async () => {
     const versions = Array.from({ length: 2501 }, (_, index) => `1.0.${index}`);
+    const affectedId = "GHSA-5555-6666-7777";
+    const reviewStarted = createDeferred();
+    const releaseReview = createDeferred();
+    const discoveryBudgetFilled = createDeferred();
     const source = createSourceFetch({
       manifest: (url) =>
         manifest(url, `https://github.com/fixture/package-${url.pathname.split("/").at(-1)}`),
+      page: (url) =>
+        Response.json(
+          url.pathname === "/repos/fixture/package-1.0.0/security-advisories"
+            ? [advisory(), advisory("< 2.0.0", { ghsa_id: affectedId })]
+            : [],
+        ),
+      reviewed: async (url) => {
+        if (url.pathname.endsWith(ADVISORY_ID)) {
+          reviewStarted.resolve();
+          await releaseReview.promise;
+        }
+        return Response.json({
+          ghsa_id: url.pathname.split("/").at(-1),
+          published_at: "2026-08-01T00:00:00Z",
+          github_reviewed_at: "2026-08-02T00:00:00Z",
+          withdrawn_at: null,
+          vulnerabilities: [
+            vulnerability(url.pathname.endsWith(affectedId) ? "< 1.0.1" : "< 1.0.0"),
+          ],
+        });
+      },
     });
-    const report = await scan(source.fetchImpl, { fixture: versions });
+    const scanning = scan(
+      async (input, init) => {
+        const response = await source.fetchImpl(input, init);
+        if (source.calls.length >= 3999) {
+          discoveryBudgetFilled.resolve();
+        }
+        return response;
+      },
+      { fixture: versions },
+    );
+    try {
+      await withTestTimeout(
+        Promise.all([reviewStarted.promise, discoveryBudgetFilled.promise]),
+        1_000,
+        "expected discovery to reach the reserved reconciliation capacity",
+      );
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(source.calls).toHaveLength(3999);
+    } finally {
+      releaseReview.resolve();
+      await scanning;
+    }
+    const report = await scanning;
     expect(source.calls.filter(({ url }) => url.origin === REGISTRY)).toHaveLength(2500);
     expect(source.calls).toHaveLength(4000);
     expect(report.coverage).toMatchObject({
       status: "partial",
       packageVersions: 2501,
       mappedPackageVersions: 2500,
+      reconciliations: [
+        { id: ADVISORY_ID, matchedVersions: [] },
+        { id: affectedId, matchedVersions: ["1.0.0"] },
+      ],
     });
+    expect(report.advisories).toMatchObject([{ id: affectedId, matchedVersions: ["1.0.0"] }]);
+    expect(report.advisories).toHaveLength(1);
     expect(report.coverage.issues).toContainEqual({
       subject: "1 package versions not inspected",
       reason: "budget-exhausted",

@@ -3,10 +3,11 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
   collectVitestExcludePatterns,
-  intersectIncludePatterns,
   matchesVitestCliSelection,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
 
@@ -16,6 +17,7 @@ describe("native CLI selection", () => {
     try {
       for (const relative of [
         "test/vitest/vitest.pattern-file.ts",
+        "test/vitest/vitest.include-patterns.ts",
         "scripts/lib/vitest-cli-mode.mts",
       ]) {
         const target = path.join(root, relative);
@@ -47,7 +49,7 @@ describe("native CLI selection", () => {
     const include = ["ui/src/**/!(*.browser).test.ts"];
     const expected = selected ? [file] : [];
     expect(narrowIncludePatternsForCli(include, ["node", "vitest", "run", file])).toEqual(expected);
-    expect(intersectIncludePatterns(include, [file])).toEqual(expected);
+    expect(intersectIncludePatterns(include, [file], matchesVitestGlob)).toEqual(expected);
     expect(matchesVitestCliSelection(file, include, ["run", file], "", {})).toBe(selected);
   });
 
@@ -92,21 +94,25 @@ describe("intersectIncludePatterns", () => {
       "ui/src/pages/workboard/workboard.e2e.test.ts",
     ];
 
-    expect(intersectIncludePatterns(owner, ["ui/src/e2e/*.e2e.test.ts"])).toEqual([
-      "ui/src/e2e/chat.e2e.test.ts",
-      "ui/src/e2e/chat.capture.e2e.test.ts",
-    ]);
     expect(
-      intersectIncludePatterns(owner, [
-        "ui/src/e2e/chat*.e2e.test.ts",
-        "ui/src/e2e/chat.e2e.test.ts",
-      ]),
+      intersectIncludePatterns(owner, ["ui/src/e2e/*.e2e.test.ts"], matchesVitestGlob),
+    ).toEqual(["ui/src/e2e/chat.e2e.test.ts", "ui/src/e2e/chat.capture.e2e.test.ts"]);
+    expect(
+      intersectIncludePatterns(
+        owner,
+        ["ui/src/e2e/chat*.e2e.test.ts", "ui/src/e2e/chat.e2e.test.ts"],
+        matchesVitestGlob,
+      ),
     ).toEqual(["ui/src/e2e/chat.e2e.test.ts", "ui/src/e2e/chat.capture.e2e.test.ts"]);
   });
 
   it("retains the ambiguity guard for glob-owned inventories", () => {
     expect(() =>
-      intersectIncludePatterns(["ui/src/**/*.e2e.test.ts"], ["ui/src/e2e/*.e2e.test.ts"]),
+      intersectIncludePatterns(
+        ["ui/src/**/*.e2e.test.ts"],
+        ["ui/src/e2e/*.e2e.test.ts"],
+        matchesVitestGlob,
+      ),
     ).toThrow("cannot safely intersect non-literal include path");
   });
 });

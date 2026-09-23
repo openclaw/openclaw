@@ -18,7 +18,8 @@ different executable. Verified setup accepts a native Codex executable or the
 official `@openai/codex` npm entrypoint, including its installed symlink or
 Windows npm launcher. Arbitrary wrapper scripts cannot be verified because
 their native target is unknown; select the native executable or official npm
-launcher instead. Codex classifies WebSocket transport as experimental
+launcher instead. An `app-server proxy` also cannot supply verified setup because
+its local executable only forwards requests to a separate daemon. Codex classifies WebSocket transport as experimental
 and unsupported; use it only for non-production testing against an app-server
 already running elsewhere:
 
@@ -51,6 +52,11 @@ failures and unsupported app-server versions stop reconnecting and report that
 operator action is required. Ping and pong frames are transport-level health
 checks: they do not start a Codex turn or invoke a model. Local stdio and Unix
 transports do not perform these remote connection checks.
+
+WebSocket and Unix socket shutdown settles when the connection closes, including
+when the server disconnected first. If the peer cannot complete the closing
+handshake, OpenClaw terminates its socket at the shutdown deadline. A closed
+connection does not prove that work on the remote app-server has stopped.
 
 Local stdio app-server sessions default to the trusted local operator
 posture: `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
@@ -102,10 +108,19 @@ see [Codex harness reference](/plugins/codex-harness-reference).
 
 With `tools.exec.mode: "ask"` and the Codex user reviewer, native command and
 file prompts use OpenClaw's two-phase operator approval route. The prompt shows
-only decisions that the native request can preserve. For example, a command
-that permits one execution but not session trust offers allow-once and deny;
-byte-bound script approvals also remain one-shot. File prompts support both
-one-shot and session approval.
+only decisions that the native request can preserve. A command with only a
+one-shot native decision offers allow-once and deny; byte-bound script approvals
+also remain one-shot. File prompts support both one-shot and session approval.
+For commands, Allow Always uses session trust when Codex offers it. Otherwise,
+it can request a persistent native allow rule when the prompt can show the exact
+command prefix or network host and its scope across future sessions. Codex owns
+applying and saving that rule; the approval event reports the requested amendment,
+not confirmation that it was saved. Automatic command and file approvals remain
+one-shot and never select a persistent policy amendment.
+
+If another connected Codex client answers a native approval request, OpenClaw
+dismisses the matching pending prompt without sending a second answer or treating
+that resolution as a timeout or tool failure.
 
 Terminal operator decisions reuse the Gateway's authoritative approval row and
 its exact execution binding. When execution identity collection is enabled,
@@ -147,6 +162,12 @@ reset time when Codex reports one and tries the next ordered auth profile
 for the same Codex run. When the reset time passes, the subscription
 profile becomes eligible again without changing the selected `openai/gpt-*`
 model or Codex runtime.
+
+An exhausted usage percentage does not put a model on cooldown when Codex
+reports ordinary usage as available or unknown. A known exhausted quota can
+still supply a scheduled reset hint; that hint does not guarantee renewed
+availability. Feature-specific resets remain separate from ordinary account
+permission.
 
 When native Codex plugins are configured, OpenClaw reads and caches one
 runtime-and-workspace-scoped `plugin/installed` snapshot. That one snapshot
@@ -198,6 +219,12 @@ connection fingerprint. Reauthenticating that same endpoint to another account
 does not revoke the schedule: subsequent runs use the endpoint's current account,
 subject to the captured app ceiling and current app/tool policy. Scheduled
 authority does not store or replay authentication credentials.
+
+Scheduled app approval ceilings preserve native tool overrides and the approval
+policy of the account identified by each tool. For tools that select an account
+when called, the shared tool ceiling uses the strictest combination of the
+configured account and default policies. Such tools can require approval across
+accounts even when one account permits the action automatically.
 
 Removing or un-configuring the endpoint, changing its connection fingerprint, or
 changing its captured managed requirements rejects the run before app execution.

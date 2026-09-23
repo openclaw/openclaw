@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { createRunningTaskRunCore as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -14,11 +13,11 @@ import { markTaskLostById, markTaskTerminalById } from "../tasks/task-registry.j
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
 
 vi.mock("../config/config.js", () => ({
@@ -52,21 +51,6 @@ function createRunningTaskRunCore(
   return task;
 }
 
-type TestRuntime = RuntimeEnv & {
-  writeStdout: ReturnType<typeof vi.fn>;
-  writeJson: ReturnType<typeof vi.fn>;
-};
-
-function createRuntime(): TestRuntime {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-  };
-}
-
 async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>): Promise<void> {
   await withOpenClawTestState(
     {
@@ -74,13 +58,11 @@ async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>)
       prefix: "openclaw-flows-command-",
     },
     async (state) => {
-      resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       try {
         await run(state.stateDir);
       } finally {
-        resetTaskRegistryDeliveryRuntimeForTests();
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
       }
@@ -97,7 +79,6 @@ describe("flows commands", () => {
 
   afterEach(() => {
     envSnapshot.restore();
-    resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
   });
@@ -127,7 +108,7 @@ describe("flows commands", () => {
         lastEventAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsListCommand({ json: true, status: "blocked" }, runtime);
 
       expect(runtime.log).not.toHaveBeenCalled();
@@ -165,9 +146,9 @@ describe("flows commands", () => {
         ],
       });
 
-      const emptyRuntime = createRuntime();
+      const emptyRuntime = createNonExitingRuntimeEnv();
       await flowsListCommand({ json: true, status: "waiting" }, emptyRuntime);
-      expect(jsonRoundTrip(emptyRuntime.writeJson.mock.calls[0]?.[0])).toStrictEqual({
+      expect(jsonRoundTrip(vi.mocked(emptyRuntime.writeJson).mock.calls[0]?.[0])).toStrictEqual({
         count: 0,
         status: "waiting",
         flows: [],
@@ -186,7 +167,7 @@ describe("flows commands", () => {
         updatedAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsListCommand({ json: true, status: "   " }, runtime);
 
       expect(runtime.log).not.toHaveBeenCalled();
@@ -202,7 +183,7 @@ describe("flows commands", () => {
     const query = vi.spyOn(taskFlowRuntime, "listTaskFlowRecords").mockImplementation(() => {
       throw new Error("TaskFlow query performed");
     });
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     try {
       await runCommandWithRuntime(runtime, () => flowsListCommand({ status: "bogus" }, runtime));
@@ -239,7 +220,7 @@ describe("flows commands", () => {
         endedAt: 150,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsListCommand({}, runtime);
 
       expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toContain(
@@ -286,14 +267,14 @@ describe("flows commands", () => {
           status: "running",
         });
 
-        const runtime = createRuntime();
+        const runtime = createNonExitingRuntimeEnv();
         await flowsListCommand({ status }, runtime);
 
         expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toContain(
           `TaskFlow pressure: ${pressure}`,
         );
 
-        const jsonRuntime = createRuntime();
+        const jsonRuntime = createNonExitingRuntimeEnv();
         await flowsListCommand({ json: true, status }, jsonRuntime);
         expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
           count: 1,
@@ -314,7 +295,7 @@ describe("flows commands", () => {
         createdAt: 100,
         updatedAt: 100,
       });
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
 
       await flowsListCommand({}, runtime);
 
@@ -344,7 +325,7 @@ describe("flows commands", () => {
           updatedAt: 100 + index,
         });
       }
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
 
       await flowsListCommand({}, runtime);
 
@@ -370,7 +351,7 @@ describe("flows commands", () => {
         updatedAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: true }, runtime);
 
       expect(runtime.log).not.toHaveBeenCalled();
@@ -408,14 +389,14 @@ describe("flows commands", () => {
         endedAt: 200,
       });
 
-      const showRuntime = createRuntime();
+      const showRuntime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: ownerKey, json: true }, showRuntime);
       expect(vi.mocked(showRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
         flowId: olderRunning.flowId,
         status: "running",
       });
 
-      const cancelRuntime = createRuntime();
+      const cancelRuntime = createNonExitingRuntimeEnv();
       await flowsCancelCommand({ lookup: ownerKey }, cancelRuntime);
       expect(vi.mocked(cancelRuntime.log)).toHaveBeenCalledWith(
         `Cancelled ${olderRunning.flowId} (managed) with status cancelled.`,
@@ -431,7 +412,7 @@ describe("flows commands", () => {
 
   it("keeps terminal reset bytes off stdout for JSON lookup failures", async () => {
     await withTaskFlowCommandStateDir(async () => {
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
 
       await flowsShowCommand({ lookup: "missing-flow", json: true }, runtime);
 
@@ -477,7 +458,7 @@ describe("flows commands", () => {
         lastEventAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
 
       expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toEqual([
@@ -537,7 +518,7 @@ describe("flows commands", () => {
           });
         }
 
-        const runtime = createRuntime();
+        const runtime = createNonExitingRuntimeEnv();
         await flowsShowCommand({ lookup: flow.flowId }, runtime);
 
         const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
@@ -547,7 +528,7 @@ describe("flows commands", () => {
         expect(linkedTaskLine).not.toContain("Outdated child progress");
         expect(linkedTaskLine).not.toContain("Generic child completion summary");
 
-        const jsonRuntime = createRuntime();
+        const jsonRuntime = createNonExitingRuntimeEnv();
         await flowsShowCommand({ lookup: flow.flowId, json: true }, jsonRuntime);
         expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
           tasks: [expect.objectContaining({ status, error })],
@@ -615,7 +596,7 @@ describe("flows commands", () => {
         terminalSummary: "Required completion did not produce a final deliverable.",
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId }, runtime);
 
       const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
@@ -628,7 +609,7 @@ describe("flows commands", () => {
       );
       expect(lines.find((line) => line.startsWith(`- ${blocked.taskId} `))).toContain(" blocked ");
 
-      const jsonRuntime = createRuntime();
+      const jsonRuntime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: true }, jsonRuntime);
       expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
         tasks: expect.arrayContaining([
@@ -670,7 +651,7 @@ describe("flows commands", () => {
         error: "Provider \u001b[31mrejected\nforged: yes",
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId }, runtime);
 
       const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
@@ -710,7 +691,7 @@ describe("flows commands", () => {
         error: `error${unsafe}`,
       });
 
-      const humanRuntime = createRuntime();
+      const humanRuntime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId }, humanRuntime);
 
       const lines = vi.mocked(humanRuntime.log).mock.calls.map(([line]) => String(line));
@@ -723,7 +704,7 @@ describe("flows commands", () => {
         expect(line).not.toContain("\n");
       }
 
-      const jsonRuntime = createRuntime();
+      const jsonRuntime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: true }, jsonRuntime);
       expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
         goal: `goal${unsafe}`,
@@ -744,12 +725,12 @@ describe("flows commands", () => {
   it("sanitizes untrusted TaskFlow filters and lookup errors", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const unsafe = "\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes";
-      const filterRuntime = createRuntime();
+      const filterRuntime = createNonExitingRuntimeEnv();
       await runCommandWithRuntime(filterRuntime, () =>
         flowsListCommand({ status: `running${unsafe}` }, filterRuntime),
       );
 
-      const lookupRuntime = createRuntime();
+      const lookupRuntime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: `missing${unsafe}` }, lookupRuntime);
 
       const lines = [
@@ -778,7 +759,7 @@ describe("flows commands", () => {
         updatedAt: 8_700_000_000_000_000,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
 
       const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
@@ -815,7 +796,7 @@ describe("flows commands", () => {
         lastEventAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
 
       const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
@@ -850,7 +831,7 @@ describe("flows commands", () => {
         updatedAt: 100,
       });
 
-      const runtime = createRuntime();
+      const runtime = createNonExitingRuntimeEnv();
       await flowsCancelCommand({ lookup: flow.flowId }, runtime);
 
       expect(vi.mocked(runtime.error)).not.toHaveBeenCalled();
@@ -859,13 +840,13 @@ describe("flows commands", () => {
         `Cancelled ${flow.flowId} (managed) with status cancelled.`,
       ]);
 
-      const listRuntime = createRuntime();
+      const listRuntime = createNonExitingRuntimeEnv();
       await flowsListCommand({}, listRuntime);
       expect(vi.mocked(listRuntime.log).mock.calls.map(([line]) => String(line))).toContain(
         "TaskFlow pressure: 0 active · 0 blocked · 0 cancel-requested · 1 total",
       );
 
-      const jsonRuntime = createRuntime();
+      const jsonRuntime = createNonExitingRuntimeEnv();
       await flowsListCommand({ json: true }, jsonRuntime);
       expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
         flows: [

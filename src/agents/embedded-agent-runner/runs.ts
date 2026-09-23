@@ -80,22 +80,10 @@ import {
   type EmbeddedRunCompletionRegistration,
   type EmbeddedRunRegistration,
   type EmbeddedRunWaiter,
+  type EmbeddedAgentQueueFailureReason,
 } from "./run-state.js";
 
 export type { EmbeddedAgentQueueHandle, EmbeddedAgentQueueMessageOptions } from "./run-state.js";
-
-type EmbeddedAgentQueueFailureReason =
-  | "no_active_run"
-  | "not_streaming"
-  | "stale_run"
-  | "compacting"
-  | "tool_authority_mismatch"
-  | "image_input_unsupported"
-  | "source_reply_delivery_mode_mismatch"
-  | "task_suggestion_delivery_mode_mismatch"
-  | "transcript_commit_wait_unsupported"
-  | "guarded_injection_unsupported"
-  | "runtime_rejected";
 
 export type EmbeddedRunTimeoutRecoveryMarker = {
   sessionId: string;
@@ -701,6 +689,7 @@ async function queueEmbeddedAgentMessageAsync(
     if (
       !prepared.outcome.queued &&
       (prepared.outcome.reason === "tool_authority_mismatch" ||
+        prepared.outcome.reason === "input_visibility_mismatch" ||
         prepared.outcome.reason === "image_input_unsupported") &&
       options?.isInboundUserMessage === true &&
       hasPromptImageInput(options) &&
@@ -716,7 +705,8 @@ async function queueEmbeddedAgentMessageAsync(
     }
     if (
       !prepared.outcome.queued &&
-      prepared.outcome.reason === "tool_authority_mismatch" &&
+      (prepared.outcome.reason === "tool_authority_mismatch" ||
+        prepared.outcome.reason === "input_visibility_mismatch") &&
       options?.isInboundUserMessage === true &&
       !hasPromptImageInput(options) &&
       prepared.pendingInput
@@ -852,12 +842,16 @@ function prepareEmbeddedAgentQueueMessage(
   );
   if (deliveryModeMismatch) {
     const activeFingerprint = normalizeOptionalString(handle.toolAuthorityFingerprint);
-    // Only the captured backend may claim a route-mismatched question answer.
+    // Projected caller authority takes precedence over raw route-mismatch proof.
     const pendingInputAuthorityProven =
-      !toolAuthorityOverlay &&
+      (!toolAuthorityOverlay || deliveryModeMismatch === "input_visibility_mismatch") &&
+      (deliveryModeMismatch !== "input_visibility_mismatch" ||
+        handle.messageInjectionV2?.version === 2) &&
       activeFingerprint &&
-      (normalizeOptionalString(options?.toolAuthorityFingerprint) === activeFingerprint ||
-        normalizeOptionalString(options?.pendingInputAuthorityFingerprint) === activeFingerprint);
+      (normalizeOptionalString(backendOptions.toolAuthorityFingerprint) === activeFingerprint ||
+        (!toolAuthorityOverlay &&
+          normalizeOptionalString(options?.pendingInputAuthorityFingerprint) ===
+            activeFingerprint));
     diag.debug(`queue message failed: sessionId=${sessionId} reason=${deliveryModeMismatch}`);
     return {
       kind: "complete",

@@ -17,7 +17,10 @@ import {
   type MockInstance,
 } from "vitest";
 import * as commandRunner from "../../process/exec-runner.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
 import {
   deleteRegistryWorktree,
@@ -153,6 +156,7 @@ describe("ManagedWorktreeService", () => {
   });
 
   afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(templateRoot, { recursive: true, force: true });
   });
@@ -197,22 +201,10 @@ describe("ManagedWorktreeService", () => {
     expect(created.path).toContain(path.join("worktrees", created.repoFingerprint, "remote-task"));
     expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
     expect(repeated).toEqual(created);
-    expectCheckoutTimeouts(commandSpy, ["origin/main"]);
-  });
-
-  it("reads registry records without retiring a temporarily unavailable worktree", async () => {
-    const created = await service.create({
-      repoRoot: repo,
-      name: "read-only-list",
-      baseRef: "HEAD",
-    });
-    await fs.rm(created.path, { recursive: true, force: true });
-
-    expect(service.listRegistryRecords()).toEqual([expect.objectContaining({ id: created.id })]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-
-    expect(await service.list()).toEqual([]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBe(now);
+    expectCheckoutTimeouts(commandSpy, [
+      "origin/main",
+      await git(created.path, "rev-parse", "HEAD"),
+    ]);
   });
 
   it("does not remove a worktree owned by another caller", async () => {
@@ -497,7 +489,7 @@ describe("ManagedWorktreeService", () => {
       let checkoutFailed = false;
       commandSpy.mockImplementation(async (...args) => {
         const result = await runCommand(...args);
-        if (isWorktreeAdd(args[0]) && result.code !== 0) {
+        if (args[0][0] === "git" && args[0].includes("read-tree") && result.code !== 0) {
           checkoutFailed = true;
           if (admission === "aborted") {
             controller.abort(closed);
@@ -521,7 +513,7 @@ describe("ManagedWorktreeService", () => {
           admission === "aborted" ? { code: "OPENCLAW_STATE_LEASE_ABORTED" } : closed,
         );
         expect(checkoutFailed).toBe(true);
-        expectCheckoutTimeouts(commandSpy, ["origin/main"]);
+        expectCheckoutTimeouts(commandSpy, ["origin/main", remoteCommit]);
         expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
         expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
         return;
@@ -529,10 +521,9 @@ describe("ManagedWorktreeService", () => {
       const created = await creation;
       expect(checkoutFailed).toBe(true);
       expect(created.baseRef).toBe("HEAD");
-      expect(await git(created.path, "rev-parse", "HEAD")).toBe(
-        await git(repo, "rev-parse", "HEAD"),
-      );
-      expectCheckoutTimeouts(commandSpy, ["origin/main", "HEAD"]);
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(localHead);
+      expectCheckoutTimeouts(commandSpy, ["origin/main", remoteCommit, "HEAD", localHead]);
     },
   );
 
@@ -741,7 +732,7 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("broken-setup");
     expect(await git(repo, "branch", "--list", "openclaw/broken-setup")).toBe("");
-    expect(service.listRegistryRecords()).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
     expect.soft(failure.message).toContain(fatal);
     expect.soft(failure.message.length).toBeLessThanOrEqual(2_300);
     expect.soft(/(?:exit|code|status)[^\n]*23/i.test(failure.message)).toBe(true);

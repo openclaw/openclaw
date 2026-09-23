@@ -57,6 +57,7 @@ export {
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   saveAuthProfileStore,
 } from "./auth-profiles/store-runtime.js";
 export {

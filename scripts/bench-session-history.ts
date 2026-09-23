@@ -17,6 +17,8 @@ const profiles = {
   sparse: { messages: 10_000, markers: false, reset: false },
   markers: { messages: 10_000, markers: true, reset: false },
   reset: { messages: 10_000, markers: true, reset: true },
+  branch: { messages: 10_000, markers: true, reset: false },
+  "sparse-branch": { messages: 10_000, markers: false, reset: false },
   trailing: { messages: 5_000, markers: false, reset: false },
 } as const;
 type Profile = keyof typeof profiles;
@@ -85,8 +87,28 @@ function fixture(profile: Profile): TranscriptEvent[] {
         display: index % 2 === 0,
       });
     }
-    if (profile === "sparse" && index % 1000 === 0) {
+    if ((profile === "sparse" || profile === "sparse-branch") && index % 1000 === 0) {
       append({ type: "compaction", id: `compaction-${index}`, summary: "Synthetic compaction" });
+    }
+  }
+  if (profile === "branch" || profile === "sparse-branch") {
+    parentId = profile === "branch" ? "message-0" : `message-${spec.messages - 101}`;
+    append({
+      type: "custom_message",
+      id: "branch-marker",
+      customType: "benchmark-notice",
+      content: "Synthetic branch notice",
+      display: true,
+    });
+    for (let index = 0; index < 1000; index += 1) {
+      append({
+        type: "message",
+        id: `branch-message-${index}`,
+        message: {
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: [{ type: "text", text: `Synthetic branch ${index}: ${"x".repeat(1024)}` }],
+        },
+      });
     }
   }
   if (profile === "trailing") {
@@ -218,20 +240,40 @@ async function trace(read: () => Promise<unknown>) {
   return { queries: [...queries.values()], jsonParseCalls, jsonParseBytes, jsonStringifyCalls };
 }
 
+async function closeBenchmarkState(stateDir: string): Promise<void> {
+  const [
+    { closeSessionTranscriptReconcileWorkerPool },
+    { closeOpenClawAgentDatabasesAsync },
+    { closeOpenClawStateDatabaseAsync },
+  ] = await Promise.all([
+    import("../src/config/sessions/session-transcript-reconcile-pool.js"),
+    import("../src/state/openclaw-agent-db.js"),
+    import("../src/state/openclaw-state-db.js"),
+  ]);
+  await closeSessionTranscriptReconcileWorkerPool();
+  await closeOpenClawAgentDatabasesAsync(stateDir);
+  await closeOpenClawStateDatabaseAsync();
+}
+
 async function worker(stateDir: string, profile: Profile, operation: Operation) {
   const scope = scopeFor(stateDir, profile);
   const importStarted = performance.now();
   const history = await import("../src/config/sessions/session-accessor.sqlite-history-events.js");
   const gateway =
     operation === "gateway-tail"
-      ? await import("../src/gateway/session-history-tail.js")
+      ? {
+          tail: await import("../src/gateway/session-history-tail.js"),
+          readers: await import("../src/gateway/session-transcript-readers.js"),
+          profile: await import("../src/gateway/current-user-profile-display.js"),
+        }
       : undefined;
-  const { openOpenClawAgentDatabase, closeOpenClawAgentDatabasesForTest } =
-    await import("../src/state/openclaw-agent-db.js");
+  const { openOpenClawAgentDatabase } = await import("../src/state/openclaw-agent-db.js");
   const importMs = performance.now() - importStarted;
   const read = async () => {
     if (gateway) {
-      const result = await gateway.readIncrementalChatHistoryTail({
+      const result = await gateway.tail.readIncrementalChatHistoryTail({
+        readers: gateway.readers,
+        resolveCurrentUserProfileDisplay: gateway.profile.resolveCurrentUserProfileDisplay,
         entry: undefined,
         readScope: scope,
         effectiveMaxChars: 8000,
@@ -307,14 +349,14 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
       }),
     );
   } finally {
-    closeOpenClawAgentDatabasesForTest(stateDir);
+    await closeBenchmarkState(stateDir);
   }
 }
 
 async function main() {
   if (values.help) {
     console.log(
-      "Usage: node --import tsx scripts/bench-session-history.ts [--profile small,long,sparse,markers,reset,trailing] [--operation recent|page|gateway-tail] [--samples 30] [--analyze] [--output report.json]\nReports a fresh-process first read and warm p50/p95, CPU, RSS, heap deltas, and separate SQL/JSON tracing. Fixtures are synthetic and automatically removed; OS caches are not flushed.",
+      "Usage: node --import tsx scripts/bench-session-history.ts [--profile small,long,sparse,markers,reset,branch,sparse-branch,trailing] [--operation recent|page|gateway-tail] [--samples 30] [--analyze] [--output report.json]\nReports a fresh-process first read and warm p50/p95, CPU, RSS, heap deltas, and separate SQL/JSON tracing. Fixtures are synthetic and automatically removed; OS caches are not flushed.",
     );
     return;
   }
@@ -341,25 +383,23 @@ async function main() {
   process.env.OPENCLAW_CONFIG_PATH = configPath;
   const { replaceTranscriptEvents } =
     await import("../src/config/sessions/session-accessor.sqlite-transcript-write.js");
-  const { waitForSessionTranscriptProjection } =
+  const { waitForSessionTranscriptIndexReconcilesInStateDir } =
     await import("../src/config/sessions/session-transcript-reconcile.js");
-  const { openOpenClawAgentDatabase, closeOpenClawAgentDatabasesForTest } =
-    await import("../src/state/openclaw-agent-db.js");
-  const { closeOpenClawStateDatabaseForTest } = await import("../src/state/openclaw-state-db.js");
+  const { openOpenClawAgentDatabase } = await import("../src/state/openclaw-agent-db.js");
   const results: unknown[] = [];
   try {
     for (const name of selected) {
       const profile = name as Profile;
       await replaceTranscriptEvents(scopeFor(stateDir, profile), fixture(profile));
-      await waitForSessionTranscriptProjection(scopeFor(stateDir, profile));
+      // Projection readiness precedes lease release; a synchronous child would block that cleanup.
+      await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
       if (values.analyze) {
         openOpenClawAgentDatabase({
           agentId: "main",
           env: scopeFor(stateDir, profile).env,
         }).db.exec("ANALYZE");
       }
-      closeOpenClawAgentDatabasesForTest(stateDir);
-      closeOpenClawStateDatabaseForTest();
+      await closeBenchmarkState(stateDir);
       for (const operation of selectedOperations) {
         const child = spawnSync(
           process.execPath,
@@ -403,8 +443,7 @@ async function main() {
     }
     console.log(output);
   } finally {
-    closeOpenClawAgentDatabasesForTest(stateDir);
-    closeOpenClawStateDatabaseForTest();
+    await closeBenchmarkState(stateDir);
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 }

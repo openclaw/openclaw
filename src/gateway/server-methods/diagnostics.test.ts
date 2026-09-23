@@ -185,6 +185,7 @@ describe("diagnostics gateway methods", () => {
       const payload = await requestLaneDiagnostics();
       expect(payload.ts).toBeGreaterThan(0);
       expect(payload.lanes.map((snapshot) => snapshot.lane)).toEqual([
+        CommandLane.ActiveMemory,
         CommandLane.Background,
         CommandLane.Cron,
         CommandLane.CronNested,

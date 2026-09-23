@@ -12,8 +12,8 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { handleGatewayRequest } from "./server-methods.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
-import { talkModeHandlers } from "./server-methods/talk-mode.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { talkModeHandlers } from "./talk/handlers/mode.js";
 
 function createPendingProfileClient() {
   return {
@@ -65,6 +65,85 @@ async function dispatchPendingProfileMethod(params: {
 }
 
 describe("Gateway pending-profile authorization", () => {
+  it.each(["agents.list", "models.list"])(
+    "rejects narrow %s catalog requests before dispatch for a verified person",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = ensureProfileForEmail("catalog-reader@example.test");
+        const client = createPendingProfileClient();
+        client.authenticatedUserProfile = {
+          profileId: profile.id,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        };
+        client.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
+        const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
+          respond(true, { catalog: [] }),
+        );
+        const denied = await dispatchPendingProfileMethod({ client, method, handler });
+        expect(denied).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ message: "missing scope: operator.read" }),
+        );
+        expect(handler).not.toHaveBeenCalled();
+
+        client.connect.scopes.push("operator.read");
+        const broad = await dispatchPendingProfileMethod({ client, method, handler });
+        expect(broad).toHaveBeenCalledWith(true, { catalog: [] });
+        expect(handler).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
+  it("requires a verified person only when the request uses narrow session admission", async () => {
+    const client = createPendingProfileClient();
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sessions: [] }));
+    client.connect.scopes = ["operator.sessions.read"];
+    const denied = await dispatchPendingProfileMethod({ client, method: "sessions.list", handler });
+    expect(denied).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN" }),
+    );
+    expect(handler).not.toHaveBeenCalled();
+
+    client.connect.scopes = ["operator.read"];
+    const broad = await dispatchPendingProfileMethod({ client, method: "sessions.list", handler });
+    expect(broad).toHaveBeenCalledWith(true, { sessions: [] });
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it("resolves a pending verified profile before dispatching a narrow session read", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("session-reader@example.test");
+      const client = createPendingProfileClient();
+      client.connect.scopes = ["operator.sessions.read"];
+      const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
+        respond(true, { sessions: [] }),
+      );
+      client.authenticatedGitHubIdentitySync = vi.fn(async () => {
+        expect(handler).not.toHaveBeenCalled();
+        client.authenticatedUserProfile = {
+          profileId: profile.id,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        };
+        return { profileId: profile.id, updatedAt: profile.updatedAt };
+      });
+      const response = await dispatchPendingProfileMethod({
+        client,
+        method: "sessions.list",
+        handler,
+      });
+      expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledOnce();
+      expect(response).toHaveBeenCalledWith(true, { sessions: [] });
+    });
+  });
+
   it.each([false, true])(
     "rechecks bound webchat talk.mode after node discovery (profile merged: %s)",
     async (merge) => {

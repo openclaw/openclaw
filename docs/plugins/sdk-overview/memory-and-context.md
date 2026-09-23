@@ -33,6 +33,10 @@ engine unchanged, and tries that engine again on the next logical turn.
 ## Memory embedding adapters
 
 - `registerMemoryCapability` is the exclusive memory-plugin API.
+- A selected memory plugin may omit `capability.runtime`, including when it
+  handles memory through its own hooks. The Memory settings page reports absent
+  host search support neutrally; this does not assess other memory integrations.
+  Plugin loading and search-runtime failures remain errors.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
   for host-managed exports. Companion plugins that enumerate those declared
   artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained
@@ -60,7 +64,7 @@ generation until its readers close; publication, source-hash validation, and
 forget operations remain with their existing database owners.
 
 Bundled workers use the private `memory-core-host-engine-knn` facade for
-read-only database access and vector primitives, and
+read-only database access, the shared SQLite idle lifetime, and vector primitives, and
 `memory-core-host-engine-indexing` for pure chunking, annotations, hashes, and
 embedding input limits. These facades avoid loading provider registries or
 writable-store initialization into worker threads. They are bundled runtime

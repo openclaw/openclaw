@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { prepareLegacyConfigMigrationRuntime } from "../commands/doctor/shared/legacy-config-migrate.test-support.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -26,7 +27,15 @@ import {
   promoteConfigSnapshotToLastKnownGoodCore,
   recoverConfigFromLastKnownGoodCore,
 } from "./io.observe-recovery.js";
+import {
+  clobberedUpdateChannelConfig,
+  clobberedUpdateChannelRaw,
+  largeRecoverableCoreConfig,
+  recoverableCoreConfig,
+  recoverableTelegramConfig,
+} from "./io.observe-recovery.test-support.js";
 import * as configObserveState from "./io.observe-state.js";
+import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
@@ -44,26 +53,8 @@ function resolveLastKnownGoodConfigPath(configPath: string): string {
 describe("config observe recovery", () => {
   let fixtureRoot = "";
   let homeCaseId = 0;
-  const clobberedUpdateChannelConfig = { update: { channel: "beta" } };
-  const clobberedUpdateChannelRaw = `${JSON.stringify(clobberedUpdateChannelConfig, null, 2)}\n`;
-  const recoverableTelegramConfig = {
-    meta: { lastTouchedVersion: "2026.4.22" },
-    update: { channel: "beta" },
-    gateway: { mode: "local" },
-    channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
-  };
-  const recoverableCoreConfig = {
-    meta: { lastTouchedVersion: "2026.4.22" },
-    update: { channel: "beta" },
-    gateway: { mode: "local" as const },
-  };
-  const largeRecoverableCoreConfig = {
-    ...recoverableCoreConfig,
-    gateway: {
-      ...recoverableCoreConfig.gateway,
-      trustedProxies: Array.from({ length: 60 }, (_, index) => `192.0.2.${index}`),
-    },
-  };
+  let restoreMigrationRuntime: (() => void) | undefined;
+  const workerFixture = createConfigIoWorkerFixture();
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = path.join(fixtureRoot, `case-${homeCaseId++}`);
@@ -73,10 +64,13 @@ describe("config observe recovery", () => {
 
   beforeAll(async () => {
     fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-config-observe-recovery-"));
+    await workerFixture.setup(fixtureRoot);
+    restoreMigrationRuntime = await prepareLegacyConfigMigrationRuntime();
   });
 
   afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
+    restoreMigrationRuntime?.();
+    await workerFixture.close();
     closeOpenClawStateDatabaseForTest();
     await fsp.rm(fixtureRoot, { recursive: true, force: true });
   });
@@ -999,13 +993,15 @@ describe("config observe recovery", () => {
           "utf-8",
         );
         const clobbered = await writeClobberedUpdateChannel(configPath);
-        const input = { deps, configPath, ...clobbered, prepareBackup: approveRecoveryCandidate };
+        const prepareBackup = vi.fn(approveRecoveryCandidate);
+        const input = { deps, configPath, ...clobbered, prepareBackup };
 
         const recovered =
           mode === "async"
             ? await maybeRecoverSuspiciousConfigRead(input)
             : maybeRecoverSuspiciousConfigReadSync(input);
 
+        expect(prepareBackup).not.toHaveBeenCalled();
         expect(recovered).toEqual(clobbered);
         await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
         await expect(readObserveEvents(auditPath)).resolves.toEqual([]);

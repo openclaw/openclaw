@@ -5,7 +5,7 @@ import { shouldDisplayChatSubmission } from "../pages/chat/history-merge.ts";
 import { buildInitialChatSubmission } from "../pages/chat/user-message-content.ts";
 import { createChatSubmissions, type RetainedChatSubmission } from "./chat-submissions.ts";
 
-function message(text: string): RetainedChatSubmission["message"] {
+function message(text: string): NonNullable<RetainedChatSubmission["message"]> {
   return { role: "user", content: [{ type: "text", text }], timestamp: 1, __openclaw: {} };
 }
 
@@ -35,15 +35,16 @@ describe("retained chat submissions", () => {
         retain(index);
       }
       expect(read(0)).toBeFalsy();
-      expect(read(1)?.message.content).toEqual([{ type: "text", text: "1" }]);
+      expect(read(1)?.message?.content).toEqual([{ type: "text", text: "1" }]);
       const replacement = expectDefined(retain(1), "retained submission");
+      const replacementMessage = expectDefined(replacement.message, "pending display");
       expect(
         shouldDisplayChatSubmission(
           replacement,
           findChatSubmissionMessage(
             [
               {
-                ...replacement.message,
+                ...replacementMessage,
                 __openclaw: { id: "receipt", idempotencyKey: `${replacement.pendingRunId}:user` },
               },
             ],
@@ -87,9 +88,7 @@ describe("retained chat submissions", () => {
       pendingRunId: "initial-run",
     });
     expect(handoff.readInitial("main", replacementOwner)).toBeNull();
-    handoff.clearInitial("agent:main:missing");
-    expect(handoff.readInitial("main", owner)).not.toBeNull();
-    handoff.clearInitial("agent:main:main");
+    handoff.clear();
     expect(handoff.readInitial("main", owner)).toBeNull();
   });
 });
@@ -162,4 +161,56 @@ describe("initial user message handoff", () => {
       expect(handoff.readInitial(sessionKey, replacementClient)).toBeNull();
     }
   });
+});
+
+describe("pending create display authority", () => {
+  it("retains unadmitted route metadata after private display disposal", () => {
+    const submissions = createChatSubmissions();
+    const creation = { sessionKey: "agent:main:dashboard:pending", admitted: false };
+    const release = submissions.beginCreate({ creation, message: null, canDisplay: () => true });
+    const routeCreation = submissions.creation;
+    release();
+    expect(submissions.readCreateMessage(creation.sessionKey)).toBeNull();
+    expect(submissions.creation).toBeUndefined();
+    expect(routeCreation?.admitted).toBe(false);
+  });
+
+  it("checks the live transaction owner before exposing pre-admission bytes", () => {
+    const submissions = createChatSubmissions();
+    const key = "agent:main:dashboard:private";
+    let authorized = true;
+    submissions.beginCreate({
+      creation: { sessionKey: key, admitted: false },
+      message: message("private synthetic draft"),
+      canDisplay: () => authorized,
+    });
+    expect(submissions.readCreateMessage(key)?.content).toEqual([
+      { type: "text", text: "private synthetic draft" },
+    ]);
+    expect(submissions.readCreateMessage("agent:main:dashboard:other")).toBeNull();
+    authorized = false;
+    expect(submissions.readCreateMessage(key)).toBeNull();
+  });
+
+  it.each(["agent:main:dashboard:resumed", "agent:main:dashboard:newer"])(
+    "a retired attempt cannot clear successor %s",
+    (nextKey) => {
+      const submissions = createChatSubmissions();
+      const key = "agent:main:dashboard:resumed";
+      const releaseOld = submissions.beginCreate({
+        creation: { sessionKey: key, admitted: false },
+        message: null,
+        canDisplay: () => true,
+      });
+      const releaseCurrent = submissions.beginCreate({
+        creation: { sessionKey: nextKey, admitted: false },
+        message: message("current draft"),
+        canDisplay: () => true,
+      });
+      releaseOld();
+      expect(submissions.readCreateMessage(nextKey)).not.toBeNull();
+      releaseCurrent();
+      expect(submissions.readCreateMessage(nextKey)).toBeNull();
+    },
+  );
 });

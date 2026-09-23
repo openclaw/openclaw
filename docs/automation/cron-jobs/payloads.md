@@ -25,7 +25,7 @@ Every job carries exactly one payload kind, chosen by flag:
 System-owned monitor jobs are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). The weekly Skill Workshop review is a normal isolated `agentTurn` job with a reserved declaration key. Both appear in `openclaw cron list`; use `--all` to include disabled rows.
 The `skillCollectionReview` payload kind is not accepted. Stored rows that use it are replaced with the canonical review job.
 
-Skill collection review runs every 7 days. It is enabled when `skills.workshop.autonomous.mode` is `auto`; `propose` and `off` keep the system-owned job disabled. The Gateway converges these jobs at startup and after config reload. Scheduled reviews require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the Gateway logs a startup warning and does not run scheduled reviews. There is no separate weekly Gateway timer.
+Skill collection review runs every 7 days. It is enabled when `skills.workshop.autonomous.mode` is `auto`; `propose` and `off` keep the system-owned job disabled. In `auto` mode, a review stays disabled when every statically resolvable model candidate is known to lack rooted execution support. Its display name includes `no-rooted-runtime`; inspect disabled rows with `openclaw cron list --all --json`. A supported fallback keeps the job enabled. Stored session model/runtime preferences and unknown eligibility also keep it enabled, with final checks at execution time. The Gateway converges these jobs at startup and after config reload. Convergence clears the reason and restores auto-mode enablement when the configured chain becomes eligible or unknown. Scheduled reviews require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the Gateway logs a startup warning and does not run scheduled reviews. There is no separate weekly Gateway timer.
 
 ### Agent-turn options
 
@@ -54,7 +54,7 @@ Skill collection review runs every 7 days. It is enabled when `skills.workshop.a
   Skip workspace bootstrap file injection.
 </ParamField>
 <ParamField path="--tools" type="string">
-  Restrict which tools the job can use, for example `--tools exec,read`.
+  Restrict which tools the job can use, for example `--tools exec,read`. Pass `--tools ""` for an empty allowlist that disables all agent tools, including tools used by a condition trigger.
 </ParamField>
 
 New jobs that can run tools always store an explicit tool policy. Jobs created by an agent
@@ -63,6 +63,83 @@ stored list. Jobs created by an authenticated operator without `--tools` store a
 unrestricted `*` policy; `automations edit --clear-tools` restores that explicit unrestricted
 policy. Existing jobs that predate an explicit tool policy retain their current behavior
 until their tool policy is explicitly edited or the job is recreated.
+
+Changing an account-bound job to a payload that does not run tools and later back
+to an agent turn preserves its account restriction. A payload conversion does not
+reauthorize that job as an operator-created job.
+
+Management edits cannot restore missing policy metadata as operator authority.
+For a legacy job that has lost its policy, an authenticated operator can explicitly
+reauthorize it, or an authenticated creator can recreate it with a fresh tool cap.
+
+When the creator's `exec` capability is fixed to the Gateway, the automation also
+retains that target. With `tools.exec.host: "auto"`, the saved target determines
+placement. A conflicting current explicit host setting or required sandbox
+isolation blocks the command instead of moving it to another host. Current tool
+and approval policies still apply.
+
+With `message` in the tool cap, scheduled agent turns can read messages and channel
+information on supported channel plugins without an inbound chat. Operator-created
+jobs use the current operator read policy. Agent-created jobs retain their recorded
+creator origin and account, and the channel's delegated read restrictions still
+apply. Delivery settings do not grant read access.
+
+Current global, agent, profile, and provider tool policy is checked when each new
+scheduled message invocation starts. Configuration changes apply to later invocations;
+an invocation already admitted retains its configuration. Disabling or removing a job,
+withdrawing its `message` capability, or revoking its caller or plugin authority stops
+further affected reads from that occurrence, including pending reads before another
+provider request or result delivery. Re-enabling the job does not restore an
+occurrence's revoked access.
+
+A new account-bound job created by a verified local administrator retains that
+authenticated local source, allowing provider-permitted reads through its saved
+creator account. Editing its `toolsAllow` cap from the same local source explicitly
+reauthorizes an existing job. Description, display-label, and exact no-op edits
+preserve the recorded source. Changes to model-facing names, prompts, tools, schedules,
+or other executable behavior need fresh source authorization and clear the old source
+when none is present. Remote management alone cannot supply local-source authorization,
+and older jobs without a provable origin remain blocked until reauthorized or recreated
+from a fresh authorized source.
+
+Scheduled turns can also `edit`, `delete`, `pin`, and `unpin` Discord messages.
+Agent-created jobs use their recorded creator account and Discord's delegated
+target restrictions. Operator-created jobs use Discord's operator target policy.
+Trusted operator jobs can additionally use `channel-edit`, including the existing
+channel and thread edit options; account-created jobs do not inherit operator
+administration.
+
+For these writes, the job needs `message` in its tool policy, an enabled account
+and action, and the bot's required Discord permissions. Use an updated Discord plugin with
+[scheduled write support](/plugins/sdk-channel-plugins#scheduled-channel-administration).
+
+Account-bound jobs can use Discord `channel-edit` when an authenticated Discord
+turn has authorized their current definition. OpenClaw privately retains that
+requester's Discord account and sender identity, and Discord's current channel
+or thread permissions must allow the edit. The original session creator and a
+configured OpenClaw owner are not substitutes for those native permissions.
+
+Executable edits from the job's owning conversation and account bind the job to
+the current authorized editor. This includes the prompt, model, name, schedule,
+delivery, and tool policy. An executable edit without a matching authenticated
+Discord requester clears this permission and stops further native actions from
+the old occurrence. Description and display-label changes preserve it.
+
+Older jobs, jobs edited by older writers, and jobs whose requester authorization
+was cleared need fresh authorization before `channel-edit` can run. From the
+original Discord conversation and account, ask the agent to edit the job with
+an explicit finite `toolsAllow` list including `message`, or recreate it there.
+If its execution authorization is also missing, recreate it from that conversation;
+management access alone does not restore the missing authorization.
+The editor must already have automation-management access. Other job behavior
+keeps its existing policy; a CLI edit cannot invent a Discord requester. These
+requester facts are omitted from public job results, and no new setting is needed.
+
+Channel-name lookup and subsequent write requests retain the current job and
+plugin authority. Configuration changes apply to the next message invocation;
+disabling or narrowing the job itself stops later requests and retries in the
+current invocation. A confirmed write still returns its result if authority ends
+while the response is pending.
 
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 
@@ -110,6 +187,8 @@ openclaw automations create "*/15 * * * *" \
 `--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution without shell parsing. Optional `--command-env KEY=VALUE` (repeatable), `--command-input`, `--timeout-seconds` (default 10 minutes), `--no-output-timeout-seconds`, and `--output-max-bytes` control the process environment, stdin, and output bounds.
 
 Delivered text is derived from process output: non-empty stdout wins; if stdout is empty and stderr is non-empty, stderr is delivered; if both are present, the scheduler sends a small `stdout:` / `stderr:` block. Exit code `0` records the run `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger failure alerts. A command that prints only `NO_REPLY` uses the normal automation silent-token suppression and posts nothing back to chat.
+
+When the run deadline stops a command, run history retains its captured output and command timeout reason after bounded process cleanup. Completion delivery does not start after that deadline.
 
 ### Script payloads
 
@@ -188,7 +267,7 @@ Agent-turn jobs default to the creating conversation when the create request car
 
   </Accordion>
   <Accordion title="Subagent and Discord delivery">
-    When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendants are still running, OpenClaw suppresses that partial parent update instead of announcing it.
+    When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation.
 
     For text-only Discord announce targets, OpenClaw sends the canonical final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.
 

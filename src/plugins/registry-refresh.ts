@@ -3,10 +3,14 @@ import { createConfigIO } from "../config/io.factory.js";
 import { createManagedRuntimeEnvBase } from "../config/io.read-helpers.js";
 import { formatConfigIssueSummary } from "../config/issue-format.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isGatewayPluginMetadataSnapshotActive } from "./current-plugin-metadata-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import type { InstalledPluginIndexRefreshReason } from "./installed-plugin-index.js";
-import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import type { PluginLifecycleLeaseContext } from "./plugin-lifecycle-lease.js";
+import { createPluginCache, getScopedPluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  hasPluginLifecycleLease,
+  type PluginLifecycleLeaseContext,
+} from "./plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 
@@ -55,8 +59,17 @@ export async function refreshPluginRegistryAfterConfigMutation(
     : undefined;
   lease?.assertOwned();
   try {
-    // Discover post-write state without retiring the Gateway's current generation.
-    await withPluginCache(createPluginCache(), async () => {
+    // Standalone policy writes retain their lease's package facts. Gateway source
+    // mutations leave enclosing caches intact, so refresh those independently.
+    const scoped = getScopedPluginCache();
+    const cache =
+      params.reason === "policy-changed" &&
+      hasPluginLifecycleLease() &&
+      !isGatewayPluginMetadataSnapshotActive() &&
+      scoped?.kind === "operation"
+        ? scoped
+        : createPluginCache();
+    await withPluginCache(cache, async () => {
       const installRecords =
         params.installRecords ??
         (await tracePluginLifecyclePhaseAsync(

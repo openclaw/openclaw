@@ -277,6 +277,8 @@ describe("archive workspace lifetime", () => {
     "cleans the archive workspace before exposing %s",
     async (outcome) => {
       await withTestDir({ prefix: "openclaw-npm-archive-" }, async (rootDir) => {
+        // Workspace admission must not depend on the runner's directory umask.
+        await fs.chmod(rootDir, 0o700);
         const actual = await vi.importActual<typeof import("./install-source-utils.js")>(
           "./install-source-utils.js",
         );

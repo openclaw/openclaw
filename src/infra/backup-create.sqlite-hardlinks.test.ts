@@ -254,12 +254,15 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
     {
       name: "refuses a canonical symlink retargeted after an earlier declared plugin snapshot completes",
       change: "symlink retarget",
+      error: /Canonical SQLite path changed after discovery/iu,
     },
     {
       name: "refuses a canonical-bound hardlink alias replaced after an earlier declared plugin snapshot completes",
       change: "hardlink replacement",
+      error:
+        /SQLite hardlink journal owner may be outside the backup inventory:.*has 1 links, but 2 paths were admitted/iu,
     },
-  ])("$name", async ({ change }) => {
+  ])("$name", async ({ change, error }) => {
     await withHardlinkedDatabase("alpha.sqlite", async ({ state, ownerPath }) => {
       const canonicalPath = resolveOpenClawStateSqlitePath(state.env);
       const firstPath = state.statePath("state", "first-global.sqlite");
@@ -312,7 +315,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
           return result;
         });
       try {
-        await expectBackupRefused(state, /Canonical SQLite path changed after discovery/iu);
+        await expectBackupRefused(state, error);
         expect(changed).toBe(true);
         if (change === "symlink retarget") {
           expect(await fs.realpath(canonicalPath)).toBe(secondPath);

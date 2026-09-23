@@ -15,6 +15,11 @@ Dreaming is enabled by default. Set
 `plugins.entries.memory-core.config.dreaming.enabled: false` to disable it.
 </Note>
 
+When the cron scheduler is disabled (`cron.enabled: false` or
+`OPENCLAW_SKIP_CRON=1`), dreaming defers automatic job creation and updates while
+preserving existing jobs. Startup cleanup of historical dreaming artifacts still
+runs. Explicitly disabling dreaming still removes its managed jobs.
+
 ## What dreaming writes
 
 - **Machine state** in SQLite-backed plugin state (recall store, phase signals, ingestion checkpoints, locks).

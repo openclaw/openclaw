@@ -65,6 +65,7 @@ profile selected in the table above. It has no profile-file destination option.
 - Completion generation eagerly loads the full command tree, including plugin CLI commands, so nested subcommands are included.
 - If invalid configuration prevents plugin discovery, generation warns and still includes core commands. Repair the configuration and regenerate to include plugin commands.
 - Bash completion supports both `--flag value` and `--flag=value`, including named profiles before nested commands and single-quoted, double-quoted, or backslash-escaped value prefixes.
+- After an option terminator (`--`), Bash completes command names but does not suggest options or option values.
 - PowerShell completes commands and option values at the cursor, including when later arguments are already present.
 - `openclaw update` refreshes the completion cache automatically after a successful update. `openclaw doctor` can repair missing or stale completion setups.
 

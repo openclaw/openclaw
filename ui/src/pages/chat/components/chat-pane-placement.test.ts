@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
 import { renderChatPanePlacement } from "./chat-pane-placement.ts";
@@ -145,6 +145,45 @@ describe("chat pane device placement", () => {
     },
   );
 
+  it.each(["local", undefined] as const)(
+    "offers worker dispatch for a repository-only session with %s placement",
+    (placementState) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      containers.push(container);
+      const onPlacementRecover = vi.fn();
+      const session: GatewaySessionRow = {
+        key: "agent:main:repository",
+        kind: "direct",
+        updatedAt: 0,
+        repositoryWorkspaceId: "repository-workspace-1",
+        ...(placementState
+          ? {
+              placement: {
+                state: placementState,
+                generation: 1,
+                createdAtMs: 1,
+                updatedAtMs: 1,
+                stateChangedAtMs: 1,
+              },
+            }
+          : {}),
+      };
+
+      render(renderChatPanePlacement({ session, onPlacementRecover }), container);
+
+      expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+        "Worker required",
+      );
+      const dispatch = container.querySelector<HTMLElement>(".chat-pane__placement-recovery");
+      expect(container.querySelectorAll(".chat-pane__placement-recovery")).toHaveLength(1);
+      expect(dispatch?.textContent?.trim()).toBe("Choose worker…");
+      expect(container.querySelector(".chat-pane__placement-move")).toBeNull();
+      dispatch?.click();
+      expect(onPlacementRecover).toHaveBeenCalledOnce();
+    },
+  );
+
   it("offers restart without a redundant stop action after a failed worker is gone", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -166,7 +205,7 @@ describe("chat pane device placement", () => {
 
     render(renderChatPanePlacement({ session }), container);
 
-    expect(container.querySelector(".chat-pane__placement-restart")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".chat-pane__placement-recovery")?.textContent?.trim()).toBe(
       "Restart session…",
     );
     expect(container.querySelector(".chat-pane__placement-reclaim")).toBeNull();
@@ -193,7 +232,7 @@ describe("chat pane device placement", () => {
 
     render(renderChatPanePlacement({ session }), container);
 
-    expect(container.querySelector(".chat-pane__placement-restart")).toBeNull();
+    expect(container.querySelector(".chat-pane__placement-recovery")).toBeNull();
     expect(container.querySelector(".chat-pane__placement-reclaim")?.textContent?.trim()).toBe(
       "Stop worker…",
     );

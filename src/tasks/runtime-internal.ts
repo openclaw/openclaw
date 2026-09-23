@@ -1,21 +1,50 @@
 // Internal task registry facade used by runtime modules without exposing public SDK surface.
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
-  ensureTaskFlowRegistryReady,
-  reloadTaskFlowRegistryFromStore,
+  ensureTaskFlowRegistryReadyAsync,
+  reloadTaskFlowRegistryFromStoreAsync,
 } from "./task-flow-runtime-internal.js";
 import {
-  ensureTaskRegistryReady as ensureTaskRegistryReadyInternal,
-  reloadTaskRegistryFromStore as reloadTaskRegistryFromStoreInternal,
-} from "./task-registry.js";
+  ensureTaskRegistryReadyAsync,
+  reloadTaskRegistryFromStoreAsync,
+} from "./task-registry-state.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
-export function ensureTaskRuntimeStateReady(): void {
-  ensureTaskFlowRegistryReady();
-  ensureTaskRegistryReadyInternal();
+/** Read a task view without creating state or refreshing the synchronous projections. */
+export async function findTaskViewByRunIdAsync(
+  runId: string,
+  assertCurrent: () => void,
+): Promise<TaskRecord | undefined> {
+  assertCurrent();
+  const lookup = runId.trim();
+  if (!lookup) {
+    return undefined;
+  }
+  const context = captureOpenClawStateWorkerContext();
+  const { runOpenClawStateWorkerOperation } =
+    await import("../state/openclaw-state-worker-store.js");
+  const task = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "tasks.findByRunId", input: { runId: lookup } }),
+    { existingOnly: true, assertCurrent },
+  );
+  context.admission.assertCurrent();
+  assertCurrent();
+  return task;
 }
 
-export function reloadTaskRuntimeStateFromStore(): void {
-  reloadTaskFlowRegistryFromStore();
-  reloadTaskRegistryFromStoreInternal();
+export async function ensureTaskRuntimeStateReady(): Promise<void> {
+  const context = captureOpenClawStateWorkerContext();
+  await ensureTaskFlowRegistryReadyAsync(context);
+  context.admission.assertCurrent();
+  await ensureTaskRegistryReadyAsync(context);
+}
+
+export async function reloadTaskRuntimeStateFromStore(): Promise<void> {
+  const context = captureOpenClawStateWorkerContext();
+  await reloadTaskFlowRegistryFromStoreAsync(context);
+  context.admission.assertCurrent();
+  await reloadTaskRegistryFromStoreAsync(context);
 }
 
 export {
@@ -31,7 +60,7 @@ export {
   listFreshTasksForOwnerKey,
   listTaskRecordPage,
   listTaskRecords,
-  listTaskRecordsUnsorted,
+  listTaskRecordsForOwnerTree,
   listTasksForFlowId,
   listTasksForOwnerKey,
   linkTaskToFlowById,
@@ -48,3 +77,8 @@ export {
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 export type { TaskRecord } from "./task-registry.types.js";
+export { listTaskStatesForFlowIds } from "./task-registry-query.js";
+export {
+  createTaskRegistryReadPreparation,
+  prepareTaskRegistryRead,
+} from "./task-registry-read.js";

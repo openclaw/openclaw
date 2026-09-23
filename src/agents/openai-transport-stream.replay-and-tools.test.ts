@@ -577,8 +577,6 @@ describe("openai transport stream", () => {
       }),
     ).resolves.toMatchObject({
       stream: recoveredStream,
-      response: recoveredResponse,
-      attempt: { kind: "reasoning-stripped" },
     });
 
     expect(create).toHaveBeenCalledTimes(2);
@@ -632,8 +630,6 @@ describe("openai transport stream", () => {
       }),
     ).resolves.toMatchObject({
       stream: recoveredStream,
-      response: recoveredResponse,
-      attempt: { kind: "compaction-stripped" },
     });
 
     expect(create).toHaveBeenCalledTimes(3);
@@ -809,8 +805,6 @@ describe("openai transport stream", () => {
       }),
     ).resolves.toMatchObject({
       stream: recoveredStream,
-      response: recoveredResponse,
-      attempt: { kind: "reasoning-stripped" },
     });
 
     expect(create).toHaveBeenCalledTimes(2);

@@ -1,4 +1,3 @@
-// Telegram plugin module implements built-in native command behavior.
 import {
   loadPreparedModelCatalog,
   resolveAgentConfig,
@@ -8,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildCommandTextFromArgs,
+  canResolveCommandArgMenu,
   findCommandByNativeName,
   formatCommandArgMenuTitle,
   formatFastModeCurrentStatus,
@@ -18,7 +18,6 @@ import {
   resolveStoredModelOverride,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
-import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -28,9 +27,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import type { TelegramPendingInboundTarget } from "./bot-handlers.types.js";
 import {
-  dispatchTelegramBuiltinTurn,
   prepareTelegramCommandDispatch,
   type TelegramCommandExecutorParams,
 } from "./bot-native-command-dispatch.js";
@@ -249,12 +246,14 @@ function formatTelegramCommandArgMenuTitle(params: {
   return title;
 }
 
+export type TelegramBuiltinCommandResult = "handled" | "handled-clear-buttons" | "fall-through";
+
 export async function executeTelegramBuiltinCommand(
   params: TelegramCommandExecutorParams & {
     commandName: string;
-    cancelPendingInbound: (target: TelegramPendingInboundTarget) => void;
+    shouldSkip?: () => boolean;
   },
-): Promise<boolean> {
+): Promise<TelegramBuiltinCommandResult> {
   // Loaded-registry lookup only: Telegram defines no resolveNativeCommandName
   // hook, and the bundled fallback would jiti-load the plugin source in dev/test.
   const commandDefinition = findCommandByNativeName(params.commandName, "telegram", {
@@ -270,12 +269,19 @@ export async function executeTelegramBuiltinCommand(
     : params.rawText
       ? `/${params.commandName} ${params.rawText}`
       : `/${params.commandName}`;
-  const dispatch = await prepareTelegramCommandDispatch(
-    { ...params, requireAuth: true },
-    isAbortRequestText(prompt) ? params.cancelPendingInbound : undefined,
-  );
+  if (
+    commandDefinition?.key !== "login" &&
+    (!commandDefinition ||
+      !canResolveCommandArgMenu({ command: commandDefinition, args: commandArgs }))
+  ) {
+    return "fall-through";
+  }
+  if (commandDefinition?.key === "login" && params.shouldSkip?.()) {
+    return "handled";
+  }
+  const dispatch = await prepareTelegramCommandDispatch({ ...params, requireAuth: true });
   if (!dispatch) {
-    return false;
+    return "handled";
   }
   if (commandDefinition?.key === "login") {
     const { executeTelegramLoginCommand } = await loadTelegramLoginCommandExecutor();
@@ -289,7 +295,12 @@ export async function executeTelegramBuiltinCommand(
         cfg: dispatch.runtimeCfg,
         agentId: dispatch.route.agentId,
       }).provider;
-    return await executeTelegramLoginCommand({ dispatch, commandText: prompt, currentProvider });
+    const clearButtons = await executeTelegramLoginCommand({
+      dispatch,
+      commandText: prompt,
+      currentProvider,
+    });
+    return clearButtons ? "handled-clear-buttons" : "handled";
   }
 
   const menuNeedsModelContext =
@@ -346,6 +357,10 @@ export async function executeTelegramBuiltinCommand(
       })
     : null;
   if (menu && commandDefinition) {
+    // The tracker consumes the update; a menu with no choices must leave it for the pipeline.
+    if (params.shouldSkip?.()) {
+      return "handled";
+    }
     const title = formatTelegramCommandArgMenuTitle({
       command: commandDefinition,
       menu,
@@ -393,7 +408,7 @@ export async function executeTelegramBuiltinCommand(
           ...dispatch.threadParams,
         }),
     });
-    return false;
+    return "handled";
   }
-  return await dispatchTelegramBuiltinTurn({ dispatch, prompt, commandArgs });
+  return "fall-through";
 }

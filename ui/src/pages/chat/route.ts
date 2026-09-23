@@ -31,25 +31,9 @@ function sessionPage(face: BoardFace) {
     // static face route. Both locations describe the same loader match.
     loaderDeps: (context: ApplicationContext, location: RouteLocation) =>
       sessionLoaderDeps(face, context, location),
-    loader: async (context: ApplicationContext, { location, signal }) => {
-      const { loadChatRoute } = await import("./route-loader.ts");
-      return await loadChatRoute(context, location, face, signal);
-    },
-    component: () =>
-      Promise.all([
-        import("./chat-page.ts"),
-        import("./route-view.ts"),
-        import("../../styles/chat/composer-progress.css"),
-        import("../../styles/chat/composer-queue.css"),
-        import("../../styles/chat/composer-status.css"),
-      ]).then(([, { renderChatRoute, sessionRenderOwnerKey }]) => ({
-        header: true,
-        // ChatPage's bounded inner cache owns per-session teardown, so session
-        // routes share the outer owner while their data and URL keep changing.
-        renderOwnerKey: sessionRenderOwnerKey,
-        retainOnNavigate: true,
-        render: renderChatRoute,
-      })),
+    loader: async (context: ApplicationContext, options) =>
+      (await import("./route-loader.ts")).loadSessionPage(context, face, options),
+    component: () => import("./route-entry.ts"),
   });
 }
 

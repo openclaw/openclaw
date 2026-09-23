@@ -1,4 +1,3 @@
-// Memory Core plugin module implements dreaming markdown behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -14,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { updateDeepDreamsFile } from "./dreaming-dreams-file.js";
+import { getMemoryWorkspaceMaintenance, readWorkspaceText } from "./memory-workspace-files.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
@@ -60,7 +60,15 @@ function shouldWriteSeparate(storage: MemoryDreamingStorageConfig): boolean {
   return storage.mode === "separate" || storage.mode === "both" || storage.separateReports;
 }
 
-async function replaceDreamingMarkdownFile(filePath: string, content: string): Promise<void> {
+export async function replaceDreamingMarkdownFile(
+  filePath: string,
+  content: string,
+  workspaceDir?: string,
+): Promise<void> {
+  const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
+  if (files) {
+    return await files.replaceReport(filePath, content);
+  }
   const directoryPath = path.dirname(filePath);
   await fs.mkdir(directoryPath, { recursive: true });
   const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
@@ -93,12 +101,14 @@ export async function writeDailyDreamingPhaseBlock(params: {
 
   if (shouldWriteInline(params.storage)) {
     const candidatePath = resolveDailyMemoryPath(params.workspaceDir, nowMs, params.timezone);
-    const original = await fs.readFile(candidatePath, "utf-8").catch((err: unknown) => {
-      if (extractErrorCode(err) === "ENOENT") {
-        return undefined;
-      }
-      throw err;
-    });
+    const original = await readWorkspaceText(params.workspaceDir, candidatePath).catch(
+      (err: unknown) => {
+        if (extractErrorCode(err) === "ENOENT") {
+          return undefined;
+        }
+        throw err;
+      },
+    );
     // An existing empty file still owns its managed block; absence does not.
     if (params.hasContent || original !== undefined) {
       inlinePath = candidatePath;
@@ -110,7 +120,11 @@ export async function writeDailyDreamingPhaseBlock(params: {
         endMarker: markers.end,
         body,
       });
-      await replaceDreamingMarkdownFile(inlinePath, withTrailingNewline(updated));
+      await replaceDreamingMarkdownFile(
+        inlinePath,
+        withTrailingNewline(updated),
+        params.workspaceDir,
+      );
     }
   }
 
@@ -127,7 +141,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
       body,
       "",
     ].join("\n");
-    await replaceDreamingMarkdownFile(reportPath, report);
+    await replaceDreamingMarkdownFile(reportPath, report, params.workspaceDir);
   }
 
   await appendMemoryHostEvent(params.workspaceDir, {
@@ -166,7 +180,7 @@ export async function writeDeepDreamingReport(params: {
   let reportPath: string | undefined;
   if (params.hasContent && shouldWriteSeparate(params.storage)) {
     reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
-    await replaceDreamingMarkdownFile(reportPath, `# Deep Sleep\n\n${body}\n`);
+    await replaceDreamingMarkdownFile(reportPath, `# Deep Sleep\n\n${body}\n`, params.workspaceDir);
   }
   await appendMemoryHostEvent(params.workspaceDir, {
     type: "memory.dream.completed",
