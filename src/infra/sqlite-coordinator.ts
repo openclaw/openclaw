@@ -26,6 +26,19 @@ export const SqliteCoordinatorError = resolveGlobalSingleton(
 );
 export type SqliteCoordinatorError = InstanceType<typeof SqliteCoordinatorError>;
 
+export type SqliteCoordinatorFailureSettlement = {
+  /** Every custody path whose scoped cleanup may retry this acquisition. */
+  paths: readonly string[];
+  settle: () => void;
+};
+
+type SqliteCoordinatorOptions = {
+  busyTimeoutMs?: number;
+  keepAlive?: boolean;
+  /** Called only after a failed acquisition has no remaining native handle. */
+  acquisitionFailure?: SqliteCoordinatorFailureSettlement;
+};
+
 export type SqliteCoordinatorLease = {
   /** This lease has relinquished custody, either to the pool or by native close. */
   readonly closed: boolean;
@@ -133,22 +146,45 @@ const coordinatorPool = resolveGlobalSingleton(
     runInCoordinatorPoolContext: AsyncLocalStorage.snapshot(),
     idleCoordinators: new Map<string, IdleCoordinator>(),
     failedIdleCloses: new Map<DatabaseSync, string>(),
+    failedAcquisitionSettlements: new Map<DatabaseSync, SqliteCoordinatorFailureSettlement>(),
+    noHandleSettlements: new Map<() => void, SqliteCoordinatorFailureSettlement>(),
     exitCloseRegistered: false,
     closeOnExit: closeIdleCoordinatorsOnExit,
   }),
   () => closeIdleCoordinatorPool(),
   "close-only",
 );
-const { runInCoordinatorPoolContext, idleCoordinators, failedIdleCloses } = coordinatorPool;
+const {
+  runInCoordinatorPoolContext,
+  idleCoordinators,
+  failedIdleCloses,
+  failedAcquisitionSettlements,
+  noHandleSettlements,
+} = coordinatorPool;
 
 function updateCoordinatorExitClose() {
-  const needed = idleCoordinators.size > 0 || failedIdleCloses.size > 0;
+  const needed =
+    idleCoordinators.size > 0 || failedIdleCloses.size > 0 || noHandleSettlements.size > 0;
   if (needed && !coordinatorPool.exitCloseRegistered) {
     process.once("exit", coordinatorPool.closeOnExit);
   } else if (!needed && coordinatorPool.exitCloseRegistered) {
     process.removeListener("exit", coordinatorPool.closeOnExit);
   }
   coordinatorPool.exitCloseRegistered = needed;
+}
+
+/** Retain receipt custody when acquisition failed before any native handle opened. */
+export function settleUnopenedSqliteCoordinator(
+  settlement: SqliteCoordinatorFailureSettlement,
+): void {
+  const { settle } = settlement;
+  noHandleSettlements.set(settle, settlement);
+  try {
+    settle();
+    noHandleSettlements.delete(settle);
+  } finally {
+    updateCoordinatorExitClose();
+  }
 }
 
 function takeIdleCoordinator(location: string) {
@@ -166,8 +202,12 @@ function closeIdleCoordinatorDatabase(database: DatabaseSync, location: string) 
     if (database.isOpen) {
       database.close();
     }
+    if (!database.isOpen) {
+      failedAcquisitionSettlements.get(database)?.settle();
+      failedAcquisitionSettlements.delete(database);
+    }
   } finally {
-    if (database.isOpen) {
+    if (database.isOpen || failedAcquisitionSettlements.has(database)) {
       failedIdleCloses.set(database, location);
     } else {
       failedIdleCloses.delete(database);
@@ -177,6 +217,13 @@ function closeIdleCoordinatorDatabase(database: DatabaseSync, location: string) 
 }
 
 function closeIdleCoordinatorsOnExit() {
+  for (const settlement of noHandleSettlements.values()) {
+    try {
+      settleUnopenedSqliteCoordinator(settlement);
+    } catch {
+      // The exact failed publication remains owned until process exit.
+    }
+  }
   const databases = new Map(failedIdleCloses);
   for (const [location] of idleCoordinators) {
     const idle = takeIdleCoordinator(location);
@@ -193,10 +240,17 @@ function closeIdleCoordinatorsOnExit() {
   }
 }
 
-function closeIdleCoordinatorPool(include: (location: string) => boolean = () => true): void {
-  const databases = new Map([...failedIdleCloses].filter(([, location]) => include(location)));
+function closeIdleCoordinatorPool(include?: (location: string) => boolean): void {
+  const databases = new Map(
+    [...failedIdleCloses].filter(
+      ([database, location]) =>
+        !include ||
+        include(location) ||
+        failedAcquisitionSettlements.get(database)?.paths.some(include),
+    ),
+  );
   for (const [location] of idleCoordinators) {
-    if (!include(location)) {
+    if (include && !include(location)) {
       continue;
     }
     const idle = takeIdleCoordinator(location);
@@ -208,6 +262,16 @@ function closeIdleCoordinatorPool(include: (location: string) => boolean = () =>
   for (const [database, location] of databases) {
     try {
       closeIdleCoordinatorDatabase(database, location);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  for (const settlement of noHandleSettlements.values()) {
+    if (include && !settlement.paths.some(include)) {
+      continue;
+    }
+    try {
+      settleUnopenedSqliteCoordinator(settlement);
     } catch (error) {
       errors.push(error);
     }
@@ -274,7 +338,7 @@ function retainIdleCoordinator(location: string, database: DatabaseSync, identit
 function tryAcquireSqliteCoordinator(
   location: string,
   mode: "shared" | "exclusive",
-  options: { busyTimeoutMs?: number; keepAlive?: boolean },
+  options: SqliteCoordinatorOptions,
 ): SqliteCoordinatorLease | null {
   const busyTimeoutMs = Math.max(0, Math.trunc(options.busyTimeoutMs ?? 0));
   const reusableLocation =
@@ -288,12 +352,13 @@ function tryAcquireSqliteCoordinator(
   const before = poolLocation ? readCoordinatorIdentity(poolLocation) : undefined;
   const idle = poolLocation ? takeIdleCoordinator(poolLocation) : undefined;
   const reused = idle && matchesCoordinatorIdentity(idle.identity, before) ? idle : undefined;
-  if (poolLocation && idle && !reused) {
-    closeIdleCoordinatorDatabase(idle.database, poolLocation);
-  }
-  const database = reused?.database ?? withSqliteNativeOpen(() => openNodeSqliteDatabase(location));
+  let database = reused?.database;
   let identity: fs.BigIntStats | undefined;
   try {
+    if (poolLocation && idle && !reused) {
+      closeIdleCoordinatorDatabase(idle.database, poolLocation);
+    }
+    database ??= withSqliteNativeOpen(() => openNodeSqliteDatabase(location));
     // Kysely transaction callbacks cannot own a lock beyond their synchronous commit section.
     // This handle never writes or commits data. Keep the empty database's initial
     // journal in memory so acquiring a lock does not create filesystem artifacts.
@@ -331,10 +396,23 @@ function tryAcquireSqliteCoordinator(
       }
     }
   } catch (error) {
-    if (poolLocation) {
-      closeIdleCoordinatorDatabase(database, poolLocation);
-    } else {
-      database.close();
+    try {
+      if (database) {
+        if (options.acquisitionFailure) {
+          failedAcquisitionSettlements.set(database, options.acquisitionFailure);
+        }
+        // Failed acquisition cannot return a lease. Keep its exact native owner
+        // for closeIdleSqliteCoordinators/exit retry if close or settlement fails.
+        closeIdleCoordinatorDatabase(database, poolLocation ?? reusableLocation ?? location);
+      } else if (options.acquisitionFailure) {
+        settleUnopenedSqliteCoordinator(options.acquisitionFailure);
+      }
+    } catch (cleanupError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "SQLite coordinator acquisition and cleanup both failed",
+        error,
+      );
     }
     if (isSqliteLockError(error)) {
       return null;
@@ -404,7 +482,7 @@ function tryAcquireSqliteCoordinator(
 /** Hold a raw exclusive transaction until release for cross-process coordination. */
 export function tryAcquireExclusiveSqliteCoordinator(
   location: string,
-  options: { busyTimeoutMs?: number; keepAlive?: boolean } = {},
+  options: SqliteCoordinatorOptions = {},
 ): SqliteCoordinatorLease | null {
   return tryAcquireSqliteCoordinator(location, "exclusive", options);
 }
@@ -412,7 +490,7 @@ export function tryAcquireExclusiveSqliteCoordinator(
 /** Retain a read lock for a live handle; no rows or journal files are written. */
 export function tryAcquireSharedSqliteCoordinator(
   location: string,
-  options: { busyTimeoutMs?: number; keepAlive?: boolean } = {},
+  options: SqliteCoordinatorOptions = {},
 ): SqliteCoordinatorLease | null {
   return tryAcquireSqliteCoordinator(location, "shared", options);
 }

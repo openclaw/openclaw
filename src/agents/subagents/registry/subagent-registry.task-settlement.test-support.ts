@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
 import { getTaskFlowByIdForOwner } from "../../../tasks/task-flow-owner-access.js";
 import { readTaskRegistryRevision } from "../../../tasks/task-registry-state.js";
@@ -16,6 +17,7 @@ import { findTaskByRunIdForStatus } from "../../../tasks/task-status-access.js";
 import {
   createSessionEntry,
   createSubagentRunRecord,
+  mockGatewayMethods,
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
@@ -23,18 +25,24 @@ import { observeRootWork } from "./subagent-registry.browser-cleanup.test-suppor
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import { makeRunningTaskParams } from "./subagent-registry.run-fixtures.test-support.js";
 
+type RestoredTaskSettlementTestParams = {
+  getRegistry: () => SubagentRegistryHarness;
+  mocks: Pick<
+    ReturnType<typeof createSubagentRegistryMockState>,
+    | "entries"
+    | "restoreSubagentRunsFromDisk"
+    | "callGateway"
+    | "runSubagentAnnounceFlow"
+    | "dispatchRecoveryAgent"
+  >;
+  hydrateAndActivateRegistry: () => void;
+};
+
 export function registerRestoredTaskSettlementTest({
   getRegistry,
   mocks,
   hydrateAndActivateRegistry,
-}: {
-  getRegistry: () => SubagentRegistryHarness;
-  mocks: Pick<
-    ReturnType<typeof createSubagentRegistryMockState>,
-    "entries" | "restoreSubagentRunsFromDisk" | "callGateway" | "runSubagentAnnounceFlow"
-  >;
-  hydrateAndActivateRegistry: () => void;
-}): void {
+}: RestoredTaskSettlementTestParams): void {
   it("does not replay a failed waiter completion onto a same-run replacement", async () => {
     const mod = getRegistry();
     const runId = "waiter-projection-replaced";
@@ -160,6 +168,87 @@ export function registerRestoredTaskSettlementTest({
       );
       expect(upsertTask).not.toHaveBeenCalled();
       expect(readTaskRegistryRevision()).toBe(taskRevision);
+    } finally {
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+    }
+  });
+}
+
+export function registerRestoredCompletedSessionTest({
+  getRegistry,
+  mocks,
+  hydrateAndActivateRegistry,
+}: RestoredTaskSettlementTestParams): void {
+  it("settles and announces a retired running row whose saved session completed as done", async ({
+    signal,
+  }) => {
+    const mod = getRegistry();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    try {
+      const startedAt = Date.now() - 2_000;
+      const endedAt = Date.now() - 1_000;
+      const runId = "run-restored-completed-session";
+      const childSessionKey = "agent:main:subagent:restored-completed-session";
+      mocks.entries = {
+        [childSessionKey]: createSessionEntry({
+          status: "done",
+          startedAt,
+          endedAt,
+          updatedAt: endedAt,
+          lifecycleRevision: "revision-child",
+          lifecycleRunId: runId,
+          abortedLastRun: false,
+        }),
+      };
+      expect(
+        createRunningTaskRun(
+          makeRunningTaskParams({ runId, childSessionKey, startedAt, task: "saved completion" }),
+        ),
+      ).not.toBeNull();
+      const restored = createSubagentRunRecord({
+        runId,
+        childSessionKey,
+        task: "saved completion",
+        createdAt: startedAt,
+        execution: { status: "running", startedAt, lifecycleGeneration: "retired-generation" },
+      });
+      mocks.restoreSubagentRunsFromDisk.mockImplementation((params) => {
+        params.runs.set(runId, restored);
+        return 1;
+      });
+      mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "timeout" } });
+
+      const announceEntered = createDeferred();
+      mocks.runSubagentAnnounceFlow.mockImplementationOnce(async () => {
+        announceEntered.resolve();
+        return "delivered";
+      });
+      const settleRootWork = observeRootWork();
+      try {
+        hydrateAndActivateRegistry();
+        await racePromiseWithAbortSignal(announceEntered.promise, signal);
+      } finally {
+        // Completion includes native task writes and the announcement cleanup tail.
+        await settleRootWork();
+      }
+
+      expect(
+        mod.listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId),
+      ).toMatchObject({
+        execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
+        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+        delivery: { status: "delivered" },
+      });
+      expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "succeeded", endedAt });
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          childRunId: runId,
+          outcome: expect.objectContaining({ status: "ok" }),
+        }),
+      );
+      expect(mocks.dispatchRecoveryAgent).not.toHaveBeenCalled();
     } finally {
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });

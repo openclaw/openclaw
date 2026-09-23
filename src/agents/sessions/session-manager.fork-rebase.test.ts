@@ -12,6 +12,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { SessionManager, type SessionEntry, type SessionMessageEntry } from "./session-manager.js";
@@ -21,6 +22,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     for (const stateDir of tempDirs.dirs) {
       await cleanupSessionStateForTest({ stateDir });
     }
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );

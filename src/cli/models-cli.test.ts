@@ -730,7 +730,7 @@ describe("models cli", () => {
         runModelsCommand(["models", "--agent", "other-person", "accounts", ...args]),
       ).rejects.toMatchObject({ code: 1 });
       expect(error).toHaveBeenCalledWith(expect.stringContaining("does not support --agent"));
-      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(exit).not.toHaveBeenCalled();
       expect(command).not.toHaveBeenCalled();
     },
   );

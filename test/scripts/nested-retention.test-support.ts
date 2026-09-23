@@ -173,6 +173,7 @@ export default {
   const { child, completion } = spawnOwnedVitestProcess({
     command: process.execPath,
     args,
+    nodeEntryIndex: 0,
     options: {
       cwd: root,
       env: {

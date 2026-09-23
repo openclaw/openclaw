@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { initializePublishedConfigRuntimeEnv } from "../config/config-env-vars.js";
 import * as configIO from "../config/io.factory.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
@@ -17,6 +18,10 @@ import {
 } from "./registry-refresh.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
+
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 const runtimeCache = vi.hoisted(() => ({ clear: vi.fn() }));
 vi.mock("./loader.js", () => ({ clearPluginRegistryLoadCache: runtimeCache.clear }));

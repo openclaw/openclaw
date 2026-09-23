@@ -4,7 +4,7 @@ import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
 import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
@@ -15,6 +15,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
 } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { createOpenClawReadTool } from "../agent-tools.read.js";
 import { createExecTool } from "../bash-tools.exec-run.js";
@@ -37,6 +38,10 @@ import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createReadTool } from "./tools/read.js";
+
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 registerAgentSessionLoopTestLifecycle();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>

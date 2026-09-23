@@ -90,7 +90,7 @@ export function acquireDeviceIdentityCoordinator(params: DeviceIdentityCoordinat
   }
   const stateCoordinatorPath = resolveStateDatabaseCoordinatorPath({
     databasePath: params.databasePath,
-    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(params.databasePath),
     uid: typeof process.getuid === "function" ? process.getuid() : undefined,
   });
   const coordinators: Array<{ release: () => void }> = [];

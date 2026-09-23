@@ -81,6 +81,13 @@ export function createPreparedVitestCliFixture(
           path.join(root, source),
         );
       }
+      // Native helpers and copied wrappers must publish the same context identity.
+      // This entry is selected by URL, so static import-closure collection omits it.
+      const resourcePreload = "src/infra/vitest-resource-context-preload.test-support.mjs";
+      fs.writeFileSync(
+        path.join(root, resourcePreload),
+        `import ${JSON.stringify(pathToFileURL(path.join(repoRoot, resourcePreload)).href)};\n`,
+      );
       if (compiler) {
         redirect = path.join(root, "prepared-compiler.mjs");
         fs.writeFileSync(

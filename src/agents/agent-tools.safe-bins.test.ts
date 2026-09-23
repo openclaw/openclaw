@@ -6,10 +6,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 
@@ -91,6 +92,10 @@ beforeAll(async () => {
 
 beforeEach(() => {
   supervisorSpawnMock.mockClear();
+});
+
+afterAll(async () => {
+  await closeStateDatabaseForTest();
 });
 
 vi.mock("../infra/shell-env.js", async () => {

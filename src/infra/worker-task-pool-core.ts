@@ -7,6 +7,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
+import { captureResourceOwnedNativeWorkerExit } from "./vitest-resource-ownership.js";
 import { createCpuTrackedWorker, markWorkerRetirement } from "./worker-cpu.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
@@ -416,6 +417,7 @@ class WorkerTaskPoolCore<Input, Output> {
       this.workers--;
       this.fail(slot, new WorkerTaskError(`worker exited with code ${code}`, "unavailable"));
     });
+    slot.settleNativeExit = captureResourceOwnedNativeWorkerExit(worker);
     return worker;
   }
 

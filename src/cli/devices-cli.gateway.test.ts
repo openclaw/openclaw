@@ -15,7 +15,10 @@ import {
 } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { registerDevicesCli } from "./devices-cli.js";
 
@@ -79,7 +82,8 @@ beforeEach(async () => {
   baseDir = await roots.make();
   vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
 });
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });

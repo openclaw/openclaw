@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
@@ -23,7 +23,6 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -34,7 +33,10 @@ import {
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
-import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
+import {
+  cleanupMediaPersistenceFixtures,
+  createLegacyDatabaseFixture,
+} from "./state-migrations.media-persistence.test-support.js";
 import { createLegacyStateMigrationStepReceipt } from "./state-migrations.messages.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 
@@ -63,11 +65,7 @@ function readUserVersion(databasePath: string): number {
   }
 }
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  cleanupTempDirs(tempDirs);
-});
+afterEach(() => cleanupMediaPersistenceFixtures(tempDirs));
 
 describe("media persistence migration targets", () => {
   it.each(

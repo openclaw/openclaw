@@ -240,12 +240,16 @@ export function assertSqliteWorkerActorReusable(
   moduleUrl: string,
   inputHash: string,
   stateContext: SqliteWorkerStateContext | undefined,
+  runtimeGeneration: Actor["runtimeGeneration"],
 ): void {
   if (actor.slot.failed) {
     throw actor.slot.failed;
   }
   if (actor.moduleUrl !== moduleUrl || actor.inputHash !== inputHash) {
     throw new Error("SQLite database already belongs to another worker backend");
+  }
+  if (actor.runtimeGeneration !== runtimeGeneration) {
+    throw new Error("SQLite worker runtime generation changed; close its actor first");
   }
   if (actor.stateContext?.existingSchemaPath !== stateContext?.existingSchemaPath) {
     throw new Error("Shared-state worker schema policy changed; close its actor first");

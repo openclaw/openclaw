@@ -66,6 +66,7 @@ export function waitForFile(file) {
   for (const file of [
     "scripts/lib/process-memory.mts",
     "packages/normalization-core/src/mountinfo-path.ts",
+    "src/infra/vitest-resource-ownership.ts",
   ]) {
     write(file, fs.readFileSync(path.resolve(file), "utf8"));
   }

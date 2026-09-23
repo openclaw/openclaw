@@ -816,6 +816,11 @@ export function spawnWatchedVitestProcess({
   let timeoutCompletion: Promise<boolean> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
   const testCommand = directNodeArgs ? resolveVitestTestCommand(directNodeArgs, env) : undefined;
+  const nodeEntryIndex = testCommand?.args.findIndex(
+    (arg, index) =>
+      path.basename(arg) === "vitest.mjs" ||
+      (index === 0 && ["-e", "--eval", "-p", "--print", "-", "--"].includes(arg)),
+  );
   if (workerRun && testCommand) {
     // Give either runtime the same owned compiled-subprocess generation.
     const cliIndex = testCommand.args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
@@ -846,7 +851,7 @@ export function spawnWatchedVitestProcess({
     : spawnParams;
   const { child, completion: childCompletion } = spawnOwnedVitestProcess({
     ...(testCommand
-      ? { ...testCommand, options: childSpawnParams }
+      ? { ...testCommand, nodeEntryIndex, options: childSpawnParams }
       : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams })),
     homeMode,
   });

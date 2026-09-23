@@ -870,6 +870,7 @@ describe("openclaw test instance", () => {
           const { child, completion } = spawnOwnedVitestProcess({
             command: process.execPath,
             args: ${JSON.stringify(args)},
+            nodeEntryIndex: 4,
             options: { cwd: process.cwd(), stdio: "inherit" },
             homeMode: "tooling",
           });

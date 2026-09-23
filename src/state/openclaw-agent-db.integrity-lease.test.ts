@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { captureResourceOwnedNativeProcessExit } from "../infra/vitest-resource-ownership.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
@@ -26,16 +27,17 @@ import {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const children = new Set<ChildProcess>();
+const children = new Map<ChildProcess, (() => Promise<void>) | undefined>();
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(
-    [...children].map(async (child) => {
+    [...children].map(async ([child, settleNativeExit]) => {
       if (child.exitCode === null && child.signalCode === null) {
         const exited = once(child, "exit");
         child.kill("SIGKILL");
         await exited;
       }
+      await settleNativeExit?.();
     }),
   );
   children.clear();
@@ -49,7 +51,7 @@ async function openChild(pathname: string, env: NodeJS.ProcessEnv) {
     ["integrity-lease", pathname],
     { execArgv: ["--import", "tsx"], env: { ...process.env, ...env }, silent: true },
   );
-  children.add(child);
+  children.set(child, captureResourceOwnedNativeProcessExit(child));
   let stderr = "";
   child.stderr?.on("data", (chunk) => {
     stderr += String(chunk);

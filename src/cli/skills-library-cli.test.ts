@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillsLibraryReadResult } from "../../packages/gateway-protocol/src/index.js";
+import { runWithMockedCliExit } from "../test-utils/command-runner.js";
 import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -64,7 +65,10 @@ function cli() {
   return program;
 }
 async function parse(args: string[]) {
-  await cli().parseAsync(["skills", "library", ...args], { from: "user" });
+  await runWithMockedCliExit(
+    () => cli().parseAsync(["skills", "library", ...args], { from: "user" }),
+    mocks.exit,
+  );
 }
 
 beforeEach(async () => {

@@ -17,12 +17,13 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import {
   deliveryContextFromSession,
@@ -46,9 +47,13 @@ describe("outbound session persistence", () => {
     storePath = path.join(tempDirs.make("openclaw-outbound-session-"), "sessions.json");
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    closeOpenClawAgentDatabasesForTest();
+  afterEach(async () => {
+    try {
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it.each([" External ", "internal"])(

@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -42,6 +43,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await databases.closeOpenClawAgentDatabasesAsync();
     databases.closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );

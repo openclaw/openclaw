@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createExecTool } from "../agents/bash-tools.js";
 import { resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
@@ -23,9 +24,13 @@ const envSnapshot = captureEnv([
   "TSX_DISABLE_CACHE",
 ]);
 
-afterEach(() => {
+afterEach(async () => {
   clearGatewayAgentCliShim();
-  envSnapshot.restore();
+  try {
+    await closeOpenClawStateDatabaseAsync();
+  } finally {
+    envSnapshot.restore();
+  }
 });
 
 function readExecText(result: Awaited<ReturnType<ReturnType<typeof createExecTool>["execute"]>>) {

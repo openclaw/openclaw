@@ -113,6 +113,8 @@ export type Task<Input, Output> = Deferred<Output> & {
 export type Slot<Input, Output> = {
   nativeSections: WorkerNativeSectionState;
   worker?: Worker;
+  /** Retryable receipt for this exact Worker, captured before it can exit. */
+  settleNativeExit?: () => Promise<void>;
   releaseResources?: () => Promise<void>;
   task?: Task<Input, Output>;
   idleTimer?: NodeJS.Timeout;

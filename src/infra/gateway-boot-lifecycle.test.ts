@@ -1,13 +1,17 @@
 // Gateway boot lifecycle tests cover restart-loop breaker accounting.
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
@@ -76,6 +80,102 @@ function insertBootRows(
 }
 
 describe("gateway crash-loop breaker", () => {
+  it.each(["live owner", "after shutdown", "rejected write"] as const)(
+    "settles boot-completion storage without taking another owner's handle: %s",
+    (mode) => {
+      const lifecycle = createLifecycleDb();
+      const bootId = recordGatewayBootStart(lifecycle.env, 1_000);
+      if (!bootId) {
+        throw new Error("Boot fixture could not be recorded");
+      }
+      if (mode === "rejected write") {
+        lifecycle.db.exec(`
+          CREATE TRIGGER reject_boot_completion BEFORE UPDATE ON gateway_boot_lifecycle
+          BEGIN SELECT RAISE(ABORT, 'controlled boot write refusal'); END;
+        `);
+      }
+      if (mode !== "live owner") {
+        closeOpenClawStateDatabaseForTest();
+      }
+      const pathname = resolveOpenClawStateSqlitePath(lifecycle.env);
+      completeGatewayBootLifecycle(
+        bootId,
+        { outcome: "clean_stop", reason: "stop (SIGTERM)" },
+        lifecycle.env,
+        2_000,
+      );
+      expect(isOpenClawStateDatabaseOpen(pathname)).toBe(mode === "live owner");
+      expect(lifecycle.db.isOpen).toBe(mode === "live owner");
+      const persisted = new DatabaseSync(pathname, { readOnly: true });
+      try {
+        expect(
+          persisted
+            .prepare(
+              "SELECT completed_at_ms, outcome FROM gateway_boot_lifecycle WHERE boot_id = ?",
+            )
+            .get(bootId),
+        ).toEqual({
+          completed_at_ms: mode === "rejected write" ? null : 2_000,
+          outcome: mode === "rejected write" ? null : "clean_stop",
+        });
+      } finally {
+        persisted.close();
+      }
+    },
+  );
+
+  it("keeps completion fail-open and retries retained native cleanup", () => {
+    const lifecycle = createLifecycleDb();
+    const bootId = recordGatewayBootStart(lifecycle.env, 1_000);
+    expect(bootId).toBeDefined();
+    const pathname = resolveOpenClawStateSqlitePath(lifecycle.env);
+    closeOpenClawStateDatabaseForTest();
+    const warn = vi.fn();
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
+    loggingState.rawConsole = { log: warn, info: warn, warn, error: warn };
+    const originalClose: unknown = Object.getOwnPropertyDescriptor(
+      DatabaseSync.prototype,
+      "close",
+    )?.value;
+    if (typeof originalClose !== "function") {
+      throw new Error("Missing native SQLite close implementation");
+    }
+    let retainedIsOpen: (() => boolean) | undefined;
+    const close = vi
+      .spyOn(DatabaseSync.prototype, "close")
+      .mockImplementation(function (this: DatabaseSync) {
+        if (
+          !retainedIsOpen &&
+          isOpenClawStateDatabaseOpen(pathname) &&
+          this.location() === pathname
+        ) {
+          retainedIsOpen = () => this.isOpen;
+          throw new Error("controlled native boot close failure");
+        }
+        return Reflect.apply(originalClose, this, []);
+      });
+    try {
+      expect(() =>
+        completeGatewayBootLifecycle(
+          bootId,
+          { outcome: "clean_stop", reason: "stop (SIGTERM)" },
+          lifecycle.env,
+          2_000,
+        ),
+      ).not.toThrow();
+      expect(retainedIsOpen?.()).toBe(true);
+      const warnings = warn.mock.calls.flat().join("\n");
+      expect(warnings).toContain("failed to retire gateway boot outcome storage; fail-open");
+      expect(warnings).not.toContain("failed to persist gateway boot outcome");
+      close.mockRestore();
+      expect(closeOpenClawStateDatabaseByPath(pathname)).toBe(true);
+      expect(retainedIsOpen?.()).toBe(false);
+    } finally {
+      close.mockRestore();
+      closeOpenClawStateDatabaseByPath(pathname);
+    }
+  });
+
   it("projects replacement history only while it is the latest shutdown", () => {
     const lifecycle = createLifecycleDb();
     expect(readGatewayLastInstallationReplacement(lifecycle.env)).toBeUndefined();

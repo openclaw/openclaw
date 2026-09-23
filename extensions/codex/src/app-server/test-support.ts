@@ -275,6 +275,18 @@ export function createClientHarness(
   };
 }
 
+// Capture reads runtime files before startup; respond when initialize reaches the wire.
+export function createInitializingClientHarness(userAgent: string) {
+  return createClientHarness({
+    onWrite: (line, send) => {
+      const request = JSON.parse(line) as { id: number; method: string };
+      if (request.method === "initialize") {
+        send({ id: request.id, result: { userAgent } });
+      }
+    },
+  });
+}
+
 /** Stock read-only replies from an authenticated managed native app-server. */
 export function createCodexInferenceReadResponses() {
   return {

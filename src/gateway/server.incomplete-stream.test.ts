@@ -8,6 +8,7 @@ import {
 } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import { stateDirGatewayFixtureEntrypoint } from "../cli/cli-entrypoint.test-support.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 
@@ -167,6 +168,7 @@ it(
         });
         await gateway.startGateway();
         client = await connectGatewayClient({
+          deviceIdentity: loadOrCreateDeviceIdentity({ identityKey: "stream-completion-client" }),
           url: gateway.url,
           token: gateway.gatewayToken,
           signal,

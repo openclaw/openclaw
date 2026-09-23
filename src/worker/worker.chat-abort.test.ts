@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerInferenceTerminalOutcome } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -29,6 +29,8 @@ import {
   getActiveAgentRunDelegatedAuthority,
   getAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
   ComposedGatewayHarness,
@@ -39,7 +41,7 @@ import {
   doneOutcome,
 } from "./worker-fault-injection.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 describe("worker chat.abort settlement", () => {
   let harness: ComposedGatewayHarness;
@@ -51,6 +53,9 @@ describe("worker chat.abort settlement", () => {
 
   afterEach(async () => {
     await harness.close();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    tempDirs.cleanup();
   });
 
   it.each([

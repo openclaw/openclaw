@@ -8,11 +8,13 @@ import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listOpenClawRegisteredAgentDatabases } from "../src/state/openclaw-agent-db-registry-listing.js";
+import { openOpenClawAgentDatabase } from "../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { captureFullEnv, setTestEnvValue, withPathResolutionEnv } from "../src/test-utils/env.js";
+import { cleanupExtensionTestHome } from "./extension-database-test-lifecycle.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
 
@@ -50,6 +52,42 @@ afterEach(() => {
 });
 
 describe("test environment SQLite lifetime", () => {
+  it.each([false, true])(
+    "closes native agent leases before removing an extension home (close refused: %s)",
+    async (refuseClose) => {
+      const testEnv = installTestEnv({ mode: "hermetic" });
+      const agent = openOpenClawAgentDatabase({ agentId: "fixture" });
+      const shared = openOpenClawStateDatabase();
+      const leases = () => shared.db.prepare("SELECT lease_id FROM agent_database_leases").all();
+      expect(agent.db.isOpen).toBe(true);
+      expect(leases()).toHaveLength(1);
+      const refusal = new Error("native agent close refused");
+      const close = refuseClose
+        ? vi.spyOn(agent.db, "close").mockImplementation(() => {
+            throw refusal;
+          })
+        : undefined;
+      try {
+        if (refuseClose) {
+          await expect(cleanupExtensionTestHome(testEnv.cleanup)).rejects.toBe(refusal);
+          expect(agent.db.isOpen).toBe(true);
+          expect(shared.db.isOpen).toBe(true);
+          expect(leases()).toHaveLength(1);
+          expect(fs.existsSync(testEnv.tempHome)).toBe(true);
+          close?.mockRestore();
+        }
+        await cleanupExtensionTestHome(testEnv.cleanup);
+        expect(agent.db.isOpen).toBe(false);
+        expect(shared.db.isOpen).toBe(false);
+        expect(fs.existsSync(testEnv.tempHome)).toBe(false);
+      } finally {
+        close?.mockRestore();
+        // The failed-close case retains exact custody until supported cleanup succeeds.
+        await cleanupExtensionTestHome(testEnv.cleanup);
+      }
+    },
+  );
+
   it("does not reuse a legacy database in a recycled PID namespace", () => {
     // Reproduce the old namespace only beneath a directory this test created.
     const legacyPath = path.join(

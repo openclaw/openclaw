@@ -22,6 +22,7 @@ import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-com
 import { routeLogsToStderr } from "../logging/console.js";
 import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveEnvironmentValue } from "./process-env.js";
@@ -402,7 +403,11 @@ void (async () => {
   try {
     await finalizeMigratedUpdate();
   } finally {
-    await closeOpenClawStateDatabaseAsync();
+    try {
+      await closeOpenClawAgentDatabasesAsync();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
   }
 })().catch((error: unknown) => {
   process.stderr.write(`${formatUpdateFinalizationError(error)}\n`);

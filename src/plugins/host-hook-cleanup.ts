@@ -40,7 +40,7 @@ function shouldCleanPlugin(pluginId: string, filterPluginId?: string): boolean {
 }
 
 async function clearPluginSessionStores(params: {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   mode: "plugin-owned-state" | "promoted-slots";
   pluginId?: string;
   sessionKey?: string;
@@ -59,7 +59,7 @@ async function clearPluginSessionStores(params: {
   const storeTargets =
     params.storeTargets ??
     params.resolveStoreTargets?.() ??
-    resolveAllAgentSessionStoreTargetsSync(params.cfg);
+    resolveAllAgentSessionStoreTargetsSync(params.cfg ?? getRuntimeConfig());
   let cleared = 0;
   for (const target of storeTargets) {
     if (params.shouldCleanup && !params.shouldCleanup()) {
@@ -155,7 +155,7 @@ export async function runPluginHostCleanup(params: {
     if (!params.skipPersistentSessionState && shouldCleanup()) {
       try {
         cleanupCount = await clearPluginSessionStores({
-          cfg: params.cfg ?? getRuntimeConfig(),
+          cfg: params.cfg,
           mode: params.reason === "restart" ? "promoted-slots" : "plugin-owned-state",
           pluginId: params.pluginId,
           sessionKey: params.sessionKey,

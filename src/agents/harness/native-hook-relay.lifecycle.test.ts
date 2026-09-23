@@ -1,5 +1,5 @@
 import { Agent, Server, request } from "node:http";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
 import * as mutableFileBinding from "../../infra/system-run-approval-binding.js";
 import {
   initializeGlobalHookRunner,
@@ -7,6 +7,7 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import * as relayBridge from "./native-hook-relay-bridge.js";
@@ -22,6 +23,8 @@ import {
   resolveNativeHookRelayDeferredToolApproval,
   testing,
 } from "./native-hook-relay.js";
+
+afterAll(() => closeOpenClawStateDatabaseAsync());
 
 afterEach(async () => {
   await testing.clearNativeHookRelaysForTests();
@@ -715,9 +718,7 @@ it("binds direct bridge tokens to the relay they were issued for", async () => {
     try {
       await Promise.all([first.ready, second.ready]);
       const firstRecord = await store.readNativeHookRelayBridgeRecord({ relayId: first.relayId });
-      if (!firstRecord) {
-        throw new Error("test bridge registration unavailable");
-      }
+      assert(firstRecord, "test bridge registration unavailable");
       await store.writeNativeHookRelayBridgeRecord({
         record: { ...firstRecord, relayId: second.relayId, expiresAtMs: Date.now() + 10_000 },
       });

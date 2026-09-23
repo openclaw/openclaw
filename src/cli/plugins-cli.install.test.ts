@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { hashConfigIncludeRaw } from "../config/includes.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -20,6 +20,7 @@ import {
 } from "../plugins/official-external-plugin-catalog.js";
 import * as slotSelection from "../plugins/slot-selection.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
@@ -51,6 +52,10 @@ import {
   configWriteMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
+import {
+  createEnabledPluginConfig,
+  createEmptyPluginConfig,
+} from "./plugins-cli.install-fixtures.test-support.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
@@ -116,26 +121,6 @@ function cliInstallPath(pluginId: string): string {
 function useProfileExtensionsDir(): string {
   process.env.OPENCLAW_STATE_DIR = PROFILE_STATE_ROOT;
   return path.resolve(PROFILE_STATE_ROOT, "extensions");
-}
-
-function createEnabledPluginConfig(pluginId: string): OpenClawConfig {
-  return {
-    plugins: {
-      entries: {
-        [pluginId]: {
-          enabled: true,
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
-function createEmptyPluginConfig(): OpenClawConfig {
-  return {
-    plugins: {
-      entries: {},
-    },
-  } as OpenClawConfig;
 }
 
 function createClawHubInstallResult(params: {
@@ -607,6 +592,9 @@ function primeBlockedHookConfigMutation(config = {} as OpenClawConfig): void {
 }
 
 describe("plugins cli install", () => {
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+  });
   beforeEach(() => {
     resetPluginsCliTestState();
     resolveNpmSpecMetadataMock.mockReset().mockImplementation(async ({ spec }) => {

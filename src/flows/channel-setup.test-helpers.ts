@@ -256,3 +256,22 @@ export function createChannelSetupMocks() {
     factories,
   };
 }
+
+export const DEFERRED_CHANNEL_SETUP_OPTIONS = {
+  deferStatusUntilSelection: true,
+  skipConfirm: true,
+  skipDmPolicyPrompt: true,
+} satisfies NonNullable<Parameters<typeof import("./channel-setup.js").setupChannels>[3]>;
+
+export const QUICKSTART_CHANNEL_SETUP_OPTIONS = {
+  quickstartDefaults: true,
+  skipConfirm: true,
+  skipDmPolicyPrompt: true,
+} satisfies NonNullable<Parameters<typeof import("./channel-setup.js").setupChannels>[3]>;
+
+export const TARGETED_CHANNEL_SETUP_OPTIONS = {
+  initialSelection: ["external-chat"],
+  finishAfterInitialSelection: true,
+  deferStatusUntilSelection: true,
+  skipDmPolicyPrompt: true,
+} satisfies NonNullable<Parameters<typeof import("./channel-setup.js").setupChannels>[3]>;

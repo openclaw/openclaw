@@ -2,7 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import ts from "typescript";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clearCronJobActive, markCronJobActive } from "../../cron/active-jobs.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
@@ -10,6 +10,7 @@ import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { compactCronListJob } from "../../gateway/server-methods/cron-list-projection.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import {
   createCodeModeHarness,
@@ -19,6 +20,10 @@ import {
   waitUntilCompleted,
 } from "../code-mode.test-support.js";
 import { createCronTool } from "./cron-tool.js";
+
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 const job: CronJob = {
   id: "invoice-check",

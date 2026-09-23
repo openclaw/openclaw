@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import { defaultRuntime } from "../runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { registerConfigCli } from "./config-cli.js";
 
@@ -49,10 +50,11 @@ export function useConfigCliIntegrationHarness() {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const registeredRuntimeLogs: string[] = [];
   const registeredRuntimeErrors: string[] = [];
-  afterEach(() => {
+  afterEach(async () => {
     registeredRuntimeLogs.length = 0;
     registeredRuntimeErrors.length = 0;
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   async function runRegisteredConfigCommand(args: string[]): Promise<void> {

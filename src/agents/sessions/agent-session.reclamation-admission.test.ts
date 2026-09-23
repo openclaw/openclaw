@@ -21,6 +21,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
@@ -83,6 +84,7 @@ describe("agent session persistence during reclamation", () => {
     checkpoint.startForeground = undefined;
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   registerAgentSessionLoopTestLifecycle();

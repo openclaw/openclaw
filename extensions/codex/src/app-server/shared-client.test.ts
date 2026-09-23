@@ -16,7 +16,7 @@ import { withCodexAppServerJsonClient } from "./request.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./shared-client-lifecycle.js";
 import { registerSharedClientLifetimeTests } from "./shared-client-lifetime.test-support.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, createInitializingClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const mocks = vi.hoisted(() => ({
@@ -142,14 +142,7 @@ let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js")
 let withLeasedCodexAppServerClientStartSelectionRetry: typeof import("./shared-client.js").withLeasedCodexAppServerClientStartSelectionRetry;
 
 function createAutoInitializingClientHarness() {
-  return createClientHarness({
-    onWrite(line, send) {
-      const request = JSON.parse(line) as { id: number; method: string };
-      if (request.method === "initialize") {
-        send({ id: request.id, result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` } });
-      }
-    },
-  });
+  return createInitializingClientHarness(`codex-cli/${CODEX_APP_SERVER_VERSION}`);
 }
 
 async function sendInitializeResult(
@@ -159,18 +152,6 @@ async function sendInitializeResult(
   const initialize = JSON.parse(await harness.waitForWrite(0)) as { id: number; method: string };
   expect(initialize.method).toBe("initialize");
   harness.send({ id: initialize.id, result: { userAgent } });
-}
-
-// Capture reads runtime files before startup; respond when initialize reaches the wire.
-function createInitializingClientHarness(userAgent: string) {
-  return createClientHarness({
-    onWrite: (line, send) => {
-      const request = JSON.parse(line) as { id: number; method: string };
-      if (request.method === "initialize") {
-        send({ id: request.id, result: { userAgent } });
-      }
-    },
-  });
 }
 
 async function sendEmptyModelList(harness: ReturnType<typeof createClientHarness>): Promise<void> {
@@ -896,6 +877,8 @@ describe("shared Codex app-server client", () => {
         commandSource: "config",
         args: ["app-server"],
         headers: {},
+        // These in-memory transports have no Node startup hooks to attest.
+        env: { NODE_OPTIONS: "" },
       };
 
       try {
@@ -950,6 +933,7 @@ describe("shared Codex app-server client", () => {
         commandSource: "managed",
         args: ["app-server"],
         headers: {},
+        env: { NODE_OPTIONS: "" },
       };
 
       try {

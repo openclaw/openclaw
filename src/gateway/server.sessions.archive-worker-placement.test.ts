@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -109,9 +110,9 @@ function placementReader(current: () => WorkerSessionPlacementRecord | undefined
   };
 }
 
-test.each([false, true])(
+test.for([false, true])(
   "sessions.patch archives past queued maintenance and explains concurrent requests (cleanup fails=%s)",
-  async (cleanupFails) => {
+  async (cleanupFails, { signal }) => {
     const { dir, storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:archive-already-stopping";
     const sessionId = "session-archive-already-stopping";
@@ -175,31 +176,40 @@ test.each([false, true])(
       sessionId: "unrelated-session",
       sessionKey: "agent:main:unrelated-session",
     });
-    await dispatchEntered.promise;
-    const sweep = coordinated.reconcile();
+    let sweep: ReturnType<typeof coordinated.reconcile> | undefined;
+    const requests: ReturnType<typeof directSessionReq>[] = [];
+    const failures: unknown[] = [];
     const context = {
       workerEnvironmentService: environments,
       workerSessionPlacementService: placementReader(() => placement),
       workerPlacementDispatchService: coordinated,
     };
-    const archive = () =>
-      directSessionReq(
+    const archive = () => {
+      const request = directSessionReq(
         "sessions.patch",
         { key: sessionKey, archived: true, expectedSessionId: sessionId },
         { context },
       );
-    const first = archive();
+      requests.push(request);
+      return request;
+    };
     try {
-      await Promise.race([
-        reclaimStarted.promise,
-        first.then((result) => {
-          expect(result).toMatchObject({ ok: true });
-          throw new Error("archive completed before worker cleanup");
-        }),
-      ]);
+      await racePromiseWithAbortSignal(dispatchEntered.promise, signal);
+      sweep = coordinated.reconcile();
+      const first = archive();
+      await racePromiseWithAbortSignal(
+        Promise.race([
+          reclaimStarted.promise,
+          first.then((result) => {
+            expect(result).toMatchObject({ ok: true });
+            throw new Error("archive completed before worker cleanup");
+          }),
+        ]),
+        signal,
+      );
       expect(reclaim).toHaveBeenCalledOnce();
       for (let attempt = 0; attempt < 2; attempt++) {
-        const duplicate = await archive();
+        const duplicate = await racePromiseWithAbortSignal(archive(), signal);
         expect(duplicate).toMatchObject({
           ok: false,
           error: {
@@ -212,25 +222,39 @@ test.each([false, true])(
         expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
       }
       releaseReclaim.resolve();
-      expect(await first).toMatchObject({ ok: !cleanupFails });
+      expect(await racePromiseWithAbortSignal(first, signal)).toMatchObject({ ok: !cleanupFails });
       if (cleanupFails) {
-        expect(await archive()).toMatchObject({ ok: true });
+        expect(await racePromiseWithAbortSignal(archive(), signal)).toMatchObject({ ok: true });
         expect(reclaim).toHaveBeenCalledTimes(2);
       }
       expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
       expect(reconcile).not.toHaveBeenCalled();
+    } catch (error) {
+      failures.push(error);
     } finally {
       releaseReclaim.resolve();
       releaseDispatch.resolve();
-      await Promise.all([first, dispatch, sweep]);
-      await environments.stop();
+      const settled = await Promise.allSettled([...requests, dispatch, sweep]);
+      for (const result of settled) {
+        if (result.status === "rejected") {
+          failures.push(result.reason);
+        }
+      }
+      try {
+        await environments.stop();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Archive fixture or cleanup failed");
     }
   },
 );
 
-test.each([false, true])(
+test.for([false, true])(
   "sessions.patch waits for orphaned provisioning cleanup (failure=%s)",
-  async (destroyFails) => {
+  async (destroyFails, { signal }) => {
     const { dir, storePath } = await createSessionStoreDir();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: dir } });
     const placements = createWorkerSessionPlacementStore({ database });
@@ -270,13 +294,16 @@ test.each([false, true])(
       },
     );
     try {
-      await Promise.race([
-        destroying.promise,
-        archive.then((result) => {
-          expect(result).toMatchObject({ ok: true });
-          throw new Error("archive completed before worker destruction");
-        }),
-      ]);
+      await racePromiseWithAbortSignal(
+        Promise.race([
+          destroying.promise,
+          archive.then((result) => {
+            expect(result).toMatchObject({ ok: true });
+            throw new Error("archive completed before worker destruction");
+          }),
+        ]),
+        signal,
+      );
       expect(
         loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt,
       ).toBeUndefined();
@@ -339,13 +366,17 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
   };
   pendingArchiveCleanups.add(cleanup);
   try {
-    await Promise.race([
-      reclaimStarted.promise,
-      archive.then((result) => {
-        throw new Error(`Archive settled before reclaim: ${result.error?.message ?? "no reclaim"}`);
-      }),
-    ]);
-    signal.throwIfAborted();
+    await racePromiseWithAbortSignal(
+      Promise.race([
+        reclaimStarted.promise,
+        archive.then((result) => {
+          throw new Error(
+            `Archive settled before reclaim: ${result.error?.message ?? "no reclaim"}`,
+          );
+        }),
+      ]),
+      signal,
+    );
     expect(reclaim).toHaveBeenCalledOnce();
     expect(reclaim).toHaveBeenCalledWith(
       { sessionId, sessionKey, agentId: "main" },
@@ -409,14 +440,15 @@ test("sessions.patch rejects a mismatched reclaimed identity without archiving",
   const sessionKey = "agent:main:archive-cloud-identity";
   const sessionId = "session-archive-cloud-identity";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-  const reclaim = vi.fn(async () =>
-    workerPlacement({
+  let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
+  const reclaim = vi.fn(async () => {
+    placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
+    return workerPlacement({
       sessionId,
       sessionKey: "agent:main:wrong-session",
       state: "reclaimed",
-    }),
-  );
+    });
+  });
 
   const archived = await directSessionReq(
     "sessions.patch",
@@ -499,15 +531,17 @@ test.for(["active", "failed"] as const)(
     };
     pendingArchiveCleanups.add(cleanup);
     try {
-      await Promise.race([
-        drainEntered.promise,
-        archive.then((result) => {
-          throw new Error(
-            `Archive settled before its runtime drain: ${result.error?.message ?? "no drain"}`,
-          );
-        }),
-      ]);
-      signal.throwIfAborted();
+      await racePromiseWithAbortSignal(
+        Promise.race([
+          drainEntered.promise,
+          archive.then((result) => {
+            throw new Error(
+              `Archive settled before its runtime drain: ${result.error?.message ?? "no drain"}`,
+            );
+          }),
+        ]),
+        signal,
+      );
       expect(drainStarted).toHaveBeenCalledOnce();
       placement = workerPlacement({
         sessionId,

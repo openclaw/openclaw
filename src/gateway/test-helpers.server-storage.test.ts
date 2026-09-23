@@ -19,6 +19,7 @@ import {
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
+  retainOpenClawStateDatabaseForIndependentRead,
 } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -45,6 +46,39 @@ afterAll(async () => {
   }
 });
 installGatewayTestHooks();
+
+test("retires asynchronous shared-state borrowers before resetting the task registry", () => {
+  const database = openOpenClawStateDatabase();
+  const identity = captureOpenClawStateDatabaseReadAdmission(database.path).identity;
+  const reference = retainOpenClawStateDatabaseForIndependentRead(database.path);
+  if (!reference) {
+    throw new Error("Expected a real canonical SQLite read reference");
+  }
+  let retired = false;
+  const unregister = registerOpenClawStateDatabaseAsyncResource({
+    close: async (closedIdentity) => {
+      if (closedIdentity?.key !== identity.key) {
+        return;
+      }
+      expect(database.db.isOpen).toBe(true);
+      expect(fs.existsSync(database.path)).toBe(true);
+      await Promise.resolve();
+      reference.release();
+      retired = true;
+    },
+  });
+  onTestFinished(async () => {
+    try {
+      expect(retired).toBe(true);
+      expect(database.db.isOpen).toBe(false);
+      expect(fs.existsSync(database.path)).toBe(false);
+    } finally {
+      reference.release();
+      unregister();
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
+    }
+  });
+});
 
 test("joins a direct history projection's accepted read before retiring the Gateway home", async () => {
   const scope = { agentId: "main", sessionKey: "agent:main:fixture-history" };

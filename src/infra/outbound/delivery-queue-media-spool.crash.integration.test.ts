@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
+import { captureResourceOwnedNativeProcessExit } from "../vitest-resource-ownership.js";
 import {
   collectEntrySpoolPaths,
   pruneOrphanedDeliveryQueueMedia,
@@ -38,14 +39,20 @@ async function enqueueThenKillChild(source: string): Promise<ChildResult> {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     },
   );
+  let settleNativeExit: ReturnType<typeof captureResourceOwnedNativeProcessExit> = undefined;
   const closed = new Promise<void>((resolve) => {
     spawned.once("close", () => resolve());
   });
   const stop = async () => {
     spawned.kill("SIGKILL");
     await closed;
+    await settleNativeExit?.();
   };
   stopChild = stop;
+  settleNativeExit =
+    spawned.pid === undefined
+      ? undefined
+      : captureResourceOwnedNativeProcessExit(spawned, { includeWorkerThreads: true });
   const result = await new Promise<ChildResult>((resolve, reject) => {
     let stdout = "";
     let stderr = "";

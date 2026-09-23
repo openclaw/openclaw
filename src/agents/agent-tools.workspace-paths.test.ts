@@ -7,11 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createReadTool } from "openclaw/plugin-sdk/agent-sessions";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   createSandboxedEditTool,
@@ -31,6 +32,10 @@ import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandb
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { withUnsafeMountedSandboxHarness } from "./test-helpers/unsafe-mounted-sandbox.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 vi.mock("../infra/shell-env.js", async () => {
   const mod =

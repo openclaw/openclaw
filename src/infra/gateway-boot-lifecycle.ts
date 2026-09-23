@@ -2,9 +2,11 @@
 import { randomUUID } from "node:crypto";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -304,6 +306,8 @@ export function completeGatewayBootLifecycle(
   if (!bootId) {
     return;
   }
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  const wasOpen = isOpenClawStateDatabaseOpen(databasePath);
   const signal =
     completion.outcome !== "clean_stop"
       ? undefined
@@ -349,6 +353,18 @@ export function completeGatewayBootLifecycle(
     }
   } catch (err) {
     gatewayLifecycleLog.warn(`failed to persist gateway boot outcome; fail-open: ${String(err)}`);
+  } finally {
+    // Terminal completion may run after server shutdown retired shared state.
+    // This synchronous write owns only a handle it opened, not a live Gateway's cache.
+    if (!wasOpen) {
+      try {
+        closeOpenClawStateDatabaseByPath(databasePath);
+      } catch (error) {
+        gatewayLifecycleLog.warn(
+          `failed to retire gateway boot outcome storage; fail-open: ${String(error)}`,
+        );
+      }
+    }
   }
 }
 

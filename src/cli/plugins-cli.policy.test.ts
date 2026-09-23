@@ -7,6 +7,7 @@ import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-ow
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
@@ -89,7 +90,8 @@ describe("plugins cli policy mutations", () => {
     mockPluginRegistry([]);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     expect(inventory.hostedCatalog).not.toHaveBeenCalled();
     clearPluginMetadataLifecycleCaches();
     if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {

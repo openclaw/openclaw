@@ -7,6 +7,7 @@ import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
 import { resolveStateLifecycleRuntimeDirectory } from "../../infra/state-database-coordinator.js";
 import { createRetainedCheckpointFixture } from "../../infra/update-retained-checkpoint.test-support.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { applyVitestResourceContextToChildEnv } from "../../infra/vitest-resource-ownership.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -52,6 +53,8 @@ function runIndependentSchemaWriter(env: ReturnType<typeof freshEnvironment>, va
     databasePath: resolveOpenClawStateSqlitePath(env),
     runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
   };
+  const childEnv = { ...env, PATH: process.env.PATH, SystemRoot: process.env.SystemRoot };
+  applyVitestResourceContextToChildEnv(childEnv);
   return execNodeEvalSync(
     `import {
       StateSchemaMutationConflictError,
@@ -65,7 +68,7 @@ function runIndependentSchemaWriter(env: ReturnType<typeof freshEnvironment>, va
     }`,
     {
       imports: ["tsx"],
-      env: { ...env, PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
+      env: childEnv,
       timeout: 20_000,
     },
   ).trim();

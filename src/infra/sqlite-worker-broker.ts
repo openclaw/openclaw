@@ -173,7 +173,13 @@ export class SqliteWorkerBroker {
       );
     }
     if (actor) {
-      assertSqliteWorkerActorReusable(actor, moduleUrl, inputHash, options.stateContext);
+      assertSqliteWorkerActorReusable(
+        actor,
+        moduleUrl,
+        inputHash,
+        options.stateContext,
+        options.runtimeGeneration,
+      );
       actor.references += 1;
     } else {
       const slot = await this.acquireSlot(options);
@@ -683,9 +689,13 @@ export class SqliteWorkerBroker {
       }
       await this.inputAdmission.joinOpens();
       await Promise.allSettled(this.operations);
-      const results = await Promise.allSettled(
-        [...this.actors.values()].map((actor) => this.lifecycle.closeActor(actor)),
-      );
+      // Failed receipt publication outlives actor removal. Retry those exact
+      // observed exits on an explicit host close, including failed empty opens.
+      const orphanedNativeExits = this.lifecycle.retireOrphanedNativeExits();
+      const results = await Promise.allSettled([
+        ...[...this.actors.values()].map((actor) => this.lifecycle.closeActor(actor)),
+        ...orphanedNativeExits,
+      ]);
       const errors = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
       );

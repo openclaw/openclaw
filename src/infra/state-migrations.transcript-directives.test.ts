@@ -18,6 +18,7 @@ import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "../state/openclaw-agent-db-lease.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -28,52 +29,19 @@ import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-par
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE } from "./state-migrations.transcript-directives-archives.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
+import {
+  messageEvent,
+  type FixtureEvent,
+} from "./state-migrations.transcript-directives.test-support.js";
 
 const tempDirs: string[] = [];
-
-type FixtureEvent = Record<string, unknown>;
-
-function messageEvent(params: {
-  content: unknown;
-  id: string;
-  parentId?: string | null;
-  role: "assistant" | "toolResult" | "user";
-  timestamp: number;
-}): FixtureEvent {
-  return {
-    type: "message",
-    id: params.id,
-    parentId: params.parentId ?? null,
-    timestamp: params.timestamp,
-    message: {
-      role: params.role,
-      content: params.content,
-      timestamp: params.timestamp,
-      ...(params.role === "assistant"
-        ? {
-            api: "messages",
-            provider: "anthropic",
-            model: "sonnet-4.6",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "stop",
-          }
-        : {}),
-    },
-  };
-}
 
 function insertSession(
   database: import("node:sqlite").DatabaseSync,
@@ -195,9 +163,11 @@ function parseArchive(content: string): FixtureEvent[] {
     .map((line) => JSON.parse(line) as FixtureEvent);
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
 });

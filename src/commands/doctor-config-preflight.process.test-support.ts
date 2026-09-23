@@ -3,7 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
+import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
+import {
+  applyVitestResourceContextToChildEnv,
+  captureResourceOwnedNativeProcessExit,
+} from "../infra/vitest-resource-ownership.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
 import {
@@ -18,6 +23,10 @@ const isolatedRuntimeNodeExecPath = resolveTestNodeExecPath();
 // makes Doctor repair that checkout instead, including building its Control UI.
 // Dependency realpaths still own their transitive packages under isolated installs.
 const ISOLATED_RUNTIME_NODE_ARGS = [
+  // Configure startup policy before spawning so native ownership stays with
+  // this child instead of an otherwise unnecessary CLI respawn.
+  "--disable-warning=ExperimentalWarning",
+  ...(process.platform === "win32" ? ["--stack-size=8192"] : []),
   "--preserve-symlinks",
   "--preserve-symlinks-main",
   "--import",
@@ -40,6 +49,33 @@ const ISOLATED_RUNTIME_NODE_ARGS = [
   `)}`,
 ];
 
+async function runOwnedRuntimeChild(params: Parameters<typeof runCliProcessChild>[0]) {
+  const env = { ...params.env };
+  applyVitestResourceContextToChildEnv(env);
+  let settleNativeExit: ReturnType<typeof captureResourceOwnedNativeProcessExit>;
+  let joinVerified = true;
+  try {
+    return await runCliProcessChild({
+      ...params,
+      env,
+      interact(child) {
+        settleNativeExit = child.pid
+          ? captureResourceOwnedNativeProcessExit(child, { includeWorkerThreads: true })
+          : undefined;
+        child.stdin.end(params.input);
+      },
+    });
+  } catch (error) {
+    // Failed native cleanup must remain observable without waiting on a live child.
+    joinVerified = !hasUnjoinedWork(error);
+    throw error;
+  } finally {
+    if (joinVerified) {
+      await settleNativeExit?.();
+    }
+  }
+}
+
 export function runBuiltRuntime(
   runtimeRoot: string,
   env: NodeJS.ProcessEnv,
@@ -47,7 +83,7 @@ export function runBuiltRuntime(
   timeout: number,
   maxBuffer?: number,
 ) {
-  return runCliProcessChild({
+  return runOwnedRuntimeChild({
     nodeExecutable: isolatedRuntimeNodeExecPath,
     nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
     nodeArgsPolicy: "caller",
@@ -65,7 +101,7 @@ export function runSourceRuntime(
   timeout: number,
   maxBuffer?: number,
 ) {
-  return runCliProcessChild({
+  return runOwnedRuntimeChild({
     nodeExecutable: isolatedRuntimeNodeExecPath,
     nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args],
     nodeArgsPolicy: "caller",
@@ -76,12 +112,15 @@ export function runSourceRuntime(
   });
 }
 
-export function runIsolatedModuleScript(
+export async function runIsolatedModuleScript(
   env: NodeJS.ProcessEnv,
   script: string,
   options: { runtimeRoot?: string; timeoutMs?: number } = {},
 ) {
-  return execFileAsync(
+  const childEnv = { ...env };
+  // Allowlisted fixture environments still need their validated database owner.
+  applyVitestResourceContextToChildEnv(childEnv);
+  const execution = execFileAsync(
     isolatedRuntimeNodeExecPath,
     [
       ...(options.runtimeRoot ? ISOLATED_RUNTIME_NODE_ARGS : []),
@@ -94,11 +133,20 @@ export function runIsolatedModuleScript(
     {
       cwd: options.runtimeRoot ?? path.resolve("."),
       encoding: "utf8",
-      env,
+      env: childEnv,
       maxBuffer: 4 * 1024 * 1024,
       timeout: options.timeoutMs ?? 30_000,
     },
   );
+  const settleNativeExit = execution.child.pid
+    ? captureResourceOwnedNativeProcessExit(execution.child, { includeWorkerThreads: true })
+    : undefined;
+  // execFile's result can arrive before close; join this child and its native threads.
+  try {
+    return await execution;
+  } finally {
+    await settleNativeExit?.();
+  }
 }
 
 export function createSourceRuntime(root: string): string {

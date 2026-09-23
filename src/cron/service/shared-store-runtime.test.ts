@@ -79,9 +79,10 @@ async function addTarget(cron: CronService, suffix: string): Promise<CronJob> {
 
 const schedulerChildScript = String.raw`
 import { CronService } from ${JSON.stringify(serviceUrl.href)};
-import { openOpenClawStateDatabase } from ${JSON.stringify(stateDatabaseUrl.href)};
+import { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } from ${JSON.stringify(stateDatabaseUrl.href)};
 const runs = JSON.parse(process.env.OPENCLAW_CRON_SHARED_STORE_RUNS);
 const log = { debug() {}, info() {}, warn() {}, error() {} };
+try {
 for (const run of runs) {
   const cron = new CronService({
     cronEnabled: true,
@@ -116,6 +117,9 @@ for (const run of runs) {
     openOpenClawStateDatabase().db.exec("DROP TRIGGER IF EXISTS reject_scheduler_completion");
     cron.stop();
   }
+}
+} finally {
+  await closeOpenClawStateDatabaseAsync();
 }
 `;
 
@@ -155,7 +159,7 @@ const overlappingRunsChildScript = String.raw`
 import assert from "node:assert/strict";
 import { loadCronStore } from ${JSON.stringify(storeUrl.href)};
 import { CronService } from ${JSON.stringify(serviceUrl.href)};
-import { openOpenClawStateDatabase } from ${JSON.stringify(stateDatabaseUrl.href)};
+import { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } from ${JSON.stringify(stateDatabaseUrl.href)};
 const { storePath, jobId, nowMs } = JSON.parse(process.env.OPENCLAW_CRON_SHARED_STORE_RUNS);
 const started = [Promise.withResolvers(), Promise.withResolvers()];
 const completions = [Promise.withResolvers(), Promise.withResolvers()];
@@ -213,6 +217,7 @@ try {
   database?.exec("DROP TRIGGER IF EXISTS reject_successor_row");
   for (const completion of completions) completion.resolve();
   cron.stop();
+  await closeOpenClawStateDatabaseAsync();
   process.disconnect();
 }
 `;

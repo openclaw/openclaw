@@ -8,6 +8,7 @@ import { registerProviderPlugin, requireRegisteredProvider } from "../plugin-tes
 import { buildManifestModelProviderConfig } from "../provider-catalog-shared.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 import { createProviderUsageFetch, makeResponse } from "../test-env.js";
+import { registerOpenRouterProviderRuntimeTests } from "./provider-runtime-contract-openrouter.test-support.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
@@ -831,25 +832,7 @@ export function describeOpenRouterProviderRuntimeContract(
       { providerIds: ["openrouter"], pluginId: "openrouter", name: "OpenRouter", load },
     ]);
 
-    it("owns dynamic OpenRouter model defaults", () => {
-      const provider = requireProviderContractProvider("openrouter");
-      // OpenRouter owns a runtime-discovered catalog, so these synthetic defaults stay literal.
-      const model = provider.resolveDynamicModel?.({
-        provider: "openrouter",
-        modelId: "x-ai/grok-4-1-fast",
-        modelRegistry: {
-          find: () => null,
-        } as never,
-      });
-
-      expectFields(model, {
-        id: "x-ai/grok-4-1-fast",
-        provider: "openrouter",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/api/v1",
-        maxTokens: 8192,
-      });
-    });
+    registerOpenRouterProviderRuntimeTests(() => requireProviderContractProvider("openrouter"));
   });
 }
 

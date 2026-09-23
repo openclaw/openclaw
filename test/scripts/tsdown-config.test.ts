@@ -23,9 +23,11 @@ import {
 import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import aiBuildConfig from "../../tsdown.ai.config.ts";
 import buildConfigs from "../../tsdown.config.ts";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+import { FS_SAFE_CALLER_PROBE, QA_RUNTIME_PRODUCTION_PROBE } from "./tsdown-config.test-support.js";
 
 const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
 const { createTempDir } = createScriptTestHarness();
@@ -85,49 +87,64 @@ const workerBuildTargets = [
 const isWorkerBuildConfig = (config: TsdownConfig) =>
   workerBuildTargets.some(([, matches]) => matches(config));
 
-const FS_SAFE_CALLER_PROBE = `
-import assert from "node:assert/strict";
-import fs from "node:fs";
-import { createRequire, isBuiltin, registerHooks } from "node:module";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-const [entry, observer, rootDir, mode, outcome, sealed] = process.argv.slice(1);
-if (sealed) registerHooks({ resolve(specifier, context, next) {
-  if (!isBuiltin(specifier) && specifier !== pathToFileURL(entry).href)
-    throw new Error("sealed dependency escaped: " + specifier);
-  return next(specifier, context);
-}});
-const { root, parseJsonWithJson5Fallback, resolvePreferredOpenClawTmpDir, resolveRuntimeProcessEntrypointUrl } = await import(pathToFileURL(entry).href);
-if (sealed) {
-  assert.deepEqual(parseJsonWithJson5Fallback("{value:'bundled',}"), {value:"bundled"});
-  assert.equal(resolvePreferredOpenClawTmpDir({preferredDir:rootDir, tmpdir:()=>rootDir, platform:"linux"}), rootDir);
-  assert.equal(resolveRuntimeProcessEntrypointUrl("githubExec").href, new URL("./github-exec-launcher.mjs", pathToFileURL(entry)).href);
-  assert.equal(resolveRuntimeProcessEntrypointUrl("serviceChildRelay").href, new URL("./service-child-relay.mjs", pathToFileURL(entry)).href);
-}
-const { configureFsSafeNative, getFsSafeNativeConfig, FsSafeError } = await import(pathToFileURL(observer).href);
-assert.equal(getFsSafeNativeConfig().mode, mode === "configured" ? "off" : mode);
-if (mode === "configured") configureFsSafeNative({ mode: "require" });
-const scoped = await root(rootDir);
-if (outcome === "missing") {
-  await assert.rejects(scoped.write("proof.txt", "native proof"), (error) => {
-    assert(error instanceof FsSafeError);
-    assert.equal(error.code, "helper-unavailable");
-    assert.equal(error.cause?.code, "MODULE_NOT_FOUND");
-    return true;
-  });
-  assert.deepEqual(fs.readdirSync(rootDir), []);
-} else {
-  await scoped.write("proof.txt", "native proof");
-  await scoped.create("created.txt", "create proof");
-  assert.equal(fs.readFileSync(path.join(rootDir, "proof.txt"), "utf8"), "native proof");
-  assert.equal(fs.readFileSync(path.join(rootDir, "created.txt"), "utf8"), "create proof");
-}
-const loaded = Object.keys(createRequire(import.meta.url).cache).filter((file) => file.endsWith("fs-safe-native.node"));
-assert.equal(loaded.length, outcome === "native" ? 1 : 0);
-if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep));
-`;
-
 describe("tsdown config", () => {
+  it("loads the packaged QA child environment without development dependencies", async () => {
+    const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    expect(selected).toBeDefined();
+    const root = fs.realpathSync(createTempDir("openclaw-tsdown-qa-runtime-"));
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+    // Fresh test installs do not contain workspace package dist artifacts.
+    const aiRoot = path.join(root, "node_modules/@openclaw/ai");
+    fs.mkdirSync(aiRoot, { recursive: true });
+    fs.copyFileSync("packages/ai/package.json", path.join(aiRoot, "package.json"));
+    fs.symlinkSync(
+      path.resolve("packages/ai/node_modules"),
+      path.join(aiRoot, "node_modules"),
+      "dir",
+    );
+    const aiBuild = await build({
+      ...aiBuildConfig,
+      config: false,
+      outDir: path.join(aiRoot, "dist"),
+      dts: false,
+      logLevel: "silent",
+    });
+    for (const bundle of aiBuild.bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      entry: {
+        "qa-child-env": "extensions/qa-lab/src/gateway-child-env.ts",
+        "qa-runtime": "extensions/qa-lab/runtime-api.ts",
+      },
+      outDir: path.join(root, "dist"),
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          execFile(
+            testNodeExecPath,
+            ["--input-type=module", "-e", QA_RUNTIME_PRODUCTION_PROBE, root, process.cwd()],
+            { cwd: root, timeout: 30_000, env: { ...process.env, NODE_OPTIONS: "" } },
+            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+          );
+        },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      expect(result.stdout.trim()).toBe(
+        "QA child environment loads without development dependencies",
+      );
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it("emits every private Telegram QA harness entry only in private QA builds", async () => {
     const expectedEntries = {
       "plugin-sdk/qa-channel-protocol": "src/plugin-sdk/qa-channel-protocol.ts",
@@ -135,7 +152,9 @@ describe("tsdown config", () => {
       "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
     };
     const defaultUnified = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
-    expect(defaultUnified?.entry).not.toMatchObject(expectedEntries);
+    for (const entry of Object.keys(expectedEntries)) {
+      expect(defaultUnified?.entry).not.toHaveProperty(entry);
+    }
 
     vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
     const { default: privateQaBuildConfigs } = await importFreshModule<
@@ -363,13 +382,22 @@ describe("tsdown config", () => {
     }
     const root = fs.realpathSync(createTempDir("openclaw-tsdown-imap-"));
     fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-    fs.symlinkSync(fs.realpathSync("node_modules"), path.join(root, "node_modules"), "dir");
+    const manifest = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      dependencies: Record<string, string>;
+    };
+    for (const name of Object.keys(manifest.dependencies)) {
+      const destination = path.join(root, "node_modules", name);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.symlinkSync(fs.realpathSync(path.join("node_modules", name)), destination, "dir");
+    }
     const { bundles } = await build({
       ...selected,
       config: false,
       entry: {
         [entryName]: "extensions/imap/index.ts",
         "plugin-sdk/plugin-state-store-runtime": "src/plugin-sdk/plugin-state-store-runtime.ts",
+        // The standalone caller only needs production cleanup, not the Vitest/session facade.
+        "fixture-state-lifecycle": "src/state/openclaw-state-db-cache.ts",
       },
       outDir: path.join(root, "dist"),
       dts: false,

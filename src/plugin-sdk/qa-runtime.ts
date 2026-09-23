@@ -7,6 +7,9 @@ import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
 export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+export { applyVitestResourceContextToChildEnv } from "../infra/vitest-resource-ownership.js";
+export { loadSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
+export type { TrajectoryEvent } from "../trajectory/types.js";
 export {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,

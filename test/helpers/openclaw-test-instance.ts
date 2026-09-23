@@ -20,6 +20,7 @@ import {
   terminateManagedChild,
 } from "../../scripts/lib/managed-child-process.mts";
 import { hasErrnoCode } from "../../src/infra/errno.js";
+import { captureResourceOwnedNativeProcessExit } from "../../src/infra/vitest-resource-ownership.js";
 import {
   appendCapturedOutput,
   createCapturedOutputBuffers,
@@ -861,6 +862,10 @@ export async function createOpenClawTestInstance(
     return next.promise;
   };
   const stopTimeoutMs = options.stopTimeoutMs ?? GATEWAY_STOP_TIMEOUT_MS;
+  const gatewayNativeExits = new WeakMap<
+    OpenClawTestProcess,
+    ReturnType<typeof captureResourceOwnedNativeProcessExit>
+  >();
   const spawnGatewayProcess = (
     spawnManagedChild: Awaited<ReturnType<typeof loadManagedChildSpawner>>,
     args: string[],
@@ -874,6 +879,12 @@ export async function createOpenClawTestInstance(
       stdio: ["ignore", "pipe", "pipe"],
       detached: shouldUseOpenClawTestProcessGroup(),
     });
+    if (next.pid !== undefined) {
+      gatewayNativeExits.set(
+        next,
+        captureResourceOwnedNativeProcessExit(next, { includeWorkerThreads: true }),
+      );
+    }
     next.stdout.setEncoding("utf8");
     next.stderr.setEncoding("utf8");
     next.once("error", (error) =>
@@ -892,8 +903,13 @@ export async function createOpenClawTestInstance(
     stopOptions: GatewayProcessStopOptions = {},
   ): Promise<boolean> => {
     const closed = await stopGatewayProcess(target, deadline, stopTimeoutMs, stopOptions, stderr);
-    if (closed && child?.process === target) {
-      child = undefined;
+    if (closed) {
+      // Whole-process death settles only this child and its threads, not descendant work.
+      await gatewayNativeExits.get(target)?.();
+      gatewayNativeExits.delete(target);
+      if (child?.process === target) {
+        child = undefined;
+      }
     }
     return closed;
   };

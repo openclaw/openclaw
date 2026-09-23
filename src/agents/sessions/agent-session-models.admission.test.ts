@@ -27,6 +27,7 @@ import {
   runOpenClawAgentWriteAdmission,
   SQLITE_SESSION_WRITER_QUEUES,
 } from "../../state/openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import {
   createTestSession,
@@ -63,12 +64,14 @@ async function closeDatabaseRoots(roots: Iterable<string>) {
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await closeDatabaseRoots(tempDirs.dirs);
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );
 const suiteTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await closeDatabaseRoots(suiteTempDirs.dirs);
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );

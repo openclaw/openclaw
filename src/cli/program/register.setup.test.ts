@@ -1,6 +1,7 @@
 // Register setup tests cover setup command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithMockedCliExit } from "../../test-utils/command-runner.js";
 import { registerCoreCliCommands } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
 import { registerOnboardCommand } from "./register.onboard.js";
@@ -65,7 +66,7 @@ describe("registerSetupCommand", () => {
   async function runCli(args: string[]) {
     const program = new Command();
     registerSetupCommand(program);
-    await program.parseAsync(args, { from: "user" });
+    await runWithMockedCliExit(() => program.parseAsync(args, { from: "user" }), runtime.exit);
   }
 
   async function runInteractiveBareSetup() {
@@ -209,7 +210,7 @@ describe("registerSetupCommand", () => {
     await runInteractiveBareSetup();
 
     expect(readLocalOnboardingStateMock).toHaveBeenCalledWith("/tmp/openclaw.json", sourceConfig);
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(expect.any(Object), runtime);
     expect(runSystemAgentMock).not.toHaveBeenCalled();
   });
 
@@ -230,7 +231,7 @@ describe("registerSetupCommand", () => {
       await runInteractiveBareSetup();
 
       expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
-      expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+      expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(expect.any(Object), runtime);
       expect(runSystemAgentMock).not.toHaveBeenCalled();
     },
   );
@@ -338,7 +339,7 @@ describe("registerSetupCommand", () => {
   it("keeps onboarding JSON for unconfigured systems", async () => {
     await runCli(["setup", "--json"]);
 
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(expect.any(Object), runtime);
     expect(lastWizardOptions()?.json).toBe(true);
     expect(runSystemAgentMock).not.toHaveBeenCalled();
   });
@@ -365,7 +366,7 @@ describe("registerSetupCommand", () => {
   it("runs setup wizard command by default", async () => {
     await runCli(["setup", "--workspace", "/tmp/ws"]);
 
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(expect.any(Object), runtime);
     expect(lastWizardOptions()?.workspace).toBe("/tmp/ws");
     expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
     expect(setupCommandMock).not.toHaveBeenCalled();
@@ -438,7 +439,7 @@ describe("registerSetupCommand", () => {
       credential,
     ]);
 
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(expect.any(Object), runtime);
     expect(lastWizardOptions()?.mode).toBe("remote");
     expect(lastWizardOptions()?.remoteUrl).toBe("wss://example");
     expect(lastWizardOptions()?.[optionKey]).toBe(credential);
@@ -501,7 +502,7 @@ describe("registerSetupCommand", () => {
   it("runs setup wizard command when wizard-only flags are passed explicitly", async () => {
     await runCli(["setup", "--mode", "remote", "--non-interactive", "--accept-risk"]);
 
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(expect.any(Object), runtime);
     expect(lastWizardOptions()?.mode).toBe("remote");
     expect(lastWizardOptions()?.nonInteractive).toBe(true);
     expect(lastWizardOptions()?.acceptRisk).toBe(true);
@@ -531,7 +532,7 @@ describe("registerSetupCommand", () => {
       "--json",
     ]);
 
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(expect.any(Object), runtime);
     expect(lastWizardOptions()).toMatchObject({
       nonInteractive: true,
       acceptRisk: true,
@@ -587,7 +588,7 @@ describe("registerSetupCommand", () => {
       "--custom-text-input",
     ]);
 
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(expect.any(Object), runtime);
     expect(lastWizardOptions()).toMatchObject({
       nonInteractive: true,
       acceptRisk: true,
@@ -646,7 +647,7 @@ describe("registerSetupCommand", () => {
       "--import-secrets",
     ]);
 
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(expect.any(Object), runtime);
     expect(lastWizardOptions()?.importFrom).toBe("hermes");
     expect(lastWizardOptions()?.importSource).toBe("/tmp/hermes");
     expect(lastWizardOptions()?.importSecrets).toBe(true);

@@ -9,6 +9,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -17,6 +18,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     for (const dir of tempDirs.dirs) {
       await closeOpenClawAgentDatabasesAsync(dir);
     }
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );

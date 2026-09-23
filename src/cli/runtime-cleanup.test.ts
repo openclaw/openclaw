@@ -5,6 +5,10 @@ import { closeCliResources, getPendingCliDisposers } from "./runtime-cleanup.js"
 
 const memoryClosed = vi.hoisted(() => vi.fn(async () => {}));
 const databasesClosed = vi.hoisted(() => vi.fn(async () => {}));
+const stateClosed = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../state/openclaw-state-db-cache.js", () => ({
+  closeOpenClawStateDatabaseAsync: stateClosed,
+}));
 vi.mock("../state/openclaw-agent-db-resources.js", () => ({
   hasOpenClawAgentDatabaseAsyncResources: () => true,
 }));
@@ -31,7 +35,8 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 beforeEach(() => {
   vi.useFakeTimers();
   memoryClosed.mockClear();
-  databasesClosed.mockClear();
+  databasesClosed.mockReset();
+  stateClosed.mockReset();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -65,6 +70,7 @@ it("continues later cleanup when a harness disposer never settles", async () => 
     await closing;
     expect(memoryClosed).toHaveBeenCalledOnce();
     expect(databasesClosed).toHaveBeenCalledOnce();
+    expect(stateClosed).toHaveBeenCalledOnce();
     expect(getPendingCliDisposers()).toEqual(["agent-harness/stalled-fixture"]);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("agent-harness/stalled-fixture"));
   } finally {
@@ -72,5 +78,31 @@ it("continues later cleanup when a harness disposer never settles", async () => 
     await closing;
     await vi.advanceTimersByTimeAsync(0);
   }
+  expect(getPendingCliDisposers()).toEqual([]);
+});
+
+it("joins shared-state cleanup even after agent database cleanup rejects", async () => {
+  databasesClosed.mockRejectedValueOnce(new Error("agent close failed"));
+  const entered = createDeferredCore();
+  const gate = createDeferredCore();
+  stateClosed.mockImplementationOnce(async () => {
+    entered.resolve();
+    await gate.promise;
+  });
+  let settled = false;
+  const closing = closeCliResources().then(() => {
+    settled = true;
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stateClosed).toHaveBeenCalledOnce();
+    await entered.promise;
+    expect(settled).toBe(false);
+    expect(getPendingCliDisposers()).toEqual(["shared-state-databases"]);
+  } finally {
+    gate.resolve();
+    await closing;
+  }
+  expect(settled).toBe(true);
   expect(getPendingCliDisposers()).toEqual([]);
 });

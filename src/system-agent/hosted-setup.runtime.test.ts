@@ -28,6 +28,7 @@ import {
 import { createInstallAccountPolicyFixture } from "../plugins/test-helpers/install-account-policy.test-support.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import {
   fakeOverviewLoader,
@@ -754,7 +755,12 @@ describe("SystemAgentChatEngine runtime", () => {
 });
 
 describe("hosted channel post-write hooks", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
+      cleanup();
+    }),
+  );
   it("ChatWizardHost.startChannel owns plugin resources through deferred hooks without retiring Gateway boot", async () => {
     await using bootCache = createPluginCache({ kind: "process" });
     const fixture = createInstallAccountPolicyFixture(

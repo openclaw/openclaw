@@ -1,14 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-harness.js";
 import { loadCronStore } from "../cron/store.js";
 import { getGatewayProcessInstanceId } from "../gateway/process-instance.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
+
+// afterAll unwinds registrations: close after the harness saves its final empty stores.
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "plugin-service-cron-" });
 const handles = new Set<PluginServicesHandle>();

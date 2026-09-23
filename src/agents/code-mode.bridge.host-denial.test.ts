@@ -11,6 +11,7 @@ import {
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import type { PluginHookBeforeToolCallEvent } from "../plugins/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
@@ -106,6 +107,7 @@ describe("Code Mode subscribed host denial", () => {
     resetGlobalHookRunner();
     resetAdjustedParamsByToolCallIdForTests();
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it.each([

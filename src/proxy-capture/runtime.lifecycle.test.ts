@@ -370,11 +370,15 @@ describe("capture store lifecycle", () => {
       const redactionUrl = resolveRuntimeWorkerUrl(
         proxyCaptureNativeProcessEntrypoints.secretRedaction,
       ).href;
+      const stateUrl = resolveRuntimeWorkerUrl(
+        proxyCaptureNativeProcessEntrypoints.stateDatabaseCache,
+      ).href;
       const script = `
         import assert from "node:assert/strict";
         import { captureHttpExchange, initializeDebugProxyCapture, finalizeDebugProxyCapture } from ${JSON.stringify(runtimeUrl.href)};
         import { getDebugProxyCaptureStore } from ${JSON.stringify(storeUrl)};
         import { registerSecretValueForRedaction } from ${JSON.stringify(redactionUrl)};
+        import { closeOpenClawStateDatabaseByPath } from ${JSON.stringify(stateUrl)};
         const settings = ${JSON.stringify(settings)};
         const store = ${storage === "shared" ? "getDebugProxyCaptureStore()" : "getDebugProxyCaptureStore(settings.dbPath, settings.blobDir)"};
         const failure = ${JSON.stringify(failure)};
@@ -429,6 +433,8 @@ describe("capture store lifecycle", () => {
           assert.equal(terminals, failure === "none" ? 2 : 1);
           assert.equal(ended, 1);
           assert.equal(failures, failure === "none" ? 0 : 1);
+          // Capture-store finalization does not own the shared database cache.
+          closeOpenClawStateDatabaseByPath(store.dbPath);
           process.stdout.write(JSON.stringify({ acquired, terminals, ended, failures }));
         });
         process.exit(0);

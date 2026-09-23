@@ -1,6 +1,11 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { getManagedChildCommandPid } from "../../scripts/lib/managed-child-process.mts";
+import {
+  assertManagedHandoffTestConsumer,
+  createManagedHandoffTestBinding,
+} from "../../test/helpers/managed-handoff-isolation.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -18,11 +23,13 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
       let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
       return runQaGatewayTestFixture(
         context,
-        async ({ signal, verifyCleanup }) => {
+        async ({ signal, verifyCleanup, createTempDir }) => {
+          const handoff = createManagedHandoffTestBinding(createTempDir("windows-cron-handoff-"));
           instance = await createOpenClawTestInstance({
             name: `windows-cron-process-identity-${process.pid}`,
             signal,
             verifyCleanup,
+            gatewayCommandPrefix: [process.execPath, handoff.nodeOption],
             env: {
               OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
               OPENCLAW_SKIP_CRON: undefined,
@@ -32,6 +39,14 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
           signal.throwIfAborted();
           await instance.startGateway();
           signal.throwIfAborted();
+          if (!instance.child) {
+            throw new Error("Ready Gateway has no managed process owner");
+          }
+          assertManagedHandoffTestConsumer(
+            handoff,
+            getManagedChildCommandPid(instance.child),
+            path.resolve("dist"),
+          );
           client = await connectGatewayClient({
             url: instance.url,
             token: instance.gatewayToken,

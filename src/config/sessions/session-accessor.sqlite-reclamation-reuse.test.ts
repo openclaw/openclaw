@@ -19,6 +19,7 @@ import type { MessageActionResult } from "../../infra/outbound/message-action-co
 import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import { terminateVitestWorker } from "../../infra/vitest-resource-context.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -839,15 +840,18 @@ test("joins a crashed reused Worker, releases its exact lease, and preserves the
   await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
   const child = spawned[0]!;
   let terminated = false;
+  let termination: Promise<void> | undefined;
   child.prependListener("message", (message: { type: string; operationId?: number }) => {
     if (message.type === "admission-request" && message.operationId === 2 && !terminated) {
       terminated = true;
-      void child.terminate();
+      termination = terminateVitestWorker(child);
+      void termination.catch(() => undefined);
     }
   });
   await expect(
     runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[1]! }),
   ).rejects.toThrow(/exited|uncertain/);
+  await termination;
   expect(terminated).toBe(true);
   expect(child.threadId).toBe(-1);
   expect(leasesFor(fixture)).toHaveLength(1);
@@ -902,7 +906,7 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
     throw new Error("Expected the real Worker's admitted lease receipt and retirement owner");
   }
   const child = spawned[0]!;
-  await child.terminate();
+  await terminateVitestWorker(child);
   expect(child.threadId).toBe(-1);
   const kept = openOpenClawAgentDatabase({ ...fixture.options, agentId: "kept" });
   const state = openOpenClawStateDatabase({ env: fixture.options.env }).db;

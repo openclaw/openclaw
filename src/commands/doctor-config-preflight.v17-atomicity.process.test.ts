@@ -41,6 +41,8 @@ describe("doctor schema-17 repair atomicity", () => {
     );
     const output = `${result.stdout}\n${result.stderr}`;
 
+    expect(result.code, output).toBe(1);
+    expect(result.signal, output).toBeNull();
     expect(output).toContain("Skipped agent database migration");
     expect(output).toContain("Participant migration cannot rebuild unknown indexes");
 

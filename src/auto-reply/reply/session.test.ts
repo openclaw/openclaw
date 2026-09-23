@@ -49,11 +49,15 @@ import {
   listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
 } from "../../sessions/session-state-events.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -74,6 +78,8 @@ import { persistSessionUsageUpdate } from "./session-usage.js";
 import { resolveReplySessionPreprocessingState } from "./session.js";
 import { expectSessionParticipantInputs } from "./session.participant.test-support.js";
 import {
+  requireMockCallArg,
+  expectEntryFields,
   initSessionState,
   readSessionStore as readSessionStoreFast,
   runExplicitResetCases,
@@ -148,28 +154,6 @@ async function makeStorePath(prefix: string): Promise<string> {
 
 const createStorePath = makeStorePath;
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai:secondary@example.test";
-
-function requireMockCallArg(
-  mockFn: { mock: { calls: unknown[][] } },
-  label: string,
-  index = 0,
-): Record<string, unknown> {
-  const arg = mockFn.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
-  if (!arg) {
-    throw new Error(`expected ${label} call #${index + 1}`);
-  }
-  return arg;
-}
-
-function expectEntryFields(
-  entry: SessionEntry,
-  expected: Record<string, unknown>,
-  label?: string,
-): void {
-  for (const [key, value] of Object.entries(expected)) {
-    expect((entry as unknown as Record<string, unknown>)[key], label ?? key).toEqual(value);
-  }
-}
 
 describe("resolveReplySessionPreprocessingState", () => {
   const sessionKey = "agent:main:harness:codex:supervision:media-preflight";
@@ -446,7 +430,9 @@ afterEach(async () => {
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
 });
 describe("initSessionState guarded initialization", () => {
   it("registers per-group ambient visibility when direct messages use isolated sessions", async () => {

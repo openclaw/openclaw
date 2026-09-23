@@ -1,9 +1,9 @@
-import "./openclaw-tools.sessions.mocks.test-support.js";
-import "./test-helpers/fast-openclaw-tools-sessions.js";
 // Verifies sessions list/history/send behavior across gateway and channel targets.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import "./openclaw-tools.sessions.mocks.test-support.js";
+import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
@@ -33,11 +33,20 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
+import {
+  requireGatewayCall,
+  agentParams,
+  expectInterSessionAgentCall,
+  sessionsSendDetails,
+  type GatewayCall,
+} from "./openclaw-tools.sessions-assertions.test-support.js";
 import { registerSessionsSendParticipantTests } from "./openclaw-tools.sessions-participants.test-support.js";
 import { registerSessionsSendResumeTests } from "./openclaw-tools.sessions-resume.test-support.js";
 import {
@@ -58,7 +67,13 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 const { callGatewayMock, loadSessionEntryByKeyMock } =
   await import("./openclaw-tools.sessions.mocks.test-support.js");
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 const continuations = observeSessionSendContinuations();
 
 const TEST_CONFIG = {
@@ -209,66 +224,6 @@ const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2
     { timeout: timeoutMs, interval: 5 },
   );
 };
-
-type GatewayCall = {
-  method?: string;
-  params?: Record<string, unknown>;
-};
-
-type AgentCallParams = {
-  message?: string;
-  lane?: string;
-  channel?: string;
-  sessionKey?: string;
-  extraSystemPrompt?: string;
-  inputProvenance?: {
-    kind?: string;
-    sourceSessionKey?: string;
-    sourceChannel?: string;
-    sourceTool?: string;
-    sourceRole?: string;
-  };
-};
-
-type SessionsSendDetails = {
-  status?: string;
-  runId?: string;
-  reply?: string;
-  error?: string;
-  sentBeforeError?: boolean;
-  sessionKey?: string;
-  targetDisposition?: string;
-  delivery?: {
-    status?: string;
-    mode?: string;
-  };
-};
-
-function requireGatewayCall(call: unknown, method: string): GatewayCall {
-  const request = call as GatewayCall | undefined;
-  if (request?.method !== method) {
-    throw new Error(`expected ${method} gateway call`);
-  }
-  return request;
-}
-
-function agentParams(call: { params?: unknown }): AgentCallParams {
-  return (call.params ?? {}) as AgentCallParams;
-}
-
-function expectInterSessionAgentCall(call: { params?: unknown }): void {
-  // Inter-session sends should be marked as nested non-user agent calls.
-  const params = agentParams(call);
-  expect(params.message).toContain("[Inter-session message");
-  expect(params.message).toContain("isUser=false");
-  expect(params.lane).toMatch(/^nested(?::|$)/);
-  expect(params.channel).toBe("webchat");
-  expect(params.inputProvenance?.kind).toBe("inter_session");
-}
-
-function sessionsSendDetails(details: unknown): SessionsSendDetails {
-  return details as SessionsSendDetails;
-}
 
 describe("sessions tools", () => {
   beforeEach(async () => {

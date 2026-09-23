@@ -175,6 +175,7 @@ export function createFixture(
     "src/shared/deferred.ts",
     "src/shared/freebsd-process-identity.ts",
     "src/infra/node-runtime-executable.ts",
+    "src/infra/vitest-resource-ownership.ts",
     "src/infra/runtime-dependency-ownership.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
     "packages/normalization-core/src/mountinfo-path.ts",

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { commitMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { rejectDurableDelivery, settlePendingFinalDelivery } from "./delivery-completion.js";
 
 const recoveryMocks = vi.hoisted(() => ({
@@ -56,6 +58,8 @@ describe("pending-final delivery completion", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 

@@ -243,6 +243,7 @@ async function main(): Promise<void> {
       { env: process.env },
     ),
     command: process.execPath,
+    nodeEntryIndex: resolveVitestNodeArgs().length,
     args: [
       ...resolveVitestNodeArgs(),
       resolveVitestCliEntry(),

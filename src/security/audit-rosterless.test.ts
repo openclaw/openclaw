@@ -2,13 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 
 vi.unmock("../agents/agent-scope-config.js");
 
 const { runSecurityAuditCore } = await import("./audit.js");
 
 describe("security audit rosterless configs", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
+      cleanup();
+    }),
+  );
 
   function makeAuditPaths(label: string) {
     const rootDir = tempDirs.make(`openclaw-audit-${label}-`);

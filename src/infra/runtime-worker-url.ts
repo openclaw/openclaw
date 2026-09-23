@@ -61,6 +61,6 @@ export function resolveRuntimeWorkerThreadExecArgv(
     return [];
   }
   return /\.[cm]?ts$/.test(fileURLToPath(url)) && !isBunRuntime(execPath)
-    ? ["--import", import.meta.resolve("tsx/esm")]
+    ? ["--import", import.meta.resolve("./runtime-worker-source-loader.mjs")]
     : [];
 }

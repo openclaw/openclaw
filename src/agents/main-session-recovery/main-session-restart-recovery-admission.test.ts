@@ -22,6 +22,8 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { waitForFast } from "../subagent-test-fixtures.test-helpers.js";
@@ -84,6 +86,8 @@ describe("startup recovery admission", () => {
   afterEach(async () => {
     resetGatewayWorkAdmission();
     await cleanupSessionStateForTest({ stateDir: tmpDir });
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   async function makeMainSessionFixture(

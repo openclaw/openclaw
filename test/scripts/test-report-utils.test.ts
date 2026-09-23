@@ -182,6 +182,12 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
           path.join(root, "scripts", `${name}.mts`),
         );
       }
+      // Reuse the real owner identity when copied wrappers add their preload URL.
+      const resourcePreload = "src/infra/vitest-resource-context-preload.test-support.mjs";
+      fs.writeFileSync(
+        path.join(root, resourcePreload),
+        `import ${JSON.stringify(pathToFileURL(path.join(repoRoot, resourcePreload)).href)};\n`,
+      );
       fs.writeFileSync(
         config,
         `export default { root: ${JSON.stringify(root)}, test: { include: ["case.test.mjs"], globals: true, maxWorkers: 1 } };`,

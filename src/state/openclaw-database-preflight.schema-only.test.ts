@@ -1,3 +1,4 @@
+import { fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -5,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
+import { captureResourceOwnedNativeProcessExit } from "../infra/vitest-resource-ownership.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -17,6 +19,11 @@ import {
 } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, fork: vi.fn(actual.fork) };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -222,11 +229,27 @@ it.each(
         );
         if (cleanupFailure === "reject") {
           const cancelled = new Error("caller stopped during cleanup");
+          const childExits: Array<ReturnType<typeof captureResourceOwnedNativeProcessExit>> = [];
+          vi.mocked(fork).mockClear();
           cleanup.mockImplementation(() => {
+            // This fixture intentionally kills sibling readers while native handles may be open.
+            for (const result of vi.mocked(fork).mock.results) {
+              if (
+                result.type === "return" &&
+                result.value.exitCode === null &&
+                result.value.signalCode === null
+              ) {
+                childExits.push(captureResourceOwnedNativeProcessExit(result.value));
+              }
+            }
             controller.abort(cancelled);
             throw rejectedCleanup;
           });
-          await expect(inspect()).rejects.toBe(cancelled);
+          try {
+            await expect(inspect()).rejects.toBe(cancelled);
+          } finally {
+            await Promise.all(childExits.map(async (settle) => settle?.()));
+          }
         }
       });
     } finally {

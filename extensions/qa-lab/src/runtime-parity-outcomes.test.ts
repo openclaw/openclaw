@@ -1,5 +1,10 @@
 // Qa Lab tests cover runtime parity outcome precedence and skip preservation.
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
@@ -7,6 +12,15 @@ import {
   type RuntimeId,
   type RuntimeParityCell,
 } from "./runtime-parity.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
+
+const tempDirs = createTempDirHarness();
+afterEach(async () => {
+  // Agent lease release can reopen shared state; retire it before shared state and files.
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  await tempDirs.cleanup();
+});
 
 function makeRuntimeParityCell(runtime: RuntimeId): RuntimeParityCell {
   return {
@@ -29,7 +43,7 @@ describe("runtime parity outcomes", () => {
     const cell = await captureRuntimeParityCell({
       runtime: "codex",
       gateway: {
-        tempRoot: `/tmp/openclaw-qa-runtime-parity-missing-${process.pid}`,
+        tempRoot: path.join(await tempDirs.makeTempDir("openclaw-qa-runtime-parity-"), "missing"),
       },
       scenarioResult: {
         status: "skip",

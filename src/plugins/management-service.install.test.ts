@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { pluginLifecycleError } from "../gateway/server-methods/plugins-lifecycle-error.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { PluginInstallConfigError } from "./install-config.js";
 import {
@@ -124,7 +125,12 @@ function mockClawHubInstall(pluginId: string, packageName: string) {
 }
 
 describe("managed plugin installation", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
+      cleanup();
+    }),
+  );
 
   beforeEach(() => {
     // Explicit empty env fixtures must never acquire a lease in the operator's home.

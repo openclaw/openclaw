@@ -1,5 +1,5 @@
 // SQLite transcript archive worker tests cover off-main execution and snapshot fencing.
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,8 +14,8 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
-import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { decodeSessionArchiveBytes, readSessionArchiveContentSync } from "./archive-compression.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
@@ -26,6 +26,13 @@ import {
   replaceSessionEntry,
 } from "./session-accessor.js";
 import { writeTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
+import {
+  createTranscriptEvent,
+  createTranscriptEventLine,
+  createTestTrajectoryEvent,
+  sha256,
+  type TestTranscriptEvent,
+} from "./session-accessor.sqlite-archive-fixtures.test-support.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import {
   deleteMaterializedSessionStatePlans,
@@ -38,11 +45,6 @@ import {
   waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
-
-type TestTranscriptEvent = {
-  id: string;
-  [key: string]: unknown;
-};
 
 describe("SQLite transcript archive worker", () => {
   let tempDir: string;
@@ -59,6 +61,7 @@ describe("SQLite transcript archive worker", () => {
     await waitForSessionTranscriptIndexReconcilesInStateDir(tempDir);
     await closeOpenClawAgentDatabasesAsync(tempDir);
     closeOpenClawAgentDatabasesForTest(tempDir);
+    await closeOpenClawStateDatabaseAsync();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -854,36 +857,11 @@ describe("SQLite transcript archive worker", () => {
   );
 });
 
-function createTranscriptEvent(sessionId: string, content: string): TestTranscriptEvent {
-  return JSON.parse(createTranscriptEventLine(sessionId, content)) as TestTranscriptEvent;
-}
-
-function createTranscriptEventLine(sessionId: string, content: string): string {
-  return JSON.stringify({ type: "session", id: sessionId, content });
-}
-
-function createTestTrajectoryEvent(sessionId: string): TrajectoryEvent {
-  return {
-    traceSchema: "openclaw-trajectory",
-    schemaVersion: 1,
-    traceId: sessionId,
-    source: "runtime",
-    type: "test.concurrent-delete",
-    ts: "2026-07-22T00:00:00.000Z",
-    seq: 1,
-    sessionId,
-  };
-}
-
 function readArchiveLines(archivePath: string | undefined): string[] {
   expect(archivePath).toBeTruthy();
   return readSessionArchiveContentSync(archivePath ?? "")
     .trim()
     .split("\n");
-}
-
-function sha256(content: string | Uint8Array): string {
-  return createHash("sha256").update(content).digest("hex");
 }
 
 function openLifecycleTestDatabase(storePath: string) {

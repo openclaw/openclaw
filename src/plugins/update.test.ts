@@ -7,11 +7,16 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { SpawnResult } from "../process/exec.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { resolvePluginInstallOwnerMigrations } from "./install-transaction.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import {
+  requireExpectedPluginId,
+  requirePluginPackageName,
+} from "./update.install-assertions.test-support.js";
 
 const APP_ROOT = "/app";
 
@@ -27,24 +32,6 @@ type NpmInstallIntegrityDrift = {
 };
 
 const appBundledPluginRoot = (pluginId: string) => bundledPluginRootAt(APP_ROOT, pluginId);
-
-function requireExpectedPluginId(params: { expectedPluginId?: string }): string {
-  if (!params.expectedPluginId) {
-    throw new Error("Expected npm install params to include expectedPluginId");
-  }
-  return params.expectedPluginId;
-}
-
-function requirePluginPackageName(
-  plugins: Array<{ pluginId: string; packageName: string }>,
-  pluginId: string,
-): string {
-  const plugin = plugins.find((candidate) => candidate.pluginId === pluginId);
-  if (!plugin) {
-    throw new Error(`Expected plugin fixture ${pluginId}`);
-  }
-  return plugin.packageName;
-}
 
 const installPluginFromNpmSpecMock = vi.fn();
 const installPluginFromMarketplaceMock = vi.fn();
@@ -70,7 +57,8 @@ const withClawPackageLifecycleLeaseMock = vi.fn(
 const tempDirs: string[] = [];
 const capabilityConsentMode = vi.hoisted(() => ({ real: false }));
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -13,8 +13,15 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice } from "./auth-choice.apply.js";
+import {
+  expectPromptMessage,
+  expectPromptMessageContaining,
+  promptMessages,
+} from "./auth-choice.prompt-assertions.test-support.js";
 
 type DetectZaiEndpoint = (params: {
   apiKey: string;
@@ -677,18 +684,6 @@ describe("applyAuthChoice", () => {
     expect(profile?.provider).toBe(expected.provider);
     expect(profile?.mode).toBe(expected.mode);
   }
-  function promptMessages(mock: { mock: { calls: unknown[][] } }): string[] {
-    return mock.mock.calls.map((call) => {
-      const message = (call[0] as { message?: unknown }).message;
-      return typeof message === "string" ? message : "";
-    });
-  }
-  function expectPromptMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
-    expect(promptMessages(mock).join("\n")).toContain(expected);
-  }
-  function expectPromptMessage(mock: { mock: { calls: unknown[][] } }, expected: string) {
-    expect(promptMessages(mock)).toContain(expected);
-  }
   function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
     const call = mock.mock.calls[0];
     if (!call) {
@@ -721,6 +716,8 @@ describe("applyAuthChoice", () => {
     resolveDeprecatedProviderInstallCatalogEntry.mockReset();
     resolveDeprecatedProviderInstallCatalogEntry.mockReturnValue(undefined);
     testAuthProfileStores.clear();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     await lifecycle.cleanup();
   });
 

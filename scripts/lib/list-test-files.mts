@@ -7,6 +7,8 @@ import { join } from "node:path";
 export function listTrackedTestFiles(rootDir: string, suffix = ".test.ts"): string[] {
   const result = spawnSync("git", ["ls-files", "--", rootDir], {
     encoding: "utf8",
+    // Whole-repository inventories exceed Node's default 1 MiB output buffer.
+    maxBuffer: 16 * 1024 * 1024,
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status === 0) {

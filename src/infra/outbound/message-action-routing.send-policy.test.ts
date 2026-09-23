@@ -1,11 +1,18 @@
 // Covers core message-action send fallback, TTS application, and durable send
 // policy after plugin preparation is absent.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentRestartRecoveryContext } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
+
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+});
 
 const ttsMocks = vi.hoisted(() => ({
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),

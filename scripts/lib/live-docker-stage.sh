@@ -158,9 +158,10 @@ NODE
 
   local capability
   capability="$(
-    printf '%s' "$metadata_json" | node -e '
-      const fs = require("node:fs");
-      const value = JSON.parse(fs.readFileSync(0, "utf8"));
+    printf '%s' "$metadata_json" | node --input-type=module -e '
+      let input = "";
+      for await (const chunk of process.stdin) input += chunk;
+      const value = JSON.parse(input);
       if (
         !value ||
         typeof value !== "object" ||
@@ -184,9 +185,10 @@ NODE
 
   local packages
   packages="$(
-    printf '%s' "$metadata_json" | node -e '
-      const fs = require("node:fs");
-      const value = JSON.parse(fs.readFileSync(0, "utf8"));
+    printf '%s' "$metadata_json" | node --input-type=module -e '
+      let input = "";
+      for await (const chunk of process.stdin) input += chunk;
+      const value = JSON.parse(input);
       process.stdout.write(value.packages.join("\n"));
     '
   )" || return $?

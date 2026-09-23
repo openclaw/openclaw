@@ -6,10 +6,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -26,6 +27,10 @@ const supervisorMock = vi.hoisted(() => ({
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => supervisorMock,
 }));
+
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 const isWin = process.platform === "win32";
 const defaultShell = isWin

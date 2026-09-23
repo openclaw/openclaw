@@ -1,15 +1,23 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { ComposedGatewayHarness } from "./worker-fault-injection.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+// Session seeding uses the suite test home in addition to each fixture root.
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 function cleanupOptions(root: string) {
   return { stateDir: path.join(root, "state"), rootPath: root };

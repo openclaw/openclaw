@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { readSessionBindingInspectionConversation } from "./session-binding-normalization.js";
 import {
   getSessionBindingService,
@@ -11,7 +12,10 @@ import {
   type SessionBindingRecord,
 } from "./session-binding-service.js";
 
-afterEach(() => testing.resetSessionBindingAdaptersForTests());
+afterEach(async () => {
+  testing.resetSessionBindingAdaptersForTests();
+  await closeOpenClawStateDatabaseAsync();
+});
 
 const record: SessionBindingRecord = {
   bindingId: "external-binding",

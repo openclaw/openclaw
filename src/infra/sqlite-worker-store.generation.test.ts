@@ -103,3 +103,62 @@ nodeIt("borrows only one carrier at capacity and never crosses retained generati
     await expect(append(store, "preserved")).resolves.toMatchObject({ writes: 2 });
   }
 });
+
+nodeIt("keeps identical backend actors within their ordinary or retained generation", async () => {
+  const moduleUrl = new URL("./sqlite-worker-store.test-support.ts", import.meta.url);
+  const directory = tempDirs.make("openclaw-shared-retained-generation-");
+  const retained = pathToFileURL(path.join(directory, "backend.mts"));
+  await writeFile(retained, `export * from ${JSON.stringify(moduleUrl.href)};\n`);
+  const file = databasePath();
+  const generation = (run: () => Promise<void>) =>
+    withRuntimeWorkerGeneration(
+      async (bind) => {
+        bind((url) => (url.href === moduleUrl.href ? retained : url));
+        await run();
+      },
+      async () => {},
+    );
+  const openShared = async (retainedScope: boolean) => {
+    const source = retainedScope ? captureRuntimeWorkerSource(moduleUrl) : { moduleUrl: retained };
+    const store = await openSqliteWorkerStore<FixtureOperations>({
+      ...source,
+      databasePath: file,
+      input: undefined,
+    });
+    stores.add(store);
+    return store;
+  };
+  const ordinary = await openShared(false);
+  await append(ordinary, "ordinary");
+  await generation(async () => {
+    await expect(openShared(true)).rejects.toThrow("runtime generation changed");
+  });
+  expect(await read(ordinary)).toEqual(["ordinary"]);
+  await ordinary.close();
+
+  let owner: SqliteWorkerStore<FixtureOperations> | undefined;
+  await generation(async () => {
+    owner = await openShared(true);
+    const first = await append(owner, "first");
+    const peer = await openShared(true);
+    expect(await append(peer, "peer")).toMatchObject({
+      actor: first.actor,
+      threadId: first.threadId,
+    });
+    await generation(async () => {
+      await expect(openShared(true)).rejects.toThrow("runtime generation changed");
+    });
+    await expect(openShared(false)).rejects.toThrow("runtime generation changed");
+    await append(owner, "still-owned");
+    expect(await read(peer)).toEqual(["ordinary", "first", "peer", "still-owned"]);
+  });
+  await expect(read(owner!)).rejects.toMatchObject({ code: "closed" });
+  await generation(async () => {
+    expect(await read(await openShared(true))).toEqual([
+      "ordinary",
+      "first",
+      "peer",
+      "still-owned",
+    ]);
+  });
+});

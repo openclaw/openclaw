@@ -1,11 +1,12 @@
 // Search setup tests cover search provider setup and config changes.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginEnable from "../plugins/enable.js";
 import { createNonExitingRuntime } from "../runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runSearchSetupFlow } from "./search-setup.js";
 
@@ -188,6 +189,10 @@ function latestPluginInstallRequest(): {
   ];
   return request;
 }
+
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 describe("runSearchSetupFlow", () => {
   beforeEach(() => {

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SUPERVISOR_HINT_ENV_VARS } from "openclaw/plugin-sdk/process-runtime";
+import { applyVitestResourceContextToChildEnv } from "openclaw/plugin-sdk/qa-runtime";
 import { buildQaCodexAppServerArgs } from "./codex-app-server-args.js";
 import type { QaProviderMode } from "./model-selection.js";
 import {
@@ -121,6 +122,7 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  applyVitestResourceContextToChildEnv(normalizedEnv);
   // Path isolation alone still lets CLI bootstrap discover the operator's service.
   normalizedEnv.OPENCLAW_PROFILE = `qa-${createHash("sha256")
     .update(params.tempRoot)

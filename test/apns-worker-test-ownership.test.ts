@@ -68,7 +68,7 @@ it.each(consumers)("runs the real APNs reader $file in one fork owner", ({ file,
   ]);
   const selected = projects.filter((project) => project.files.has(file));
   expect(selected.map((project) => ({ name: project.name, pool: project.pool }))).toEqual([
-    { name: owner, pool: owner === "infra" ? diagnosticForksPool : "forks" },
+    { name: owner, pool: diagnosticForksPool },
   ]);
 });
 

@@ -125,6 +125,7 @@ describe("check-extension-package-tsc-boundary", () => {
     materializeNativeCompiler(root);
     for (const file of [
       "scripts/lib",
+      "src/infra/vitest-resource-ownership.ts",
       "packages/normalization-core/src",
       "packages/normalization-core/package.json",
       "src/shared/non-packaged-plugin-dirs.ts",

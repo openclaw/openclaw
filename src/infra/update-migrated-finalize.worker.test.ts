@@ -8,6 +8,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 
 const fixture = vi.hoisted(() => ({
   close: vi.fn<() => Promise<void>>(),
+  closeAgents: vi.fn<() => Promise<void>>(),
   budget: vi.fn(),
   activation: vi.fn(),
   finish: vi.fn(),
@@ -64,6 +65,9 @@ vi.mock("../cli/update-cli/update-command-terminal.js", () => ({
 vi.mock("../cli/update-cli/update-command-windows-task.js", () => ({
   createWindowsTaskAutoStartRecovery: vi.fn(),
 }));
+vi.mock("../state/openclaw-agent-db-lifecycle.js", () => ({
+  closeOpenClawAgentDatabasesAsync: fixture.closeAgents,
+}));
 vi.mock("../state/openclaw-state-db.js", () => ({
   closeOpenClawStateDatabaseAsync: fixture.close,
 }));
@@ -95,7 +99,8 @@ const result = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
 
 beforeEach(() => {
   vi.resetModules();
-  vi.clearAllMocks();
+  vi.resetAllMocks();
+  fixture.closeAgents.mockResolvedValue(undefined);
   stdout.length = 0;
   stderr.length = 0;
   loggingState.forceConsoleToStderr = false;
@@ -123,7 +128,55 @@ afterEach(() => {
   loggingState.rawConsole = originalConsole;
   setLoggerOverride(null);
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
+
+it.each([false, true])(
+  "awaits agent cleanup before shared state and preserves cleanup failure (reject=%s)",
+  async (reject) => {
+    const agentStarted = createDeferredCore();
+    const releaseAgent = createDeferredCore();
+    const sharedClosed = createDeferredCore();
+    const errorLogged = createDeferredCore();
+    const failure = new Error("agent database drain failed");
+    fixture.closeAgents.mockImplementation(async () => {
+      agentStarted.resolve();
+      await releaseAgent.promise;
+      if (reject) {
+        throw failure;
+      }
+    });
+    fixture.close.mockImplementation(async () => sharedClosed.resolve());
+    vi.spyOn(process.stderr, "write").mockImplementation((value) => {
+      stderr.push(String(value));
+      errorLogged.resolve();
+      return true;
+    });
+    process.argv = [process.execPath, "update-migrated-finalize.worker.js", "--check"];
+
+    try {
+      await import("./update-migrated-finalize.worker.js");
+      // The shared-close alternative makes a missing agent drain fail immediately.
+      await Promise.race([agentStarted.promise, sharedClosed.promise]);
+      expect(fixture.closeAgents).toHaveBeenCalledOnce();
+      expect(fixture.close).not.toHaveBeenCalled();
+      releaseAgent.resolve();
+      await sharedClosed.promise;
+      expect(fixture.close).toHaveBeenCalledOnce();
+      if (reject) {
+        await errorLogged.promise;
+        expect(stderr.join("")).toBe(`${String(failure)}\n`);
+        expect(process.exitCode).toBe(1);
+      } else {
+        expect(stderr).toEqual([]);
+        expect(process.exitCode).toBe(originalExitCode);
+      }
+    } finally {
+      releaseAgent.resolve();
+      await sharedClosed.promise;
+    }
+  },
+);
 
 it.each(["json", "human", "check"] as const)(
   "preserves %s stdout through finalization and asynchronous cleanup",
@@ -612,7 +665,7 @@ it.each([
   });
   const settled = createDeferredCore();
   fixture.close.mockImplementation(async () => settled.resolve());
-  process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
+  vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", "/synthetic/doctor.json");
   process.argv = [process.execPath, "update-migrated-finalize.worker.js", "--doctor"];
   vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
     yield JSON.stringify({
@@ -628,7 +681,7 @@ it.each([
     await import("./update-migrated-finalize.worker.js");
     await settled.promise;
   } finally {
-    delete process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+    vi.unstubAllEnvs();
     vi.doUnmock("../flows/doctor-health.js");
   }
 

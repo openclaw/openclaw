@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import * as commands from "../process/exec.js";
+import * as spawns from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
@@ -15,6 +16,7 @@ import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js"
 import { acquireStateDatabaseHandleExclusion } from "./state-database-coordinator.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
+import { captureResourceOwnedNativeProcessExit } from "./vitest-resource-ownership.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -235,6 +237,25 @@ it.each(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       };
     `,
     );
+    // Observe the actual native child before this fixture cancels it or faults close.
+    // Only the PID that reached the injected source fault may receive an exit receipt.
+    const nativeReaders = new Map<
+      number,
+      { child: ChildProcess; settle: (() => Promise<void>) | undefined }
+    >();
+    const recordSpawn = spawns.recordChildProcessSpawn;
+    vi.spyOn(spawns, "recordChildProcessSpawn").mockImplementation((command, child) => {
+      recordSpawn(command, child);
+      if (
+        child.pid &&
+        child.spawnargs.some((arg) => /update-candidate-state\.worker\.[cm]?[jt]s$/.test(arg))
+      ) {
+        nativeReaders.set(child.pid, {
+          child,
+          settle: captureResourceOwnedNativeProcessExit(child),
+        });
+      }
+    });
     const controller = new AbortController();
     const now = Date.now.bind(Date);
     let elapsed = 0;
@@ -279,6 +300,12 @@ it.each(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       }
       const { pid } = JSON.parse(fs.readFileSync(marker, "utf8")) as { pid: number };
       expect(() => process.kill(pid, 0)).toThrow();
+      if (outcome !== "read-failure") {
+        const observed = nativeReaders.get(pid);
+        expect(observed, "faulted schema child was observed before native close").toBeDefined();
+        expect(observed!.child.exitCode !== null || observed!.child.signalCode !== null).toBe(true);
+        await observed!.settle?.();
+      }
       acquireStateDatabaseHandleExclusion({ databasePath: file, busyTimeoutMs: 0 }).release();
       expect(fs.readdirSync(cache)).toEqual(["openclaw", "unrelated.txt"]);
       expect(fs.readdirSync(path.join(cache, "openclaw"))).toEqual([]);

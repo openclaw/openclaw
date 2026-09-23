@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { invokeNativeHookRelay, registerNativeHookRelay, testing } from "./native-hook-relay.js";
 
@@ -18,6 +19,7 @@ afterEach(async () => {
   mockCallGatewayTool.mockReset();
   vi.restoreAllMocks();
   await testing.clearNativeHookRelaysForTests();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 function mockGatewayApproval(waitResult: { id?: string; decision?: string | null }) {

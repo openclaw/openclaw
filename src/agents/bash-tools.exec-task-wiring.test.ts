@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 
 const taskTracking = vi.hoisted(() => ({
   createBackgroundExecTask: vi.fn(),
@@ -10,8 +12,12 @@ const taskTracking = vi.hoisted(() => ({
 }));
 
 vi.mock("./bash-tools.exec-task-tracking.js", () => taskTracking);
+vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => supervisor }));
+
+let supervisor: ReturnType<typeof createProcessSupervisor>;
 
 import { getFinishedSession } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
@@ -20,8 +26,15 @@ import {
 } from "./tools/gateway-caller-context.js";
 
 describe("exec background task wiring", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = createTempDirTracker();
+  afterEach(async () => {
+    await supervisor.shutdown();
+    resetProcessRegistryForTests();
+    await closeOpenClawStateDatabaseAsync();
+    tempDirs.cleanup();
+  });
   beforeEach(() => {
+    supervisor = createProcessSupervisor();
     taskTracking.createBackgroundExecTask.mockReset();
     taskTracking.finalizeBackgroundExecTask.mockReset();
   });

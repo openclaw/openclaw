@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { detectAvailableSetupProviderIds } from "./provider-setup-availability.js";
 
 const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn());
@@ -23,6 +24,10 @@ vi.mock("./providers.runtime.js", () => ({
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ debug }),
 }));
+
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 describe("detectAvailableSetupProviderIds", () => {
   beforeEach(() => {

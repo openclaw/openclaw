@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   recordInstalledPluginIndexInstallOwner,
   resolveInstalledPluginIndexInstallOwner,
@@ -21,8 +22,9 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 
 const tempDirs: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
+  await closeOpenClawStateDatabaseAsync();
   cleanupTrackedTempDirs(tempDirs);
 });
 

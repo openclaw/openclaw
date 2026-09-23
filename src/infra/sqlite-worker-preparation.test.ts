@@ -5,6 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -255,7 +256,11 @@ if (!isMainThread) {
         },
         context,
       );
-      const worker = posts.mock.contexts[0];
+      const openIndex = posts.mock.calls.findIndex(
+        ([request]) =>
+          isRecord(request) && request.type === "open" && request.databasePath === databasePath,
+      );
+      const worker = posts.mock.contexts[openIndex];
       posts.mockRestore();
       if (!store || !(worker instanceof Worker)) {
         throw new Error("Expected the fixture's lifecycle worker");

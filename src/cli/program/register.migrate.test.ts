@@ -1,10 +1,10 @@
 // Migrate CLI registration tests cover public option forwarding.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithMockedCliExit } from "../../test-utils/command-runner.js";
 import { OpenClawCommand } from "./openclaw-command.js";
 import { registerMigrateCommand } from "./register.migrate.js";
 
 const mocks = vi.hoisted(() => ({
-  ExitError: class ExitError extends Error {},
   migrateApplyCommand: vi.fn(),
   migrateDefaultCommand: vi.fn(),
   migrateListCommand: vi.fn(),
@@ -23,8 +23,8 @@ vi.mock("../../commands/migrate.js", () => ({
   migratePlanCommand: mocks.migratePlanCommand,
 }));
 
-vi.mock("../../runtime.js", () => ({
-  ExitError: mocks.ExitError,
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -32,7 +32,7 @@ async function runCli(args: string[]): Promise<void> {
   const program = new OpenClawCommand();
   program.enablePositionalOptions();
   registerMigrateCommand(program);
-  await program.parseAsync(args, { from: "user" });
+  await runWithMockedCliExit(() => program.parseAsync(args, { from: "user" }), mocks.runtime.exit);
 }
 
 describe("registerMigrateCommand", () => {

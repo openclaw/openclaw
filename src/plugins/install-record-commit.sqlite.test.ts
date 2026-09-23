@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
+import { captureResourceOwnedNativeProcessExit } from "../infra/vitest-resource-ownership.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -26,7 +27,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function runChild(scriptPath: string, args: string[]) {
+async function runChild(scriptPath: string, args: string[]) {
   const child = spawn(process.execPath, ["--import", "tsx", scriptPath, ...args], {
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
@@ -44,16 +45,43 @@ function runChild(scriptPath: string, args: string[]) {
       reject(new Error(`install-record commit child exited before ready: ${output}`));
     });
   });
-  const done = new Promise<void>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
+  // Observe readiness while installing the actual close join before native capture.
+  void ready.catch(() => {});
+  let processError: Error | undefined;
+  const completion = new Promise<void>((resolve, reject) => {
+    child.once("error", (error) => {
+      processError = error;
+    });
+    child.once("close", (code) => {
+      if (processError) {
+        reject(processError);
+      } else if (code === 0) {
         resolve();
       } else {
         reject(new Error(`install-record commit child exited ${code}: ${output}`));
       }
     });
   });
+  let settleNativeExit: ReturnType<typeof captureResourceOwnedNativeProcessExit>;
+  try {
+    // These real config writers cache SQLite handles on both the process and its Workers.
+    settleNativeExit = child.pid
+      ? captureResourceOwnedNativeProcessExit(child, { includeWorkerThreads: true })
+      : undefined;
+  } catch (error) {
+    child.kill("SIGKILL");
+    await completion.catch(() => {});
+    throw error;
+  }
+  const done = (async () => {
+    try {
+      await completion;
+    } finally {
+      await settleNativeExit?.();
+    }
+  })();
+  // The caller first awaits readiness, then owns this eventual success or failure.
+  void done.catch(() => {});
   return { ready, done };
 }
 
@@ -276,14 +304,19 @@ describe("plugin install record commit rollback", () => {
           );
         });
 
-        const first = runChild(childScript, [state.stateDir, "first", firstEntered, firstRelease]);
+        const first = await runChild(childScript, [
+          state.stateDir,
+          "first",
+          firstEntered,
+          firstRelease,
+        ]);
         const firstDone = first.done;
         let secondDone: Promise<void> | undefined;
         try {
           // Bootstrap readiness is outside lock assertions; slow TS imports are not blocked writers.
           await first.ready;
           await waitForFile(firstEntered);
-          const second = runChild(childScript, [
+          const second = await runChild(childScript, [
             state.stateDir,
             "second",
             secondEntered,

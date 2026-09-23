@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPluginSnapshotReportMock,
   clearPluginRegistryLoadCacheMock,
@@ -19,6 +19,7 @@ import {
   applyPluginUninstallDirectoryRemovalMock,
 } from "../cli/plugins-cli-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
@@ -45,6 +46,9 @@ const installWriteOptions = {
 };
 
 describe("persistPluginInstall", () => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+  });
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
     resetPluginsCliTestState();
@@ -502,6 +506,7 @@ describe("persistPluginInstall", () => {
       expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
       expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(true);
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });

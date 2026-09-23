@@ -2,6 +2,7 @@ import { Command } from "commander";
 // Register status/health/session tests cover status-related command registration.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithMockedCliExit } from "../../test-utils/command-runner.js";
 import { ExpectedCliError } from "../failure-output.js";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
 
@@ -118,7 +119,10 @@ describe("registerStatusHealthSessionsCommands", () => {
   }
 
   async function runCli(args: string[]) {
-    await createProgram().parseAsync(args, { from: "user" });
+    await runWithMockedCliExit(
+      () => createProgram().parseAsync(args, { from: "user" }),
+      runtime.exit,
+    );
   }
 
   async function expectSessionsRegistrationError(

@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -61,6 +62,7 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
   });
 
   afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (tmpDir) {
@@ -70,6 +72,7 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
   });
 
   afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (!fixtureRoot) {

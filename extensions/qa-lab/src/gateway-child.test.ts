@@ -2345,21 +2345,9 @@ describe("qa bundled plugin dir", () => {
     expect((await lstat(path.join(bundledPluginsDir, "image-generation-core"))).isDirectory()).toBe(
       true,
     );
-    const sharedChunkStat = await lstat(
-      path.join(
-        repoRoot,
-        ".artifacts",
-        "qa-runtime",
-        path.basename(tempRoot),
-        "dist",
-        "shared-chunk-abc123.js",
-      ),
-    );
-    if (sharedChunkStat.isFile()) {
-      expect(sharedChunkStat.isFile()).toBe(true);
-    } else {
-      expect(sharedChunkStat.isSymbolicLink()).toBe(true);
-    }
+    await expect(
+      readFile(path.join(stagedRoot, "dist", "shared-chunk-abc123.js"), "utf8"),
+    ).resolves.toBe("export {};\n");
   });
 
   it("preserves dist-runtime-only root chunks when dist also exists", async () => {
@@ -2415,21 +2403,8 @@ describe("qa bundled plugin dir", () => {
       `${pathToFileURL(path.join(bundledPluginsDir, "runtime-only", "index.js")).href}?t=${Date.now()}`
     )) as { marker: string };
     expect(runtimeOnly.marker).toBe("runtime");
-    const runtimeChunkStat = await lstat(
-      path.join(
-        repoRoot,
-        ".artifacts",
-        "qa-runtime",
-        path.basename(tempRoot),
-        "dist",
-        "runtime-chunk.js",
-      ),
-    );
-    if (runtimeChunkStat.isFile()) {
-      expect(runtimeChunkStat.isFile()).toBe(true);
-    } else {
-      expect(runtimeChunkStat.isSymbolicLink()).toBe(true);
-    }
+    // The imported plugin above consumes this root chunk; no file-vs-symlink
+    // representation assertion is needed for the staging contract.
   });
 
   it("rejects invalid bundled plugin ids before staging paths are built", async () => {

@@ -42,7 +42,7 @@ export async function runCommandWithRuntime(
     await action();
   } catch (err) {
     // Keep help imports lazy while completed commands reach the cleanup and output-drain owner.
-    const { ExitError } = await import("../runtime.js");
+    const { defaultRuntime, ExitError } = await import("../runtime.js");
     if (
       err instanceof ExitError ||
       isJsonOutputModeActive(process.argv) ||
@@ -55,6 +55,9 @@ export async function runCommandWithRuntime(
       return;
     }
     runtime.error(formatCliOperatorError(err));
+    if (runtime === defaultRuntime) {
+      throw new ExitError(1);
+    }
     runtime.exit(1);
   }
 }

@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createManagedServiceManagerBoundary } from "./update-managed-service-handoff-boundary.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
@@ -65,6 +67,13 @@ export function useManagedServiceHandoffLifecycleFixture() {
   const managedProcessCleanups = new Set<() => Promise<void>>();
   const mockedHandoffLeaseCleanups = new Set<() => void>();
   const mockedHandoffs = new Map<string, { handoffId: string }>();
+  let handoffBinding: ReturnType<typeof createManagedHandoffTestBinding> | undefined;
+  const assertHandoffDatabasePath = (databasePath: string) => {
+    if (!handoffBinding) {
+      throw new Error("Managed handoff fixture has no private database binding");
+    }
+    handoffBinding.assertPath(databasePath);
+  };
 
   beforeEach(async () => {
     // Helpers in one fixture share a coordinator without touching the operator's database.
@@ -72,7 +81,11 @@ export function useManagedServiceHandoffLifecycleFixture() {
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
     );
     tempDirs.add(coordinatorDir);
+    handoffBinding = createManagedHandoffTestBinding(coordinatorDir);
     resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
+    const { resolveManagedUpdateLeaseDatabasePath } =
+      await import("./update-managed-service-handoff-lease.js");
+    assertHandoffDatabasePath(resolveManagedUpdateLeaseDatabasePath());
     forceKillChildProcessTreeMock.mockReset();
     spawnMock.mockReset();
     spawnMock.mockImplementation((_command: string, args: string[]) => {
@@ -87,54 +100,77 @@ export function useManagedServiceHandoffLifecycleFixture() {
           child,
           paramsPath: args.at(-1) ?? "",
           cleanups: mockedHandoffLeaseCleanups,
+          assertDatabasePath: assertHandoffDatabasePath,
         });
       });
       return child;
     });
   });
 
-  afterEach(async () => {
+  const cleanupFixture = async () => {
     vi.useRealTimers();
-    await Promise.all([...managedProcessCleanups].map((cleanup) => cleanup()));
-    managedProcessCleanups.clear();
-    for (const child of mockedChildren) {
-      child.emit("exit", 0, null);
-    }
-    for (const cleanup of mockedHandoffLeaseCleanups) {
-      cleanup();
-    }
-    try {
-      if (mockedHandoffs.size > 0) {
+    await runQaGatewayFixture(
+      async () => {},
+      ...[...managedProcessCleanups].map((cleanup) => async () => {
+        await cleanup();
+        managedProcessCleanups.delete(cleanup);
+      }),
+      ...[...mockedChildren].map((child) => () => child.emit("exit", 0, null)),
+      // Exit listeners can fail before deleting their cleanup. Retry every retained
+      // owner, but preserve the first failure even if native cleanup now succeeds.
+      () => runQaGatewayFixture(async () => {}, ...mockedHandoffLeaseCleanups),
+      async () => {
         const { cancelManagedServiceUpdateHandoff } =
           await import("./update-managed-service-handoff.js");
-        for (const [installRoot, { handoffId }] of mockedHandoffs) {
-          // Cancellation retires the exited owner only after verifying its lease was released.
-          await expect(
-            cancelManagedServiceUpdateHandoff({
-              kind: "managed-update-handoff",
-              installRoot,
-              handoffId,
-            }),
-          ).resolves.toBe("restored-in-process");
+        await runQaGatewayFixture(
+          async () => {},
+          ...[...mockedHandoffs].map(([installRoot, { handoffId }]) => async () => {
+            // Cancellation retires the exited owner only after verifying its lease was released.
+            await expect(
+              cancelManagedServiceUpdateHandoff({
+                kind: "managed-update-handoff",
+                installRoot,
+                handoffId,
+              }),
+            ).resolves.toBe("restored-in-process");
+            mockedHandoffs.delete(installRoot);
+          }),
+        );
+      },
+      async () => {
+        for (const child of mockedChildren) {
+          child.stdin.destroy();
+          child.stdout.destroy();
         }
-      }
-    } finally {
-      mockedHandoffs.clear();
-      for (const child of mockedChildren) {
-        child.stdin.destroy();
-        child.stdout.destroy();
-      }
-      mockedChildren.clear();
-      closeOpenClawStateDatabaseForTest();
-      await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
-      tempDirs.clear();
-    }
-  });
+        mockedChildren.clear();
+        closeOpenClawStateDatabaseForTest();
+        if (managedProcessCleanups.size || mockedHandoffLeaseCleanups.size || mockedHandoffs.size) {
+          throw new Error(
+            "Managed handoff fixture retains unsettled resources; keeping its directories",
+          );
+        }
+        await Promise.all(
+          [...tempDirs].map(async (dir) => {
+            await fs.rm(dir, { recursive: true, force: true });
+            tempDirs.delete(dir);
+          }),
+        );
+      },
+    );
+  };
+  afterEach(cleanupFixture);
 
   const runManagedServiceManagerBoundary = createManagedServiceManagerBoundary({
     spawnMock,
     tempDirs,
     cleanups: managedProcessCleanups,
   });
-  return { forceKillChildProcessTreeMock, spawnMock, tempDirs, runManagedServiceManagerBoundary };
+  return {
+    forceKillChildProcessTreeMock,
+    spawnMock,
+    tempDirs,
+    runManagedServiceManagerBoundary,
+    assertHandoffDatabasePath,
+    cleanupFixture,
+  };
 }

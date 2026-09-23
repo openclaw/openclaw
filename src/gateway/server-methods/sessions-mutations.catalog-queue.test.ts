@@ -13,6 +13,7 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
@@ -67,7 +68,9 @@ function patchRequest(context: GatewayRequestContext) {
     } as never);
 }
 
-test("catalog reload releases the agent writer while preserving same-session ordering", async () => {
+test("catalog reload releases the agent writer while preserving same-session ordering", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const catalogKey = "agent:main:catalog-dependent";
     const metadataKey = "agent:main:independent-metadata";
@@ -126,7 +129,7 @@ test("catalog reload releases the agent writer while preserving same-session ord
       );
       metadataPatch = patch({ key: metadataKey, pinned: true }, metadataResponse);
       // Join independent work before advancing the diagnostic clock or releasing the catalog.
-      await metadataPatch;
+      await racePromiseWithAbortSignal(Promise.resolve(metadataPatch), signal);
       expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined);
       expect(catalogResponse).not.toHaveBeenCalled();
       expect(successorResponse).not.toHaveBeenCalled();
@@ -178,9 +181,9 @@ test("catalog reload releases the agent writer while preserving same-session ord
   });
 });
 
-test.each(["identity", "label", "alias", "cleared-selection"] as const)(
+test.for(["identity", "label", "alias", "cleared-selection"] as const)(
   "catalog preparation revalidates fresh %s before using the prepared result",
-  async (change) => {
+  async (change, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const key = change === "alias" ? "agent:main:main" : "agent:main:catalog-revalidation";
       const storedKey = change === "alias" ? "agent:main:work" : key;
@@ -249,7 +252,7 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
                       contextWindow: undefined,
                     },
               ).then(() => changed());
-        await mutation;
+        await racePromiseWithAbortSignal(Promise.resolve(mutation), signal);
         expect(changed).toHaveBeenCalledOnce();
       } finally {
         if (change === "alias") {
@@ -308,7 +311,9 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
   },
 );
 
-test("patchMany prepares singleton agent groups without blocking another session", async () => {
+test("patchMany prepares singleton agent groups without blocking another session", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const targets = ["main", "secondary"].map((agentId) => ({
       key: `agent:${agentId}:catalog-batch`,
@@ -359,10 +364,10 @@ test("patchMany prepares singleton agent groups without blocking another session
     const metadataResponse = vi.fn();
     let metadataPatch: Promise<void> | void = undefined;
     try {
-      await Promise.race([entered.promise, batch]);
+      await racePromiseWithAbortSignal(Promise.race([entered.promise, batch]), signal);
       expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2);
       metadataPatch = patchRequest(context)({ key: metadataKey, pinned: true }, metadataResponse);
-      await metadataPatch;
+      await racePromiseWithAbortSignal(Promise.resolve(metadataPatch), signal);
       expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined);
       expect(respond).not.toHaveBeenCalled();
     } finally {
@@ -453,7 +458,9 @@ test("a multi-target agent group retains ordered label claims around catalog loa
   });
 });
 
-test("dispatched authorization rejects an instance replaced during catalog preparation", async () => {
+test("dispatched authorization rejects an instance replaced during catalog preparation", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const sessionKey = "agent:main:commit-bound-authorization";
     // A write-scoped model reset revalidates retained thinking. Admin scope would
@@ -525,7 +532,7 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
         committed();
       })();
       void replacement.catch(() => {});
-      await replacement;
+      await racePromiseWithAbortSignal(replacement, signal);
       expect(committed).toHaveBeenCalledOnce();
       release.resolve();
       await request;

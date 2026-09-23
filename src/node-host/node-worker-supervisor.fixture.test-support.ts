@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { captureResourceOwnedNativeProcessExit } from "../infra/vitest-resource-ownership.js";
 import * as serviceChildControl from "../process/supervisor/service-child-control-reader.js";
 import type { NodeWorkerLaunchClaim } from "./node-worker-launch-store.js";
 import * as workerLaunchTransport from "./node-worker-launch-transport.js";
@@ -18,15 +19,27 @@ import {
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
 
+const supervisorOwnerExits = new WeakMap<ChildProcess, (() => Promise<void>) | undefined>();
+
+function retainSupervisorOwnerExit(child: ChildProcess): ChildProcess {
+  supervisorOwnerExits.set(
+    child,
+    captureResourceOwnedNativeProcessExit(child, { includeWorkerThreads: true }),
+  );
+  return child;
+}
+
 function writeSupervisorOwnerScript(root: string, waitForCompletedTurn: boolean): string {
   const supervisorUrl = pathToFileURL(path.resolve("src/node-host/node-worker-supervisor.ts")).href;
   const turnsUrl = pathToFileURL(path.resolve("src/node-host/node-worker-turn-store.ts")).href;
+  const stateUrl = pathToFileURL(path.resolve("src/state/openclaw-state-db.ts")).href;
   const scriptPath = path.join(root, "supervisor-owner.mts");
   fs.writeFileSync(
     scriptPath,
     `
       import fs from "node:fs";
       import { createNodeWorkerSupervisor } from ${JSON.stringify(supervisorUrl)};
+      import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(stateUrl)};
       import { NodeWorkerTurnStore } from ${JSON.stringify(turnsUrl)};
       const [bundleRoot, stateDir, inputPath] = process.argv.slice(2);
       const supervisor = createNodeWorkerSupervisor({
@@ -35,6 +48,7 @@ function writeSupervisorOwnerScript(root: string, waitForCompletedTurn: boolean)
       });
       const shutdown = async () => {
         await supervisor.close();
+        await closeOpenClawStateDatabaseAsync();
         process.exit(0);
       };
       process.once("SIGTERM", () => void shutdown());
@@ -107,10 +121,10 @@ export function spawnPendingSupervisorOwner({
         setInterval(() => {}, 1000);
       `,
   );
-  return spawn(
-    process.execPath,
-    ["--import", "tsx", scriptPath, env.OPENCLAW_STATE_DIR!, claimPath],
-    { stdio: ["ignore", "pipe", "pipe"] },
+  return retainSupervisorOwnerExit(
+    spawn(process.execPath, ["--import", "tsx", scriptPath, env.OPENCLAW_STATE_DIR!, claimPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
   );
 }
 
@@ -135,7 +149,7 @@ export function spawnSupervisorOwner(params: {
     ],
     { env: { ...process.env, ...params.env }, stdio: ["ignore", "pipe", "pipe"] },
   );
-  return child;
+  return retainSupervisorOwnerExit(child);
 }
 
 export async function waitForIdentityDeath(identity: NodeWorkerProcessIdentity) {
@@ -168,6 +182,10 @@ export function waitForChildLine(child: ChildProcess): Promise<string> {
 }
 
 export function waitForChildExit(child: ChildProcess): Promise<void> {
+  const settleNativeExit = supervisorOwnerExits.get(child);
+  if (settleNativeExit) {
+    return settleNativeExit();
+  }
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve();
   }

@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { configureNodeHost } from "./config.js";
 
 const [candidateNodeId, nowMs] = process.argv.slice(2);
@@ -15,4 +16,5 @@ const config = await configureNodeHost({
 await new Promise<void>((resolve, reject) => {
   process.send!(config, (error) => (error ? reject(error) : resolve()));
 });
+await closeOpenClawStateDatabaseAsync();
 process.disconnect!();

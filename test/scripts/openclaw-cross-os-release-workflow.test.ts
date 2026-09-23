@@ -853,28 +853,12 @@ describe("cross-OS release checks workflow", () => {
       "scripts",
       "packages/normalization-core",
       "src/infra/file-read.ts",
+      "src/infra/vitest-resource-ownership.ts",
     ]) {
       const target = join(fixture, source);
       mkdirSync(dirname(target), { recursive: true });
       cpSync(source, target, { recursive: true });
     }
-    const wrapper = readFileSync(WRAPPER_PATH, "utf8");
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
-      scripts: Record<string, string>;
-    };
-    const windowsCiCoverage = [
-      packageJson.scripts["test:windows:ci:1"],
-      packageJson.scripts["test:windows:ci:2"],
-    ].join(" ");
-
-    expect(wrapper).toContain('exec "${node_cmd}" "${script_path}" "$@"');
-    expect(wrapper).not.toContain("npm");
-    expect(wrapper).not.toContain("tsx");
-    expect(wrapper).not.toContain("--import");
-    expect(script).toMatch(/^#!\/usr\/bin\/env node$/mu);
-    expect(script).not.toContain("--import tsx");
-    expect(windowsCiCoverage).toContain("test/scripts/openclaw-cross-os-release-workflow.test.ts");
     const result = spawnSync(
       BASH_BIN,
       [

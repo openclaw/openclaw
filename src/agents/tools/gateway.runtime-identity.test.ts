@@ -24,6 +24,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { resolveSkillWorkshopApprovalForFinalParams } from "../agent-tools.before-tool-call.approval.js";
 import {
@@ -90,10 +91,11 @@ describe("gateway tool runtime identity", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const token of mintedTurnCapabilities.splice(0)) {
       revokeMessageActionTurnCapability(token);
     }
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it("omits runtime identity outside trusted agent context", async () => {

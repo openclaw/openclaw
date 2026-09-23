@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -19,6 +21,11 @@ import {
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
+
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+});
 
 const scriptedCliProgram = String.raw`
 let input = "";

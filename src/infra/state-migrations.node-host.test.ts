@@ -12,6 +12,7 @@ import {
 import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -27,7 +28,8 @@ const fixtureDigest = ["fixture", "digest"].join("-");
 
 describe("legacy node-host Doctor migration", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     });

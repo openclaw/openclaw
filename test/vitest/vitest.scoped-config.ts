@@ -228,6 +228,7 @@ export function createScopedVitestConfig(
     : includeFromEnv;
   const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
   const isolate = options?.isolate ?? false;
+  const pool = options?.pool ?? baseTest.pool;
   const setupFiles = [
     ...new Set([
       ...(baseTest.setupFiles ?? []),
@@ -253,14 +254,8 @@ export function createScopedVitestConfig(
       ...(resolvedScopedDir ? { dir: resolvedScopedDir } : {}),
       include: scopedInclude,
       exclude,
-      ...(options?.pool
-        ? {
-            pool:
-              options.pool === "forks" && (scopedDir === "extensions" || options.name === "infra")
-                ? diagnosticForksPool
-                : options.pool,
-          }
-        : {}),
+      // Every fork owns process-lifetime native handles, including shared-worker suites.
+      pool: pool === "forks" ? diagnosticForksPool : pool,
       ...(options?.fileParallelism === undefined
         ? {}
         : { fileParallelism: options.fileParallelism }),

@@ -15,6 +15,7 @@ import {
   acquireGatewayLifecycleCoordinator,
   acquireStateDatabaseCoordinator,
 } from "../infra/state-database-coordinator.js";
+import { applyVitestResourceContextToChildEnv } from "../infra/vitest-resource-ownership.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -46,6 +47,7 @@ function createFixture() {
     OPENCLAW_DEBUG_PROXY_ENABLED: "1",
     OPENCLAW_UPDATE_IN_PROGRESS: "1",
   };
+  applyVitestResourceContextToChildEnv(env);
   const databasePath = openOpenClawStateDatabase({ env }).path;
   closeOpenClawStateDatabaseForTest();
   const legacy = new DatabaseSync(databasePath);

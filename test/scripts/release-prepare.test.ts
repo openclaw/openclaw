@@ -129,10 +129,13 @@ describe("release preparation plan", () => {
 
   it("streams large JSON-mode child output to stderr without buffering", () => {
     const childScript = [
-      'const { writeSync } = require("node:fs");',
-      'writeSync(1, "child stdout begin\\n" + "x".repeat(2 * 1024 * 1024) + "\\nchild stdout end\\n");',
-      'writeSync(2, "child stderr sentinel\\n");',
-      "process.exit(23);",
+      'process.stdout.write("child stdout begin\\n" + "x".repeat(2 * 1024 * 1024) + "\\nchild stdout end\\n", (error) => {',
+      "if (error) throw error;",
+      'process.stderr.write("child stderr sentinel\\n", (error) => {',
+      "if (error) throw error;",
+      "process.exitCode = 23;",
+      "});",
+      "});",
     ].join("");
     const harness = `
       import { runReleasePrepareStep } from ${JSON.stringify(new URL("../../scripts/release-prepare.ts", import.meta.url).href)};

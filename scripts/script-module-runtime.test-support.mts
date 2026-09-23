@@ -25,12 +25,6 @@ export const scriptModuleEntrypoints = {
     distWorkerPath: "legacy-finalizer/scripts/watch-node.js",
   },
 
-  vitestBatchRunner: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "lib/vitest-batch-runner",
-    sourceExtension: ".mts",
-    distWorkerPath: "legacy-finalizer/scripts/lib/vitest-batch-runner.js",
-  },
   additionalBoundaryChecks: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "run-additional-boundary-checks",

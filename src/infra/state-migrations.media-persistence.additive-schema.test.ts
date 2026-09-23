@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -7,7 +7,10 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
-import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
+import {
+  cleanupMediaPersistenceFixtures,
+  createLegacyDatabaseFixture,
+} from "./state-migrations.media-persistence.test-support.js";
 
 const tempDirs: string[] = [];
 
@@ -50,10 +53,8 @@ function createV17AdditiveFixture(
 }
 
 describe("legacy media persistence additive schema repair", () => {
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    cleanupTempDirs(tempDirs);
+  afterEach(async () => {
+    await cleanupMediaPersistenceFixtures(tempDirs);
   });
 
   it("repairs schema-19 additive session schema before media validation", async () => {

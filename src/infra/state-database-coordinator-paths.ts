@@ -1,7 +1,52 @@
 import { realpathSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import {
+  resolveIdentityPathViaExistingAncestorSync,
+  resolvePathViaExistingAncestorSync,
+} from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
+import { isPathInside } from "./path-guards.js";
+import { getVitestResourceContext } from "./vitest-resource-ownership.js";
+
+// The launcher publishes this before application imports; production has no test context.
+const resourceContext = getVitestResourceContext();
+const resourceOwners = resourceContext?.kind === "owned" ? resourceContext.owners : [];
+const productionRuntimeDirectory =
+  resourceContext?.kind === "owned"
+    ? resourceContext.productionRuntimeDirectory
+    : process.platform === "win32"
+      ? path.join(os.homedir(), "AppData", "Local", "OpenClaw", "locks")
+      : "/tmp";
+
+export function findLifecycleResourceOwner(targetPath: string) {
+  if (resourceOwners.length === 0) {
+    return undefined;
+  }
+  return findCanonicalLifecycleResourceOwner(
+    resolveIdentityPathViaExistingAncestorSync(targetPath),
+  );
+}
+
+function findCanonicalLifecycleResourceOwner(canonical: string) {
+  let nearest: (typeof resourceOwners)[number] | undefined;
+  for (const owner of resourceOwners) {
+    if (
+      isPathInside(owner.root, canonical) &&
+      (!nearest || owner.root.length > nearest.root.length)
+    ) {
+      nearest = owner;
+    }
+  }
+  return nearest;
+}
+
+export function resolveDefaultLifecycleRuntimeDirectory(databasePath?: string): string {
+  return (
+    (databasePath ? findLifecycleResourceOwner(databasePath)?.root : undefined) ??
+    productionRuntimeDirectory
+  );
+}
 
 export type CoordinatorFamily = "gateway-lifecycle" | "state-lifecycle" | "state-handles";
 
@@ -26,7 +71,19 @@ export function resolveLifecycleCoordinatorBase(params: {
   uid: number | undefined;
 }) {
   const canonicalDatabasePath = resolveCoordinatorIdentityPath(params.databasePath);
-  const canonicalRuntimeDirectory = resolveCoordinatorIdentityPath(params.runtimeDirectory);
+  const requestedRuntimeDirectory = resolveCoordinatorIdentityPath(params.runtimeDirectory);
+  const defaultRuntimeDirectory = resolveCoordinatorIdentityPath(productionRuntimeDirectory);
+  const databaseOwner = findCanonicalLifecycleResourceOwner(canonicalDatabasePath);
+  const runtimeOwner = findCanonicalLifecycleResourceOwner(requestedRuntimeDirectory);
+  // Explicit private runtimes remain private. External databases must still contend
+  // with production even when a test worker inherited its owner's temporary root.
+  const canonicalRuntimeDirectory = databaseOwner
+    ? requestedRuntimeDirectory === defaultRuntimeDirectory
+      ? databaseOwner.root
+      : requestedRuntimeDirectory
+    : runtimeOwner
+      ? defaultRuntimeDirectory
+      : requestedRuntimeDirectory;
   // The predecessor state-local coordinator shipped only in v2026.8.1-beta.2.
   // Keep one current stable runtime path; beta-only peers are not upgrade-compatible.
   const suffix =

@@ -1,6 +1,7 @@
 // Register onboard tests cover onboarding command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithMockedCliExit } from "../../test-utils/command-runner.js";
 import { registerOnboardCommand } from "./register.onboard.js";
 
 const mocks = vi.hoisted(() => ({
@@ -66,7 +67,7 @@ describe("registerOnboardCommand", () => {
   async function runCli(args: string[]) {
     const program = new Command().enablePositionalOptions().exitOverride();
     registerOnboardCommand(program);
-    await program.parseAsync(args, { from: "user" });
+    await runWithMockedCliExit(() => program.parseAsync(args, { from: "user" }), runtime.exit);
   }
 
   function setupWizardOptions(callIndex = 0): Record<string, unknown> {

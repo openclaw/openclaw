@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { expect, it } from "vitest";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
+import { captureResourceOwnedNativeWorkerExit } from "../infra/vitest-resource-ownership.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -68,6 +69,7 @@ it("keeps deferred activation pending until renewal commits after contention", a
       execArgv: resolveRuntimeWorkerThreadExecArgv(driverUrl),
       env: {},
     });
+    const settleWorkerExit = captureResourceOwnedNativeWorkerExit(worker);
     const prepared = createDeferredCore();
     const processed = createDeferredCore();
     const ready = createDeferredCore();
@@ -123,6 +125,7 @@ it("keeps deferred activation pending until renewal commits after contention", a
       stopping = true;
       await worker.terminate();
       await exited.promise;
+      await settleWorkerExit?.();
     }
   });
 });

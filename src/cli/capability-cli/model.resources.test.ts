@@ -217,7 +217,8 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
               requests[0]!.end(
                 JSON.stringify({ error: { message: "fixture provider rejection" } }),
               );
-              await expect(first).rejects.toThrow("CLI failed");
+              await expect(first).rejects.toMatchObject({ code: 1 });
+              expect(exit).not.toHaveBeenCalled();
               expect(errors.mock.calls.flat().join(" ")).toContain("fixture provider rejection");
             } else if (mode === "callback-drain") {
               finish(requests[0]!, 0);
@@ -225,7 +226,8 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
             } else if (mode === "cancel-drain") {
               finish(requests[0]!, 0);
               await Promise.race([cancelStarted.promise, first]);
-              await expect(first).rejects.toThrow("CLI failed");
+              await expect(first).rejects.toMatchObject({ code: 1 });
+              expect(exit).not.toHaveBeenCalled();
               drainage = parent.drain().then(() => {
                 drained = true;
               });

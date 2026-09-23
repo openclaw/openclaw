@@ -2,6 +2,7 @@
 /* oxlint-disable typescript/no-unnecessary-type-parameters -- explicit call-site result types keep mock tuple extraction precise. */
 import { spawn, spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,7 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { parseCLI } from "vitest/node";
@@ -38,19 +39,20 @@ import {
   prepareVitestRuntime,
   resolveVitestPretestBuildMode,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
-import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
   parseExtensionIds,
   parseExactVitestExcludePaths,
   resolveExtensionBatchParallelism,
   runExtensionBatchPlan,
 } from "../../scripts/test-extension-batch.mts";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../src/infra/runtime-worker-url.js";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForFile,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
@@ -879,7 +881,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
       const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
       writeFileSync(
         path.join(root, "selected.test.mjs"),
-        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
+        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe(${JSON.stringify(`--import=${pathToFileURL(path.join(process.cwd(), "src/infra/vitest-resource-context-preload.test-support.mjs")).href} --trace-warnings`)});expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
       );
       for (const name of ["excluded", "unrelated"]) {
         writeFileSync(
@@ -1038,55 +1040,89 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
       const childPidPath = path.join(root, "child.pid");
       const descendantPidPath = path.join(root, "descendant.pid");
       const signaledPath = path.join(root, "signaled");
+      const readyPath = path.join(root, "ready");
 
       writeFileSync(
         config,
         `import {spawn} from 'node:child_process';import fs from 'node:fs';
 process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(signaledPath)},'SIGTERM');process.exit(0)});
-const descendant=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.stdout.write('ready');"],{stdio:['ignore','pipe','ignore']});
-await new Promise(resolve=>descendant.stdout.once('data',resolve));
-fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(descendant.pid));
 fs.writeFileSync(${JSON.stringify(childPidPath)},String(process.pid));
+const descendant=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.stdout.write('ready');"],{stdio:['ignore','pipe','ignore']});
+fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(descendant.pid));
+await new Promise(resolve=>descendant.stdout.once('data',resolve));
+fs.writeFileSync(${JSON.stringify(readyPath)},'ready');
 await new Promise(()=>{});export default {};`,
       );
-      const batchRunnerUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.vitestBatchRunner);
+      // Repository tooling resolves source-only preloads relative to its actual entry.
       writeFileSync(
         entry,
-        `import {runVitestBatch} from ${JSON.stringify(batchRunnerUrl.href)};process.exitCode=await runVitestBatch({config:${JSON.stringify(config)},args:['--configLoader=native'],targets:[]});`,
+        `import {runVitestBatch} from ${JSON.stringify(path.join(process.cwd(), "scripts/lib/vitest-batch-runner.mts"))};process.exitCode=await runVitestBatch({config:${JSON.stringify(config)},args:['--configLoader=native'],targets:[]});`,
       );
       const runner = spawn(
         process.execPath,
-        [...resolveRuntimeWorkerArgv(batchRunnerUrl).slice(0, -1), entry],
-        { cwd: process.cwd(), stdio: "ignore" },
+        ["--import", path.join(process.cwd(), "scripts/tsx.mjs"), entry],
+        { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
       );
+      let output = "";
+      runner.stdout.on("data", (chunk) => {
+        output += String(chunk);
+      });
+      runner.stderr.on("data", (chunk) => {
+        output += String(chunk);
+      });
+      runner.once("error", (error) => {
+        output += String(error);
+      });
+      const runnerClosed = new Promise<void>((resolve) => {
+        runner.once("close", () => resolve());
+      });
       let childPid = 0;
       let descendantPid = 0;
 
       try {
-        childPid = await waitForPidFile(childPidPath, 5_000);
-        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+        await waitForFile(readyPath, 5_000);
+        childPid = await waitForPidFile(childPidPath, 0);
+        descendantPid = await waitForPidFile(descendantPidPath, 0);
         expect(Number.isInteger(childPid)).toBe(true);
         expect(Number.isInteger(descendantPid)).toBe(true);
 
         expect(runner.pid).toBeGreaterThan(0);
+        const completion = waitForChildClose(runner);
         process.kill(runner.pid!, "SIGTERM");
-        const result = await waitForClose(runner);
+        const result = await completion;
 
         expect(result).toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(() => fileExists(signaledPath), 5_000);
+        await waitForFile(signaledPath, 5_000);
         expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
-        await waitFor(() => !isProcessAlive(childPid), 5_000);
-        await waitFor(() => !isProcessAlive(descendantPid), 5_000);
+        await waitForDead(childPid, 5_000);
+        await waitForDead(descendantPid, 5_000);
+      } catch (error) {
+        throw new Error(`Native batch signal fixture failed: ${output}`, { cause: error });
       } finally {
-        if (runner.pid && isProcessAlive(runner.pid)) {
-          process.kill(runner.pid, "SIGKILL");
+        if (runner.exitCode === null && runner.signalCode === null) {
+          const stopped = waitForChildClose(runner);
+          runner.kill("SIGTERM");
+          try {
+            await stopped;
+          } catch {
+            runner.kill("SIGKILL");
+          }
         }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        // Startup can fail after a child is published but before readiness.
+        if (!childPid && existsSync(childPidPath)) {
+          childPid = await waitForPidFile(childPidPath, 0);
         }
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
+        if (!descendantPid && existsSync(descendantPidPath)) {
+          descendantPid = await waitForPidFile(descendantPidPath, 0);
         }
+        for (const pid of [childPid, descendantPid]) {
+          if (pid && isProcessAlive(pid)) {
+            process.kill(pid, "SIGKILL");
+            await waitForDead(pid, 5_000);
+          }
+        }
+        // Descendants may hold inherited pipes after the wrapper is killed.
+        await runnerClosed;
         rmSync(root, { force: true, recursive: true });
       }
     },
@@ -1383,45 +1419,3 @@ await new Promise(()=>{});export default {};`,
     expect(result.stderr).toContain(`No tests found for ${bundledPluginRoot(extensionId)}.`);
   });
 });
-
-async function waitFor(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
-  const startedAt = Date.now();
-  while (!condition()) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error("timed out waiting for condition");
-    }
-    await delay(5);
-  }
-}
-
-async function waitForClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await Promise.race([
-    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    }),
-    delay(timeoutMs, undefined, { ref: false }).then(() => {
-      throw new Error("timed out waiting for child close");
-    }),
-  ]);
-}
-
-function fileExists(filePath: string): boolean {
-  try {
-    readFileSync(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}

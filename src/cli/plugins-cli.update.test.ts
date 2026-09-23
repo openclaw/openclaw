@@ -12,6 +12,7 @@ import {
   type PluginInstallTransaction,
 } from "../plugins/install-transaction.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import {
@@ -37,29 +38,11 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
 import { registerPluginsCli } from "./plugins-cli.js";
+import { createTrackedPluginConfig } from "./plugins-cli.update-fixtures.test-support.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 const { set: setTty, restore: restoreTty } = createCliTtyMock();
-
-function createTrackedPluginConfig(params: {
-  pluginId: string;
-  spec: string;
-  resolvedName?: string;
-}): OpenClawConfig {
-  return {
-    plugins: {
-      installs: {
-        [params.pluginId]: {
-          source: "npm",
-          spec: params.spec,
-          installPath: `/tmp/${params.pluginId}`,
-          ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
 
 function createCapabilityConsentReview(): PluginCapabilityConsentReview {
   return {
@@ -274,7 +257,8 @@ describe("plugins cli update", () => {
     resetPluginsCliTestState();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     restoreTty();
     if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
       delete process.env.OPENCLAW_NIX_MODE;

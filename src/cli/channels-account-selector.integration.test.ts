@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
+import { runWithMockedCliExit } from "../test-utils/command-runner.js";
 import { registerChannelsCli } from "./channels-cli.js";
 
 const requireValidConfigForWrite = vi.hoisted(() => vi.fn(async () => null));
@@ -25,7 +26,10 @@ async function runChannelMutation(verb: string, account?: string) {
     .exitOverride()
     .configureOutput({ writeErr: () => undefined });
   await registerChannelsCli(program, ["node", "openclaw", ...args]);
-  await program.parseAsync(args, { from: "user" });
+  await runWithMockedCliExit(
+    () => program.parseAsync(args, { from: "user" }),
+    vi.mocked(defaultRuntime.exit),
+  );
 }
 
 describe.each(["add", "remove", "login", "logout"])("channels %s account selection", (verb) => {
@@ -45,7 +49,7 @@ describe.each(["add", "remove", "login", "logout"])("channels %s account selecti
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("--account must not be blank"),
     );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(requireValidConfigForWrite).not.toHaveBeenCalled();
   });
 

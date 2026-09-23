@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExclusiveSlotSelectionMock,
   configWriteMock,
@@ -11,6 +11,7 @@ import {
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
 } from "../cli/plugins-cli-test-helpers.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 
@@ -25,6 +26,10 @@ const install = {
   spec: "workboard@1.0.0",
   installPath: "/private/managed-source/workboard",
 };
+
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 describe("plugin install persistence warning audiences", () => {
   beforeEach(() => {

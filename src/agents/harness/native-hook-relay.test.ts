@@ -9,7 +9,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 // Covers native hook relay registration, bridge invocation, and approval state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { runNativeHookRelayCliFromArgv } from "../../cli/native-hook-relay-cli.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -28,6 +28,8 @@ import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
@@ -48,33 +50,12 @@ import {
   registerNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
 } from "./native-hook-relay.js";
+import {
+  createPermissionRequestFixture,
+  readTestNativeAgentId,
+} from "./native-hook-relay.permission-fixture.test-support.js";
 
 const NATIVE_HOOK_RELAY_EXEC_PREFIX = process.platform === "win32" ? "" : "exec ";
-
-function createPermissionRequestFixture(
-  relayId: string,
-  toolUseId: string,
-): Parameters<typeof invokeNativeHookRelay>[0] {
-  return {
-    provider: "codex",
-    relayId,
-    event: "permission_request",
-    rawPayload: {
-      hook_event_name: "PermissionRequest",
-      cwd: "/repo",
-      tool_name: "Bash",
-      tool_use_id: toolUseId,
-      tool_input: { command: "git status" },
-    },
-  };
-}
-
-function readTestNativeAgentId(rawPayload: unknown): string | undefined {
-  if (!isRecord(rawPayload) || typeof rawPayload.agent_id !== "string") {
-    return undefined;
-  }
-  return rawPayload.agent_id.trim() || undefined;
-}
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -82,6 +63,11 @@ afterEach(async () => {
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
   await testing.clearNativeHookRelaysForTests();
+});
+
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
@@ -810,25 +796,37 @@ describe("native hook relay registry", () => {
     },
   );
 
-  it("fails closed when a retained relay predicate throws", () => {
+  it("fails closed when a retained relay predicate throws", async () => {
+    const fixture = await createAdmittedHostCapabilityTestFixture({
+      runId: "run-throwing-retain-predicate",
+    });
+    const predicate = vi.fn(() => {
+      throw new Error("predicate failed");
+    });
     const relayId = uniqueNativeHookRelayIdForTests("throwing-retain-predicate");
     const relay = registerOwnedNativeHookRelay({
       provider: "codex",
       relayId,
       sessionId: "session-1",
       runId: "run-throwing-retain-predicate",
+      runBeforeToolCall: fixture.hostCapabilities.runBeforeToolCall,
       retention: {
         readClaim: readTestNativeAgentId,
         allowPreToolUse: () => false,
         onDispose: () => {},
-        shouldRetainAfterForegroundClose: () => {
-          throw new Error("predicate failed");
-        },
+        shouldRetainAfterForegroundClose: predicate,
       },
     });
 
-    expect(() => relay.unregister()).not.toThrow();
-    expect(testing.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+    try {
+      expect(() => relay.unregister()).not.toThrow();
+      expect(predicate).toHaveBeenCalledOnce();
+      expect(testing.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+    } finally {
+      relay.unregister();
+      fixture.closeHost();
+      fixture.closeAdmission();
+    }
   });
 
   it("keeps a reentrant same-id successor after old teardown completes", () => {

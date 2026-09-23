@@ -119,6 +119,11 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         await import("../state/openclaw-agent-db-lifecycle.js");
       await closeOpenClawAgentDatabasesAsync();
     },
+    "shared-state-databases": async () => {
+      const { closeOpenClawStateDatabaseAsync } =
+        await import("../state/openclaw-state-db-cache.js");
+      await closeOpenClawStateDatabaseAsync();
+    },
   };
   for (const [name, finalize] of Object.entries(finalizers)) {
     await runCliDisposer(name, finalize, runCleanup);

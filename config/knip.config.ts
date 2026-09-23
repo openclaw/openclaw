@@ -153,6 +153,7 @@ const repositoryScriptEntries = [
   "scripts/lib/vitest-resource-reporter.mts!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
+  "scripts/live-docker-stage-private-sdk-exports.mjs!",
   // Mantis controllers launch these observers and bridge by path inside isolated runtimes.
   "scripts/mantis/observe-request-telegram-qa.mts!",
   "scripts/mantis/observe-request-web-ui.mts!",

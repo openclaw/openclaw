@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -20,8 +20,8 @@ const priorJson = `{ "revision": 41, "index": {
   "installRecords": {}, "plugins": [], "diagnostics": []
 } }`;
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   cleanupTrackedTempDirs(tempDirs);
 });
 

@@ -1,11 +1,16 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { installClawPackages, preflightClawPackage } from "./packages.js";
 import { packageInstallPlan as plan } from "./packages.test-support.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
+
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 const integrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const pluginPackage = {

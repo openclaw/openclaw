@@ -1,10 +1,11 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
+import { captureResourceOwnedNativeProcessExit } from "../vitest-resource-ownership.js";
 import { withStableDeliveryPreparation } from "./delivery-queue-preparation.js";
 import { deliveryQueueProcessEntrypoints } from "./delivery-queue-process-runtime.test-support.js";
 
@@ -12,7 +13,7 @@ const childUrl = resolveRuntimeWorkerUrl(deliveryQueueProcessEntrypoints.prepara
 
 describe("stable delivery preparation cross-process ownership", () => {
   let stateDir = "";
-  let child: ChildProcess | null = null;
+  let stopChild: (() => Promise<void>) | undefined;
 
   beforeEach(async () => {
     closeOpenClawStateDatabaseForTest();
@@ -20,18 +21,31 @@ describe("stable delivery preparation cross-process ownership", () => {
   });
 
   afterEach(async () => {
-    child?.kill("SIGKILL");
-    child = null;
+    await stopChild?.();
+    stopChild = undefined;
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("blocks a second process before it can enter modifying policy", async () => {
     const id = "cross-process-stable-intent";
-    child = spawn(process.execPath, [...resolveRuntimeWorkerArgv(childUrl), stateDir, id], {
+    const child = spawn(process.execPath, [...resolveRuntimeWorkerArgv(childUrl), stateDir, id], {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
+    let settleNativeExit: ReturnType<typeof captureResourceOwnedNativeProcessExit> = undefined;
+    stopChild = async () => {
+      child.kill("SIGKILL");
+      await closed;
+      await settleNativeExit?.();
+    };
+    settleNativeExit =
+      child.pid === undefined
+        ? undefined
+        : captureResourceOwnedNativeProcessExit(child, { includeWorkerThreads: true });
     await new Promise<void>((resolve, reject) => {
       let stdout = "";
       let stderr = "";
@@ -46,7 +60,11 @@ describe("stable delivery preparation cross-process ownership", () => {
       child?.stderr?.on("data", (chunk: Buffer) => {
         stderr += chunk.toString();
       });
-      child?.once("exit", (code) => {
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once("exit", (code) => {
         clearTimeout(timer);
         reject(new Error(`child exited before ownership proof (${code}): ${stderr}`));
       });

@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
@@ -9,6 +10,10 @@ import {
   registerOwnedNativeHookRelay,
   testing,
 } from "./native-hook-relay.js";
+
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),

@@ -347,7 +347,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       Array.from({ length: 3 }, () => ({
         buildPrivateQa: "1",
         enablePrivateQaCli: "1",
-        nodeOptions: "--no-warnings",
+        nodeOptions: `--import=${new URL("../../../src/infra/vitest-resource-context-preload.test-support.mjs", import.meta.url).href} --no-warnings`,
       })),
     );
     expect(isQaPosixProcessGroupAlive(gateway.pid!)).toBe(true);

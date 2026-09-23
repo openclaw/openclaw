@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { fork, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,12 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-readonly-location.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { acquireStateDatabaseHandleExclusion } from "./state-database-coordinator.js";
+import { captureResourceOwnedNativeProcessExit } from "./vitest-resource-ownership.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, fork: vi.fn(actual.fork) };
+});
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -253,7 +259,9 @@ describe("schema-header native reader lifetime", () => {
       const controller = new AbortController();
       const cancellation = new Error("header inspection cancelled");
       let settled = false;
-      await using schemaReader = createAgentSchemaInspectionWorker();
+      vi.mocked(fork).mockClear();
+      const schemaReader = createAgentSchemaInspectionWorker();
+      let settleNativeExits: Array<() => Promise<void>> = [];
       const operation = schemaReader.inspect(
         {
           pathname,
@@ -272,6 +280,15 @@ describe("schema-header native reader lifetime", () => {
         },
       );
       try {
+        const children = vi
+          .mocked(fork)
+          .mock.results.filter((result) => result.type === "return")
+          .map(({ value }) => value);
+        expect(children).toHaveLength(1);
+        settleNativeExits = children.flatMap((child) => {
+          const settle = captureResourceOwnedNativeProcessExit(child);
+          return settle ? [settle] : [];
+        });
         await vi.waitFor(() => expect(fs.existsSync(marker("read"))).toBe(true), {
           timeout: 10_000,
         });
@@ -312,7 +329,12 @@ describe("schema-header native reader lifetime", () => {
       } finally {
         controller.abort(cancellation);
         await Promise.allSettled([operation]);
-        writer.close();
+        try {
+          await schemaReader[Symbol.asyncDispose]();
+          await Promise.all(settleNativeExits.map((settle) => settle()));
+        } finally {
+          writer.close();
+        }
       }
     },
     30_000,

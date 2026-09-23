@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
@@ -17,8 +18,9 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 
 const tempDirs: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
+  await closeOpenClawStateDatabaseAsync();
   cleanupTrackedTempDirs(tempDirs);
 });
 

@@ -1,4 +1,9 @@
 export const proxyCaptureNativeProcessEntrypoints = {
+  stateDatabaseCache: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../state/openclaw-state-db-cache",
+    distWorkerPath: "state/openclaw-state-db-cache.js",
+  },
   runtime: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "runtime",

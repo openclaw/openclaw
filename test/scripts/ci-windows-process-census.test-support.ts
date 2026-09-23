@@ -107,6 +107,7 @@ else if (fault !== "retire") console.log(JSON.stringify({ ready: true }));
 `;
       const { child, completion } = spawnOwnedVitestProcess({
         command: process.execPath,
+        nodeEntryIndex: 1,
         args: [
           "--input-type=module",
           "-e",

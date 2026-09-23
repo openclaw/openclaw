@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { discoverConfiguredPluginLoadPaths, discoverOpenClawPlugins } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
@@ -45,7 +46,14 @@ import {
 } from "./registry-lifecycle.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    clearPluginMetadataLifecycleCaches();
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 
 it.each(["success", "plugin failure", "module failure", "host failure"] as const)(
   "keeps adopted instance custody through physical disposal (%s)",
@@ -110,11 +118,6 @@ it.each(["success", "plugin failure", "module failure", "host failure"] as const
     }
   },
 );
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  clearPluginMetadataLifecycleCaches();
-});
 
 function createWindowsRootAliasFixture(
   prefix: string,

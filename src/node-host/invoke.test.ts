@@ -10,7 +10,10 @@ import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
@@ -18,8 +21,9 @@ import { handleInvoke } from "./invoke.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
   resetPluginRuntimeStateForTest();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 const approvalResolutionFailure = vi.hoisted(() => ({ error: null as Error | null }));
@@ -883,6 +887,7 @@ describe("node host invoke", () => {
         });
       });
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       fs.rmSync(tempHome, { recursive: true, force: true });
     }

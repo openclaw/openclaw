@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import path from "node:path";
+import * as json5 from "json5";
 import { createStandardRawEventIngressMonitor } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelIngressQueue } from "../../src/channels/message/ingress-queue.js";
 import { runGatewayLoop } from "../../src/cli/gateway-cli/run-loop.js";
@@ -7,15 +9,26 @@ import {
   requestGatewayRestartWithSignalAdmission,
   resetGatewayRestartStateForInProcessRestart,
 } from "../../src/infra/restart.js";
+import { registerSealedRuntime } from "../../src/infra/sealed-runtime-registry.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../../src/infra/update-managed-service-handoff-lease.js";
 import {
   getGatewayRestartDrainSignal,
   resetGatewayWorkAdmission,
 } from "../../src/process/gateway-work-admission.js";
-import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../src/state/openclaw-state-db.js";
 
 const stateDir = process.argv[2];
 if (!stateDir) {
   throw new Error("state directory argument is required");
+}
+const control = path.join(fs.realpathSync(stateDir), "handoff-control");
+fs.mkdirSync(control, { mode: 0o700 });
+registerSealedRuntime({ json5, resolveSecureTempRoot: () => control });
+if (
+  resolveManagedUpdateLeaseDatabasePath() !==
+  path.join(fs.realpathSync(control), "managed-update-handoffs.sqlite")
+) {
+  throw new Error("Gateway restart fixture handoff database escaped its private root");
 }
 process.env.OPENCLAW_STATE_DIR = path.resolve(stateDir);
 process.env.OPENCLAW_NO_RESPAWN = "1";
@@ -144,7 +157,7 @@ releaseFirstClose();
 await secondStarted;
 process.emit("SIGINT");
 const exitCode = await exited;
-closeOpenClawStateDatabaseForTest();
+await closeOpenClawStateDatabaseAsync();
 
 process.send?.({
   type: "ingress-restart-proof",

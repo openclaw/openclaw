@@ -1,10 +1,15 @@
 // Directory CLI tests cover directory command registration and plugin-backed lookups.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { registerDirectoryCli } from "./directory-cli.js";
+
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 const runtimeState = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");

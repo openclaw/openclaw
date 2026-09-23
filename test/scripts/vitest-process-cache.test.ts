@@ -44,6 +44,7 @@ console.log(JSON.stringify({ namespace, output: result.stdout, disabled: process
     };
     const { child, completion } = spawnOwnedVitestProcess({
       command: testNodeExecPath,
+      nodeEntryIndex: sharedVitestConfig.test.execArgv.length + 1,
       args: [...sharedVitestConfig.test.execArgv, "--input-type=module", "-e", script],
       homeMode,
       options: { env, stdio: ["ignore", "pipe", "pipe"] },
@@ -80,6 +81,7 @@ it.skipIf(process.platform !== "win32")(
     }
     const { child, completion } = spawnOwnedVitestProcess({
       command: testNodeExecPath,
+      nodeEntryIndex: 0,
       args: [
         "-e",
         "console.log(JSON.stringify([process.env.TMPDIR, process.env.TMP, process.env.TEMP]))",

@@ -7,6 +7,7 @@ import {
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
+import { runWithMockedCliExit } from "../test-utils/command-runner.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
@@ -128,7 +129,10 @@ describe("registerQrCli", () => {
 
   async function runQr(args: string[]) {
     const program = createProgram();
-    await program.parseAsync(["qr", ...args], { from: "user" });
+    await runWithMockedCliExit(
+      () => program.parseAsync(["qr", ...args], { from: "user" }),
+      runtimeExit,
+    );
   }
 
   async function expectQrExit(args: string[]) {
@@ -186,6 +190,8 @@ describe("registerQrCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetRuntimeCapture();
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
+    vi.stubEnv("OPENCLAW_PROFILE", "");
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     runtimeExit.mockImplementation(() => {

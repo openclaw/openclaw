@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.ts";
@@ -238,7 +239,9 @@ export default {
           TMP: tmp,
           TEMP: tmp,
           CI: "1",
-          NODE_OPTIONS: `--require=${preload}`,
+          NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(preload).href}`]
+            .filter(Boolean)
+            .join(" "),
           OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "cache"),
           POOL_DIAGNOSTIC_FIXTURE_SECRET: "fixture-env-value-do-not-print",
         },
@@ -406,5 +409,82 @@ process.exit("7");
       outcomes.push({ code, listenerCode: result.code });
     }
     expect(outcomes[1]).toEqual(outcomes[0]);
+  },
+);
+
+it(
+  "joins native fork and Worker claims at the owned process close",
+  { timeout: 180_000 },
+  async ({ signal }) => {
+    const root = tempDirs.make("openclaw-fork-resource-claims-");
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+    fs.symlinkSync(
+      path.join(repoRoot, "node_modules"),
+      path.join(root, "node_modules"),
+      "junction",
+    );
+    fs.writeFileSync(
+      path.join(root, "vitest.config.ts"),
+      `import { createCommandsVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.commands.config.ts"))};
+const { pool } = createCommandsVitestConfig({}).test;
+export default { root: ${JSON.stringify(root)}, test: { pool, isolate: true, maxWorkers: 1, include: ["owned.test.ts"] } };
+`,
+    );
+    const ownership = path.join(repoRoot, "src/infra/vitest-resource-ownership.ts");
+    const workerSource = `
+import { parentPort } from "node:worker_threads";
+import { DatabaseSync } from "node:sqlite";
+import { getVitestResourceContext } from ${JSON.stringify(pathToFileURL(ownership).href)};
+const context = getVitestResourceContext();
+if (context?.kind !== "owned") throw new Error("Expected worker resource owner");
+for (const owner of context.owners) owner.claimNativeHandle(() => {});
+const db = new DatabaseSync(${JSON.stringify(path.join(root, "worker.sqlite"))});
+db.exec("BEGIN EXCLUSIVE");
+parentPort.postMessage("ready");
+setInterval(() => {}, 1000);
+`;
+    fs.writeFileSync(
+      path.join(root, "owned.test.ts"),
+      `import { once } from "node:events";
+import { Worker } from "node:worker_threads";
+import { it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { getVitestResourceContext } from ${JSON.stringify(ownership)};
+it("leaves native cached handles with the fork lifetime", async () => {
+  const context = getVitestResourceContext();
+  if (context?.kind !== "owned") throw new Error("Expected fork resource owner");
+  for (const owner of context.owners) owner.claimNativeHandle(() => {});
+  const db = new DatabaseSync(${JSON.stringify(path.join(root, "main.sqlite"))});
+  db.exec("BEGIN EXCLUSIVE");
+  const worker = new Worker(new URL(${JSON.stringify("data:text/javascript," + encodeURIComponent(workerSource))}), { execArgv: ["--import", ${JSON.stringify(path.join(repoRoot, "scripts/tsx.mjs"))}] });
+  await once(worker, "message");
+});
+`,
+    );
+    const result = await runVitestShutdownCommand({
+      args: [
+        path.join(repoRoot, "scripts/run-vitest.mjs"),
+        "run",
+        "--config",
+        path.join(root, "vitest.config.ts"),
+        "--configLoader",
+        "native",
+      ],
+      cwd: root,
+      env: {
+        ...process.env,
+        HOME: root,
+        USERPROFILE: root,
+        TMPDIR: root,
+        TMP: root,
+        TEMP: root,
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "cache"),
+      },
+      signal,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(output).toMatch(/1 passed/u);
+    expect(result.code, output).toBe(0);
+    expect(output).not.toContain("Unreleased Vitest resource claim");
   },
 );

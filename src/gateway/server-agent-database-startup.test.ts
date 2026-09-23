@@ -1,4 +1,6 @@
+import childProcess, { type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
@@ -19,6 +21,7 @@ import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import * as inspection from "../infra/sqlite-readonly-worker.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
+import { captureResourceOwnedNativeProcessExit } from "../infra/vitest-resource-ownership.js";
 import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
@@ -42,6 +45,7 @@ import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.
 installGatewayTestHooks();
 afterEach(() => {
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   vi.unstubAllEnvs();
 });
 
@@ -51,6 +55,22 @@ function pauseIntegrityInspections(params: {
   pausePaths?: string[];
   pausePreparation?: boolean;
 }) {
+  const nativeReaders: Array<{
+    child: ChildProcess;
+    settle: (() => Promise<void>) | undefined;
+  }> = [];
+  const fork = childProcess.fork;
+  vi.spyOn(childProcess, "fork").mockImplementation((...args) => {
+    const child = fork(...args);
+    if (
+      child.pid &&
+      /openclaw-agent-schema-inspection\.worker\.[cm]?[jt]s$/.test(String(args[0]))
+    ) {
+      nativeReaders.push({ child, settle: captureResourceOwnedNativeProcessExit(child) });
+    }
+    return child;
+  });
+  syncBuiltinESMExports();
   const releasePath = path.join(params.root, "release-inspection");
   const enteredPaths = params.paths.map((_, index) =>
     path.join(params.root, `inspection-entered-${index}`),
@@ -107,6 +127,15 @@ DatabaseSync.prototype.prepare = function(sql) {
     enteredPaths,
     preparationReleasePath,
     preparationEnteredPaths,
+    async settleKilledReaders() {
+      // A fault-stalled SQLite reader cannot run JS finally after SIGKILL.
+      // Do not settle normally exited readers or any descendant/general claim.
+      for (const { child, settle } of nativeReaders) {
+        if (child.signalCode === "SIGKILL") {
+          await settle?.();
+        }
+      }
+    },
   };
 }
 
@@ -229,7 +258,7 @@ it.each([
               process.kill(pid, 0);
               inspectionAliveAtBrokerClose = true;
             } catch {
-              inspectionAliveAtBrokerClose = false;
+              inspectionAliveAtBrokerClose ??= false;
             }
           } finally {
             await close();
@@ -457,6 +486,7 @@ it.each([
           await unadoptedPortClaim?.release();
         }
       }
+      await pause?.settleKilledReaders();
     }
   },
 );
@@ -540,5 +570,6 @@ it("recovers queued agents after both inspection slots expire without refusing a
   } finally {
     fs.writeFileSync(pause.releasePath, "resume");
     await server?.close();
+    await pause.settleKilledReaders();
   }
 });

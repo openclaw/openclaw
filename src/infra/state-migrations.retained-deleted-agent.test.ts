@@ -473,6 +473,18 @@ describe("Doctor with a deleted agent database", () => {
             expect.stringContaining("retired"),
             "Doctor warnings",
           );
+          const activeAlias = path.join(stateDir, "active-alias.sqlite");
+          const activeBefore = fs.readFileSync(activePath);
+          fs.linkSync(activePath, activeAlias);
+          try {
+            await expect(
+              runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" }),
+            ).rejects.toThrow(`hard-linked path: ${activePath}`);
+            expect(fs.readFileSync(activePath)).toEqual(activeBefore);
+            expect(fs.readFileSync(activeAlias)).toEqual(activeBefore);
+          } finally {
+            fs.unlinkSync(activeAlias);
+          }
         } else {
           expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
             scannedStores: 1,

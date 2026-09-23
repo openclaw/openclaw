@@ -8,6 +8,13 @@ import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-own
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import {
+  composeVitestLauncherNodeOptions,
+  resolveVitestLauncherResourceContext,
+  VITEST_OPENCLAW_PRODUCTION_LOCK_ROOT,
+  VITEST_OPENCLAW_RESOURCE_ROOT,
+  VITEST_OPENCLAW_RESOURCE_ROOT_CHAIN,
+} from "../infra/vitest-resource-context.test-support.js";
 
 export function createGatewayFixtureFork(
   registerCleanup: (cleanup: () => Promise<void>) => unknown,
@@ -65,7 +72,14 @@ export default defineConfig({
       let joined = false;
       try {
         // Failed child claims stay private; only transformed code is shared across fresh forks.
-        createVitestResourceOwner(root);
+        const owner = createVitestResourceOwner(root);
+        const inherited = resolveVitestLauncherResourceContext(process.env);
+        const resourceRoots = [owner, ...inherited.owners].map(
+          ({ root: resourceRoot, identity }) => ({
+            root: resourceRoot,
+            identity,
+          }),
+        );
         const prepared = await prepareProject();
         const require = createRequire(import.meta.url);
         const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
@@ -100,6 +114,11 @@ export default defineConfig({
           timeoutMs: 90_000,
           maxBytes,
           env: {
+            // This raw native-failure fixture bypasses the ordinary owned Vitest launcher.
+            NODE_OPTIONS: composeVitestLauncherNodeOptions(undefined),
+            [VITEST_OPENCLAW_RESOURCE_ROOT]: root,
+            [VITEST_OPENCLAW_RESOURCE_ROOT_CHAIN]: JSON.stringify(resourceRoots),
+            [VITEST_OPENCLAW_PRODUCTION_LOCK_ROOT]: inherited.productionRuntimeDirectory,
             PATH: process.env.PATH,
             OPENCLAW_VITEST_FS_MODULE_CACHE: process.env.OPENCLAW_VITEST_FS_MODULE_CACHE,
             HOME: path.join(root, "home"),

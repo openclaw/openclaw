@@ -62,6 +62,20 @@ describe("worker task pool source loading", () => {
                parentPort.on("message", () => parentPort.postMessage({ status: "ok", value: Marker.Ready }));`,
     },
     {
+      name: "explicit CommonJS TypeScript",
+      filename: "worker.cts",
+      source: `const { parentPort } = require("node:worker_threads");
+               enum Marker { Ready = 41 }
+               parentPort.on("message", () => parentPort.postMessage({ status: "ok", value: Marker.Ready }));`,
+    },
+    {
+      name: "ESM TypeScript",
+      filename: "worker.mts",
+      source: `import { parentPort } from "node:worker_threads";
+               enum Marker { Ready = 41 }
+               parentPort.on("message", () => parentPort.postMessage({ status: "ok", value: Marker.Ready }));`,
+    },
+    {
       name: "compiled CommonJS",
       filename: "worker.cjs",
       source: `const { parentPort } = require("node:worker_threads");
@@ -78,5 +92,23 @@ describe("worker task pool source loading", () => {
     fs.writeFileSync(path.join(directory, "package.json"), '{"type":"commonjs"}');
 
     expect(await runWorker(directory, filename, source)).toBe(41);
+  });
+
+  it("propagates malformed TypeScript and joins the failed worker before recovery", async () => {
+    const directory = tempDirs.make("worker-invalid-typescript-");
+    fs.writeFileSync(path.join(directory, "package.json"), '{"type":"commonjs"}');
+    await expect(runWorker(directory, "invalid.cts", "const broken: = 1;")).rejects.toMatchObject({
+      code: "unavailable",
+      message: expect.stringMatching(/(?:Syntax|Transform)Error:/u),
+    });
+    expect(
+      await runWorker(
+        directory,
+        "recovered.ts",
+        `const { parentPort } = require("node:worker_threads");
+         enum Marker { Ready = 43 }
+         parentPort.on("message", () => parentPort.postMessage({ status: "ok", value: Marker.Ready }));`,
+      ),
+    ).toBe(43);
   });
 });

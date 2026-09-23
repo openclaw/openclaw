@@ -996,6 +996,8 @@ export async function runCli(
           }
           throw error;
         } finally {
+          // Preflight can open shared readers before command registration begins.
+          await closeCliResources(harnessCleanup);
           const resources = harnessCleanup?.pluginResources;
           if (resources) {
             await runCliDisposer("plugin-registration-resources", async () => {
@@ -1732,7 +1734,6 @@ async function runCliWithPreparedOutputMode(
     uninstallGatewayRunRuntimeHooks?.();
     const resources = options.harnessCleanup?.pluginResources;
     await runCliDisposer("managed-proxy", stopStartedProxy, resources?.runCleanup);
-    await closeCliResources(options.harnessCleanup);
     if (!resources) {
       pauseNonTtyStdinForCliExit();
     }

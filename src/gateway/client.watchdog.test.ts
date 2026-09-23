@@ -1,8 +1,11 @@
 // Gateway client watchdog tests ensure managed proxy mode does not block direct
 // loopback WebSocket connections needed by the OpenClaw wrapper.
-import { describe, expect, test, vi } from "vitest";
+import { afterAll, describe, expect, test, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { GatewayClient } from "./client.js";
+
+afterAll(() => closeOpenClawStateDatabaseAsync());
 
 function isIpv6UnavailableError(err: unknown): boolean {
   const code =

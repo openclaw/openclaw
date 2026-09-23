@@ -1,6 +1,5 @@
 // Coordinates Gateway presence and shared-state lifecycle operations outside removable state.
 import { AsyncLocalStorage } from "node:async_hooks";
-import os from "node:os";
 import path from "node:path";
 import type { MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -8,8 +7,10 @@ import {
   createSqliteLifecycleAggregateError,
   ensurePrivateSqliteCoordinatorDirectory,
   runWithSqliteCoordinator,
+  settleUnopenedSqliteCoordinator,
   SqliteCoordinatorError,
   type SqliteCoordinatorLease,
+  type SqliteCoordinatorFailureSettlement,
   tryAcquireExclusiveSqliteCoordinator,
   tryAcquireSharedSqliteCoordinator,
 } from "./sqlite-coordinator.js";
@@ -25,6 +26,8 @@ import {
   StateSchemaMutationConflictError,
 } from "./state-database-coordinator-errors.js";
 import {
+  findLifecycleResourceOwner,
+  resolveDefaultLifecycleRuntimeDirectory,
   resolveLifecycleCoordinatorBase,
   buildLifecycleCoordinatorPath,
   resolveLifecycleCoordinatorPath,
@@ -85,14 +88,12 @@ type StateDatabaseCoordinatorLease = {
   release: () => void;
 };
 
-export function resolveStateLifecycleRuntimeDirectory(): string {
+export function resolveStateLifecycleRuntimeDirectory(databasePath?: string): string {
   const captured = coordinatorRuntimeDirectories.getStore();
   if (captured !== undefined) {
     return captured.directory;
   }
-  return process.platform === "win32"
-    ? path.join(os.homedir(), "AppData", "Local", "OpenClaw", "locks")
-    : "/tmp";
+  return resolveDefaultLifecycleRuntimeDirectory(databasePath);
 }
 
 /** Capture the directory owner's retention policy before crossing an async or worker boundary. */
@@ -118,6 +119,97 @@ export function resolveStateDatabaseCoordinatorPath(params: {
   uid: number | undefined;
 }): string {
   return resolveLifecycleCoordinatorPath("state-lifecycle", params);
+}
+
+/** Namespace cleanup requires native close or an explicitly joined native owner exit. */
+function acquireResourceOwnedCoordinator(
+  databasePath: string,
+  coordinatorPath: string,
+  coordinatorLabel: string,
+  acquire: (
+    owned: boolean,
+    acquisitionFailure: SqliteCoordinatorFailureSettlement,
+  ) => SqliteCoordinatorLease | null,
+): SqliteCoordinatorLease | null {
+  const owners = [
+    findLifecycleResourceOwner(databasePath),
+    findLifecycleResourceOwner(coordinatorPath),
+  ].filter((owner, index, all) => owner !== undefined && all.indexOf(owner) === index);
+  const releases: Array<() => void> = [];
+  const releaseClaims = () => {
+    // Successful receipts leave the retry set; failed publication remains retryable.
+    for (let index = releases.length - 1; index >= 0; index -= 1) {
+      releases[index]!();
+      releases.splice(index, 1);
+    }
+  };
+  const acquisitionFailure = {
+    paths: [
+      databasePath,
+      coordinatorPath,
+      ...owners.flatMap((owner) => (owner ? [owner.root] : [])),
+    ],
+    settle: releaseClaims,
+  };
+  try {
+    for (const owner of owners) {
+      if (owner) {
+        owner.claimNativeHandle((release) => releases.push(release));
+      }
+    }
+    // Directory preparation has no native custody; unwind admitted claims if it fails.
+    ensurePrivateSqliteCoordinatorDirectory(path.dirname(coordinatorPath), coordinatorLabel);
+  } catch (error) {
+    try {
+      settleUnopenedSqliteCoordinator(acquisitionFailure);
+    } catch (cleanupError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "Failed to acquire lifecycle resource claims",
+        error,
+      );
+    }
+    throw error;
+  }
+  // Only the native acquisition owner can settle failure: it distinguishes an
+  // unopened handle or successful close from retained, retryable native custody.
+  const coordinator = acquire(owners.length > 0, acquisitionFailure);
+  if (!coordinator) {
+    releaseClaims();
+    return null;
+  }
+  if (owners.length === 0) {
+    return coordinator;
+  }
+  return {
+    get closed() {
+      return coordinator.closed && releases.length === 0;
+    },
+    release: () => {
+      const errors: unknown[] = [];
+      try {
+        coordinator.release({ keepAlive: false });
+      } catch (error) {
+        errors.push(error);
+      }
+      if (coordinator.closed) {
+        try {
+          releaseClaims();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(
+          errors,
+          "Failed to close lifecycle coordinator and release resource claims",
+        );
+      }
+    },
+  };
 }
 
 function acquireLifecycleCoordinator(
@@ -148,11 +240,17 @@ function acquireLifecycleCoordinator(
     held.references += 1;
     held.keepAlive &&= keepAlive;
   } else {
-    ensurePrivateSqliteCoordinatorDirectory(path.dirname(coordinatorPath), `${family} coordinator`);
-    const coordinator = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, {
-      busyTimeoutMs: params.busyTimeoutMs,
-      keepAlive,
-    });
+    const coordinator = acquireResourceOwnedCoordinator(
+      params.databasePath,
+      coordinatorPath,
+      `${family} coordinator`,
+      (owned, acquisitionFailure) =>
+        tryAcquireExclusiveSqliteCoordinator(coordinatorPath, {
+          busyTimeoutMs: params.busyTimeoutMs,
+          keepAlive: !owned && keepAlive,
+          acquisitionFailure,
+        }),
+    );
     if (!coordinator) {
       throw new StateDatabaseCoordinatorContentionError(family);
     }
@@ -269,8 +367,16 @@ export function tryAcquireGatewayLifecycleCleanupCoordinator(
   params: Pick<CoordinatorOptions, "databasePath" | "runtimeDirectory" | "uid">,
 ): SqliteCoordinatorLease | null {
   const pathname = resolveGatewaySchemaFencePath(params);
-  ensurePrivateSqliteCoordinatorDirectory(path.dirname(pathname), "gateway-lifecycle coordinator");
-  return tryAcquireExclusiveSqliteCoordinator(pathname, { busyTimeoutMs: 0 });
+  return acquireResourceOwnedCoordinator(
+    params.databasePath,
+    pathname,
+    "gateway-lifecycle coordinator",
+    (_owned, acquisitionFailure) =>
+      tryAcquireExclusiveSqliteCoordinator(pathname, {
+        busyTimeoutMs: 0,
+        acquisitionFailure,
+      }),
+  );
 }
 
 /** True only while this process retains the native Gateway-role coordinator. */
@@ -516,11 +622,17 @@ export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
     return scope.pin();
   }
   return withSqliteInspectionOperation("coordinator", () => {
-    ensurePrivateSqliteCoordinatorDirectory(path.dirname(pathname), "state-handles coordinator");
-    const coordinator = tryAcquireSharedSqliteCoordinator(pathname, {
-      busyTimeoutMs: params.busyTimeoutMs,
-      keepAlive: shouldKeepStateCoordinatorAlive(params),
-    });
+    const coordinator = acquireResourceOwnedCoordinator(
+      params.databasePath,
+      pathname,
+      "state-handles coordinator",
+      (owned, acquisitionFailure) =>
+        tryAcquireSharedSqliteCoordinator(pathname, {
+          busyTimeoutMs: params.busyTimeoutMs,
+          keepAlive: !owned && shouldKeepStateCoordinatorAlive(params),
+          acquisitionFailure,
+        }),
+    );
     if (!coordinator) {
       throw new StateDatabaseCoordinatorContentionError("state-handles");
     }

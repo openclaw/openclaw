@@ -115,7 +115,7 @@ describe("resolveRuntimeWorkerArgv", () => {
       expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([...loader, fileURLToPath(url)]);
       expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
         typescriptLoader && extension.endsWith("ts")
-          ? ["--import", import.meta.resolve("tsx/esm")]
+          ? ["--import", import.meta.resolve("./runtime-worker-source-loader.mjs")]
           : [],
       );
     }

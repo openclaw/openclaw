@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import * as bundledSources from "./bundled-sources.js";
 import { attachPluginInstallOwnerMigrations } from "./install-transaction.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -82,7 +83,10 @@ function installedIndex(params: {
 
 describe("plugin release cohort package reconciliation", () => {
   const tempDirs: string[] = [];
-  afterEach(() => cleanupTrackedTempDirs(tempDirs));
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanupTrackedTempDirs(tempDirs);
+  });
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.resetAllMocks();

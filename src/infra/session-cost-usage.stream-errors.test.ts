@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import { loadCostUsageSummaryFromCache, loadSessionLogs } from "./session-cost-usage.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
@@ -96,42 +97,46 @@ if (!isMainThread) {
     await withEnvAsync(
       { OPENCLAW_STATE_DIR: tempDir, ...sqliteWorkerPreloadEnv(preload) },
       async () => {
-        const range = {
-          startMs: Date.UTC(2026, 6, 6),
-          endMs: Date.UTC(2026, 6, 7),
-        };
-        await loadCostUsageSummaryFromCache({
-          ...range,
-          agentId: "main",
-          refreshMode: "sync-when-empty",
-        });
-        const rollupsBefore = readSessionCostUsageRollupRows();
+        try {
+          const range = {
+            startMs: Date.UTC(2026, 6, 6),
+            endMs: Date.UTC(2026, 6, 7),
+          };
+          await loadCostUsageSummaryFromCache({
+            ...range,
+            agentId: "main",
+            refreshMode: "sync-when-empty",
+          });
+          const rollupsBefore = readSessionCostUsageRollupRows();
 
-        await fs.appendFile(sessionFile, appendedEntry, "utf-8");
-        await fs.writeFile(armed, "armed");
+          await fs.appendFile(sessionFile, appendedEntry, "utf-8");
+          await fs.writeFile(armed, "armed");
 
-        await loadCostUsageSummaryFromCache({ ...range, agentId: "main" });
-        let summary = await loadCostUsageSummaryFromCache({
-          ...range,
-          agentId: "main",
-          requestRefresh: false,
-        });
-        await vi.waitFor(
-          async () => {
-            summary = await loadCostUsageSummaryFromCache({
-              ...range,
-              agentId: "main",
-              requestRefresh: false,
-            });
-            expect(summary.cacheStatus?.status).toBe("partial");
-          },
-          { interval: 5, timeout: 1_000 },
-        );
+          await loadCostUsageSummaryFromCache({ ...range, agentId: "main" });
+          let summary = await loadCostUsageSummaryFromCache({
+            ...range,
+            agentId: "main",
+            requestRefresh: false,
+          });
+          await vi.waitFor(
+            async () => {
+              summary = await loadCostUsageSummaryFromCache({
+                ...range,
+                agentId: "main",
+                requestRefresh: false,
+              });
+              expect(summary.cacheStatus?.status).toBe("partial");
+            },
+            { interval: 5, timeout: 1_000 },
+          );
 
-        expect(await fs.readFile(failed, "utf8")).toBe("stream read failed");
-        expect(readSessionCostUsageRollupRows()).toEqual(rollupsBefore);
-        expect(summary.totals.totalTokens).toBe(10);
-        expect(summary.cacheStatus?.pendingFiles).toBe(1);
+          expect(await fs.readFile(failed, "utf8")).toBe("stream read failed");
+          expect(readSessionCostUsageRollupRows()).toEqual(rollupsBefore);
+          expect(summary.totals.totalTokens).toBe(10);
+          expect(summary.cacheStatus?.pendingFiles).toBe(1);
+        } finally {
+          await cleanupSessionStateForTest({ stateDir: tempDir });
+        }
       },
     );
   });

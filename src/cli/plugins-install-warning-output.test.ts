@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { installPluginFromPath } from "../plugins/install.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   installPluginFromPathMock,
@@ -10,6 +11,10 @@ import {
   resetPluginsCliTestState,
   runPluginsCommand,
 } from "./plugins-cli-test-helpers.js";
+
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 describe("plugin install warning output", () => {
   beforeEach(resetPluginsCliTestState);

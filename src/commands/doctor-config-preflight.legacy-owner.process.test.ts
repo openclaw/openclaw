@@ -85,6 +85,7 @@ describe("startup legacy store classification", () => {
       }
       const before = fs.readFileSync(legacyPath);
       const preflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight).href;
+      const cleanupUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.cleanup).href;
       const script = `
         const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
         try {
@@ -99,6 +100,9 @@ describe("startup legacy store classification", () => {
         } catch (error) {
           console.error("__REFUSED__", error instanceof Error ? error.message : String(error));
           process.exitCode = typeof error.code === "number" ? error.code : 1;
+        } finally {
+          const { cleanupSessionStateForTest } = await import(${JSON.stringify(cleanupUrl)});
+          await cleanupSessionStateForTest({ stateDir: process.env.OPENCLAW_STATE_DIR });
         }
       `;
       const result = await tempDirs.track(

@@ -4,21 +4,28 @@ import { link, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
 const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
+    const results = await Promise.allSettled(
+      [...stores].map(async (store) => {
+        await store.close();
+        stores.delete(store);
+      }),
+    );
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length) {
+      throw new AggregateError(errors, "SQLite fixture cleanup failed; databases retained");
     }
+    cleanup();
   }),
 );
 
@@ -54,7 +61,12 @@ describe("existing-only SQLite worker admission", () => {
       for (let index = 0; index < 80; index += 1) {
         expect(await open(file, true)).toBeUndefined();
       }
-      expect(requests).not.toHaveBeenCalled();
+      expect(
+        requests.mock.calls.filter(
+          ([request]) =>
+            isRecord(request) && request.type === "open" && request.databasePath === file,
+        ),
+      ).toEqual([]);
       expect(await readdir(path.dirname(file))).toEqual([]);
     } finally {
       requests.mockRestore();
@@ -129,24 +141,33 @@ describe("existing-only SQLite worker admission", () => {
       await seed(file, "original");
       await seed(replacement, "replacement");
       const replacementBytes = await readFile(replacement);
-      const messages = vi.spyOn(Worker.prototype, "postMessage").mockImplementationOnce(function (
+      const postMessage = vi.spyOn(Worker.prototype, "postMessage");
+      postMessage.mockRestore();
+      let changed = false;
+      const messages = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
         this: Worker,
-        request: SqliteWorkerRequest,
+        request: unknown,
         transferList,
       ) {
+        if (!isRecord(request) || request.type !== "open" || request.databasePath !== file) {
+          return postMessage.call(this, request, transferList);
+        }
         messages.mockRestore();
-        expect(request).toMatchObject({ type: "open", databasePath: file });
-        expect("existingIdentity" in request && request.existingIdentity).toMatch(/^file:/);
+        expect(request.existingIdentity).toMatch(/^file:/);
+        changed = true;
         if (kind === "deleted") {
           unlinkSync(file);
         } else {
           renameSync(file, displaced);
           copyFileSync(replacement, file);
         }
-        return this.postMessage(request, transferList);
+        return postMessage.call(this, request, transferList);
       });
       try {
-        await expect(open(file, true, { type: "observe", markerPath })).rejects.toThrow();
+        await expect(open(file, true, { type: "observe", markerPath })).rejects.toThrow(
+          kind === "deleted" ? "ENOENT" : "file identity changed before existing-only open",
+        );
+        expect(changed).toBe(true);
       } finally {
         messages.mockRestore();
       }

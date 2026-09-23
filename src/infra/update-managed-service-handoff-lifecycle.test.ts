@@ -29,8 +29,14 @@ import { pathExists } from "./update-managed-service-native.test-support.js";
 import { recordUpdateRunStep } from "./update-run-ledger.js";
 
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-lifecycle-${process.pid}`);
-const { forceKillChildProcessTreeMock, spawnMock, tempDirs, runManagedServiceManagerBoundary } =
-  useManagedServiceHandoffLifecycleFixture();
+const {
+  forceKillChildProcessTreeMock,
+  spawnMock,
+  tempDirs,
+  runManagedServiceManagerBoundary,
+  assertHandoffDatabasePath,
+  cleanupFixture,
+} = useManagedServiceHandoffLifecycleFixture();
 
 async function createUserSystemdFixture() {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-run-"));
@@ -576,6 +582,60 @@ describe("managed service update handoff", () => {
     expect(child.stdout.destroyed).toBe(true);
   });
 
+  it.each([false, true])(
+    "settles native lease cleanup after an exit-listener failure (multiple=%s)",
+    async (multiple) => {
+      const { startManagedServiceUpdateHandoff } =
+        await import("./update-managed-service-handoff.js");
+      const result = await startManagedServiceUpdateHandoff({
+        root: MOCK_INSTALL_ROOT,
+        restartDrainTimeoutMs: 300_000,
+        parentPid: process.pid,
+        execPath: process.execPath,
+        argv1: "/opt/openclaw/openclaw.mjs",
+        env: {},
+        meta: {},
+      });
+      expect(result.status).toBe("started");
+      const child = spawnMock.mock.results[0]!.value as ReturnType<typeof createSpawnMock>;
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      tempDirs.add(path.dirname(args.at(-1)!));
+      const directories = [...tempDirs];
+      const originalFailure = new Error("native lease deletion failed once");
+      const anotherFailure = new Error("another exit listener failed");
+      const additionalChild = createSpawnMock();
+      if (multiple) {
+        additionalChild.once("exit", () => {
+          throw anotherFailure;
+        });
+      }
+      // Fail only the first real SQLite statement preparation during teardown.
+      // Its close must still run, and the retained cleanup must retry on a new handle.
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementationOnce(() => {
+        throw originalFailure;
+      });
+      try {
+        if (multiple) {
+          await expect(cleanupFixture()).rejects.toMatchObject({
+            errors: [originalFailure, anotherFailure],
+          });
+        } else {
+          await expect(cleanupFixture()).rejects.toBe(originalFailure);
+        }
+      } finally {
+        prepare.mockRestore();
+      }
+      for (const stopped of [child, additionalChild]) {
+        expect(stopped.stdin.destroyed).toBe(true);
+        expect(stopped.stdout.destroyed).toBe(true);
+      }
+      for (const directory of directories) {
+        await expect(pathExists(directory)).resolves.toBe(false);
+      }
+      expect(tempDirs.size).toBe(0);
+    },
+  );
+
   it("strips supervisor hints while preserving service identity for the CLI handoff", async () => {
     const { startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
@@ -644,6 +704,7 @@ describe("managed service update handoff", () => {
       const spawnNormally = spawnMock.getMockImplementation()!;
       spawnMock.mockImplementationOnce((command: string, args: string[], options: unknown) => {
         const params = JSON.parse(readFileSync(args.at(-1)!, "utf8"));
+        assertHandoffDatabasePath(params.updateLeaseDatabasePath);
         const db = new DatabaseSync(params.updateLeaseDatabasePath, { readOnly: true });
         try {
           expect(db.prepare("SELECT COUNT(*) AS count FROM managed_update_handoffs").get()).toEqual(

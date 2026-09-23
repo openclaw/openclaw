@@ -24,6 +24,7 @@ import {
 } from "./device-identity.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
+import * as resourceOwnership from "./vitest-resource-ownership.js";
 
 const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
 const SWIFT_RAW_PUBLIC_KEY = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
@@ -56,14 +57,22 @@ function writeRetiredIdentity(filePath: string): void {
   );
 }
 
-function waitForChild(child: ChildProcess): Promise<DeviceIdentity> {
+async function waitForChild(child: ChildProcess): Promise<DeviceIdentity> {
   let stdout = "";
   let stderr = "";
+  let processError: Error | undefined;
   child.stdout?.on("data", (chunk) => (stdout += String(chunk)));
   child.stderr?.on("data", (chunk) => (stderr += String(chunk)));
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
+  // Register the real close join before native ownership capture can throw.
+  const completion = new Promise<DeviceIdentity>((resolve, reject) => {
+    child.once("error", (error) => {
+      processError = error;
+    });
     child.once("close", (code, signal) => {
+      if (processError) {
+        reject(processError);
+        return;
+      }
       if (code !== 0) {
         reject(new Error(`identity worker failed (${String(code ?? signal)}): ${stderr}`));
         return;
@@ -73,9 +82,29 @@ function waitForChild(child: ChildProcess): Promise<DeviceIdentity> {
         reject(new Error("identity worker produced no result"));
         return;
       }
-      resolve(JSON.parse(resultLine) as DeviceIdentity);
+      try {
+        resolve(JSON.parse(resultLine) as DeviceIdentity);
+      } catch (error) {
+        reject(new Error("identity worker produced invalid JSON", { cause: error }));
+      }
     });
   });
+  let settleNativeExit: ReturnType<typeof resourceOwnership.captureResourceOwnedNativeProcessExit>;
+  try {
+    // These probes cache native database handles until their owning process exits.
+    settleNativeExit = child.pid
+      ? resourceOwnership.captureResourceOwnedNativeProcessExit(child)
+      : undefined;
+    return await completion;
+  } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill();
+    }
+    await Promise.allSettled([completion]);
+    throw error;
+  } finally {
+    await settleNativeExit?.();
+  }
 }
 
 async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdentity[]> {
@@ -122,7 +151,10 @@ async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdenti
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    return { child, outcome: waitForChild(child), readyPath };
+    const outcome = waitForChild(child);
+    // Readiness can fail before the caller reaches the result join.
+    void outcome.catch(() => {});
+    return { child, outcome, readyPath };
   });
 
   try {
@@ -222,20 +254,29 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
     },
   );
   const outcome = waitForChild(child);
-  const deadline = Date.now() + 15_000;
-  while (!fs.existsSync(readyPath)) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      await outcome;
+  void outcome.catch(() => {});
+  try {
+    const deadline = Date.now() + 15_000;
+    while (!fs.existsSync(readyPath)) {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        await outcome;
+        throw new Error("bootstrap creator exited before readiness");
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("timed out waiting for paused bootstrap creator");
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 2);
+      });
     }
-    if (Date.now() >= deadline) {
+    return { child, committedPath, continuePath, outcome };
+  } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) {
       child.kill();
-      throw new Error("timed out waiting for paused bootstrap creator");
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 2);
-    });
+    await Promise.allSettled([outcome]);
+    throw error;
   }
-  return { child, committedPath, continuePath, outcome };
 }
 
 function waitForFileSync(filePath: string): void {
@@ -248,6 +289,35 @@ function waitForFileSync(filePath: string): void {
     Atomics.wait(waitBuffer, 0, 0, 2);
   }
 }
+
+it("joins the identity child when native-exit capture fails", async () => {
+  const failure = new Error("resource owner metadata is unavailable");
+  const capture = vi
+    .spyOn(resourceOwnership, "captureResourceOwnedNativeProcessExit")
+    .mockImplementationOnce(() => {
+      throw failure;
+    });
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let closeObserved = false;
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => {
+      closeObserved = true;
+      resolve();
+    });
+  });
+  try {
+    await expect(Promise.resolve().then(() => waitForChild(child))).rejects.toBe(failure);
+    expect(closeObserved).toBe(true);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill();
+    }
+    await closed;
+    capture.mockRestore();
+  }
+});
 
 describe("device identity SQLite store", () => {
   it("serializes identity ownership with the shared SQLite coordinator", async () => {

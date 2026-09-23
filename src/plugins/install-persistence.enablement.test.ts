@@ -1,7 +1,7 @@
 // Plugin install enablement tests cover child policy, slot selection, and required config.
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyExclusiveSlotSelectionMock,
   buildPluginDiagnosticsReportMock,
@@ -14,6 +14,7 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "../cli/plugins-cli-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -63,6 +64,10 @@ const installWriteOptions = {
   expectedConfigPath: "/tmp/openclaw.json",
   ownedConfigPathForWrite: "/tmp/openclaw.json",
 };
+
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 describe("persistPluginInstall enablement", () => {
   beforeEach(() => {

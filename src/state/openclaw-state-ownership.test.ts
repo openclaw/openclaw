@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -99,10 +98,9 @@ function snapshotSqliteFamily(databasePath: string) {
 
 function resolveExpectedOwnershipCoordinatorPath(databasePath: string): string {
   const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
-  const runtimeDirectory =
-    process.platform === "win32"
-      ? path.join(os.homedir(), "AppData", "Local", "OpenClaw", "locks")
-      : "/tmp";
+  const runtimeDirectory = process.env.VITEST_OPENCLAW_RESOURCE_ROOT;
+  assert.ok(runtimeDirectory, "ownership fixture must run inside its launcher namespace");
+  assert.ok(canonicalDatabasePath.startsWith(`${fs.realpathSync(runtimeDirectory)}${path.sep}`));
   const canonicalRuntimeDirectory = resolvePathViaExistingAncestorSync(runtimeDirectory);
   const suffix =
     typeof process.getuid === "function"

@@ -29,8 +29,8 @@ import {
 
 const tempDirs: string[] = [];
 
-afterEach(() => {
-  cleanupMediaPersistenceFixtures(tempDirs);
+afterEach(async () => {
+  await cleanupMediaPersistenceFixtures(tempDirs);
 });
 
 describe("legacy media persistence doctor migration", () => {

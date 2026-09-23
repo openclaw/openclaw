@@ -1,6 +1,6 @@
 // Hook integration coverage for direct and queued embedded compaction.
 
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Message } from "@openclaw/llm-core";
@@ -28,7 +28,6 @@ import {
   withPluginRegistrationContext,
 } from "../../plugins/runtime.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
-import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
@@ -51,6 +50,7 @@ import { createEventBus } from "../sessions/event-bus.js";
 import { createExtensionRuntime, loadExtensionFromFactory } from "../sessions/extensions/loader.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
+import { cleanupCompactionFixture } from "./compact.hooks.cleanup.test-support.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
   attemptServerEndpointCompactionMock,
@@ -123,14 +123,6 @@ let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.j
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 let diagnosticEvents: typeof import("../../infra/diagnostic-events.js");
 let diagnosticRunActivity: typeof import("../../logging/diagnostic-run-activity.js");
-
-async function cleanupCompactionFixture(directory?: string): Promise<void> {
-  await agentDatabases.closeOpenClawAgentDatabasesAsync();
-  agentDatabases.closeOpenClawAgentDatabasesForTest();
-  if (directory) {
-    await rm(directory, { force: true, recursive: true });
-  }
-}
 
 // Target resolution still reads real SQLite metadata even when compaction is mocked.
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>

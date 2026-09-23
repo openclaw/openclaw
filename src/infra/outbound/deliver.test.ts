@@ -26,6 +26,8 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginHookRegistration } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -40,6 +42,7 @@ import * as channelResolution from "./channel-resolution.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 import { countPhysicalOutboundSends, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { matrixOutboundForTest, type MatrixSendFn } from "./deliver.matrix.test-support.js";
+import { requireMockCall, requireMockCallArg } from "./deliver.mock-calls.test-support.js";
 import {
   registerOutboundImageProjectionTests,
   registerOutboundPreparationMetadataTests,
@@ -273,30 +276,6 @@ const expectedPreferredTmpRoot = await fsPromises.realpath(resolvePreferredOpenC
 
 type DeliverOutboundArgs = Parameters<DeliverModule["deliverOutboundPayloads"]>[0];
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
-function requireMockCallArg<TArgs extends unknown[]>(
-  mockFn: { mock: { calls: TArgs[] } },
-  label: string,
-  index = 0,
-): TArgs[0] {
-  const call = mockFn.mock.calls[index];
-  if (!call || call.length === 0) {
-    throw new Error(`expected ${label} call #${index + 1}`);
-  }
-  return call[0];
-}
-
-function requireMockCall<T extends unknown[] = unknown[]>(
-  mockFn: { mock: { calls: T[] } },
-  label: string,
-  index = 0,
-): T {
-  const call = mockFn.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected ${label} call #${index + 1}`);
-  }
-  return call;
-}
-
 function requireMatrixSendCall(sendMatrix: ReturnType<typeof vi.fn>, index = 0): unknown[] {
   return requireMockCall(sendMatrix as { mock: { calls: unknown[][] } }, "matrix send", index);
 }
@@ -595,9 +574,11 @@ describe("deliverOutboundPayloads", () => {
     }));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetDiagnosticEventsForTest();
     setActivePluginRegistry(emptyRegistry);
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it("reports unsupported durable final delivery when required capabilities are missing", async () => {

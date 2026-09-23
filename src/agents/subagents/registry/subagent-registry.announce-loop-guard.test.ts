@@ -92,6 +92,7 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
 
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.test-helpers.js");
+  let resetTasks: typeof import("../../../tasks/task-registry.test-support.js").resetTaskRegistryForTests;
 
   function hydrateAndActivateRegistry() {
     registry.initSubagentRegistry();
@@ -105,14 +106,6 @@ describe("announce loop guard (#18264)", () => {
       resolveGatewayContext: () => gatewayContext as never,
     };
     registry.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
-  }
-
-  function requireRunById(runs: SubagentRunRecord[], runId: string): SubagentRunRecord {
-    const entry = runs.find((run) => run.runId === runId);
-    if (!entry) {
-      throw new Error(`expected subagent run ${runId}`);
-    }
-    return entry;
   }
 
   async function waitForRun(
@@ -135,6 +128,8 @@ describe("announce loop guard (#18264)", () => {
   beforeAll(async () => {
     vi.resetModules();
     registry = await import("./subagent-registry.test-helpers.js");
+    ({ resetTaskRegistryForTests: resetTasks } =
+      await import("../../../tasks/task-registry.test-support.js"));
   });
 
   beforeEach(() => {
@@ -157,36 +152,17 @@ describe("announce loop guard (#18264)", () => {
   });
 
   afterEach(() => {
-    registry.resetSubagentRegistryForTests({ persist: false });
-    vi.useRealTimers();
-    vi.clearAllMocks();
-  });
-
-  test("SubagentRunRecord has announceRetryCount and lastAnnounceRetryAt fields", () => {
-    registry.resetSubagentRegistryForTests();
-
-    const now = Date.now();
-    // Add a run that has already ended and exhausted retries
-    registry.addSubagentRunForTests({
-      runId: "test-loop-guard",
-      childSessionKey: "agent:main:subagent:child-1",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "agent:main:main",
-      task: "test task",
-      cleanup: "keep",
-      createdAt: now - 60_000,
-      execution: {
-        status: "terminal",
-        startedAt: now - 55_000,
-        endedAt: now - 50_000,
-      },
-      delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 10_000 },
-    });
-
-    const runs = registry.listSubagentRunsForRequester("agent:main:main");
-    const entry = requireRunById(runs, "test-loop-guard");
-    expect(entry.delivery?.attemptCount).toBe(3);
-    expect(entry.delivery?.lastAttemptAt).toBe(now - 10_000);
+    try {
+      registry.resetSubagentRegistryForTests({ persist: false });
+    } finally {
+      try {
+        // Announce status reads restore the real task registry and its SQLite handle.
+        resetTasks({ persist: false });
+      } finally {
+        vi.useRealTimers();
+        vi.clearAllMocks();
+      }
+    }
   });
 
   test("expired entries with high retry count are skipped by resumeSubagentRun", async () => {

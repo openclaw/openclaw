@@ -1,7 +1,7 @@
 // Channel setup tests cover setup flow prompts and config output.
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
 import type { ChannelOnboardingPostWriteHook } from "../channels/plugins/setup-wizard-types.js";
@@ -16,6 +16,9 @@ import { createInstallAccountPolicyFixture } from "../plugins/test-helpers/insta
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import {
+  DEFERRED_CHANNEL_SETUP_OPTIONS,
+  QUICKSTART_CHANNEL_SETUP_OPTIONS,
+  TARGETED_CHANNEL_SETUP_OPTIONS,
   externalChatSetupEntries,
   makeCatalogEntry,
   makeChannelSetupEntries,
@@ -73,26 +76,12 @@ vi.mock("../config/channel-configured.js", factories.configured);
 vi.mock("./channel-setup.prompts.js", factories.prompts);
 vi.mock("./channel-setup.status.js", factories.status);
 
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { setupChannels } from "./channel-setup.js";
 
-const DEFERRED_CHANNEL_SETUP_OPTIONS = {
-  deferStatusUntilSelection: true,
-  skipConfirm: true,
-  skipDmPolicyPrompt: true,
-} satisfies NonNullable<Parameters<typeof setupChannels>[3]>;
-
-const QUICKSTART_CHANNEL_SETUP_OPTIONS = {
-  quickstartDefaults: true,
-  skipConfirm: true,
-  skipDmPolicyPrompt: true,
-} satisfies NonNullable<Parameters<typeof setupChannels>[3]>;
-
-const TARGETED_CHANNEL_SETUP_OPTIONS = {
-  initialSelection: ["external-chat"],
-  finishAfterInitialSelection: true,
-  deferStatusUntilSelection: true,
-  skipDmPolicyPrompt: true,
-} satisfies NonNullable<Parameters<typeof setupChannels>[3]>;
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 function runChannelSetup(
   cfg: OpenClawConfig,

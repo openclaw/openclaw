@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { pinRuntimePaths } from "../../config/paths.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -38,8 +39,9 @@ beforeEach(() => {
   setRegistry(emptyRegistry);
 });
 
-afterEach(() => {
+afterEach(async () => {
   setRegistry(emptyRegistry);
+  await closeOpenClawStateDatabaseAsync();
 });
 
 function gatewayCall(): {

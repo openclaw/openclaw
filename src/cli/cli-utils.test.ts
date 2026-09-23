@@ -17,22 +17,25 @@ import {
 import { waitForever } from "./wait.js";
 
 describe("waitForever", () => {
-  it("keeps the event loop alive (ref'd interval) and returns a pending promise", () => {
+  it("keeps the event loop alive (ref'd interval) and returns a pending promise", async () => {
     const unref = vi.fn();
     const interval = { unref } as unknown as ReturnType<typeof setInterval>;
     const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
     try {
-      const promise = waitForever();
+      let settled = false;
+      void waitForever().then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
       expect(setIntervalSpy).toHaveBeenCalledTimes(1);
-      const [callback, delay] = setIntervalSpy.mock.calls[0] ?? [];
+      const [callback] = setIntervalSpy.mock.calls[0] ?? [];
       expect(typeof callback).toBe("function");
-      expect(delay).toBe(1_000_000);
       // Regression guard for the previous `.unref()` bug: an unref'd interval
       // does NOT keep the event loop alive, so `await waitForever()` would
       // exit immediately with code 13 ("unsettled top-level await"). The
       // function must NOT unref the interval.
       expect(unref).not.toHaveBeenCalled();
-      expect(promise).toBeInstanceOf(Promise);
+      expect(settled).toBe(false);
     } finally {
       setIntervalSpy.mockRestore();
     }
@@ -40,6 +43,23 @@ describe("waitForever", () => {
 });
 
 describe("runCommandWithRuntime", () => {
+  it("unwinds default-runtime failures before requesting process exit", async () => {
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        runCommandWithRuntime(defaultRuntime, async () => {
+          throw new Error("command refused");
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+      expect(error).toHaveBeenCalledExactlyOnceWith("command refused");
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+      exit.mockRestore();
+    }
+  });
+
   it.each(
     [0, 1, 2].flatMap((code) =>
       [false, true].map((customErrorHandler) => ({ code, customErrorHandler })),

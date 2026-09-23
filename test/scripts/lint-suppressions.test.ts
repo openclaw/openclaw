@@ -2,14 +2,16 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   collectLintDisableDirectives,
   isMaxLinesRule,
 } from "../../scripts/check-max-lines-ratchet.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../src/test-utils/repo-files.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 const IGNORED_DIRS = new Set([".cache", ".git", "build", "coverage", "dist", "node_modules"]);
@@ -104,33 +106,18 @@ function collectProductionLintSuppressions(): SuppressionEntry[] {
   return [...entries];
 }
 
-function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
-  const result = spawnSync(
-    "git",
-    ["grep", "-z", "-l", "-e", "oxlint-disable", "-e", "eslint-disable", "--", ...ROOTS],
-    {
-      cwd: repoRoot,
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status === 1) {
-    return [];
-  }
-  if (result.status !== 0) {
+function collectProductionLintSuppressionsFromGit(root = repoRoot): SuppressionEntry[] | null {
+  // Runtime preparation can materialize files still marked skip-worktree. Git grep
+  // omits those working-tree files; enumerate tracked paths and read present bytes.
+  const files = listGitTrackedFiles({ repoRoot: root, pathspecs: ROOTS });
+  if (files === null) {
     return null;
   }
-  const entries: SuppressionEntry[] = [];
-  for (const file of result.stdout.split("\0").filter(Boolean)) {
-    if (!isProductionCodeFile(file) || !fs.existsSync(path.join(repoRoot, file))) {
-      continue;
-    }
-    entries.push(
-      ...collectFileSuppressions(file, fs.readFileSync(path.join(repoRoot, file), "utf8")),
+  return files
+    .filter(isProductionCodeFile)
+    .flatMap((file) =>
+      collectFileSuppressions(file, fs.readFileSync(path.join(root, file), "utf8")),
     );
-  }
-  return entries;
 }
 
 function listProductionCodeFiles(): string[] {
@@ -181,6 +168,37 @@ describe("production lint suppressions", () => {
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
+    });
+  });
+
+  it("scans materialized sparse files without scanning absent or untracked files", () => {
+    const root = tempDirs.make("openclaw-suppression-sparse-");
+    const git = (...args: string[]) => {
+      const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+    };
+    git("init", "--quiet");
+    fs.mkdirSync(path.join(root, "src"));
+    fs.writeFileSync(
+      path.join(root, "src/present.ts"),
+      "// oxlint-disable-next-line no-console\nconsole.log('present');\n",
+    );
+    fs.writeFileSync(
+      path.join(root, "src/absent.ts"),
+      "// oxlint-disable no-debugger\ndebugger;\n",
+    );
+    git("add", "--", "src/present.ts", "src/absent.ts");
+    git("update-index", "--skip-worktree", "--", "src/present.ts", "src/absent.ts");
+    fs.rmSync(path.join(root, "src/absent.ts"));
+    fs.writeFileSync(
+      path.join(root, "src/untracked.ts"),
+      "// oxlint-disable no-alert\nalert('untracked');\n",
+    );
+    expectNoReaddirSyncDuring(() => {
+      expect(collectProductionLintSuppressionsFromGit(root)).toEqual([
+        { file: "src/present.ts", rule: "no-console" },
+      ]);
     });
   });
 

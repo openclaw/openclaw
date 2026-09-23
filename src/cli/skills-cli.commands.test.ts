@@ -9,6 +9,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import type { SkillStatusReport } from "../skills/discovery/status.js";
+import { runWithMockedCliExit } from "../test-utils/command-runner.js";
 import {
   expectObjectFields,
   mockCall,
@@ -237,11 +238,6 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
-vi.mock("./one-shot-exit.js", () => ({
-  exitCliAfterOutput: (runtime: typeof mocks.defaultRuntime, exitCode: number) =>
-    runtime.exit(exitCode),
-}));
-
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGatewayMock(...args),
   isGatewayClientRequestError: (error: unknown) =>
@@ -319,17 +315,15 @@ describe("skills cli commands", () => {
   };
 
   const runCommand = async (argv: string[]) => {
-    try {
-      await createProgram().parseAsync(argv, { from: "user" });
-    } catch (error) {
-      if (error instanceof Error && error.message === "__exit__:0") {
-        return;
-      }
-      throw error;
-    }
+    await runWithMockedCliExit(
+      () => createProgram().parseAsync(argv, { from: "user" }),
+      defaultRuntime.exit,
+    );
   };
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_PROFILE", "");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
     runtimeLogs.length = 0;
     runtimeStdout.length = 0;
     runtimeErrors.length = 0;
@@ -1356,9 +1350,6 @@ describe("skills cli commands", () => {
       ),
     },
   ])("exits nonzero for missing skill info in $label mode", async ({ argv, expected }) => {
-    vi.stubEnv("OPENCLAW_PROFILE", "");
-    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
-
     await expect(runCommand(argv)).rejects.toThrow("__exit__:1");
 
     expect(runtimeStdout).toEqual([expected]);
@@ -1373,8 +1364,6 @@ describe("skills cli commands", () => {
     ["weather[home]", `'skills.entries["weather[home]"].apiKey'`],
     ["123", `'skills.entries["123"].apiKey'`],
   ])("skills info prints a copyable API-key setup path for %s", async (skillKey, path) => {
-    vi.stubEnv("OPENCLAW_PROFILE", "");
-    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
     buildWorkspaceSkillStatusMock.mockReturnValue({
       ...skillStatusReportFixture,
       skills: skillStatusReportFixture.skills.map((skill) => ({

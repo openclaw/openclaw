@@ -3,6 +3,7 @@ import {
   createSqliteLifecycleAggregateError,
   type SqliteCoordinatorLease,
 } from "../infra/sqlite-coordinator.js";
+import { captureResourceOwnedNativeWorkerExit } from "../infra/vitest-resource-ownership.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
 export type LeaseHeartbeatCleanup = {
@@ -18,6 +19,7 @@ export function createLeaseHeartbeatCleanup(params: {
   let handle: { release(): void } | undefined;
   let worker: Worker | undefined;
   let exitCode: number | undefined;
+  let settleNativeExit: (() => Promise<void>) | undefined;
   const exited = createDeferredCore<number>();
   const startupRenewals = new Set<Promise<unknown>>();
   let closed = false;
@@ -48,6 +50,8 @@ export function createLeaseHeartbeatCleanup(params: {
           // A terminate result is not a substitute for the native exit event.
           await exited.promise;
         }
+        await settleNativeExit?.();
+        settleNativeExit = undefined;
         await Promise.allSettled(startupRenewals);
         release();
         return exitCode ?? 0;
@@ -64,6 +68,7 @@ export function createLeaseHeartbeatCleanup(params: {
       return (
         (!closed && worker === undefined) ||
         (worker !== undefined && exitCode === undefined) ||
+        settleNativeExit !== undefined ||
         startupRenewals.size !== 0 ||
         handle !== undefined ||
         (coordinator !== undefined && !coordinator.closed)
@@ -110,10 +115,18 @@ export function createLeaseHeartbeatCleanup(params: {
             if (stopping) {
               return;
             }
-            try {
-              release();
-            } catch (error) {
-              params.onReleaseFailed(error);
+            const finishRelease = () => {
+              settleNativeExit = undefined;
+              try {
+                release();
+              } catch (error) {
+                params.onReleaseFailed(error);
+              }
+            };
+            if (settleNativeExit) {
+              void settleNativeExit().then(finishRelease, params.onReleaseFailed);
+            } else {
+              finishRelease();
             }
           };
           if (startupRenewals.size) {
@@ -123,6 +136,8 @@ export function createLeaseHeartbeatCleanup(params: {
           }
         }
       });
+      // Keep exit ownership installed even if resource-context capture fails.
+      settleNativeExit = captureResourceOwnedNativeWorkerExit(worker);
       return worker;
     },
     failStartup(error: unknown): never {

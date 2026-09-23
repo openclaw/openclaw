@@ -154,6 +154,7 @@ function makeIsolatedPreflightFixture(params: Parameters<typeof makeReleaseFixtu
     "scripts/lib/local-check-runtime.mts",
     "scripts/lib/managed-child-process.mts",
     "scripts/lib/vitest-resource-ownership.mts",
+    "src/infra/vitest-resource-ownership.ts",
     "scripts/lib/release-version.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
     "scripts/lib/windows-taskkill.mjs",

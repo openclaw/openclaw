@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithMockedCliExit } from "../../test-utils/command-runner.js";
 import { ExpectedCliError } from "../failure-output.js";
 import { registerTasksCommand } from "./register.tasks.js";
 
@@ -74,7 +75,10 @@ describe("registerTasksCommand", () => {
   async function runCli(args: string[]) {
     const program = new Command().enablePositionalOptions();
     registerTasksCommand(program);
-    await program.parseAsync(args, { from: "user" });
+    await runWithMockedCliExit(
+      () => program.parseAsync(args, { from: "user" }),
+      mocks.runtime.exit,
+    );
   }
 
   beforeEach(() => {

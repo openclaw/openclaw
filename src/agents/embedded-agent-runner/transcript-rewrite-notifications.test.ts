@@ -17,6 +17,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -32,6 +33,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );

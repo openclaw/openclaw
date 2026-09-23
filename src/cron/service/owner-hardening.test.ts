@@ -9,6 +9,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { captureResourceOwnedNativeProcessExit } from "../../infra/vitest-resource-ownership.js";
 import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -42,7 +43,7 @@ import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
 const stateDatabaseUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase);
 
-const children = new Set<ChildProcess>();
+const children = new Map<ChildProcess, (() => Promise<void>) | undefined>();
 let scriptRoot = "";
 let runnerScript = "";
 
@@ -52,13 +53,14 @@ const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening
 // Vitest runs afterEach hooks in reverse registration order, so register last
 // to observe child exits before the temp and store hooks release their state.
 afterEach(async () => {
-  const activeChildren = [...children].filter(
+  const activeChildren = [...children.keys()].filter(
     (child) => child.exitCode === null && child.signalCode === null,
   );
   for (const child of activeChildren) {
     child.kill("SIGKILL");
   }
   await Promise.all(activeChildren.map(waitForExit));
+  await Promise.all([...children.values()].map(async (settle) => await settle?.()));
   children.clear();
 });
 
@@ -186,7 +188,12 @@ function spawnRunner(params: {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  children.add(child);
+  children.set(
+    child,
+    child.pid === undefined
+      ? undefined
+      : captureResourceOwnedNativeProcessExit(child, { includeWorkerThreads: true }),
+  );
   return child;
 }
 

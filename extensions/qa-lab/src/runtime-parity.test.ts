@@ -630,7 +630,7 @@ describe("runtime parity", () => {
     const cell = await captureRuntimeParityCell({
       runtime: "openclaw",
       gateway: {
-        tempRoot: `/tmp/openclaw-qa-runtime-parity-missing-${process.pid}`,
+        tempRoot: path.join(await tempDirs.makeTempDir("openclaw-qa-runtime-parity-"), "missing"),
       },
       scenarioResult: {
         status: "pass",
@@ -646,7 +646,7 @@ describe("runtime parity", () => {
     const cell = await captureRuntimeParityCell({
       runtime: "openclaw",
       gateway: {
-        tempRoot: `/tmp/openclaw-qa-runtime-parity-missing-${process.pid}`,
+        tempRoot: path.join(await tempDirs.makeTempDir("openclaw-qa-runtime-parity-"), "missing"),
       },
       scenarioResult: {
         status: "fail",

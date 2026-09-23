@@ -217,6 +217,7 @@ it
     const {writeLaunchAgentPlist}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.serviceFiles).href)});
     const {assertGatewayServiceUpdateCurrent}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.serviceAuthority).href)});
     const {createConfigIO}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.configIO).href)});
+    const {closeOpenClawStateDatabaseAsync}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.stateDatabase).href)});
     const wait=async name=>{while(!fs.existsSync(root+"/"+name))await setTimeout(10);};
     const phase=(name,event)=>process.stderr.write(JSON.stringify({phase:name,event,elapsedMs:performance.now()})+"\\n");
     try { await runGatewayServiceUpdateCommand("run","install",async()=>{
@@ -236,10 +237,13 @@ it
       }}));
       await attempt("native",async()=>{const r=await execFileUtf8(process.execPath,["-e",${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned")`)}]);if(r.code!==0)throw new Error(r.stderr);});
       await attempt("definition",()=>writeLaunchAgentPlist({env:{HOME:root,OPENCLAW_STATE_DIR:root,OPENCLAW_LAUNCHD_LABEL:${JSON.stringify(label)}},stdout:process.stdout,programArguments:[process.execPath,"next-definition"]}));
+      // The parent may terminate the retained receiver after reading done.
+      await closeOpenClawStateDatabaseAsync();
       fs.writeFileSync(root+"/done.tmp",JSON.stringify(results));
       fs.renameSync(root+"/done.tmp",root+"/done");
       await wait("release");
     });}catch(e){process.stderr.write(e.message);process.exitCode=1;}
+    finally{await closeOpenClawStateDatabaseAsync();}
   `;
     const spawner = `
     import fs from "node:fs";

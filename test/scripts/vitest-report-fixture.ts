@@ -374,6 +374,7 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       );
       command = ["--import", path.join(repoRoot, "node_modules/tsx/dist/loader.mjs"), entry];
     }
+    const nodeEntryIndex = command[0]?.startsWith("-") ? 2 : 0;
     const childEnv = {
       ...env,
       // V8 coverage needs fresh compilation; other phases can share private bytecode.
@@ -389,6 +390,7 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
     const { child, completion } = spawnOwnedVitestProcess({
       command: process.execPath,
       args: command,
+      nodeEntryIndex,
       homeMode: realHomeReplay ? "live-aware" : undefined,
       options: { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] },
     });

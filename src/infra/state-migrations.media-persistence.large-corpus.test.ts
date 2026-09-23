@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabases,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { mergeProcessEnv } from "./process-env.js";
 
@@ -32,11 +33,14 @@ function migrationChildEnv(stateDir: string): NodeJS.ProcessEnv {
 }
 
 const CHILD_SCRIPT = String.raw`
+  import { closeOpenClawAgentDatabasesAsync } from "./src/state/openclaw-agent-db.ts";
+  import { closeOpenClawStateDatabaseAsync } from "./src/state/openclaw-state-db.ts";
   import { createHash } from "node:crypto";
   import { DatabaseSync } from "node:sqlite";
   import { resolveOpenClawAgentSqlitePath } from "./src/state/openclaw-agent-db.ts";
   import { migrateLegacyMediaPersistence } from "./src/infra/state-migrations.media-persistence.ts";
   import { readSqliteTranscriptPayload, sqliteTranscriptPayloadColumns } from "./scripts/lib/sqlite-transcript-payload.mjs";
+  try {
   const path = resolveOpenClawAgentSqlitePath({ agentId: "main", env: process.env });
   let db = new DatabaseSync(path, { readOnly: true });
   const read = (session, seq) => readSqliteTranscriptPayload(db.prepare(
@@ -77,21 +81,35 @@ const CHILD_SCRIPT = String.raw`
     lastPreserved: hash(read("large-corpus-39", 127)) === before[1],
   }) + "\n");
   db.close();
+  } finally {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+  }
 `;
 const SESSION_WINDOW_CHILD_SCRIPT = String.raw`
+  import { closeOpenClawAgentDatabasesAsync } from "./src/state/openclaw-agent-db.ts";
+  import { closeOpenClawStateDatabaseAsync } from "./src/state/openclaw-state-db.ts";
   import { resolveOpenClawAgentSqlitePath } from "./src/state/openclaw-agent-db.ts";
   import { migrateLegacyMediaPersistence } from "./src/infra/state-migrations.media-persistence.ts";
+  try {
   const path = resolveOpenClawAgentSqlitePath({ agentId: "main", env: process.env });
   const migration = await migrateLegacyMediaPersistence({
     configuredAgentDatabaseTargets: [{ agentId: "main", path }], env: process.env,
   });
   process.stdout.write(JSON.stringify(migration) + "\n");
+  } finally {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+  }
 `;
 const SPARSE_EVENT_CHILD_SCRIPT = String.raw`
+  import { closeOpenClawAgentDatabasesAsync } from "./src/state/openclaw-agent-db.ts";
+  import { closeOpenClawStateDatabaseAsync } from "./src/state/openclaw-state-db.ts";
   import { DatabaseSync } from "node:sqlite";
   import { resolveOpenClawAgentSqlitePath } from "./src/state/openclaw-agent-db.ts";
   import { transcriptEventJsonSql } from "./src/config/sessions/transcript-payload.ts";
   import { readSqliteTranscriptPayload, sqliteTranscriptPayloadColumns } from "./scripts/lib/sqlite-transcript-payload.mjs";
+  try {
   const originalPrepare = DatabaseSync.prototype.prepare;
   const cursorSelects = new Set();
   let mediaSelects = 0;
@@ -145,6 +163,10 @@ const SPARSE_EVENT_CHILD_SCRIPT = String.raw`
     ),
   }) + "\n");
   db.close();
+  } finally {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+  }
 `;
 
 function createCorpus(stateDir: string): void {
@@ -260,7 +282,7 @@ function createSparseEventCorpus(stateDir: string): void {
 }
 
 describe("legacy media persistence large corpus", () => {
-  it("does not materialize every session window under a 128 MiB old-space cap", () => {
+  it("does not materialize every session window under a 128 MiB old-space cap", async () => {
     const stateDir = tempDir.make("openclaw-media-session-windows-");
     try {
       createSessionWindowCorpus(stateDir);
@@ -285,12 +307,12 @@ describe("legacy media persistence large corpus", () => {
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({ changes: [], warnings: [] });
     } finally {
-      closeOpenClawAgentDatabases();
-      closeOpenClawStateDatabase();
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
     }
   }, 130_000);
 
-  it("rewrites bounded batches under a 256 MiB old-space cap", () => {
+  it("rewrites bounded batches under a 256 MiB old-space cap", async () => {
     const stateDir = tempDir.make("openclaw-media-corpus-");
     try {
       createCorpus(stateDir);
@@ -323,12 +345,12 @@ describe("legacy media persistence large corpus", () => {
         lastPreserved: true,
       });
     } finally {
-      closeOpenClawAgentDatabases();
-      closeOpenClawStateDatabase();
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
     }
   }, 130_000);
 
-  it("bounds SQLite crossings across many event-bearing sessions", () => {
+  it("bounds SQLite crossings across many event-bearing sessions", async () => {
     const stateDir = tempDir.make("openclaw-media-sparse-events-");
     try {
       createSparseEventCorpus(stateDir);
@@ -370,8 +392,8 @@ describe("legacy media persistence large corpus", () => {
       ).toBe(true);
       expect(output.migrationSelects).toBeLessThan(1_000);
     } finally {
-      closeOpenClawAgentDatabases();
-      closeOpenClawStateDatabase();
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
     }
   }, 130_000);
 });

@@ -23,6 +23,10 @@ type Workflow = {
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
 const workflow = parse(source) as Workflow;
+const candidateWorkflow = parse(
+  readFileSync(".github/workflows/full-release-candidate.yml", "utf8"),
+) as Workflow;
+const resourceOwnerPath = "src/infra/vitest-resource-ownership.ts";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function step(job: string, name: string, owner = workflow) {
@@ -52,6 +56,21 @@ function checkoutPath(checkout: Record<string, unknown>) {
     throw new TypeError("checkout path must be a string");
   }
   return checkout.path;
+}
+
+function copyToolingCheckout(root: string, checkout: Record<string, unknown>) {
+  const checkoutRoot = join(root, checkoutPath(checkout));
+  // Model sparse checkouts exactly; the full checkout probe needs only this
+  // entrypoint closure, not a second copy of the entire repository.
+  const paths = checkout["sparse-checkout"]
+    ? sparsePaths(checkout)
+    : ["scripts", resourceOwnerPath];
+  for (const sourcePath of paths) {
+    const destination = join(checkoutRoot, sourcePath);
+    mkdirSync(dirname(destination), { recursive: true });
+    cpSync(sourcePath, destination, { recursive: true });
+  }
+  return checkoutRoot;
 }
 
 describe("automatic release flake retry boundary", () => {
@@ -107,7 +126,6 @@ describe("full release metadata checkouts", () => {
       job: "evidence_reuse",
       checkout: "Checkout trusted workflow helper",
       entrypoint: "release-ci-summary.mjs",
-      extraPath: ".github/actions/setup-pnpm-store-cache",
     },
     {
       job: "release_execution_plan",
@@ -129,12 +147,24 @@ describe("full release metadata checkouts", () => {
       checkout: "Checkout release state verifier",
       entrypoint: "full-release-candidate-reuse.mjs",
     },
+    {
+      job: "discover",
+      checkout: "Checkout trusted candidate discovery",
+      entrypoint: "full-release-candidate-reuse.mjs",
+      owner: candidateWorkflow,
+    },
+    {
+      job: "resolve_candidate",
+      checkout: "Checkout candidate binding authority",
+      entrypoint: "full-release-candidate-reuse.mjs",
+      owner: candidateWorkflow,
+    },
   ])(
     "runs $job tooling from the complete scripts tree",
-    ({ job, checkout, entrypoint, extraPath, fullCheckout }) => {
+    ({ job, checkout, entrypoint, fullCheckout, owner = workflow }) => {
       const root = mkdtempSync(join(tmpdir(), "openclaw-release-sparse-"));
       try {
-        const toolingCheckout = step(job, checkout).with as Record<string, unknown>;
+        const toolingCheckout = step(job, checkout, owner).with as Record<string, unknown>;
         if (fullCheckout) {
           expect(toolingCheckout).not.toHaveProperty("sparse-checkout");
           expect(toolingCheckout).not.toHaveProperty("sparse-checkout-cone-mode");
@@ -147,15 +177,9 @@ describe("full release metadata checkouts", () => {
           });
         } else {
           expect(toolingCheckout["sparse-checkout-cone-mode"]).toBe(false);
-          const paths = sparsePaths(toolingCheckout);
-          expect(paths).toEqual(extraPath ? ["scripts", extraPath] : ["scripts"]);
         }
 
-        const checkoutRoot = join(root, checkoutPath(toolingCheckout));
-        cpSync("scripts", join(checkoutRoot, "scripts"), { recursive: true });
-        if (extraPath) {
-          cpSync(extraPath, join(checkoutRoot, extraPath), { recursive: true });
-        }
+        const checkoutRoot = copyToolingCheckout(root, toolingCheckout);
 
         const runNode = (args: string[], cwd = root) =>
           execFileSync(process.execPath, args, {
@@ -197,12 +221,7 @@ describe("full release metadata checkouts", () => {
 
       const toolingCheckout = step("evidence_reuse", "Checkout trusted workflow helper")
         .with as Record<string, unknown>;
-      cpSync("scripts", join(root, checkoutPath(toolingCheckout), "scripts"), { recursive: true });
-      cpSync(
-        ".github/actions/setup-pnpm-store-cache",
-        join(root, checkoutPath(toolingCheckout), ".github/actions/setup-pnpm-store-cache"),
-        { recursive: true },
-      );
+      copyToolingCheckout(root, toolingCheckout);
 
       const setup = step("evidence_reuse", "Setup Node.js");
       const steps = workflow.jobs.evidence_reuse!.steps;

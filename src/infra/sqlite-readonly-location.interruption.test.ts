@@ -1,7 +1,9 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { signalExitCode } from "../../scripts/lib/managed-child-process.mts";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
@@ -10,24 +12,32 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
 import { reclaimAbandonedSqliteSnapshots } from "./sqlite-snapshot-staging.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
+import { captureResourceOwnedNativeProcessExit } from "./vitest-resource-ownership.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    try {
+      await testApi.flushFileLogQueueForTests();
+    } finally {
+      setLoggerOverride(null);
+      cleanup();
+    }
+  }),
+);
 const snapshotModule = resolveRuntimeWorkerUrl(
   storageProcessTestEntrypoints.sqliteReadOnlyLocation,
 );
-afterEach(() => {
-  setLoggerOverride(null);
-  vi.unstubAllEnvs();
-});
 
-it.skipIf(process.platform === "win32").each([
+it.skipIf(process.platform === "win32").for([
   { signal: "SIGTERM", relocated: false },
   { signal: "SIGKILL", relocated: false },
   { signal: "SIGTERM", relocated: true },
-])(
+] as const)(
   "reclaims a $signal-interrupted copy during idle cleanup (Doctor layout: $relocated)",
-  async ({ signal, relocated }) => {
+  async ({ signal, relocated }, { signal: testSignal }) => {
     const root = tempDirs.make("sqlite-interrupted-owner-");
+    const binding = createManagedHandoffTestBinding(root);
+    const interrupted = path.join(root, "copy-boundary.json");
     const cache = path.join(root, "cache");
     const source = path.join(root, "source.sqlite");
     const log = path.join(root, "cleanup.log");
@@ -38,32 +48,70 @@ it.skipIf(process.platform === "win32").each([
     database.exec("CREATE TABLE probe(value BLOB); INSERT INTO probe VALUES(zeroblob(2097152));");
     database.close();
     const before = fs.readFileSync(source);
-    const result = spawnSync(
-      process.execPath,
+    let exitSignal: NodeJS.Signals | null = null;
+    let settleNativeExit: (() => Promise<void>) | undefined;
+    const result = await runNodeScript(
       [
+        binding.nodeOption,
         ...resolveRuntimeWorkerArgv(snapshotModule).slice(0, -1),
         "--input-type=module",
         "-e",
         `import fs from 'node:fs'; import path from 'node:path';
          import { prepareSqliteReadOnlyLocationSyncInProcess } from ${JSON.stringify(snapshotModule.href)};
+         const open = fs.openSync;
+         let snapshotDescriptor;
+         let snapshotPath;
+         fs.openSync = (...args) => {
+           const descriptor = open(...args);
+           if (path.basename(String(args[0])) === 'first' && path.dirname(path.dirname(String(args[0]))) === ${JSON.stringify(cache)} && args[1] === 'wx') {
+             snapshotDescriptor = descriptor;
+             snapshotPath = String(args[0]);
+           }
+           return descriptor;
+         };
          const write = fs.writeSync;
          fs.writeSync = (...args) => {
            const bytes = write(...args);
-           if (!${JSON.stringify(relocated)}) process.kill(process.pid, ${JSON.stringify(signal)});
+           if (!${JSON.stringify(relocated)} && args[0] === snapshotDescriptor && bytes > 0) {
+             fs.writeFileSync(${JSON.stringify(interrupted)}, JSON.stringify({ snapshotPath, bytes }));
+             process.kill(process.pid, ${JSON.stringify(signal)});
+           }
            return bytes;
          };
          const prepared = prepareSqliteReadOnlyLocationSyncInProcess(${JSON.stringify(source)}, ${JSON.stringify(cache)});
+         if (!${JSON.stringify(relocated)}) throw new Error('fixture did not interrupt the initial snapshot copy');
          const relocated = path.join(path.dirname(prepared.location), 'openclaw-state/state/openclaw.sqlite');
          fs.mkdirSync(path.dirname(relocated), { recursive: true });
          fs.renameSync(prepared.location, relocated);
          process.kill(process.pid, ${JSON.stringify(signal)});`,
       ],
-      { encoding: "utf8", timeout: 30_000 },
+      process.env,
+      30_000,
+      {
+        signal: testSignal,
+        requireProcessTreeExit: true,
+        onReady(child) {
+          settleNativeExit = captureResourceOwnedNativeProcessExit(child);
+          child.once("exit", (_code, value) => {
+            exitSignal = value;
+          });
+        },
+      },
     );
+    await settleNativeExit?.();
+    binding.assertPath();
     expect(result.error, result.stderr).toBeUndefined();
-    expect(result.signal, result.stderr).toBe(signal);
+    expect(exitSignal, result.stderr).toBe(signal);
+    expect(result.status, result.stderr).toBe(signalExitCode(signal));
     const abandoned = fs.readdirSync(cache).map((entry) => path.join(cache, entry));
     expect(abandoned).toHaveLength(1);
+    if (!relocated) {
+      const boundary = JSON.parse(fs.readFileSync(interrupted, "utf8"));
+      expect(boundary.snapshotPath).toBe(path.join(abandoned[0]!, "first"));
+      expect(boundary.bytes).toBeGreaterThan(0);
+      expect(fs.statSync(boundary.snapshotPath).size).toBe(boundary.bytes);
+      expect(boundary.bytes).toBeLessThan(before.length);
+    }
     const retainedBytes = fs
       .readdirSync(abandoned[0]!, { recursive: true, withFileTypes: true })
       .filter((entry) => entry.isFile() && !entry.name.startsWith("owner.sqlite"))

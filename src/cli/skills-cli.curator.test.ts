@@ -5,6 +5,7 @@ import { GatewayClientRequestError } from "../../packages/gateway-client/src/req
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import { runWithMockedCliExit } from "../test-utils/command-runner.js";
 import { registerSkillsCli } from "./skills-cli.js";
 
 const mocks = vi.hoisted(() => {
@@ -90,6 +91,10 @@ function createProgram(): Command {
   return program;
 }
 
+async function runCurator(...args: Parameters<Command["parseAsync"]>): Promise<void> {
+  await runWithMockedCliExit(() => createProgram().parseAsync(...args), mocks.defaultRuntime.exit);
+}
+
 function createGatewayTransportError(kind: "closed" | "timeout", code = 1006) {
   return new GatewayTransportError({
     kind,
@@ -106,6 +111,9 @@ describe("skills curator cli", () => {
   });
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
+    vi.stubEnv("OPENCLAW_PROFILE", "");
+    mocks.defaultRuntime.exit.mockClear();
     delete mocks.config.gateway;
     mocks.getSkillCuratorStatus.mockReset().mockReturnValue(status);
     mocks.releaseGatewayLock.mockReset();
@@ -122,7 +130,7 @@ describe("skills curator cli", () => {
   });
 
   it("uses a parent --json when the leaf has its default false value", async () => {
-    await createProgram().parseAsync(["skills", "curator", "--json", "status"], {
+    await runCurator(["skills", "curator", "--json", "status"], {
       from: "user",
     });
 
@@ -130,14 +138,14 @@ describe("skills curator cli", () => {
   });
 
   it("uses --json for the default curator action", async () => {
-    await createProgram().parseAsync(["skills", "curator", "--json"], { from: "user" });
+    await runCurator(["skills", "curator", "--json"], { from: "user" });
 
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(status);
   });
 
   it("accepts an older Gateway reply without local fallback and explains legacy coverage", async () => {
     mocks.config.gateway = { mode: "remote" };
-    await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
+    await runCurator(["skills", "curator", "status"], { from: "user" });
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "skills.curator.status",
@@ -152,7 +160,7 @@ describe("skills curator cli", () => {
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining("last-used=not recorded"),
     );
-    await createProgram().parseAsync(["skills", "curator", "status", "--json"], { from: "user" });
+    await runCurator(["skills", "curator", "status", "--json"], { from: "user" });
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(status);
     expect(mocks.defaultRuntime.writeJson.mock.calls[0]?.[0]).not.toHaveProperty("inventory");
   });
@@ -168,9 +176,9 @@ describe("skills curator cli", () => {
       })),
     };
     mocks.callGateway.mockResolvedValue(liveStatus);
-    await createProgram().parseAsync(["skills", "curator", "status", "--json"], { from: "user" });
+    await runCurator(["skills", "curator", "status", "--json"], { from: "user" });
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(liveStatus);
-    await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
+    await runCurator(["skills", "curator", "status"], { from: "user" });
     expect(mocks.defaultRuntime.writeStdout).not.toHaveBeenCalledWith(
       expect.stringContaining("Legacy inventory:"),
     );
@@ -183,7 +191,7 @@ describe("skills curator cli", () => {
     });
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.defaultRuntime.writeStdout.mockClear();
-    const command = createProgram().parseAsync(["skills", "curator", "status", "--json"], {
+    const command = runCurator(["skills", "curator", "status", "--json"], {
       from: "user",
     });
     try {
@@ -203,7 +211,7 @@ describe("skills curator cli", () => {
     mocks.getSkillCuratorStatus.mockRejectedValueOnce(new Error("curator state unavailable"));
 
     await expect(
-      createProgram().parseAsync(["skills", "curator", "status", "--json"], { from: "user" }),
+      runCurator(["skills", "curator", "status", "--json"], { from: "user" }),
     ).rejects.toThrow("__exit__:1");
 
     expect(mocks.defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("curator state unavailable");
@@ -218,9 +226,7 @@ describe("skills curator cli", () => {
       ["skills", "curator", "unpin", "daily-brief", "--json"],
       ["skills", "curator", "restore", "daily-brief", "--json"],
     ]) {
-      await expect(createProgram().parseAsync(argv, { from: "user" })).rejects.toThrow(
-        "__exit__:1",
-      );
+      await expect(runCurator(argv, { from: "user" })).rejects.toThrow("__exit__:1");
     }
 
     expect(mocks.callGateway.mock.calls.map(([request]) => request.method)).toEqual([
@@ -253,12 +259,12 @@ describe("skills curator cli", () => {
       mocks.callGateway.mockRejectedValue(new Error("remote unavailable"));
 
       for (const action of curatorActions) {
-        const failure = await createProgram()
-          .parseAsync(["skills", "curator", ...action.argv, "--json"], { from: "user" })
-          .then(
-            () => undefined,
-            (error: unknown) => error,
-          );
+        const failure = await runCurator(["skills", "curator", ...action.argv, "--json"], {
+          from: "user",
+        }).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
         expect(failure, action.label).toMatchObject({ message: "__exit__:1" });
       }
 
@@ -286,10 +292,9 @@ describe("skills curator cli", () => {
       mocks.callGateway.mockRejectedValue(error);
 
       for (const action of curatorActions) {
-        const command = createProgram().parseAsync(
-          ["skills", "curator", ...action.argv, "--json"],
-          { from: "user" },
-        );
+        const command = runCurator(["skills", "curator", ...action.argv, "--json"], {
+          from: "user",
+        });
         if (action.label === "status") {
           await command;
         } else {
@@ -329,7 +334,7 @@ describe("skills curator cli", () => {
 
     for (const action of curatorActions.slice(1)) {
       await expect(
-        createProgram().parseAsync(["skills", "curator", ...action.argv, "--json"], {
+        runCurator(["skills", "curator", ...action.argv, "--json"], {
           from: "user",
         }),
         action.label,
@@ -348,7 +353,7 @@ describe("skills curator cli", () => {
 
     for (const action of curatorActions.slice(1)) {
       await expect(
-        createProgram().parseAsync(["skills", "curator", ...action.argv, "--json"], {
+        runCurator(["skills", "curator", ...action.argv, "--json"], {
           from: "user",
         }),
         action.label,
@@ -365,7 +370,7 @@ describe("skills curator cli", () => {
     mocks.callGateway.mockRejectedValue(createGatewayTransportError("closed"));
 
     await expect(
-      createProgram().parseAsync(["skills", "curator", "pin", "daily-brief", "--json"], {
+      runCurator(["skills", "curator", "pin", "daily-brief", "--json"], {
         from: "user",
       }),
     ).rejects.toThrow("__exit__:1");
@@ -417,7 +422,7 @@ describe("skills curator cli", () => {
     mocks.callGateway.mockRejectedValue(error);
 
     for (const action of curatorActions) {
-      const command = createProgram().parseAsync(["skills", "curator", ...action.argv, "--json"], {
+      const command = runCurator(["skills", "curator", ...action.argv, "--json"], {
         from: "user",
       });
       if (outcome === "root") {
@@ -447,12 +452,12 @@ describe("skills curator cli", () => {
       });
     });
 
-    await createProgram().parseAsync(["skills", "curator", "status", "--json"], {
+    await runCurator(["skills", "curator", "status", "--json"], {
       from: "user",
     });
 
     for (const action of curatorActions.slice(1)) {
-      const command = createProgram().parseAsync(["skills", "curator", ...action.argv, "--json"], {
+      const command = runCurator(["skills", "curator", ...action.argv, "--json"], {
         from: "user",
       });
       await expect(command, action.label).rejects.toThrow("__exit__:1");
@@ -478,7 +483,7 @@ describe("skills curator cli", () => {
       ],
     });
 
-    await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
+    await runCurator(["skills", "curator", "status"], { from: "user" });
 
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining("daily-brief (/workspace/skills/daily-brief/SKILL.md)  active"),
@@ -489,7 +494,7 @@ describe("skills curator cli", () => {
   });
 
   it("prints the last collection and experience outcomes", async () => {
-    await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
+    await runCurator(["skills", "curator", "status"], { from: "user" });
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining("Collection review: attempted"),
     );

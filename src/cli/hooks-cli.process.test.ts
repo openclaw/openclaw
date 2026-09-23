@@ -12,23 +12,26 @@ import {
   testing as nativeHookRelayTesting,
 } from "../agents/harness/native-hook-relay.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    await Promise.all(Array.from(activeChildren, terminateChild));
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 // Process startup includes TS transforms and plugin discovery, both of which can
 // stall behind neighboring CI shards. Bound observable milestones, not runner speed.
 const outputTimeoutMs = 45_000;
 const exitAfterOutputTimeoutMs = 30_000;
 const exitOnlyTimeoutMs = 60_000;
-
-afterEach(async () => {
-  await nativeHookRelayTesting.clearNativeHookRelaysForTests();
-  await Promise.all(Array.from(activeChildren, terminateChild));
-});
 
 async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {

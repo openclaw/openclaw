@@ -2,6 +2,11 @@
 const currentModuleUrl = import.meta.url;
 
 export const sessionTitleRetentionEntrypoints = {
+  cleanup: {
+    currentModuleUrl,
+    sourceWorkerName: "../test-utils/session-state-cleanup",
+    distWorkerPath: "test-utils/session-state-cleanup.js",
+  },
   titleReader: {
     currentModuleUrl,
     sourceWorkerName: "session-transcript-title-reader",

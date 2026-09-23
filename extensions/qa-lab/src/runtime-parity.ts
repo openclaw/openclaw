@@ -1,11 +1,11 @@
 import {
+  loadSqliteTrajectoryRuntimeEvents,
+  type TrajectoryEvent,
+} from "openclaw/plugin-sdk/qa-runtime";
+import {
   loadTranscriptEventsSync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  loadSqliteTrajectoryRuntimeEvents,
-  type SqliteTrajectoryRuntimeEventForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
@@ -715,7 +715,7 @@ function isTrajectoryToolResultError(data: Record<string, unknown>) {
 }
 
 function resolveTrajectoryToolCallOrder(
-  events: readonly SqliteTrajectoryRuntimeEventForTest[],
+  events: readonly TrajectoryEvent[],
 ): RuntimeParityObservedToolCall[] {
   const ordered: Array<{
     call: RuntimeParityObservedToolCall;

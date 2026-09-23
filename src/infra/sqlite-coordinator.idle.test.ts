@@ -26,12 +26,14 @@ import {
   acquireStateDatabaseHandleLease,
   captureStateDatabaseCoordinatorRuntime,
   resolveStateDatabaseCoordinatorPath,
+  resolveStateLifecycleRuntimeDirectory,
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "./state-database-coordinator.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const ownerUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.stateDatabaseCoordinator);
+const defaultLockFiles = new Set<string>();
 
 function observeConnections() {
   const { DatabaseSync } = requireNodeSqlite();
@@ -48,7 +50,19 @@ function firstConnection(databases: ReadonlySet<DatabaseSync>) {
 }
 
 function fixture() {
-  const directory = tempDirs.make("openclaw-coordinator-idle-");
+  // These cases exercise production pooling. Owned Vitest namespaces deliberately
+  // disable pooling and have separate immediate-close coverage in resources.test.ts.
+  const runtimeDirectory = resolveStateLifecycleRuntimeDirectory();
+  fs.mkdirSync(runtimeDirectory, { recursive: true });
+  const directory = tempDirs.make("openclaw-coordinator-idle-", runtimeDirectory);
+  const lifecyclePath = resolveStateDatabaseCoordinatorPath({
+    databasePath: path.join(directory, "state.sqlite"),
+    runtimeDirectory,
+    uid: process.getuid?.(),
+  });
+  for (const family of ["state-lifecycle", "state-handles"]) {
+    defaultLockFiles.add(lifecyclePath.replace("state-lifecycle.", `${family}.`));
+  }
   const location = path.join(directory, "coordinator.sqlite");
   fs.writeFileSync(location, "");
   return { directory, location };
@@ -91,6 +105,10 @@ describe("idle SQLite coordinator connections", () => {
     vi.restoreAllMocks();
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
+    for (const pathname of defaultLockFiles) {
+      fs.rmSync(pathname, { force: true });
+    }
+    defaultLockFiles.clear();
   });
 
   it("reuses released state-handle locks until idle eviction and then reopens", async () => {

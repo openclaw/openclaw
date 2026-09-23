@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
@@ -18,8 +19,9 @@ vi.mock("./clawhub.js", () => ({
 vi.mock("./bundled-sources.js", () => ({ resolveBundledPluginSources: () => new Map() }));
 
 const tempDirs: string[] = [];
-afterEach(() => {
+afterEach(async () => {
   vi.resetAllMocks();
+  await closeOpenClawStateDatabaseAsync();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }

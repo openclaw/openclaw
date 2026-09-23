@@ -15,7 +15,7 @@ const { clearConfigCache } = configRuntime;
 const { formatConfigIssueLines } = await import("../config/issue-format.js");
 const { REDACTED_SENTINEL } = await import("../config/redact-snapshot.js");
 const { recordDeferredPluginMigrations } = await import("../infra/deferred-plugin-migrations.js");
-const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
+const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db.js");
 const runtimeSchema = await import("../config/runtime-schema.js");
 const { runConfigGet, runConfigPatch, runConfigSet, runConfigUnset } =
   await import("./config-cli.js");
@@ -85,7 +85,7 @@ describe("config cli integration", () => {
               plugins: { entries: { sample: { config: { legacyRoot: "/srv/legacy" } } } },
             });
           } finally {
-            closeOpenClawStateDatabaseForTest();
+            await closeOpenClawStateDatabaseAsync();
           }
         });
       },

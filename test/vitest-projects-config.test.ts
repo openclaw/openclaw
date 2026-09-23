@@ -84,6 +84,7 @@ import unitFastRootConfig from "./vitest/vitest.unit-fast-root.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
 const defaultPool = process.platform === "win32" ? "forks" : "threads";
+const scopedDefaultPool = process.platform === "win32" ? diagnosticForksPool : "threads";
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
 const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/chat-metadata-runtime.cache.test.ts",
@@ -133,7 +134,7 @@ describe("projects vitest config", () => {
   it("isolates Codex file globals while inheriting the shared worker budget", () => {
     const config = requireTestConfig(codexConfig);
     expect(config.isolate).toBe(true);
-    expect(config.pool).toBe(requireTestConfig(baseConfig).pool);
+    expect(config.pool).toBe(scopedDefaultPool);
     expect(config.runner).toBeUndefined();
     expect(config.fileParallelism).toBe(requireTestConfig(baseConfig).fileParallelism);
     expect(config.maxWorkers).toBe(requireTestConfig(baseConfig).maxWorkers);
@@ -209,9 +210,12 @@ describe("projects vitest config", () => {
         "gateway",
         "gateway-database-workers",
       ]);
-      expect(projects.map((project) => project.pool)).toEqual(["forks", "forks"]);
+      expect(projects.map((project) => project.pool)).toEqual([
+        diagnosticForksPool.name,
+        diagnosticForksPool.name,
+      ]);
       const original = requireTestConfig(createGatewayVitestConfig(env));
-      expect(original.pool).toBe(defaultPool);
+      expect(original.pool).toBe(scopedDefaultPool);
       for (const project of projects) {
         expect(project.runner).toBe(original.runner);
         expect(project.setupFiles).toEqual(original.setupFiles);
@@ -267,10 +271,10 @@ describe("projects vitest config", () => {
     expect(agenticShard?.projects).toContain(methodsIsolatedProject);
     expect(agenticShard?.projects).toContain(serverIsolatedProject);
     expect(methodsIsolatedConfig.isolate).toBe(true);
-    expect(methodsIsolatedConfig.pool).toBe("forks");
+    expect(methodsIsolatedConfig.pool).toBe(diagnosticForksPool);
     expect(normalizeConfigPath(methodsIsolatedConfig.runner)).toBe("test/non-isolated-runner.ts");
     expect(methodsIsolatedConfig.include).toEqual(scopedGatewayMethodsIsolatedTestFiles);
-    expect(serverConfig.pool).toBe("forks");
+    expect(serverConfig.pool).toBe(diagnosticForksPool);
     expect(serverConfig.isolate).toBe(false);
     expect(serverConfig.fileParallelism).toBe(true);
     expect(
@@ -568,22 +572,22 @@ describe("projects vitest config", () => {
 
   it("keeps root projects on their expected pool defaults", () => {
     expect(sharedVitestConfig.test.pool).toBe(defaultPool);
-    expect(requireTestConfig(createGatewayVitestConfig()).pool).toBe(defaultPool);
-    expect(requireTestConfig(createAgentsVitestConfig()).pool).toBe(defaultPool);
-    expect(requireTestConfig(createAgentsCoreVitestConfig()).pool).toBe(defaultPool);
-    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createGatewayVitestConfig()).pool).toBe(scopedDefaultPool);
+    expect(requireTestConfig(createAgentsVitestConfig()).pool).toBe(scopedDefaultPool);
+    expect(requireTestConfig(createAgentsCoreVitestConfig()).pool).toBe(scopedDefaultPool);
+    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).pool).toBe(scopedDefaultPool);
     expect(requireTestConfig(createAgentsEmbeddedIncompleteTurnVitestConfig()).pool).toBe(
-      defaultPool,
+      scopedDefaultPool,
     );
     expect(requireTestConfig(createAgentsEmbeddedOverflowCompactionVitestConfig()).pool).toBe(
-      defaultPool,
+      scopedDefaultPool,
     );
-    expect(requireTestConfig(createAgentsEmbeddedRunVitestConfig()).pool).toBe(defaultPool);
-    expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe("forks");
-    expect(requireTestConfig(createAgentsToolsVitestConfig()).pool).toBe(defaultPool);
-    expect(requireTestConfig(createCommandsLightVitestConfig()).pool).toBe(defaultPool);
-    expect(requireTestConfig(createCommandsVitestConfig()).pool).toBe("forks");
-    expect(requireTestConfig(createPluginSdkLightVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createAgentsEmbeddedRunVitestConfig()).pool).toBe(scopedDefaultPool);
+    expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe(diagnosticForksPool);
+    expect(requireTestConfig(createAgentsToolsVitestConfig()).pool).toBe(scopedDefaultPool);
+    expect(requireTestConfig(createCommandsLightVitestConfig()).pool).toBe(scopedDefaultPool);
+    expect(requireTestConfig(createCommandsVitestConfig()).pool).toBe(diagnosticForksPool);
+    expect(requireTestConfig(createPluginSdkLightVitestConfig()).pool).toBe(scopedDefaultPool);
     expect(requireTestConfig(createUnitFastVitestConfig()).pool).toBe(defaultPool);
     expect(requireTestConfig(createContractsVitestConfig(pluginContractPatterns)).pool).toBe(
       defaultPool,

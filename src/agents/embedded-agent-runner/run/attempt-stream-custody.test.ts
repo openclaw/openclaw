@@ -24,6 +24,7 @@ import {
 } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -43,7 +44,15 @@ import {
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.useRealTimers();
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 registerAgentSessionLoopTestLifecycle();
 const checkpoint: OpenAIResponsesCompactionRejection = {
   data: "synthetic-rejected-checkpoint",
@@ -52,12 +61,6 @@ const checkpoint: OpenAIResponsesCompactionRejection = {
 type ReplayOptions = NonNullable<Parameters<StreamFn>[2]> & {
   onCompactionRejected?: (rejected: OpenAIResponsesCompactionRejection) => void;
 };
-
-afterEach(async () => {
-  vi.useRealTimers();
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-});
 
 const nextTurn = () =>
   new Promise<void>((resolve) => {

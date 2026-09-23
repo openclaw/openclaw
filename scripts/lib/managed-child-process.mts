@@ -21,6 +21,7 @@ const PROCESS_GROUP_POLL_MS = 25;
 const TASKKILL_TIMEOUT_MS = 10_000;
 type ProcessTreeState = "indeterminate" | "live" | "signaled" | "terminated";
 type ManagedChildTermination = {
+  commandPid?: number;
   processTreeState: Exclude<ProcessTreeState, "live">;
   error?: Error;
   survivingPids?: number[];
@@ -130,6 +131,16 @@ export function loadManagedChildSpawner(platform = process.platform) {
     }
     return spawnManagedChild;
   });
+}
+
+/** The native Windows Job launcher is not the command that consumes its inputs. */
+export function getManagedChildCommandPid(child: ChildProcess): number | undefined {
+  const job = windowsJobs.get(child);
+  // An admitted launcher without a spawned command has no consumer identity yet.
+  if (job) {
+    return job.commandPid;
+  }
+  return windowsTerminations.has(child) ? windowsTerminations.get(child)?.commandPid : child.pid;
 }
 
 function observeWindowsTree(child: ManagedProcessGroupChild): ManagedChildTermination {
@@ -857,6 +868,7 @@ export async function finalizeManagedChild(
     }
     const receipt: ManagedChildTermination = {
       ...observed,
+      commandPid: job.commandPid,
       processTreeState: joined ? "terminated" : "indeterminate",
       ...(failures.length
         ? { error: new AggregateError(failures, "Managed command finalization failed") }

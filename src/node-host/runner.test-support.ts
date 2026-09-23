@@ -1,6 +1,7 @@
-import { type Mock, vi } from "vitest";
+import { afterEach, type Mock, vi } from "vitest";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import type { loadDeviceAuthTokenReadOnly } from "../infra/device-auth-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { configureNodeHost, NodeHostConfig } from "./config.js";
 
 const mocks = vi.hoisted(() => ({
@@ -214,6 +215,9 @@ vi.mock("./runtime.js", async (importOriginal) => {
 // Load after mock registration and retain local bindings for Vitest's export transform.
 const { runNodeHost } = await import("./runner.js");
 const { startNodeHostMcpManager } = await import("./mcp.js");
+
+// Real runner paths can open the shared state worker even with mocked transport.
+afterEach(() => closeOpenClawStateDatabaseAsync());
 
 export function lastCapturedOptions(): GatewayClientOptions | undefined {
   return mocks.capturedGatewayClientOptions.at(-1);

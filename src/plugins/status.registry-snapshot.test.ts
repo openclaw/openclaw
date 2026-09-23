@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
@@ -53,9 +54,10 @@ function createGlobalPluginFixture(stateDir: string, pluginId: string) {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   clearPluginMetadataLifecycleCaches();
+  await closeOpenClawStateDatabaseAsync();
   cleanupTrackedTempDirs(tempDirs);
 });
 

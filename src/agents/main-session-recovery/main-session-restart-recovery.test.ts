@@ -73,10 +73,12 @@ import {
   removeAgentDeletionJournal,
 } from "../../state/agent-deletion-journal.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -129,6 +131,10 @@ import {
   makeToolResultMessage,
   makeUserMessage,
 } from "./main-session-restart-recovery-transcript.test-support.js";
+import {
+  mainSessionEntry,
+  runningSessionEntry,
+} from "./main-session-restart-recovery.entries.test-support.js";
 import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
@@ -241,6 +247,8 @@ beforeEach(async () => {
 afterEach(async () => {
   resetGatewayWorkAdmission();
   await cleanupSessionStateForTest({ stateDir: tmpDir });
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -266,26 +274,6 @@ async function writeStore(
   store: Record<string, SessionEntryFixture>,
 ): Promise<void> {
   await writeStorePath(path.join(sessionsDir, "sessions.json"), store);
-}
-
-function mainSessionEntry(overrides: SessionEntryFixture = {}): SessionEntry {
-  return createSessionEntry({
-    sessionId: "main-session",
-    permissionMode: "guarded",
-    updatedAt: Date.now() - 10_000,
-    status: "running",
-    abortedLastRun: true,
-    ...overrides,
-  });
-}
-
-function runningSessionEntry(sessionId: string, overrides: SessionEntryFixture = {}): SessionEntry {
-  return createSessionEntry({
-    sessionId,
-    updatedAt: Date.now() - 10_000,
-    status: "running",
-    ...overrides,
-  });
 }
 
 function activeRestartRun(

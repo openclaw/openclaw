@@ -87,6 +87,11 @@ export const updateExecutorNativeEntrypoints = {
     sourceWorkerName: "update-command-include-delegated.test-support",
     distWorkerPath: "test-support/update-include-delegated.js",
   },
+  stateDatabase: {
+    currentModuleUrl,
+    sourceWorkerName: "../../state/openclaw-state-db",
+    distWorkerPath: "state/openclaw-state-db.js",
+  },
   configIO: {
     currentModuleUrl,
     sourceWorkerName: "../../config/io.factory",

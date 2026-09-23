@@ -12,6 +12,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setReefRuntime } from "./runtime.js";
 import { reefSetupWizard } from "./setup.js";
@@ -32,8 +33,9 @@ describe("Reef setup wizard identity binding", () => {
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-setup-"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });

@@ -8,6 +8,7 @@ import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -63,6 +64,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   await testState.cleanup();
   await tempDirs.cleanup();
 });

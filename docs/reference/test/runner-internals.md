@@ -140,6 +140,22 @@ JavaScript `process.env` does not change native thread home lookup. Per-worker a
 per-test fixture homes remain separate. Installed Corepack and Playwright browser
 caches retain their caller-selected locations.
 
+The launcher publishes an identity-bound resource context before application imports.
+Lifecycle and shared-handle SQLite coordinators for namespace-owned databases live
+under their nearest owner and hold claims until native handles close. Nested launchers,
+worker threads, and repository-owned Node children inherit that context. External
+databases and explicitly real-home runs retain the stable production coordinator path.
+Claim admission closes before namespace deletion; missing close or descendant evidence
+retains the namespace for recovery. These claims are ephemeral test resources, not
+managed-update handoff leases, and do not isolate an explicitly shared handoff database.
+
+Caller heap and diagnostic `NODE_OPTIONS` remain after the trusted preload. Earlier
+CommonJS, loader, startup-config, and snapshot hooks are rejected for owned Node
+launches because they can import application state before the context is published.
+Node launch adapters declare the entry boundary so application arguments are not
+mistaken for runtime options. Eval/print commands keep hook-shaped literal operands
+after an explicit `--`: Node can still parse startup options after the eval source.
+
 Gateway port claims remain in the common temporary directory outside all enclosing
 Vitest namespaces, found through their explicit resource owners. Parallel invocations
 therefore share port ownership while a fixture hands its reserved socket to a child;

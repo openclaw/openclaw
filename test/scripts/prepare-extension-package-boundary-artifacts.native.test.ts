@@ -41,7 +41,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   );
   write(
     "packages/plugin-sdk/tsconfig.json",
-    JSON.stringify({ extends: "../../tsconfig.json", include: ["../../src/**/*.ts"] }),
+    JSON.stringify({ extends: "../../tsconfig.json", include: ["../../src/plugin-sdk/**/*.ts"] }),
   );
   write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
@@ -52,6 +52,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     "scripts/tsx.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib",
+    "src/infra/vitest-resource-ownership.ts",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
   ]) {

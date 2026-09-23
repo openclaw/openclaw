@@ -1,7 +1,9 @@
 /**
  * Real background-shell proof for bounded completed process retention.
  */
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   getActiveBackgroundExecSessionCount,
   listFinishedSessions,
@@ -10,8 +12,16 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
-afterEach(() => {
+vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => supervisor }));
+
+let supervisor: ReturnType<typeof createProcessSupervisor>;
+beforeEach(() => {
+  supervisor = createProcessSupervisor();
+});
+afterEach(async () => {
+  await supervisor.shutdown();
   resetProcessRegistryForTests();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 test("real completed background commands retain only the newest fully readable process logs", async () => {

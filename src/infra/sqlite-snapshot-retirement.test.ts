@@ -16,6 +16,7 @@ import {
   createSqliteSnapshotStagingDirectorySync,
 } from "./sqlite-snapshot-staging.js";
 import { acquireSqliteStagingToken } from "./sqlite-staging-token.js";
+import { captureResourceOwnedNativeProcessExit } from "./vitest-resource-ownership.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -94,6 +95,8 @@ it.skipIf(process.platform === "win32").each(["", "openclaw"])(
       ],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
+    const settleNativeExit =
+      child.pid === undefined ? undefined : captureResourceOwnedNativeProcessExit(child);
     let stderr = "";
     child.stderr.on("data", (data) => {
       stderr += String(data);
@@ -123,6 +126,7 @@ it.skipIf(process.platform === "win32").each(["", "openclaw"])(
     } finally {
       child.kill("SIGKILL");
       await closed;
+      await settleNativeExit?.();
       if (allocated && fs.existsSync(allocated) && fs.readdirSync(allocated).length === 0) {
         fs.rmdirSync(allocated);
       }

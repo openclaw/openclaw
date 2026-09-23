@@ -123,6 +123,7 @@ function workflowOccurrenceEvidence(
 function writeWorkflowEvidenceApi(root: string, accessors = true) {
   const apiPath = path.join(root, "extensions/qa-lab/api.ts");
   mkdirSync(path.dirname(apiPath), { recursive: true });
+  writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   writeFileSync(
     path.join(root, "tsconfig.json"),
     JSON.stringify({ extends: path.resolve("tsconfig.json") }),
@@ -2427,7 +2428,7 @@ fi
     }
   });
 
-  it("checks out the complete trusted Release Decision scripts tree", () => {
+  it("pins Release Decision tooling to the trusted revision without credentials", () => {
     const workflow = readWorkflow(".github/workflows/full-release-validation.yml");
     const checkout = workflow.jobs.release_decision.steps.find(
       (step: WorkflowStep) => step.name === "Checkout release decision tooling",
@@ -2435,7 +2436,7 @@ fi
 
     expect(checkout?.with).toMatchObject({
       ref: "${{ github.sha }}",
-      "sparse-checkout": "scripts",
+      // The actual sparse entrypoint closure is covered by the continuation workflow suite.
       "sparse-checkout-cone-mode": false,
       "persist-credentials": false,
     });

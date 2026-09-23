@@ -1,13 +1,25 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
-afterEach(resetProcessRegistryForTests);
+vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => supervisor }));
+
+let supervisor: ReturnType<typeof createProcessSupervisor>;
+beforeEach(() => {
+  supervisor = createProcessSupervisor();
+});
+afterEach(async () => {
+  await supervisor.shutdown();
+  resetProcessRegistryForTests();
+  await closeOpenClawStateDatabaseAsync();
+});
 
 function nodeCommand(source: string): string {
   const quote = (value: string) =>

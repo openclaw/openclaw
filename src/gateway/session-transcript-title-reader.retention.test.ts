@@ -88,6 +88,7 @@ afterAll(async () => {
 });
 
 test("releases transcript payloads after caching title fields", () => {
+  const cleanupUrl = resolveRuntimeWorkerUrl(sessionTitleRetentionEntrypoints.cleanup);
   const titleReaderUrl = resolveRuntimeWorkerUrl(sessionTitleRetentionEntrypoints.titleReader);
   const sessionUtilsUrl = resolveRuntimeWorkerUrl(sessionTitleRetentionEntrypoints.sessionUtils);
   const result = spawnSync(
@@ -101,6 +102,7 @@ test("releases transcript payloads after caching title fields", () => {
           import { setImmediate as yieldTurn } from "node:timers/promises";
           import { readSessionTitleFieldsFromTranscript } from ${JSON.stringify(titleReaderUrl.href)};
           import { deriveSessionTitle } from ${JSON.stringify(sessionUtilsUrl.href)};
+          import { cleanupSessionStateForTest } from ${JSON.stringify(cleanupUrl.href)};
 
           async function heapUsed() {
             await yieldTurn();
@@ -113,6 +115,7 @@ test("releases transcript payloads after caching title fields", () => {
             const sessionId = "preview-" + index;
             return { agentId: "main", sessionId, sessionKey: "agent:main:dashboard:" + sessionId, storePath };
           });
+          try {
           const before = await heapUsed();
           const rows = scopes.map((scope) => {
             const field = readSessionTitleFieldsFromTranscript(scope);
@@ -128,6 +131,9 @@ test("releases transcript payloads after caching title fields", () => {
           const unicodeScope = { ...scopes[0], sessionId: "unicode-preview", sessionKey: "agent:main:unicode-preview" };
           const unicodePreview = readSessionTitleFieldsFromTranscript(unicodeScope).firstUserMessage;
           process.stdout.write(JSON.stringify({ retainedBytes, rows, unicodePreview }));
+          } finally {
+            await cleanupSessionStateForTest({ stateDir: process.env.OPENCLAW_STATE_DIR });
+          }
         `,
     ],
     { cwd: process.cwd(), env: state.env, encoding: "utf8", timeout: 20_000 },

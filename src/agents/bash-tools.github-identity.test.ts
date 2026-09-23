@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -14,6 +15,10 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../secrets/store/secret-store.js")>()),
   readSecretStoreExecEnvironment: storeMocks.readSecretStoreExecEnvironment,
 }));
+
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 const snapshot = captureEnv(["GH_TOKEN", "GITHUB_TOKEN", "PREVIEW_SERVICE_TOKEN"]);
 

@@ -7,6 +7,10 @@ import { join } from "node:path";
 import { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramCallbackMessageRuntime } from "./bot-handlers.callback-router-controls.js";
@@ -247,9 +251,13 @@ describe("Telegram model callback loopback", () => {
         `Model changed to <b>${PROVIDER}/${MODEL}</b>`,
       );
     } finally {
-      server.close();
+      const closed = new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
       server.closeAllConnections();
-      server.unref();
+      await closed;
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
       await rm(stateDir, { recursive: true, force: true });
     }
   });

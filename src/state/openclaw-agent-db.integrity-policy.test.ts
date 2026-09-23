@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import {
@@ -11,6 +11,7 @@ import {
 import * as schema from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
@@ -20,13 +21,19 @@ import {
   readOpenClawAgentIntegrityVerification,
   resolveQuarantineStorePath,
 } from "./openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "./openclaw-state-db.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+const tempDirs = createTempDirTracker();
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  tempDirs.cleanup();
 });
 
 it.each(

@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -13,13 +14,15 @@ vi.mock("../process/supervisor/index.js", () => ({
 }));
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 beforeEach(() => {
   supervisor = createProcessSupervisor();
 });
 afterEach(async () => {
   await supervisor.shutdown();
   resetProcessRegistryForTests();
+  await closeOpenClawStateDatabaseAsync();
+  tempDirs.cleanup();
 });
 
 it.skipIf(process.platform === "win32")(

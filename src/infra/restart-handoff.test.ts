@@ -129,17 +129,23 @@ function spawnHandoffConsumer(params: {
 }) {
   params.signal.throwIfAborted();
   const moduleUrl = new URL("./restart-handoff.ts", import.meta.url).href;
+  const stateUrl = new URL("../state/openclaw-state-db.ts", import.meta.url).href;
   const script = `
     const mod = await import(${JSON.stringify(moduleUrl)});
+    const { closeOpenClawStateDatabaseAsync } = await import(${JSON.stringify(stateUrl)});
     const start = new Promise((resolve) => process.stdin.once("data", resolve));
     process.stdout.write("ready\\n");
     await start;
-    const result = mod.consumeGatewayRestartHandoffSync({
-      expectedPid: ${params.expectedPid},
-      now: ${params.now},
-      env: process.env,
-    });
-    process.stdout.write(JSON.stringify(result) + "\\n");
+    try {
+      const result = mod.consumeGatewayRestartHandoffSync({
+        expectedPid: ${params.expectedPid},
+        now: ${params.now},
+        env: process.env,
+      });
+      process.stdout.write(JSON.stringify(result) + "\\n");
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
   `;
   const child = spawn(
     process.execPath,

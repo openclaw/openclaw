@@ -23,6 +23,7 @@ import {
   recordUpdateRunStep,
 } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
+import { applyVitestResourceContextToChildEnv } from "../infra/vitest-resource-ownership.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -93,6 +94,18 @@ describe("Doctor CLI migration refusal", () => {
         const files = [shared, `${shared}-wal`, `${shared}-shm`, configPath];
         const before = files.map((file) => fs.readFileSync(file));
 
+        const childEnv: NodeJS.ProcessEnv = {
+          PATH: process.env.PATH,
+          HOME: root,
+          USERPROFILE: root,
+          ...env,
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.3",
+          OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+          NO_COLOR: "1",
+          CI: "1",
+        };
+        applyVitestResourceContextToChildEnv(childEnv);
         // 2026.9.2 invokes the installed index directly and keeps its ledger open.
         const result = spawnSync(
           process.execPath,
@@ -101,17 +114,7 @@ describe("Doctor CLI migration refusal", () => {
             cwd: runtimeRoot,
             encoding: "utf8",
             timeout: 60_000,
-            env: {
-              PATH: process.env.PATH,
-              HOME: root,
-              USERPROFILE: root,
-              ...env,
-              OPENCLAW_UPDATE_IN_PROGRESS: "1",
-              OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.3",
-              OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-              NO_COLOR: "1",
-              CI: "1",
-            },
+            env: childEnv,
           },
         );
         const output = `${result.stdout}\n${result.stderr}`;
@@ -551,7 +554,27 @@ it.each([
           expect(receipt).toMatchObject({
             status: "ok",
             configHash: "unchanged",
-            warnings: [expect.stringContaining("live agent databases are unchanged")],
+            warnings: [
+              expect.stringContaining("live agent databases are unchanged"),
+              // Rehearsal inventories bundled non-channel migrations even when plugins
+              // are disabled. Undeclared recovery coverage must reach the updater intact.
+              ...[
+                "acpx",
+                "active-memory",
+                "canvas",
+                "codex",
+                "crabbox",
+                "device-pair",
+                "memory-core",
+                "memory-lancedb",
+                "memory-wiki",
+                "voice-call",
+                "workboard",
+              ].map(
+                (pluginId) =>
+                  `${pluginId} migration declares no data resources; its private state is not in the recovery set`,
+              ),
+            ],
           });
           expect(output).toContain("live agent databases are unchanged");
           expect(output).not.toContain("Doctor complete.");

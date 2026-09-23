@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
+import { captureResourceOwnedNativeProcessExit } from "../infra/vitest-resource-ownership.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { OpenClawStateLeaseError, withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -31,6 +32,7 @@ type LeaseChildRun = {
   child: LeaseChild;
   ready: Promise<void>;
   completed: Promise<void>;
+  settleNativeExit?: () => Promise<void>;
   phases: ReadonlySet<string>;
   waitForPhase: (phase: string) => Promise<void>;
   output: () => string;
@@ -60,8 +62,9 @@ async function withLeaseChildren<T>(fn: (children: Set<LeaseChildRun>) => Promis
       return await fn(children);
     } finally {
       await Promise.all(
-        Array.from(children, async ({ child, completed }) => {
+        Array.from(children, async ({ child, completed, settleNativeExit }) => {
           await terminateLeaseChild(child);
+          await settleNativeExit?.();
           await completed.catch(() => {});
         }),
       );
@@ -84,6 +87,10 @@ function runLeaseChild(
     stdio: ["ignore", "pipe", "pipe"],
     env,
   });
+  const settleNativeExit =
+    child.pid === undefined
+      ? undefined
+      : captureResourceOwnedNativeProcessExit(child, { includeWorkerThreads: true });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
 
@@ -141,6 +148,7 @@ function runLeaseChild(
     child,
     ready: waitForPhase("ready"),
     completed,
+    settleNativeExit,
     phases,
     waitForPhase,
     output: () => `lease child ${args[0]} stdout:\n${stdout}\nstderr:\n${stderr}`,

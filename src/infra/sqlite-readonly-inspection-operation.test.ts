@@ -41,7 +41,7 @@ async function inspectFailure(
   const stagingRoot = path.join(root, "staging");
   fs.mkdirSync(stagingRoot);
   const actual = await vi.importActual<typeof import("./node-sqlite.js")>("./node-sqlite.js");
-  const source = actual.openNodeSqliteDatabase(sourcePath);
+  using source = actual.openNodeSqliteDatabase(sourcePath);
   source.exec("CREATE TABLE present (id INTEGER PRIMARY KEY); INSERT INTO present VALUES (7);");
   source.close();
   const before = fs.readFileSync(sourcePath);
@@ -65,6 +65,7 @@ async function inspectFailure(
     ) {
       throw failure;
     }
+    // The caller owns this returned handle; disposing here would prevent its operation.
     const database = actual.openNodeSqliteDatabase(location, options);
     opened.push(database);
     return database;
@@ -75,7 +76,7 @@ async function inspectFailure(
   if (operation === "snapshot-copy") {
     const open = fs.openSync;
     vi.spyOn(fs, "openSync").mockImplementation((...args) => {
-      if (args[1] === "wx") {
+      if (args[1] === "wx" && String(args[0]).startsWith(stagingRoot + path.sep)) {
         throw failure;
       }
       return open(...args);

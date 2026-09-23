@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import {
@@ -18,6 +19,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     for (const stateDir of tempDirs.dirs) {
       await cleanupSessionStateForTest({ stateDir });
     }
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );

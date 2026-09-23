@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
+import { cleanupMediaPersistenceFixtures } from "./state-migrations.media-persistence.test-support.js";
 
 const tempDirs: string[] = [];
 
@@ -31,10 +31,8 @@ function createArchiveFixture(bytes: Uint8Array): {
   return { archivePath, env };
 }
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  cleanupTempDirs(tempDirs);
+afterEach(async () => {
+  await cleanupMediaPersistenceFixtures(tempDirs);
 });
 
 describe("legacy media persistence NUL-tail recovery", () => {

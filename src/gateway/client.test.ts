@@ -3,8 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import type { ProxylineOptions } from "@openclaw/proxyline";
 // Gateway client tests cover WebSocket protocol negotiation, auth persistence,
 // proxy bypass setup, command dispatch, reconnect, and error handling.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -19,9 +18,15 @@ import {
   signDevicePayload as signDevicePayloadWithKey,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClientOptions } from "./client.js";
-import { createAuthFailureMessage, firstMockArg, waitForFast } from "./client.test-support.js";
+import {
+  createAuthFailureMessage,
+  expectRecordFields,
+  firstMockArg,
+  waitForFast,
+} from "./client.test-support.js";
 
 type MockLoggingConfig = {
   redactPatterns?: string[];
@@ -220,20 +225,6 @@ function getLatestWs(): MockWebSocket {
   return ws;
 }
 
-const requireRecord = createRequireRecord("record", "expected-label-object");
-
-function expectRecordFields(
-  value: unknown,
-  expected: Record<string, unknown>,
-  label: string,
-): Record<string, unknown> {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
-  }
-  return record;
-}
-
 function createClientWithIdentity(
   deviceId: string,
   onClose: (code: number, reason: string) => void,
@@ -267,6 +258,10 @@ function expectSecurityConnectError(
 
 beforeAll(async () => {
   await loadGatewayClientModule();
+});
+
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
 });
 
 beforeEach(() => {

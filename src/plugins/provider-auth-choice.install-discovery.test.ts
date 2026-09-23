@@ -6,6 +6,7 @@ import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { createNonExitingRuntime } from "../runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash, resolveAcceptedSurfaceCurrent } from "./capability-summary.js";
@@ -52,10 +53,11 @@ vi.mock("./provider-install-catalog.js", () => ({
 }));
 
 const tempDirs: string[] = [];
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   install.mockReset();
   resetPluginLoaderTestStateForTest();
+  await closeOpenClawStateDatabaseAsync();
   cleanupTrackedTempDirs(tempDirs);
 });
 

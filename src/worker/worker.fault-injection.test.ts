@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceStartParams,
@@ -22,6 +22,7 @@ import { loggingState } from "../logging/state.js";
 import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { prepareSkillResourceDelivery } from "../skills/runtime/resources.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
   WorkerAdmissionError,
@@ -40,6 +41,11 @@ import {
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+// Session seeding uses the suite test home in addition to each fixture root.
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 const REPLACEMENT_CREDENTIAL = ["worker", "replacement", "fixture"].join("-");
 const MODEL_REF = { provider: "fake", model: "fault-model" } as const;
 const TERMINAL_EVENT = {

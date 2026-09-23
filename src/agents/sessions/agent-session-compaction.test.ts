@@ -13,6 +13,7 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqli
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import {
@@ -54,6 +55,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     for (const stateDir of tempDirs.dirs) {
       await cleanupSessionStateForTest({ stateDir });
     }
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );

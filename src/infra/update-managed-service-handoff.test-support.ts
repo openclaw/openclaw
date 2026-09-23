@@ -250,6 +250,7 @@ export function signalMockManagedUpdateHandoffReady(params: {
   cleanups: Set<() => void>;
   startIdentity?: number;
   failure?: MockManagedUpdateHandoffLeaseFailure;
+  assertDatabasePath?: (databasePath: string) => void;
 }): void {
   const { child, cleanups, failure } = params;
   if (child.stdout.destroyed) {
@@ -267,6 +268,7 @@ export function signalMockManagedUpdateHandoffReady(params: {
   if (startIdentity === null) {
     throw new Error("expected the mocked handoff child to have a live process identity");
   }
+  params.assertDatabasePath?.(lease.updateLeaseDatabasePath);
   fs.mkdirSync(path.dirname(lease.updateLeaseDatabasePath), { recursive: true, mode: 0o700 });
   const owner =
     failure === "wrong-owner" ? `${lease.updateLeaseOwner}-replacement` : lease.updateLeaseOwner;
@@ -315,7 +317,7 @@ export function signalMockManagedUpdateHandoffReady(params: {
   }
   if (failure !== "absent") {
     const cleanup = () => {
-      cleanups.delete(cleanup);
+      params.assertDatabasePath?.(lease.updateLeaseDatabasePath);
       const cleanupDb = new DatabaseSync(lease.updateLeaseDatabasePath);
       try {
         cleanupDb.exec("PRAGMA busy_timeout = 5000;");
@@ -328,6 +330,7 @@ export function signalMockManagedUpdateHandoffReady(params: {
       } finally {
         cleanupDb.close();
       }
+      cleanups.delete(cleanup);
     };
     cleanups.add(cleanup);
     child.once("exit", cleanup);

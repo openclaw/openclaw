@@ -2,11 +2,13 @@
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
@@ -354,16 +356,35 @@ describe("writeConfigFile canonical reread", () => {
         const removes = vi.spyOn(fsNode, "rmSync");
         const opens = vi.spyOn(fsNode, "openSync");
         let observed: { raw: string; ino: bigint; counts: number[] } | undefined;
+        // Observe the protected home's effects, not the runner's independent
+        // native-close receipts. Associate each write with its latest observed
+        // open, since the OS can reuse a receipt descriptor for the config file.
+        // Unknown descriptors remain counted rather than hiding unobserved writes.
+        const protectsHome = (target: fsNode.PathLike | number) =>
+          typeof target === "number" ||
+          isPathInside(home, target instanceof URL ? fileURLToPath(target) : String(target));
         const effects = () => [
           rootRenames.length,
-          writes.mock.calls.length,
-          fileWrites.mock.calls.length,
+          writes.mock.calls.filter(([fd], writeIndex) => {
+            const opened = opens.mock.results.findLastIndex(
+              (result, openIndex) =>
+                result.type === "return" &&
+                result.value === fd &&
+                opens.mock.invocationCallOrder[openIndex]! <
+                  writes.mock.invocationCallOrder[writeIndex]!,
+            );
+            const target = opens.mock.calls[opened]?.[0];
+            return target === undefined || protectsHome(target);
+          }).length,
+          fileWrites.mock.calls.filter(([target]) => protectsHome(target)).length,
           truncates.mock.calls.length,
           removes.mock.calls.length,
-          opens.mock.calls.filter(([, flags]) =>
-            typeof flags === "number"
-              ? Boolean(flags & (fsNode.constants.O_WRONLY | fsNode.constants.O_RDWR))
-              : /[wa+]/.test(flags),
+          opens.mock.calls.filter(
+            ([target, flags]) =>
+              protectsHome(target) &&
+              (typeof flags === "number"
+                ? Boolean(flags & (fsNode.constants.O_WRONLY | fsNode.constants.O_RDWR))
+                : /[wa+]/.test(flags)),
           ).length,
         ];
         const failPublication = () => {

@@ -1,6 +1,7 @@
 // Register configure tests cover configure command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithMockedCliExit } from "../../test-utils/command-runner.js";
 import { registerConfigureCommand } from "./register.configure.js";
 
 const mocks = vi.hoisted(() => ({
@@ -31,7 +32,7 @@ describe("registerConfigureCommand", () => {
   async function runCli(args: string[]) {
     const program = new Command();
     registerConfigureCommand(program);
-    await program.parseAsync(args, { from: "user" });
+    await runWithMockedCliExit(() => program.parseAsync(args, { from: "user" }), runtime.exit);
   }
 
   beforeEach(() => {

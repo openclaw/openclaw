@@ -174,10 +174,10 @@ describe("models auth login owner integration", () => {
               register: registerModelsCli,
               argv: ["models", "auth", "login", "--provider", "openai", "--agent", "main"],
             }),
-          ).rejects.toThrow("exit:1");
+          ).rejects.toMatchObject({ code: 1 });
 
           expect(error).toHaveBeenCalledWith(ORDER_BUSY_MESSAGE);
-          expect(exit).toHaveBeenCalledWith(1);
+          expect(exit).not.toHaveBeenCalled();
           expect(log).not.toHaveBeenCalledWith(
             expect.stringContaining(`Auth profile: ${FRESH_PROFILE_ID}`),
           );

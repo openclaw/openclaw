@@ -6,11 +6,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator.js";
-import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
@@ -21,12 +19,14 @@ import {
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { captureResourceOwnedNativeProcessExit } from "../../infra/vitest-resource-ownership.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createUpdateProgress } from "./progress.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { createUpdatePreviewSignalScript } from "./update-command-preview-signal.test-support.js";
 import { failUpdateCommandRun } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
@@ -601,58 +601,7 @@ it.skipIf(process.platform === "win32").each([
   async ({ signal, mode }) => {
     const root = dirs.make("update-preview-signal-");
     const caller = path.join(root, "preview.mjs");
-    fs.writeFileSync(
-      caller,
-      `
-      import fs from 'node:fs';
-      import { registerSignalExitGate } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.signalExitBarrier).href)};
-      import { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } from ${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)};
-      import { createRetainedUpdateRecovery } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.retainedRecovery).href)};
-      import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase).href)};
-      import { admitUpdateCommandRun, withUpdatePreviewSignals } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)};
-      import { resolveUpdateCommandTarget } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandTarget).href)};
-      const opts = { dryRun: true };
-      const mode = ${JSON.stringify(mode)};
-      if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
-      const run = await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)}, installKind: "package" });
-      await withUpdatePreviewSignals({ ...opts, run }, async () => {
-        const sibling = createUpdateRun({ trigger: 'cli' });
-        if (mode.startsWith('resolved')) {
-          const foreign = () => recordUpdateRunPhase(run.runId, 'requested', { target: { tag: 'foreign' } });
-          if (mode === 'resolved-foreign-before') foreign();
-          const root = ${JSON.stringify(root)};
-          await resolveUpdateCommandTarget({ ...opts, run }, { triageTarget: { root, env: run.env } }, undefined, {
-            startedAt: Date.now(), postCoreUpdateResume: false, postCoreUpdateChannel: undefined,
-            timeoutMs: 1000, shouldRestart: false, requestedChannel: null, devTarget: undefined,
-            controlPlaneUpdateSentinelMeta: null, discoveredRoot: root, installKind: 'git',
-            servicePlan: undefined,
-          }, { enter: () => { throw new Error('preview must not acquire a mutable executor'); } }, 1000);
-          if (mode === 'resolved-foreign-after') foreign();
-        }
-        if (mode === 'repeat') {
-          registerSignalExitGate(new Promise((resolve) => process.once('message', resolve)));
-          process.once('SIGINT', () => process.send('interrupted'));
-        }
-        if (mode === 'handoff') process.env.OPENCLAW_UPDATE_RUN_HANDOFF = '1';
-        if (mode === 'pending' || mode === 'missing') {
-          const from = { root: ${JSON.stringify(root)}, nodePath: process.execPath, version: '1.0.0', buildId: null };
-          createRetainedUpdateRecovery({ runId: run.runId, from, to: { ...from, version: '2.0.0' } }, { env: run.env });
-        }
-        if (mode === 'changed') recordUpdateRunPhase(run.runId, 'staging');
-        if (mode === 'completed') finishUpdateRun(run.runId, { status: 'skipped', reason: 'dry-run' });
-        const expected = getUpdateRun(run.runId);
-        if (mode === 'missing') {
-          closeOpenClawStateDatabaseForTest();
-          const base = ${JSON.stringify(path.join(root, "state"))};
-          const family = base + '/.openclaw-restore-00000000-0000-4000-8000-000000000001-0';
-          fs.mkdirSync(family);
-          fs.renameSync(base + '/openclaw.sqlite', family + '/displaced');
-        }
-        process.send({ runId: run.runId, expected, sibling });
-        await new Promise(() => setInterval(() => {}, 1000));
-      });
-    `,
-    );
+    fs.writeFileSync(caller, createUpdatePreviewSignalScript(root, mode));
     const child = spawn(process.execPath, [...sourceImportArgs, caller], {
       cwd: process.cwd(),
       env: {
@@ -670,6 +619,7 @@ it.skipIf(process.platform === "win32").each([
       stderr += chunk;
     });
     const closed = once(child, "close");
+    const settleNativeExit = captureResourceOwnedNativeProcessExit(child);
     let releaseGate: ReturnType<typeof setTimeout> | undefined;
     try {
       const message = await Promise.race([
@@ -698,7 +648,9 @@ it.skipIf(process.platform === "win32").each([
         }, 100);
       }
       const [code, exitSignal] = await closed;
-      expect(code ?? (exitSignal === "SIGINT" ? 130 : 143)).toBe(signal === "SIGINT" ? 130 : 143);
+      expect([code, exitSignal]).toEqual(
+        code === null ? [null, signal] : [signal === "SIGINT" ? 130 : 143, null],
+      );
       const options =
         mode === "missing"
           ? {
@@ -742,6 +694,8 @@ it.skipIf(process.platform === "win32").each([
         child.kill("SIGKILL");
       }
       await closed;
+      // These fixtures intentionally exit with native state open; this is not a close receipt.
+      await settleNativeExit?.();
     }
   },
   60_000,

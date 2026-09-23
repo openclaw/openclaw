@@ -11,6 +11,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
@@ -48,6 +49,7 @@ afterAll(async () => {
   clearRuntimeAuthProfileStoreSnapshots();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 

@@ -15,6 +15,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
@@ -54,7 +55,7 @@ async function withUsageWorkerPreload(
     try {
       await operation();
     } finally {
-      await closeOpenClawAgentDatabasesAsync();
+      await cleanupSessionStateForTest({ stateDir: root });
     }
   });
 }

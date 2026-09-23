@@ -25,6 +25,9 @@ function startOptions(
     args: ["app-server"],
     headers: {},
     ...overrides,
+    // Attest the requested fixture environment, not Vitest's lifecycle preload.
+    // Explicit unsafe options below still exercise the production rejection path.
+    env: { NODE_OPTIONS: "", ...overrides.env },
   };
 }
 

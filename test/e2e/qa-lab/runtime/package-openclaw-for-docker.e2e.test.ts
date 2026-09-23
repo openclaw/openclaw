@@ -687,6 +687,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/release-notes-compaction.mjs",
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "scripts/lib/windows-taskkill.mjs",
+      "src/infra/vitest-resource-ownership.ts",
       "src/shared/non-packaged-plugin-dirs.ts",
     ];
     try {

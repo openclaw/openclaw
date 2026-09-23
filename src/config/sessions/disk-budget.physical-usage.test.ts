@@ -465,8 +465,18 @@ describe("physical session disk usage", () => {
     await withTestDir({ prefix: "openclaw-disk-usage-worker-error-" }, async (directory) => {
       const storePath = path.join(directory, "openclaw-agent.sqlite");
       await fs.writeFile(storePath, Buffer.alloc(321));
-      const send = vi.spyOn(Worker.prototype, "postMessage").mockImplementationOnce(() => {
-        throw new Error("synthetic worker transport failure");
+      const postMessage = Reflect.get(Worker.prototype, "postMessage") as Worker["postMessage"];
+      const send = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+        this: Worker,
+        message,
+        ...args
+      ) {
+        // Fault the disk task, not Node/tsx loader bootstrap messages sent
+        // before the Worker constructor has returned to its lifecycle owner.
+        if (message?.input === storePath) {
+          throw new Error("synthetic worker transport failure");
+        }
+        return postMessage.call(this, message, ...args);
       });
       try {
         await expect(measureSessionPhysicalDiskUsage(storePath)).rejects.toMatchObject({

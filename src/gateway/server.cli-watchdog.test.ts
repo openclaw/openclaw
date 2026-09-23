@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { waitForFile } from "../../test/helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { testing } from "../agents/cli-backends.test-support.js";
@@ -179,14 +179,7 @@ async function runWatchdogCase(
   let pendingCompletion: Promise<WatchdogCompletion> | undefined;
   let controller: ReturnType<typeof spawn> | undefined;
   let controllerExit: Promise<void> | undefined;
-  let receipts: ReturnType<typeof watch> | undefined;
-  const readyReceipt = createDeferred();
-  const resumedReceipt = createDeferred();
-  void readyReceipt.promise.catch(() => {});
-  void resumedReceipt.promise.catch(() => {});
   const abortWaits = () => {
-    readyReceipt.reject(signal.reason);
-    resumedReceipt.reject(signal.reason);
     outputChanged.resolve();
     completionObserved.resolve();
   };
@@ -198,18 +191,6 @@ async function runWatchdogCase(
         fs.mkdir(proof, { recursive: true }),
         fs.mkdir(nativeRoot, { recursive: true }),
       ]);
-      receipts = watch(nativeRoot, (_event, filename) => {
-        if (filename === "ready.json") {
-          readyReceipt.resolve();
-        }
-        if (filename === "resumed.json") {
-          resumedReceipt.resolve();
-        }
-      });
-      receipts.on("error", (error) => {
-        readyReceipt.reject(error);
-        resumedReceipt.reject(error);
-      });
       signal.throwIfAborted();
       testing.setDepsForTest({
         resolveRuntimeCliBackends: () =>
@@ -297,11 +278,8 @@ async function runWatchdogCase(
         },
       );
       expect(accepted.status).toBe("started");
-      await withTestTimeout(
-        readyReceipt.promise,
-        30_000,
-        "CLI readiness receipt was not published",
-      );
+      // Observe the durable receipt: native directory watchers can miss a rename.
+      await waitForFile(path.join(nativeRoot, "ready.json"), 30_000);
       signal.throwIfAborted();
       const ready: { pid: number; time: number; turns: number } = JSON.parse(
         await fs.readFile(path.join(nativeRoot, "ready.json"), "utf8"),
@@ -389,11 +367,7 @@ async function runWatchdogCase(
         await controllerExit;
         controller = undefined;
         if (testCase.behavior === "complete" || testCase.behavior === "quiet") {
-          await withTestTimeout(
-            resumedReceipt.promise,
-            5_000,
-            "CLI resume receipt was not published",
-          );
+          await waitForFile(path.join(nativeRoot, "resumed.json"), 5_000);
           await fs.access(path.join(nativeRoot, "resumed.json"));
         } else {
           await waitForOutputs(2);
@@ -486,7 +460,6 @@ async function runWatchdogCase(
             controller?.kill("SIGTERM");
             await controllerExit?.catch(() => {});
           },
-          () => receipts?.close(),
           async () => {
             await gateway.client.request("sessions.delete", { key: sessionKey });
           },

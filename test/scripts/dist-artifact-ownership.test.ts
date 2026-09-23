@@ -118,6 +118,7 @@ function installScripts(
   }
   for (const file of [
     "scripts/lib",
+    "src/infra/vitest-resource-ownership.ts",
     "scripts/windows-cmd-helpers.mjs",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",

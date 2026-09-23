@@ -1,8 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginsReloadParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -13,6 +14,10 @@ import {
   emptyMetadataSnapshot,
   metadataSnapshot,
 } from "./management-service.test-helpers.js";
+
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),

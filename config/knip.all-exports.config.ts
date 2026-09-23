@@ -65,6 +65,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/helpers/managed-handoff-isolation.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.
   "test/helpers/openclaw-test-instance.cli.test-support.mjs!",
+  // Generated handoff preloads and resolver shims import this fixture by URL.
+  "test/helpers/managed-handoff-isolation.ts!",
   // The public QA Gateway child launches this transport proxy by path.
   "test/fixtures/qa-gateway-rpc-proxy.mjs!",
   // ClawSweeper's paired consumer proof launches this cross-repository fixture by path.

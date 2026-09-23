@@ -6,26 +6,17 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findLegacyConfigIssues } from "../config/legacy.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   listPluginDoctorLegacyConfigRules,
   listPluginDoctorSessionRouteStateOwners,
   listPluginDoctorStateMigrationEntries,
 } from "./doctor-contract-registry.js";
+import { makeHermeticDoctorEnv } from "./doctor-contract-registry.load-paths.test-support.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 
 const tempDirs = createTempDirTracker();
-
-function makeHermeticDoctorEnv(stateDir: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    HOME: stateDir,
-    OPENCLAW_HOME: stateDir,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-  };
-}
 
 function writeDoctorPlugin(pluginRoot: string, pluginId: string): void {
   fs.mkdirSync(pluginRoot, { recursive: true });
@@ -420,8 +411,9 @@ beforeEach(() => {
   clearPluginDoctorContractRegistryCache();
 });
 
-afterEach(() => {
+afterEach(async () => {
   clearPluginDoctorContractRegistryCache();
+  await closeOpenClawStateDatabaseAsync();
   tempDirs.cleanup();
 });
 

@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
+import { runWithMockedCliExit } from "../test-utils/command-runner.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -102,7 +104,10 @@ describe("skills workshop cli", () => {
 
   const runCommand = async (argv: string[]) => {
     try {
-      await createProgram().parseAsync(argv, { from: "user" });
+      await runWithMockedCliExit(
+        () => createProgram().parseAsync(argv, { from: "user" }),
+        mocks.defaultRuntime.exit,
+      );
     } catch (error) {
       if (error instanceof Error && error.message === "__exit__:0") {
         return;
@@ -129,10 +134,12 @@ describe("skills workshop cli", () => {
     mocks.defaultRuntime.exit.mockClear();
   });
 
-  afterEach(async () => {
-    await testState.cleanup();
-    await tempDirs.cleanup();
-  });
+  afterEach(() =>
+    runQaGatewayFixture(
+      () => testState.cleanup(),
+      () => tempDirs.cleanup(),
+    ),
+  );
 
   it("renders workshop parent help successfully without creating workshop state", async () => {
     const helpOutput: string[] = [];

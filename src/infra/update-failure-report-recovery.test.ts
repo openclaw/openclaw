@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import type {
   GithubIssueSubmitHooks,
   GithubIssueReconcileHooks,
@@ -24,7 +27,13 @@ import { prepareUpdateFailureReport, submitUpdateFailureReport } from "./update-
 import { mockCreatedIssue, mockFallbackIssue } from "./update-failure-report.test-support.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 
 type PreparedReport = Awaited<ReturnType<typeof prepareUpdateFailureReport>>;
 

@@ -2,6 +2,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { captureResourceOwnedNativeProcessExit } from "../../src/infra/vitest-resource-ownership.js";
 import type { SnapshotDatabaseIdentity } from "../../src/snapshot/snapshot-provider.js";
 import {
   assertSameCompactionPayload,
@@ -111,12 +112,19 @@ export async function runVacuumInterruptionProof(params: {
     serialization: "json",
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
+  let settleNativeExit: ReturnType<typeof captureResourceOwnedNativeProcessExit>;
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk: string) => {
     stderr += chunk;
   });
 
   try {
+    // Failed spawns have no native owner; let the ready wait report the spawn error.
+    if (child.pid !== undefined) {
+      settleNativeExit = captureResourceOwnedNativeProcessExit(child, {
+        includeWorkerThreads: true,
+      });
+    }
     await waitForWorkerReady({ child, readStderr: () => stderr });
     const observed = await waitForActiveVacuum({
       child,
@@ -164,9 +172,10 @@ export async function runVacuumInterruptionProof(params: {
       walBytesObserved: observed.walBytes,
     };
   } finally {
-    if (child.exitCode === null && child.signalCode === null) {
+    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
       child.kill("SIGKILL");
-      await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE).catch(() => undefined);
+      await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE);
     }
+    await settleNativeExit?.();
   }
 }

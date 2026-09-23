@@ -10,6 +10,7 @@ import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
+import { captureResourceOwnedNativeProcessExit } from "../infra/vitest-resource-ownership.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
@@ -273,15 +274,15 @@ it.each([
         .mock.results.filter((result) => result.type === "return")
         .map(({ value }) => value);
       let closedChildren = 0;
-      childClosures = children.map(
-        (child) =>
-          new Promise<void>((resolve) => {
-            child.once("close", () => {
-              closedChildren += 1;
-              resolve();
-            });
-          }),
-      );
+      childClosures = children.map((child) => {
+        const settleNativeExit = captureResourceOwnedNativeProcessExit(child);
+        return new Promise<void>((resolve) => {
+          child.once("close", () => {
+            closedChildren += 1;
+            resolve();
+          });
+        }).then(() => settleNativeExit?.());
+      });
       if (outcome === "cancel") {
         controller.abort(cancellation);
         await setImmediate();
@@ -353,7 +354,8 @@ it.each([
       fs.writeFileSync(marker("release-1"), "resume");
       fs.writeFileSync(marker("exit-release"), "resume");
       controller.abort(cancellation);
-      await Promise.allSettled([run, ...childClosures]);
+      await Promise.allSettled([run]);
+      await Promise.all(childClosures);
     }
   },
 );

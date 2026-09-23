@@ -16,6 +16,7 @@ import {
   prepareSqliteReadOnlyLocationSyncInProcess,
   SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
+import { observeSnapshotWrites, ownSnapshot } from "./sqlite-readonly-location.test-support.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -27,11 +28,20 @@ const writers: Array<ReturnType<typeof startSqliteConcurrentWriter>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     vi.restoreAllMocks();
-    try {
-      await Promise.all(writers.splice(0).map((writer) => writer.stop()));
-    } finally {
-      cleanup();
+    const outcomes = await Promise.allSettled(
+      writers.map(async (writer) => {
+        await writer.stop();
+        writers.splice(writers.indexOf(writer), 1);
+      }),
+    );
+    const failures = outcomes.filter((outcome) => outcome.status === "rejected");
+    if (failures.length) {
+      throw new AggregateError(
+        failures.map((failure) => failure.reason),
+        "SQLite fixture writers did not settle",
+      );
     }
+    cleanup();
   });
 });
 
@@ -49,8 +59,7 @@ async function expectPublicSnapshot(
 ): Promise<void> {
   const sqlite = requireNodeSqlite();
   const databasePath = createTempDatabasePath();
-  const writer = new sqlite.DatabaseSync(databasePath);
-  let cleanup: (() => boolean) | undefined;
+  using writer = new sqlite.DatabaseSync(databasePath);
   try {
     writer.exec(`
       PRAGMA journal_mode = WAL;
@@ -60,8 +69,7 @@ async function expectPublicSnapshot(
     `);
     expect(fs.existsSync(`${databasePath}-wal`)).toBe(true);
 
-    const prepared = await prepare(databasePath);
-    cleanup = prepared.cleanup;
+    using prepared = ownSnapshot(await prepare(databasePath));
     const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
     try {
       expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "from-wal" }]);
@@ -69,9 +77,7 @@ async function expectPublicSnapshot(
       snapshot.close();
     }
     expect(prepared.cleanup()).toBe(true);
-    cleanup = undefined;
   } finally {
-    cleanup?.();
     writer.close();
   }
 }
@@ -144,7 +150,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-cache-");
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const database = new sqlite.DatabaseSync(databasePath);
+    using database = new sqlite.DatabaseSync(databasePath);
     database.exec("CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('cached');");
     database.close();
 
@@ -153,7 +159,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       try {
         expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
         expect(fs.statSync(path.dirname(prepared.location)).mode & 0o777).toBe(0o700);
-        const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+        using snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
         expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "cached" }]);
         snapshot.close();
       } finally {
@@ -166,7 +172,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-quota-");
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const database = new sqlite.DatabaseSync(databasePath);
+    using database = new sqlite.DatabaseSync(databasePath);
     database.exec("CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('survived');");
     database.close();
     const before = readFamily(databasePath);
@@ -199,7 +205,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-full-");
       const sqlite = requireNodeSqlite();
       const databasePath = createTempDatabasePath();
-      const database = new sqlite.DatabaseSync(databasePath);
+      using database = new sqlite.DatabaseSync(databasePath);
       database.exec("CREATE TABLE probe (value TEXT);");
       database.close();
       const quotaError = Object.assign(new Error("disk I/O error"), {
@@ -249,7 +255,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       if (empty) {
         fs.writeFileSync(databasePath, "");
       } else {
-        const database = new sqlite.DatabaseSync(databasePath);
+        using database = new sqlite.DatabaseSync(databasePath);
         database.exec("CREATE TABLE probe (value TEXT);");
         database.close();
       }
@@ -259,7 +265,8 @@ describe("prepareSqliteReadOnlyLocation", () => {
         path: path.join(stagingRoot, "openclaw-sqlite-readonly-stage"),
       });
       const backup = vi.spyOn(sqlite, "backup");
-      const write = vi.spyOn(fs, "writeSync");
+      const before = readFamily(databasePath);
+      const writes = observeSnapshotWrites([path.dirname(databasePath), stagingRoot]);
       vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
         throw allocationError;
       });
@@ -276,7 +283,8 @@ describe("prepareSqliteReadOnlyLocation", () => {
       });
 
       expect(backup).not.toHaveBeenCalled();
-      expect(write).not.toHaveBeenCalled();
+      expect(writes).toEqual([]);
+      expect(readFamily(databasePath)).toEqual(before);
       expect(fs.readdirSync(stagingRoot)).toEqual([]);
     },
   );
@@ -290,7 +298,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-windows-allocation-");
       const databasePath = createTempDatabasePath();
       const sqlite = requireNodeSqlite();
-      const database = new sqlite.DatabaseSync(databasePath);
+      using database = new sqlite.DatabaseSync(databasePath);
       database.exec("CREATE TABLE probe (value TEXT);");
       database.close();
       const stagingRoot = path.join(cacheRoot, "openclaw");
@@ -327,7 +335,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-source-failure-");
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const database = new sqlite.DatabaseSync(databasePath);
+    using database = new sqlite.DatabaseSync(databasePath);
     database.exec("CREATE TABLE probe (value TEXT);");
     database.close();
     const sourceError = Object.assign(new Error(label), {
@@ -348,7 +356,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     fs.mkdirSync(stagingRoot, { mode: 0o700 });
     const databasePath = path.join(stagingRoot, "source.sqlite");
     const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(databasePath);
+    using database = new sqlite.DatabaseSync(databasePath);
     database.exec("CREATE TABLE probe (value TEXT);");
     database.close();
     const sourceError = Object.assign(new Error("source permission denied"), {
@@ -371,7 +379,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-destination-path-");
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const database = new sqlite.DatabaseSync(databasePath);
+    using database = new sqlite.DatabaseSync(databasePath);
     database.exec("CREATE TABLE probe (value TEXT);");
     database.close();
     vi.spyOn(sqlite, "backup").mockImplementationOnce(async (_source, destination) => {
@@ -421,7 +429,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-corrupt-source-");
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const database = new sqlite.DatabaseSync(databasePath);
+    using database = new sqlite.DatabaseSync(databasePath);
     database.exec("CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('corrupt');");
     database.close();
 
@@ -468,17 +476,31 @@ describe("prepareSqliteReadOnlyLocation", () => {
       const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-sync-full-");
       const sqlite = requireNodeSqlite();
       const databasePath = createTempDatabasePath();
-      const database = new sqlite.DatabaseSync(databasePath);
+      using database = new sqlite.DatabaseSync(databasePath);
       database.exec("CREATE TABLE probe (value TEXT);");
       database.close();
       const before = readFamily(databasePath);
       const quotaError = Object.assign(new Error("Disk quota exceeded"), { code });
-      vi.spyOn(fs, "writeSync").mockImplementationOnce(() => {
+      let copiedPath: string | undefined;
+      const writes = observeSnapshotWrites([cacheRoot], (target, data) => {
+        // The rollback-copy path first writes a private comparison file, then
+        // publishes it. Identify the source payload rather than a staging filename.
+        if (
+          !Buffer.isBuffer(data) ||
+          !data.subarray(0, 16).equals(before.get("")!.subarray(0, 16))
+        ) {
+          return;
+        }
+        // Fault the real SQLite payload, never a staging ownership/token write.
+        copiedPath = target;
         throw quotaError;
       });
 
       await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
-        expect(() => prepareSqliteReadOnlyLocationSyncInProcess(databasePath)).toThrowError(
+        expect(() => {
+          using prepared = ownSnapshot(prepareSqliteReadOnlyLocationSyncInProcess(databasePath));
+          return prepared.location;
+        }).toThrowError(
           expect.objectContaining({
             cause: quotaError,
             message: expect.stringContaining(cacheRoot),
@@ -486,6 +508,8 @@ describe("prepareSqliteReadOnlyLocation", () => {
         );
       });
       expect(readFamily(databasePath)).toEqual(before);
+      expect(copiedPath).toBeDefined();
+      expect(writes).toContain(copiedPath);
       expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
     },
   );
@@ -494,7 +518,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const cacheRoot = path.join(tempDirs.make("openclaw-sqlite-snapshot-new-cache-"), "missing");
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const database = new sqlite.DatabaseSync(databasePath);
+    using database = new sqlite.DatabaseSync(databasePath);
     database.exec("CREATE TABLE probe (value TEXT);");
     database.close();
 
@@ -515,7 +539,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-worker-full-");
       const sqlite = requireNodeSqlite();
       const databasePath = createTempDatabasePath();
-      const database = new sqlite.DatabaseSync(databasePath);
+      using database = new sqlite.DatabaseSync(databasePath);
       database.exec(
         "CREATE TABLE probe (payload BLOB); INSERT INTO probe VALUES (zeroblob(8192));",
       );
@@ -611,7 +635,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
   ])("names retry count and guidance when $mode source does not stabilize", async ({ prepare }) => {
     const databasePath = createTempDatabasePath();
     const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(databasePath);
+    using database = new sqlite.DatabaseSync(databasePath);
     database.exec(
       "PRAGMA journal_mode = WAL; CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('ok');",
     );
@@ -650,7 +674,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     async () => {
       const sqlite = requireNodeSqlite();
       const databasePath = createTempDatabasePath();
-      const writer = new sqlite.DatabaseSync(databasePath);
+      using writer = new sqlite.DatabaseSync(databasePath);
       writer.exec(`
         PRAGMA journal_mode = WAL;
         CREATE TABLE writes (id INTEGER PRIMARY KEY);
@@ -675,9 +699,11 @@ describe("prepareSqliteReadOnlyLocation", () => {
 
         await withSqliteReadOnlyWorkerScope(async () => {
           for (const preserveSourceArtifacts of [true, false, true]) {
-            const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
-              preserveSourceArtifacts,
-            });
+            using prepared = ownSnapshot(
+              await prepareSqliteReadOnlyLocation(databasePath, {
+                preserveSourceArtifacts,
+              }),
+            );
             cleanups.push(prepared.cleanup);
             expect(readMainDatabasePosixLocks(databasePath)).toEqual(locksBefore);
             expect(prepared.cleanup()).toBe(true);
@@ -705,7 +731,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     async ({ prepare }) => {
       const sqlite = requireNodeSqlite();
       const livePath = createTempDatabasePath();
-      const writer = new sqlite.DatabaseSync(livePath);
+      using writer = new sqlite.DatabaseSync(livePath);
       writer.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA wal_autocheckpoint = 0;
@@ -737,24 +763,27 @@ describe("prepareSqliteReadOnlyLocation", () => {
         }
       });
 
-      const prepared = await prepare(databasePath);
-      expect(injected).toBe(true);
-      expect(fs.statSync(`${databasePath}-wal`).size).toBe(walSizeBeforeReset);
-      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-      expect(snapshot.prepare("SELECT value FROM before_reset").all()).toEqual([{ value: "A" }]);
-      expect(snapshot.prepare("SELECT value FROM after_reset").all()).toEqual([{ value: "B" }]);
-      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      snapshot.close();
-      expect(readLogicalFamily(databasePath)).toEqual(sourceAfterReset);
-      expect(prepared.cleanup()).toBe(true);
-      raceWriter?.close();
+      try {
+        using prepared = ownSnapshot(await prepare(databasePath));
+        expect(injected).toBe(true);
+        expect(fs.statSync(`${databasePath}-wal`).size).toBe(walSizeBeforeReset);
+        using snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+        expect(snapshot.prepare("SELECT value FROM before_reset").all()).toEqual([{ value: "A" }]);
+        expect(snapshot.prepare("SELECT value FROM after_reset").all()).toEqual([{ value: "B" }]);
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        snapshot.close();
+        expect(readLogicalFamily(databasePath)).toEqual(sourceAfterReset);
+        expect(prepared.cleanup()).toBe(true);
+      } finally {
+        raceWriter?.close();
+      }
     },
   );
 
   it("retries when backup fallback inspection sees a replaced source", async () => {
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const writer = new sqlite.DatabaseSync(databasePath);
+    using writer = new sqlite.DatabaseSync(databasePath);
     writer.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA wal_autocheckpoint = 0;
@@ -778,8 +807,8 @@ describe("prepareSqliteReadOnlyLocation", () => {
       return statSync(pathname, options as never);
     }) as typeof fs.statSync);
 
-    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-    const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+    using prepared = ownSnapshot(await prepareSqliteReadOnlyLocationInProcess(databasePath));
+    using snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
     expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "ok" }]);
     snapshot.close();
     expect(prepared.cleanup()).toBe(true);
@@ -789,7 +818,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
   it("rolls back contended MEMORY writes before committing another batch", async () => {
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const reader = new sqlite.DatabaseSync(databasePath);
+    using reader = new sqlite.DatabaseSync(databasePath);
     reader.exec(
       "CREATE TABLE pair (name TEXT PRIMARY KEY, value INTEGER NOT NULL); INSERT INTO pair VALUES ('left', 0), ('right', 0); BEGIN;",
     );
@@ -832,7 +861,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
   it("backs up live MEMORY-journal transactions atomically", async () => {
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const seed = new sqlite.DatabaseSync(databasePath);
+    using seed = new sqlite.DatabaseSync(databasePath);
     seed.exec(`
       CREATE TABLE pair (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
       INSERT INTO pair VALUES ('left', 0), ('right', 0);
@@ -853,7 +882,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       expect(held.transaction).toBe(true);
       expect(held.values).toEqual([held.commits + 1, held.commits]);
 
-      const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
+      using prepared = ownSnapshot(await prepareSqliteReadOnlyLocationInProcess(databasePath));
       const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
       try {
         const values = snapshot
@@ -891,7 +920,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
   it("keeps a rollback-to-WAL transition off the source path", async () => {
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const seed = new sqlite.DatabaseSync(databasePath);
+    using seed = new sqlite.DatabaseSync(databasePath);
     seed.exec("CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('ok');");
     seed.close();
     const fsyncSync = fs.fsyncSync.bind(fs);
@@ -901,17 +930,17 @@ describe("prepareSqliteReadOnlyLocation", () => {
       fsyncSync(descriptor);
       if (!injected) {
         injected = true;
-        const writer = new sqlite.DatabaseSync(databasePath);
+        using writer = new sqlite.DatabaseSync(databasePath);
         writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_checkpoint(TRUNCATE);");
         writer.close();
         sourceAfterTransition = readFamily(databasePath);
       }
     });
 
-    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
+    using prepared = ownSnapshot(await prepareSqliteReadOnlyLocationInProcess(databasePath));
     expect(injected).toBe(true);
     expect(path.resolve(prepared.location)).not.toBe(path.resolve(databasePath));
-    const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+    using snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
     expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "ok" }]);
     snapshot.close();
     expect(readFamily(databasePath)).toEqual(sourceAfterTransition);
@@ -923,7 +952,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     async () => {
       const sqlite = requireNodeSqlite();
       const databasePath = createTempDatabasePath();
-      const writer = new sqlite.DatabaseSync(databasePath);
+      using writer = new sqlite.DatabaseSync(databasePath);
       writer.exec(`
         PRAGMA journal_mode = WAL;
         PRAGMA wal_autocheckpoint = 0;
@@ -934,8 +963,8 @@ describe("prepareSqliteReadOnlyLocation", () => {
       const symlinkPath = path.join(path.dirname(databasePath), "state-link.sqlite");
       fs.symlinkSync(path.basename(databasePath), symlinkPath);
 
-      const prepared = await prepareSqliteReadOnlyLocationInProcess(symlinkPath);
-      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+      using prepared = ownSnapshot(await prepareSqliteReadOnlyLocationInProcess(symlinkPath));
+      using snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
       expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "from-wal" }]);
       snapshot.close();
       expect(fs.existsSync(`${symlinkPath}-wal`)).toBe(false);
@@ -948,7 +977,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
   it("retries when a pathname disappears after its file is opened", async () => {
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const seed = new sqlite.DatabaseSync(databasePath);
+    using seed = new sqlite.DatabaseSync(databasePath);
     seed.exec("CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('ok');");
     seed.close();
     const canonicalDatabasePath = fs.realpathSync.native(databasePath);
@@ -964,9 +993,9 @@ describe("prepareSqliteReadOnlyLocation", () => {
       return statSync(pathname, options as never);
     }) as typeof fs.statSync);
 
-    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
+    using prepared = ownSnapshot(await prepareSqliteReadOnlyLocationInProcess(databasePath));
     expect(injected).toBe(true);
-    const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+    using snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
     expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "ok" }]);
     snapshot.close();
     expect(prepared.cleanup()).toBe(true);
@@ -975,10 +1004,10 @@ describe("prepareSqliteReadOnlyLocation", () => {
   it("retries cleanup after a transient removal failure", async () => {
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const seed = new sqlite.DatabaseSync(databasePath);
+    using seed = new sqlite.DatabaseSync(databasePath);
     seed.exec("CREATE TABLE probe (value TEXT);");
     seed.close();
-    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
+    using prepared = ownSnapshot(await prepareSqliteReadOnlyLocationInProcess(databasePath));
     const privateDirectory = path.dirname(prepared.location);
     const rmSync = fs.rmSync.bind(fs);
     let failRemoval = true;
@@ -1001,7 +1030,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
   it("copies an orphan SHM privately without creating a source WAL", async () => {
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
-    const seed = new sqlite.DatabaseSync(databasePath);
+    using seed = new sqlite.DatabaseSync(databasePath);
     seed.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE probe (value TEXT);
@@ -1015,8 +1044,8 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const beforeMain = fs.readFileSync(databasePath);
     const beforeEntries = fs.readdirSync(path.dirname(databasePath)).toSorted();
 
-    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-    const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+    using prepared = ownSnapshot(await prepareSqliteReadOnlyLocationInProcess(databasePath));
+    using snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
     expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "committed" }]);
     snapshot.close();
     expect(prepared.cleanup()).toBe(true);

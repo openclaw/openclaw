@@ -12,6 +12,7 @@ import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js
 import * as logger from "../logger.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ProcessExtinctionResult } from "../process/supervisor/types.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostClient } from "./client.js";
 import { decodeClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
@@ -24,6 +25,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   clearRuntimeConfigSnapshot();
+  await closeOpenClawStateDatabaseAsync();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 

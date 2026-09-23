@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
@@ -175,7 +176,8 @@ function metadataSnapshot(enabled: boolean, installed = false) {
 }
 
 describe("plugin management registry refresh", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     clearPluginMetadataLifecycleCaches();
     cleanupTrackedTempDirs(trackedArtifactDirs);
   });

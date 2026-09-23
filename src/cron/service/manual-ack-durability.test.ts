@@ -1,13 +1,14 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { captureResourceOwnedNativeProcessExit } from "../../infra/vitest-resource-ownership.js";
 import { clearCommandLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { runCommandBuffered } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
@@ -22,7 +23,9 @@ import type { CronJob } from "../types.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-manual-ack-durability-" });
 
-it("records the exact acknowledged manual run after SIGKILL before command-lane dispatch", async () => {
+it("records the exact acknowledged manual run after SIGKILL before command-lane dispatch", async ({
+  signal,
+}) => {
   const { storePath } = await makeStorePath();
   const now = Date.now();
   const job: CronJob = {
@@ -43,10 +46,11 @@ it("records the exact acknowledged manual run after SIGKILL before command-lane 
   const queueUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.commandQueue);
   const stateDir = resolveOpenClawStateDirForDatabasePath(openOpenClawStateDatabase().path);
   const node = resolveTestNodeExecPath();
-  const runChild = (killAfterAck: boolean) =>
-    runCommandBuffered(
+  const runChild = async (killAfterAck: boolean) => {
+    let settleNativeExit: (() => Promise<void>) | undefined;
+    let exitSignal: NodeJS.Signals | null = null;
+    const result = await runNodeScript(
       [
-        node,
         ...resolveRuntimeWorkerArgv(serviceUrl, node).slice(0, -1),
         "--input-type=module",
         "--eval",
@@ -73,20 +77,34 @@ it("records the exact acknowledged manual run after SIGKILL before command-lane 
           cron.stop();
         `,
       ],
+      { ...process.env, OPENCLAW_STATE_DIR: stateDir, HOME: path.dirname(stateDir) },
+      20_000,
       {
-        timeoutMs: 20_000,
-        killGraceMs: 500,
-        env: { OPENCLAW_STATE_DIR: stateDir, HOME: path.dirname(stateDir) },
-        maxOutputBytes: { stdout: 16_384, stderr: 16_384 },
+        executable: node,
+        signal,
+        maxBuffer: 16_384,
+        requireProcessTreeExit: true,
+        onReady(child) {
+          settleNativeExit = captureResourceOwnedNativeProcessExit(child, {
+            includeWorkerThreads: true,
+          });
+          child.once("exit", (_code, value) => {
+            exitSignal = value;
+          });
+        },
       },
     );
+    await settleNativeExit?.();
+    expect(result.error, result.stderr).toBeUndefined();
+    return { ...result, signal: exitSignal };
+  };
 
   const killed = await runChild(true);
-  expect(killed.signal, killed.stderr.toString()).toBe("SIGKILL");
-  const ack = JSON.parse(killed.stdout.toString());
+  expect(killed.signal, killed.stderr).toBe("SIGKILL");
+  const ack = JSON.parse(killed.stdout);
   expect(ack).toMatchObject({ ok: true, enqueued: true, runId: expect.any(String) });
   const restarted = await runChild(false);
-  expect(restarted.code, restarted.stderr.toString()).toBe(0);
+  expect(restarted.status, restarted.stderr).toBe(0);
   const receipt = openOpenClawStateDatabase()
     .db.prepare(
       "SELECT status, error_text FROM cron_run_receipts WHERE request_run_id = ? AND job_id = ?",

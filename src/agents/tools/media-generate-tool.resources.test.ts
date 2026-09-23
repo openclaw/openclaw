@@ -16,6 +16,7 @@ import {
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import * as taskRuntime from "../../tasks/runtime-internal.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
@@ -285,7 +286,8 @@ async function prepareSnapshot(
   return { snapshot, release: () => discardPreparedPluginGeneration(prepared.pluginGeneration) };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   resetRecentMediaGenerationDuplicateGuardsForTests();
   clearPluginMetadataLifecycleCaches();

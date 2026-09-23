@@ -18,6 +18,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   disposeOpenClawAgentDatabaseByPath,
 } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 
 const thinkingMocks = vi.hoisted(() => ({
@@ -31,6 +32,7 @@ const sdkSessionTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     for (const dir of sdkSessionTempDirs.dirs) {
       await closeOpenClawAgentDatabasesAsync(dir);
     }
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );

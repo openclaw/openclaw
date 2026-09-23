@@ -10,6 +10,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 
 const { config, callGatewayMock } = vi.hoisted(() => ({
   config: {
@@ -48,9 +49,8 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const dir of tempDirs.dirs) {
-      await closeOpenClawAgentDatabasesAsync(dir);
-    }
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );

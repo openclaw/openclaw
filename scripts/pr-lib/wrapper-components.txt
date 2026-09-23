@@ -694,6 +694,7 @@ src/infra/restart-stale-pids.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-worker-generation.ts
+src/infra/runtime-worker-source-loader.mjs
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
 src/infra/sealed-runtime-registry.ts
@@ -807,6 +808,10 @@ src/infra/update-run-schema.ts
 src/infra/update-run-timeouts.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-step-identity.ts
+src/infra/vitest-resource-context-preload.test-support.mjs
+src/infra/vitest-resource-context.test-support.ts
+src/infra/vitest-resource-ownership.ts
+src/infra/vitest-resource-stop-probe.test-support.mjs
 src/infra/warning-filter.ts
 src/infra/windows-encoding.ts
 src/infra/windows-install-roots.ts

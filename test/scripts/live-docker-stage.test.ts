@@ -6,16 +6,18 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  lstatSync,
+  realpathSync,
   readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
-import { addStagedPrivatePluginSdkExports } from "../../scripts/live-docker-stage-private-sdk-exports.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -1069,15 +1071,14 @@ describe("live Docker state staging", () => {
   function writeFixturePackageSpecParser(root: string) {
     const parserPath = path.join(root, "src", "infra", "npm-registry-spec.ts");
     mkdirSync(path.dirname(parserPath), { recursive: true });
+    writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+    writeFileSync(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({ extends: path.join(repoRoot, "tsconfig.json") }),
+    );
     writeFileSync(
       parserPath,
-      String.raw`
-export function parseRegistryNpmSpec(spec: string) {
-  return /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*(?:@[a-z0-9][a-z0-9._-]*)?$/u.test(spec)
-    ? { raw: spec }
-    : null;
-}
-`,
+      `export { parseRegistryNpmSpec } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "src/infra/npm-registry-spec.ts")).href)};\n`,
     );
   }
 
@@ -1322,15 +1323,34 @@ export function parseRegistryNpmSpec(spec: string) {
     expect(derivedCapability.stdout).toContain("preserving historical no-package-setup behavior");
   });
 
-  it("lets staged metadata output flush through normal Node completion", () => {
-    const source = readFileSync(stageScriptPath, "utf8");
-    const moduleStart = source.indexOf("node --import tsx --input-type=module <<'NODE'");
-    const moduleEnd = source.indexOf("\nNODE\n", moduleStart);
-    expect(moduleStart).toBeGreaterThanOrEqual(0);
-    expect(moduleEnd).toBeGreaterThan(moduleStart);
-    const moduleSource = source.slice(moduleStart, moduleEnd);
-    expect(moduleSource).not.toContain("process.exit(");
-    expect(moduleSource.match(/process\.stdout\.write/gu)).toHaveLength(1);
+  it("flushes every staged package through normal Node completion", () => {
+    const root = tempDirs.make("openclaw-live-stage-flush-");
+    mkdirSync(path.join(root, "scripts"));
+    linkFixtureNodeModules(root);
+    writeFixturePackageSpecParser(root);
+    // Exceed pipe capacity with valid, distinct package names, without booting npm
+    // hundreds of times. The setup-command boundary records every delivered package.
+    const packages = Array.from(
+      { length: 1024 },
+      (_, index) => `fixture-${index}-${"x".repeat(180)}`,
+    );
+    writeFileSync(
+      path.join(root, "scripts", "print-cli-backend-live-metadata.ts"),
+      `export async function resolveCliBackendDockerPackages() { return ${JSON.stringify(packages)}; }\n`,
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; cd "$1"; source "$2"; openclaw_live_run_setup_command() { printf "%s\\n" "$6"; }; openclaw_live_prepare_cli_backend_docker_packages "" ""',
+        "test",
+        root,
+        stageScriptPath,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual(packages);
   });
 
   it("rejects malformed staged package metadata before npm runs", () => {
@@ -1729,31 +1749,74 @@ export function parseRegistryNpmSpec(spec: string) {
     expect(ambiguous.stderr).toContain("multiple staged files matched");
   });
 
-  it("keeps repo-local generated artifacts out of the source copy", () => {
-    const script = readFileSync(stageScriptPath, "utf8");
+  function runArchiveStage(kind: "source_tree" | "state_dir", root: string, destination: string) {
+    return spawnSync(
+      "bash",
+      [
+        "-c",
+        // Map the fixed container source mount to this fixture. BSD tar lacks only
+        // the two GNU read-race diagnostics; all archive/exclusion work stays real.
+        `set -euo pipefail; source "$1";
+       tar() {
+         local args=()
+         for arg in "$@"; do
+           if [[ "$arg" == /src ]]; then args+=("$FIXTURE_SOURCE");
+           elif [[ "$FIXTURE_BSD_TAR" == 1 && ( "$arg" == --warning=no-file-changed || "$arg" == --ignore-failed-read ) ]]; then continue;
+           else args+=("$arg"); fi
+         done
+         command tar "\${args[@]}"
+       }
+       openclaw_live_stage_${kind} "$2"`,
+        "test",
+        stageScriptPath,
+        destination,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: root,
+          FIXTURE_SOURCE: root,
+          FIXTURE_BSD_TAR: process.platform === "darwin" ? "1" : "0",
+          OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR: path.join(repoRoot, "scripts"),
+        },
+      },
+    );
+  }
 
-    expect(script).toContain("--exclude=.artifacts");
-    expect(script).toContain('node "$scripts_dir/live-docker-stage-private-sdk-exports.mjs"');
-  });
-
-  it("adds private SDK source exports only to the disposable source stage", () => {
-    const root = tempDirs.make("openclaw-live-stage-sdk-");
+  it("copies source without generated artifacts and adds SDK exports only to the stage", () => {
+    const root = tempDirs.make("openclaw-live-stage-source-");
+    const destination = tempDirs.make("openclaw-live-stage-destination-");
     mkdirSync(path.join(root, "scripts", "lib"), { recursive: true });
     mkdirSync(path.join(root, "src", "plugin-sdk"), { recursive: true });
-    writeFileSync(
-      path.join(root, "package.json"),
-      JSON.stringify({ exports: { "./plugin-sdk/core": "./dist/plugin-sdk/core.js" } }),
-    );
+    const manifest = JSON.stringify({
+      exports: { "./plugin-sdk/core": "./dist/plugin-sdk/core.js" },
+    });
+    writeFileSync(path.join(root, "package.json"), manifest);
     writeFileSync(
       path.join(root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
       JSON.stringify(["keyed-async-queue"]),
     );
     writeFileSync(path.join(root, "src", "plugin-sdk", "keyed-async-queue.ts"), "export {};\n");
-
-    addStagedPrivatePluginSdkExports(root);
-
-    const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-    expect(packageJson.exports).toEqual({
+    for (const directory of [".artifacts", "node_modules", "dist", ".worktrees"]) {
+      mkdirSync(path.join(root, directory));
+      writeFileSync(path.join(root, directory, "generated"), "must stay on host");
+    }
+    const result = runArchiveStage("source_tree", root, destination);
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(path.join(root, "package.json"), "utf8")).toBe(manifest);
+    expect(
+      readFileSync(path.join(destination, "src/plugin-sdk/keyed-async-queue.ts"), "utf8"),
+    ).toBe("export {};\n");
+    for (const directory of [".artifacts", "node_modules", "dist", ".worktrees"]) {
+      expect(existsSync(path.join(destination, directory))).toBe(false);
+      expect(readFileSync(path.join(root, directory, "generated"), "utf8")).toBe(
+        "must stay on host",
+      );
+    }
+    expect(
+      JSON.parse(readFileSync(path.join(destination, "package.json"), "utf8")).exports,
+    ).toEqual({
       "./plugin-sdk/core": "./dist/plugin-sdk/core.js",
       "./plugin-sdk/keyed-async-queue": {
         types: "./src/plugin-sdk/keyed-async-queue.ts",
@@ -1762,18 +1825,98 @@ export function parseRegistryNpmSpec(spec: string) {
     });
   });
 
-  it("keeps host-only generated registry state out of the container copy", () => {
-    const script = readFileSync(stageScriptPath, "utf8");
+  it.each(["missing-table", "corrupt"] as const)(
+    "handles %s staged state without changing the source database",
+    (kind) => {
+      const root = tempDirs.make("openclaw-live-stage-state-failure-");
+      const source = path.join(root, ".openclaw", "state");
+      const destination = tempDirs.make("openclaw-live-stage-state-failure-copy-");
+      mkdirSync(source, { recursive: true });
+      const databasePath = path.join(source, "openclaw.sqlite");
+      if (kind === "corrupt") {
+        writeFileSync(databasePath, "invalid SQLite fixture");
+      } else {
+        const database = new DatabaseSync(databasePath);
+        try {
+          database.exec(
+            "CREATE TABLE unrelated (value TEXT); INSERT INTO unrelated VALUES ('keep')",
+          );
+        } finally {
+          database.close();
+        }
+      }
+      const originalBytes = readFileSync(databasePath);
+      const result = runArchiveStage("state_dir", root, destination);
+      expect(readFileSync(databasePath)).toEqual(originalBytes);
+      if (kind === "corrupt") {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("file is not a database");
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        const copied = new DatabaseSync(path.join(destination, "state", "openclaw.sqlite"));
+        try {
+          expect(copied.prepare("SELECT value FROM unrelated").all()).toEqual([{ value: "keep" }]);
+        } finally {
+          copied.close();
+        }
+      }
+    },
+  );
 
-    expect(script).toContain("--exclude=workspace");
-    expect(script).toContain("--exclude=sandboxes");
-    expect(script).toContain("--exclude=plugins/installs.json");
-    expect(script).toContain("--exclude=plugins/installs.json.migrated");
-    expect(script).toContain(
-      `db.prepare("DELETE FROM config_machine_state WHERE state_key = ?").run("plugins.installedIndex");`,
+  it("scrubs host plugin paths only from staged state while preserving portable data", () => {
+    const root = tempDirs.make("openclaw-live-stage-state-");
+    const source = path.join(root, ".openclaw");
+    const destination = tempDirs.make("openclaw-live-stage-state-copy-");
+    for (const directory of ["state", "plugins", "workspace", "sandboxes"]) {
+      mkdirSync(path.join(source, directory), { recursive: true });
+    }
+    const hostPath = "/synthetic-host-only/plugin-installed-index";
+    for (const file of [
+      "plugins/installs.json",
+      "plugins/installs.json.migrated",
+      "sandboxes/private",
+    ]) {
+      writeFileSync(path.join(source, file), hostPath);
+    }
+    writeFileSync(path.join(source, "workspace/kept"), "linked workspace");
+    writeFileSync(path.join(source, "openclaw.json"), '{"gateway":{"mode":"local"}}');
+    const databasePath = path.join(source, "state/openclaw.sqlite");
+    const original = new DatabaseSync(databasePath);
+    try {
+      original.exec("CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value TEXT)");
+      original
+        .prepare("INSERT INTO config_machine_state VALUES (?, ?)")
+        .run("plugins.installedIndex", hostPath);
+      original
+        .prepare("INSERT INTO config_machine_state VALUES (?, ?)")
+        .run("portable.setting", "retain");
+    } finally {
+      original.close();
+    }
+    const originalBytes = readFileSync(databasePath);
+    const result = runArchiveStage("state_dir", root, destination);
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(databasePath)).toEqual(originalBytes);
+    expect(readFileSync(path.join(destination, "openclaw.json"), "utf8")).toBe(
+      '{"gateway":{"mode":"local"}}',
     );
-    expect(script).toContain("PRAGMA secure_delete = ON");
-    expect(script).toContain("VACUUM");
-    expect(script).toContain("host-absolute paths");
+    for (const file of ["plugins/installs.json", "plugins/installs.json.migrated", "sandboxes"]) {
+      expect(existsSync(path.join(destination, file))).toBe(false);
+      expect(existsSync(path.join(source, file))).toBe(true);
+    }
+    expect(lstatSync(path.join(destination, "workspace")).isSymbolicLink()).toBe(true);
+    expect(realpathSync(path.join(destination, "workspace"))).toBe(
+      realpathSync(path.join(source, "workspace")),
+    );
+    const copiedPath = path.join(destination, "state/openclaw.sqlite");
+    const copied = new DatabaseSync(copiedPath);
+    try {
+      expect(copied.prepare("SELECT * FROM config_machine_state ORDER BY state_key").all()).toEqual(
+        [{ state_key: "portable.setting", value: "retain" }],
+      );
+    } finally {
+      copied.close();
+    }
+    expect(readFileSync(copiedPath).includes(Buffer.from(hostPath))).toBe(false);
   });
 });

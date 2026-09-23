@@ -1,25 +1,36 @@
 // Verifies state-dir migrations preserve existing OpenClaw runtime data.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { getPluginInstallRecordMapEntry } from "../config/plugin-install-record-map.js";
 import { hashJson } from "../plugins/installed-plugin-index-hash.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import {
   autoMigrateLegacyStateDir,
   resetAutoMigrateLegacyStateDirForTest,
 } from "./state-migrations.state-dir.js";
 
 async function withStateDirFixture(run: (root: string) => Promise<void>): Promise<void> {
+  const lifetime = createFixtureLifetime();
+  onTestFinished(() => lifetime.cleanup());
+  const root = lifetime.createTempDir("openclaw-state-dir-");
   try {
-    await withTestDir({ prefix: "openclaw-state-dir-" }, async (root) => {
-      await run(root);
+    await lifetime.run(async () => {
+      try {
+        await run(root);
+      } finally {
+        resetAutoMigrateLegacyStateDirForTest();
+        await lifetime.verifyCleanup(() => closeOpenClawStateDatabaseAsync());
+      }
     });
   } finally {
-    resetAutoMigrateLegacyStateDirForTest();
+    await lifetime.cleanup();
   }
 }
 

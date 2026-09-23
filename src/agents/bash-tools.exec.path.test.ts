@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
@@ -195,8 +196,12 @@ describe("exec PATH login shell merge", () => {
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReturnValue(1234);
   });
 
-  afterEach(() => {
-    envSnapshot.restore();
+  afterEach(async () => {
+    try {
+      await closeOpenClawStateDatabaseAsync();
+    } finally {
+      envSnapshot.restore();
+    }
   });
 
   it("strips malformed XML arg-value suffixes from exec command and routing options", async () => {
@@ -382,8 +387,12 @@ describe("exec host env validation", () => {
     process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
   });
 
-  afterEach(() => {
-    envSnapshot.restore();
+  afterEach(async () => {
+    try {
+      await closeOpenClawStateDatabaseAsync();
+    } finally {
+      envSnapshot.restore();
+    }
   });
 
   it("blocks LD_/DYLD_ env vars on host execution", async () => {

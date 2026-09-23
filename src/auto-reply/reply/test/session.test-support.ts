@@ -1,6 +1,7 @@
 // Shared store and reset fixtures for session.test.ts.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expect } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
@@ -113,4 +114,26 @@ export async function runExplicitResetCases(params: {
     results.push({ ...testCase, result, stored: readSessionStore(params.storePath) });
   }
   return results;
+}
+
+export function requireMockCallArg(
+  mockFn: { mock: { calls: unknown[][] } },
+  label: string,
+  index = 0,
+): Record<string, unknown> {
+  const arg = mockFn.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
+  if (!arg) {
+    throw new Error(`expected ${label} call #${index + 1}`);
+  }
+  return arg;
+}
+
+export function expectEntryFields(
+  entry: SessionEntry,
+  expected: Record<string, unknown>,
+  label?: string,
+): void {
+  for (const [key, value] of Object.entries(expected)) {
+    expect((entry as unknown as Record<string, unknown>)[key], label ?? key).toEqual(value);
+  }
 }

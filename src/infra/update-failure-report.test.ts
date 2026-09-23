@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import type { GithubIssueSubmitHooks, PreparedGithubIssue } from "./github-issue.js";
 import {
@@ -15,13 +16,19 @@ import {
 } from "./restart-sentinel.js";
 import { prepareUpdateFailureReport, submitUpdateFailureReport } from "./update-failure-report.js";
 import {
+  failedUpdate,
   mockCreatedIssue,
   mockFallbackIssue,
   mockFallbackAfterIssueCreateNoStart,
 } from "./update-failure-report.test-support.js";
-import type { UpdateRunResult } from "./update-runner-types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 
 type PreparedReport = Awaited<ReturnType<typeof prepareUpdateFailureReport>>;
 
@@ -62,30 +69,6 @@ async function listSavedReportArtifacts(prepared: PreparedReport): Promise<strin
   return entries
     .filter((entry) => entry.startsWith(`${parsed.name}.`) && entry.endsWith(parsed.ext))
     .map((entry) => path.join(parsed.dir, entry));
-}
-
-function failedUpdate(overrides: Partial<UpdateRunResult> = {}): UpdateRunResult {
-  return {
-    status: "error",
-    mode: "git",
-    reason: "build-failed",
-    before: { sha: "a".repeat(40), version: "2026.8.1" },
-    after: { sha: "b".repeat(40), version: "2026.8.2" },
-    steps: [
-      {
-        name: "build",
-        command: "pnpm build --token raw-command-secret",
-        cwd: "/Users/private/openclaw",
-        durationMs: 12,
-        exitCode: 1,
-        stdoutTail: "raw chat and log output must not be copied",
-        stderrTail: "token=raw-log-secret /Users/private/openclaw/build.log",
-      },
-    ],
-    durationMs: 20,
-    recovery: { serviceRestartSafe: true, version: "2026.8.1" },
-    ...overrides,
-  };
 }
 
 describe("update failure report", () => {

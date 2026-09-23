@@ -27,7 +27,7 @@ import type {
   AgentWorkerFixtureOperations,
   bindSqliteWorkerBackend,
 } from "./openclaw-agent-worker-store.test-support.js";
-import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workers = new Set<OpenClawAgentSqliteWorkerStore<AgentWorkerFixtureOperations>>();
@@ -47,6 +47,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync(root);
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
 });
 async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   const { db } = openOpenClawAgentDatabase(options);

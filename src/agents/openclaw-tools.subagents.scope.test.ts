@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   callGatewayMock,
   resetSubagentsConfigOverride,
@@ -14,6 +16,11 @@ import {
 } from "./subagents/registry/subagent-registry.test-helpers.js";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
+
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+});
 
 function writeStore(storePath: string, store: Record<string, unknown>) {
   // Scope tests use a real session-store file so spawnedBy lookups match runtime behavior.

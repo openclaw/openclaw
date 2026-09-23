@@ -7,6 +7,7 @@ import { ForksPoolWorker, type PoolOptions, type WorkerRequest } from "vitest/no
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { collectNodeDiagnosticReport } from "../../scripts/lib/node-diagnostic-report.mts";
 import { collectVitestForkOsDiagnostics } from "../../scripts/lib/vitest-fork-os-diagnostics.mts";
+import { captureResourceOwnedNativeProcessExit } from "../../src/infra/vitest-resource-ownership.ts";
 
 const POOL_NAME = "openclaw-forks";
 const MAX_REPORT_CHARS = 64 * 1_024;
@@ -14,6 +15,7 @@ const MAX_REPORT_CHARS = 64 * 1_024;
 class DiagnosticForksPoolWorker extends ForksPoolWorker {
   override readonly name = POOL_NAME;
   private child?: ChildProcess;
+  private settleNativeExit?: () => Promise<void>;
   private reportDir?: string;
   private stopRequested = false;
   private stopAcknowledged = false;
@@ -64,6 +66,10 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
       unsubscribe("child_process", observe);
     }
     this.child = children.find((child) => child.spawnargs?.includes(this.entrypoint));
+    // Pool stop owns this exact process and every Worker isolate it terminates.
+    this.settleNativeExit = this.child?.pid
+      ? captureResourceOwnedNativeProcessExit(this.child, { includeWorkerThreads: true })
+      : undefined;
     this.child?.once("exit", () => clearTimeout(this.diagnosticTimer));
     await started;
   }
@@ -143,6 +149,7 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
     clearTimeout(this.diagnosticTimer);
     try {
       await super.stop();
+      await this.settleNativeExit?.();
     } finally {
       await this.diagnostics;
       if (this.reportDir) {

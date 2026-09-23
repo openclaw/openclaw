@@ -7,6 +7,7 @@ import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import {
   attachPluginInstallTransaction,
@@ -24,7 +25,12 @@ import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { invokePluginArtifactInstallMock } from "./test-helpers/install-fixtures.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 const mocks = vi.hoisted(() => ({ install: vi.fn(), commit: vi.fn() }));
 vi.mock("./clawhub.js", () => ({
   installPluginFromClawHub: (...args: unknown[]) => mocks.install(...args),

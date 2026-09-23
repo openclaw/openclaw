@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { MessagePort } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeIdleSqliteCoordinators } from "../infra/sqlite-coordinator.js";
 import { captureCoordinatorDatabase } from "../infra/sqlite-coordinator.test-support.js";
 import * as coordinatorDelegate from "../infra/state-database-coordinator-delegate.js";
 import * as stateCoordinator from "../infra/state-database-coordinator.js";
@@ -20,14 +23,25 @@ afterEach(async () => {
   resetTaskFlowRegistryForTests({ persist: false });
 });
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("Doctor maintenance with managed-flow workers", () => {
   it.each([false, true])(
     "preserves pooling until worker close requests retirement (close before owner release=%s)",
     async (closeBeforeRelease) => {
+      // Runner-owned databases intentionally close instead of pooling. Exercise
+      // production retention in a unique external state/runtime, then retire it.
+      const runtime = stateCoordinator.resolveStateLifecycleRuntimeDirectory();
+      await fs.mkdir(runtime, { recursive: true });
+      const root = tempDirs.make("doctor-worker-retention-", await fs.realpath(runtime));
       await withOpenClawTestState(
-        { scenario: "external-service", label: "doctor-worker-retention" },
-        async (state) => {
-          const directory = state.path("coordinator-runtime");
+        {
+          scenario: "external-service",
+          label: "doctor-worker-retention",
+          env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+        },
+        async () => {
+          const directory = path.join(root, "coordinator-runtime");
           await stateCoordinator.withStateDatabaseCoordinatorRuntimeDirectory(
             { directory, keepAlive: true },
             async () => {
@@ -62,6 +76,7 @@ describe("Doctor maintenance with managed-flow workers", () => {
                     keepAlive: false,
                   })
                   .release();
+                closeIdleSqliteCoordinators(root);
               }
             },
           );

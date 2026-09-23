@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { expect } from "vitest";
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -60,4 +61,15 @@ export async function startGenericEmbeddingServer() {
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };
+}
+
+export async function expectDefaultEmbeddingResponse(res: Response) {
+  expect(res.status).toBe(200);
+  const json = (await res.json()) as {
+    object?: string;
+    data?: Array<{ object?: string; embedding?: number[] }>;
+  };
+  expect(json.object).toBe("list");
+  expect(json.data?.[0]?.object).toBe("embedding");
+  expect(json.data?.[0]?.embedding).toEqual([0.1, 0.2]);
 }

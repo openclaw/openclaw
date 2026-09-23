@@ -2,7 +2,9 @@ import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import { runWithMockedCliExit } from "../test-utils/command-runner.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -66,6 +68,10 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => mocks.workspaceDir,
 }));
 
+function parseCommand(program: Command, ...args: Parameters<Command["parseAsync"]>) {
+  return runWithMockedCliExit(() => program.parseAsync(...args), mocks.defaultRuntime.exit);
+}
+
 function createGatewayTransportError(kind: "closed" | "timeout") {
   return new GatewayTransportError({
     kind,
@@ -93,6 +99,8 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
   });
 
   beforeEach(async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
+    vi.stubEnv("OPENCLAW_PROFILE", "");
     testState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-skills-cli-workshop-cache-",
@@ -102,6 +110,9 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     mocks.gatewayApply = undefined;
     mocks.releaseGatewayLock.mockReset();
     mocks.acquireGatewayLock.mockReset().mockResolvedValue({ release: mocks.releaseGatewayLock });
+    mocks.defaultRuntime.log.mockClear();
+    mocks.defaultRuntime.writeStdout.mockClear();
+    mocks.defaultRuntime.writeJson.mockClear();
     mocks.defaultRuntime.error.mockClear();
     mocks.defaultRuntime.exit.mockClear();
     mocks.callGateway.mockReset().mockImplementation(async (request) => {
@@ -112,11 +123,13 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     });
   });
 
-  afterEach(async () => {
-    await testState.cleanup();
-    await tempDirs.cleanup();
-    vi.unstubAllEnvs();
-  });
+  afterEach(() =>
+    runQaGatewayFixture(
+      () => testState.cleanup(),
+      () => tempDirs.cleanup(),
+      () => vi.unstubAllEnvs(),
+    ),
+  );
 
   it("applies through the gateway process that owns the cached session skill index", async () => {
     // This first module graph stands in for the long-running Gateway process.
@@ -162,7 +175,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     const program = new Command();
     program.exitOverride();
     registerSkillsCli(program);
-    await program.parseAsync(["skills", "workshop", "apply", proposal.record.id], {
+    await parseCommand(program, ["skills", "workshop", "apply", proposal.record.id], {
       from: "user",
     });
 
@@ -214,7 +227,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     program.exitOverride();
     registerSkillsCli(program);
     await expect(
-      program.parseAsync(["skills", "workshop", "apply", proposal.record.id], { from: "user" }),
+      parseCommand(program, ["skills", "workshop", "apply", proposal.record.id], { from: "user" }),
     ).rejects.toThrow("__exit__:1");
 
     expect(mocks.callGateway.mock.calls.map(([request]) => request.method)).toEqual([
@@ -250,7 +263,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     const program = new Command();
     program.exitOverride();
     registerSkillsCli(program);
-    await program.parseAsync(["skills", "workshop", "apply", proposal.record.id], {
+    await parseCommand(program, ["skills", "workshop", "apply", proposal.record.id], {
       from: "user",
     });
 
@@ -339,7 +352,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     const program = new Command();
     program.exitOverride();
     registerSkillsCli(program);
-    const command = program.parseAsync(["skills", "workshop", "apply", proposal.record.id], {
+    const command = parseCommand(program, ["skills", "workshop", "apply", proposal.record.id], {
       from: "user",
     });
     // Root-owned credential/transport errors propagate; ordinary command errors log and exit.
@@ -379,7 +392,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     program.exitOverride();
     registerSkillsCli(program);
     await expect(
-      program.parseAsync(["skills", "workshop", "apply", proposal.record.id], { from: "user" }),
+      parseCommand(program, ["skills", "workshop", "apply", proposal.record.id], { from: "user" }),
     ).rejects.toBe(authError);
 
     expect(mocks.callGateway).toHaveBeenCalledOnce();
@@ -416,12 +429,14 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       const program = new Command();
       program.exitOverride();
       registerSkillsCli(program);
-      const failure = await program
-        .parseAsync(["skills", "workshop", "apply", proposal.record.id], { from: "user" })
-        .then(
-          () => undefined,
-          (error: unknown) => error,
-        );
+      const failure = await parseCommand(
+        program,
+        ["skills", "workshop", "apply", proposal.record.id],
+        { from: "user" },
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       expect(failure).toMatchObject({
         name: "GatewayCredentialsRequiredError",
         message: "selected gateway requires credentials",
@@ -477,7 +492,8 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     const program = new Command();
     program.exitOverride();
     registerSkillsCli(program);
-    await program.parseAsync(
+    await parseCommand(
+      program,
       [
         "skills",
         "workshop",

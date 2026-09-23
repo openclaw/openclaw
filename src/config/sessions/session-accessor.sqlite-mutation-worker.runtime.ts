@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync-cache-state.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import { onSqliteWalCheckpoint } from "../../infra/sqlite-wal-checkpoint.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
@@ -92,27 +93,42 @@ export async function runColdMutationWorkerPort(
     0,
     data.plan.databaseOptions,
     (databaseOptions) =>
-      runColdMutationWorker(port, {
-        ...data,
-        plan: { ...data.plan, databaseOptions },
-      }),
+      runColdMutationWorker(
+        port,
+        {
+          ...data,
+          plan: { ...data.plan, databaseOptions },
+        },
+        request.coordination.databasePath,
+      ),
   );
   port.postMessage(response);
   port.close();
 }
 
-async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerData) {
+async function runColdMutationWorker(
+  port: MessagePort,
+  data: SessionColdWorkerData,
+  stateDatabasePath: string,
+) {
   const { mutateSessionColdTranscriptInWorker, prepareSessionColdRestoreInWorker } =
     await import("./session-cold-storage-worker.js");
-  // Restore materialization must finish before requesting any write admission.
-  const coldRecords =
-    data.plan.kind === "cold-restore"
-      ? await prepareSessionColdRestoreInWorker(data.plan)
-      : undefined;
+  const closeDatabase = async () => {
+    const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
+    if (cleanup.settled) {
+      closeOpenClawStateDatabaseByPath(stateDatabasePath);
+    }
+    return cleanup;
+  };
   const commitGate = data.commitGate;
   let result: SessionColdMutationResult;
   let validation: OpenClawAgentDatabaseValidation | undefined;
   try {
+    // Preparation can acquire cached handles too; failed restore must join their cleanup.
+    const coldRecords =
+      data.plan.kind === "cold-restore"
+        ? await prepareSessionColdRestoreInWorker(data.plan)
+        : undefined;
     result = await withWorkerWriteAdmission(
       port,
       0,
@@ -144,7 +160,16 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
       },
     );
   } catch (error) {
-    const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
+    let cleanup: Awaited<ReturnType<typeof closeDatabase>>;
+    try {
+      cleanup = await closeDatabase();
+    } catch (cleanupError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "SQLite cold mutation and Worker cleanup failed",
+        error,
+      );
+    }
     if (cleanup.settled) {
       markSqliteReclamationSettled(commitGate);
     } else {
@@ -156,7 +181,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
     }
     throw error;
   }
-  const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
+  const cleanup = await closeDatabase();
   const workerResult = {
     result,
     ...(cleanup.cleanupWarnings.length > 0 ? { cleanupWarnings: cleanup.cleanupWarnings } : {}),
@@ -194,11 +219,16 @@ export async function runReclamationWorkerPort(
       } satisfies SqliteReclamationWorkerMessage);
     }
   });
-  const closeDatabase = async () => {
+  const closeDatabase = async (stateDatabasePath: string) => {
     checkpointResultOwnedByRequest = false;
     const cleanup = await settleReclamationDatabase(databaseOptions.path);
     claim?.release();
     claim = undefined;
+    if (cleanup.settled) {
+      // Normal close and failed requests both retire their native shared-state handle
+      // before acknowledging settlement, while the parent's writer admission is held.
+      closeOpenClawStateDatabaseByPath(stateDatabasePath);
+    }
     return cleanup;
   };
   try {
@@ -236,13 +266,9 @@ export async function runReclamationWorkerPort(
         databaseOptions,
         async (options) => {
           if (request.type === "close") {
-            const cleanup = await closeDatabase();
-            if (pooledTask) {
-              if (!cleanup.settled) {
-                throw new Error("Canonical validation task could not close its agent database");
-              }
-              // Keep native close under this task's coordinator and parent's writer admission.
-              closeOpenClawStateDatabaseByPath(request.coordination.databasePath);
+            const cleanup = await closeDatabase(request.coordination.databasePath);
+            if (pooledTask && !cleanup.settled) {
+              throw new Error("Canonical validation task could not close its agent database");
             }
             return {
               type: "closed",
@@ -400,7 +426,15 @@ export async function runReclamationWorkerPort(
               validation,
             } satisfies SqliteMutationWorkerMessage<typeof result>;
           } catch (error) {
-            failureCleanup = await closeDatabase();
+            try {
+              failureCleanup = await closeDatabase(request.coordination.databasePath);
+            } catch (cleanupError) {
+              throw createSqliteLifecycleAggregateError(
+                [error, cleanupError],
+                "SQLite session reclamation and Worker cleanup failed",
+                error,
+              );
+            }
             if (failureCleanup.settled) {
               markSqliteReclamationSettled(commitGate);
             } else {

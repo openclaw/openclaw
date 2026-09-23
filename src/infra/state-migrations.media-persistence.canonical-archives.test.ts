@@ -193,9 +193,9 @@ function expectPreservedIdentity(before: ArchiveRow, after: ArchiveRow): void {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  cleanupMediaPersistenceFixtures(tempDirs);
+  await cleanupMediaPersistenceFixtures(tempDirs);
 });
 
 describe("media migration of canonical SQLite transcript archives", () => {

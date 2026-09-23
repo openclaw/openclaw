@@ -62,6 +62,7 @@ function createLinkedCheckoutFixture() {
     "scripts/tsx.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib",
+    "src/infra/vitest-resource-ownership.ts",
   ]) {
     const target = path.join(primary, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });

@@ -22,6 +22,7 @@ import {
 import { renderUpdateRunNotice, renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 
 const mocks = vi.hoisted(() => ({
   verifyGateway: vi.fn<typeof import("./update-command-verification.js").verifyUpdatedGateway>(
@@ -128,7 +129,12 @@ import { registerRestartFailureOwnershipTest } from "./update-command-restart-fa
 import { UpdateCommandFailure } from "./update-command-result.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 
 beforeEach(() => {
   mocks.verifyGateway.mockReset();

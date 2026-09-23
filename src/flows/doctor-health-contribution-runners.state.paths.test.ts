@@ -16,12 +16,13 @@ import { runStateIntegrityHealth } from "./doctor-health-contribution-runners.st
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
 vi.hoisted(() => {
-  // Shared-worker setup can import path helpers before this Windows simulation.
-  // Re-evaluate that graph so it consumes this file’s node:path mock.
+  // Shared-worker setup may cache helpers. Re-evaluate the graph with the
+  // switchable path facade, leaving host paths intact during module imports.
   vi.resetModules();
 });
 
 const fixture = vi.hoisted(() => ({
+  windowsPaths: false,
   database: undefined as OpenClawStateDatabase | undefined,
   beforeAdmission: undefined as (() => void) | undefined,
   note: vi.fn(),
@@ -29,7 +30,16 @@ const fixture = vi.hoisted(() => ({
 
 vi.mock("node:path", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:path")>();
-  return { ...actual, default: actual.win32 };
+  return {
+    ...actual,
+    // Import-time infrastructure validates real host resource paths. Switch only
+    // while exercising the synthetic Windows registry and Doctor operations.
+    default: new Proxy(actual, {
+      get(target, property) {
+        return Reflect.get(fixture.windowsPaths ? actual.win32 : target, property);
+      },
+    }),
+  };
 });
 vi.mock("../state/openclaw-state-db.js", () => ({
   runOpenClawStateWriteTransaction: <T>(operation: (database: OpenClawStateDatabase) => T): T => {
@@ -138,11 +148,13 @@ function context(env: NodeJS.ProcessEnv = {}, shouldRepair = true): DoctorHealth
 
 describe("Doctor Windows database path repair", () => {
   beforeEach(() => {
+    fixture.windowsPaths = true;
     vi.stubGlobal("process", { ...process, platform: "win32" });
     fixture.beforeAdmission = undefined;
     fixture.note.mockClear();
   });
   afterEach(() => {
+    fixture.windowsPaths = false;
     fixture.database?.db.close();
     fixture.database = undefined;
     vi.unstubAllGlobals();

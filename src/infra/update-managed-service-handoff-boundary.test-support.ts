@@ -50,6 +50,7 @@ import {
   readSavedFailure,
 } from "./update-managed-service-native.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import { captureResourceOwnedNativeProcessExit } from "./vitest-resource-ownership.js";
 
 export function createManagedServiceManagerBoundary({
   spawnMock,
@@ -137,7 +138,13 @@ export function createManagedServiceManagerBoundary({
     let helper: import("node:child_process").ChildProcess | undefined;
     let helperCompletion: Promise<number | null> | undefined;
     let helperLogPath: string | undefined;
-    const cleanup = createManagedServiceBoundaryCleanup(() => [helper, parent]);
+    let settleHelperExit: (() => Promise<void>) | undefined;
+    const reapProcesses = createManagedServiceBoundaryCleanup(() => [helper, parent]);
+    const cleanup = async () => {
+      await reapProcesses();
+      // Native helper exit releases its main-thread handles, not descendant or general claims.
+      await settleHelperExit?.();
+    };
     cleanups.add(cleanup);
     try {
       await startManagedServiceUpdateHandoff({
@@ -379,6 +386,7 @@ export function createManagedServiceManagerBoundary({
         stdio: ["pipe", "pipe", "pipe"],
       });
       helper = runningHelper;
+      settleHelperExit = captureResourceOwnedNativeProcessExit(runningHelper);
       let stdout = "";
       runningHelper.stdout?.on("data", (chunk) => {
         stdout += chunk.toString();

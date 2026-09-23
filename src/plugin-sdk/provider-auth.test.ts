@@ -13,6 +13,8 @@ import {
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   COPILOT_INTEGRATION_ID,
   deriveCopilotApiBaseUrlFromToken,
@@ -21,6 +23,7 @@ import {
   readClaudeCliCredentialsCached,
   resolveCopilotApiToken,
 } from "./provider-auth.js";
+import { withPartialCopilotResponse } from "./provider-auth.transport.test-support.js";
 
 const TEST_GITHUB_TOKEN = ["github", "token"].join("-");
 const TEST_CACHED_COPILOT_TOKEN = [
@@ -28,7 +31,13 @@ const TEST_CACHED_COPILOT_TOKEN = [
   ["proxy-ep", "proxy.individual.githubcopilot.com"].join("="),
 ].join(";");
 const TEST_GITHUB_TOKEN_FINGERPRINT = createHash("sha256").update(TEST_GITHUB_TOKEN).digest("hex");
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 
 describe("provider auth public SDK", () => {
   it("keeps the shipped Claude credential reader functional during its deprecation window", async () => {
@@ -357,31 +366,6 @@ describe("provider auth public SDK", () => {
   });
 });
 
-async function withPartialCopilotResponse(run: (port: number) => Promise<void>): Promise<void> {
-  const { once } = await import("node:events");
-  const http = await import("node:http");
-  const server = http.createServer((_req, res) => {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.write('{"token":"partial');
-  });
-
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected server address");
-  }
-
-  try {
-    await run(address.port);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-      server.closeAllConnections();
-    });
-  }
-}
-
 type FallbackStoreCaseResult = {
   profileIds: string[];
   resolvedKey: string | undefined;
@@ -610,6 +594,8 @@ describe("provider API-key readiness", () => {
         ).toBe(expected);
       } finally {
         clearRuntimeAuthProfileStoreSnapshots();
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
         await fs.rm(agentDir, { force: true, recursive: true });
       }
     },
@@ -757,6 +743,8 @@ describe("provider API-key readiness", () => {
         ).toBe(expected);
       } finally {
         clearRuntimeAuthProfileStoreSnapshots();
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
         await fs.rm(agentDir, { force: true, recursive: true });
       }
     },
@@ -801,6 +789,8 @@ describe("provider API-key readiness", () => {
       ).toBe(true);
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
       await fs.rm(agentDir, { force: true, recursive: true });
     }
   });
@@ -1711,9 +1701,10 @@ describe("Copilot data-residency domain resolution", () => {
       cachePath: "/tmp/copilot-token-cross.json",
       loadJsonFileImpl: () => ({
         token: "public;proxy-ep=proxy.individual.githubcopilot.com",
-        expiresAt: Number.MAX_SAFE_INTEGER - 1,
+        expiresAt: Date.now() + 60 * 60 * 1000,
         updatedAt: Date.now(),
         integrationId: COPILOT_INTEGRATION_ID,
+        sourceCredentialFingerprint: TEST_GITHUB_TOKEN_FINGERPRINT,
         domain: "github.com",
       }),
       saveJsonFileImpl: (_path, value) => saved.push(value),

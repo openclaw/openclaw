@@ -15,6 +15,7 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { createPostUpdateRepairFixture } from "./update-command-post-update-repair.test-support.js";
 import { registerCurrentCoreRuntimeRefreshTests } from "./update-command-post-update-runtime-refresh.test-support.js";
@@ -119,7 +120,12 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
   markControlPlaneUpdateRestartSentinelFailureBestEffort: async () => {},
 }));
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();

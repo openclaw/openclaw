@@ -17,6 +17,7 @@ import type {
   PreparedSqliteWorkerOpen,
 } from "./sqlite-worker-broker.types.js";
 import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";
+import { captureResourceOwnedNativeWorkerExit } from "./vitest-resource-ownership.js";
 import { createCpuTrackedWorker } from "./worker-cpu.js";
 
 const runOutsideCaller = AsyncLocalStorage.snapshot();
@@ -38,11 +39,36 @@ export function createSqliteWorkerLifecycle({
   ) => Promise<unknown>;
   fail: (slot: Slot, error: unknown) => void;
 }) {
-  function createSlot(
+  // Receipt publication may fail after the actor has already been forgotten.
+  const nativeExitSettlements = new Map<Slot, () => Promise<void>>();
+
+  async function captureNativeExit(slot: Slot): Promise<void> {
+    try {
+      const settle = captureResourceOwnedNativeWorkerExit(slot.worker);
+      if (settle) {
+        nativeExitSettlements.set(slot, settle);
+      }
+    } catch (error) {
+      // No request has been admitted, but the newly spawned worker is still ours.
+      fail(slot, error);
+      try {
+        await retire(slot);
+      } catch (cleanupError) {
+        throw createSqliteLifecycleAggregateError(
+          [error, cleanupError],
+          "SQLite worker startup cleanup failed",
+          error,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async function createSlot(
     options: PreparedSqliteWorkerOpen,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
-  ): Slot {
+  ): Promise<Slot> {
     if (process.versions.bun && process.platform === "darwin") {
       ensureSqliteLibrarySelected();
     }
@@ -83,16 +109,18 @@ export function createSqliteWorkerLifecycle({
       slots.delete(slot);
       exited.resolve();
     });
+    await captureNativeExit(slot);
     worker.unref();
     return slot;
   }
 
   async function closeGeneration(generation: RuntimeWorkerGeneration): Promise<void> {
-    const results = await Promise.allSettled(
-      [...actors.values()]
+    const results = await Promise.allSettled([
+      ...[...actors.values()]
         .filter((actor) => actor.runtimeGeneration === generation)
         .map((actor) => retireActor(actor)),
-    );
+      ...retireOrphanedNativeExits(generation),
+    ]);
     const errors = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
@@ -251,6 +279,12 @@ export function createSqliteWorkerLifecycle({
         }
       }
       await slot.exit;
+      try {
+        await nativeExitSettlements.get(slot)?.();
+        nativeExitSettlements.delete(slot);
+      } catch (error) {
+        errors.push(error);
+      }
       for (const actor of slot.actors) {
         try {
           releaseSqliteWorkerActorCoordinators(actor);
@@ -272,7 +306,17 @@ export function createSqliteWorkerLifecycle({
     return slot.retiring;
   }
 
+  function retireOrphanedNativeExits(generation?: RuntimeWorkerGeneration): Promise<void>[] {
+    const actorSlots = new Set([...actors.values()].map((actor) => actor.slot));
+    return [...nativeExitSettlements.keys()]
+      .filter(
+        (slot) => !actorSlots.has(slot) && (!generation || slot.runtimeGeneration === generation),
+      )
+      .map(retire);
+  }
+
   return {
+    retireOrphanedNativeExits,
     createSlot,
     closeGeneration,
     releaseActorReference,

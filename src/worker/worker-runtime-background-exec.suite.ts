@@ -11,6 +11,7 @@ import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protoc
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { NodeWorkerJournalWorker } from "../node-host/node-worker-journal-worker.js";
 import type { NodeWorkerLaunchReceipt } from "../node-host/node-worker-launch-store.js";
@@ -23,6 +24,8 @@ import { createNodeWorkerSupervisor } from "../node-host/node-worker-supervisor.
 import { NodeWorkerTurnStore } from "../node-host/node-worker-turn-store.js";
 import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import type { NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
@@ -110,6 +113,7 @@ export function registerWorkerBackgroundExecLifecycleTests({
           'import { writeFileSync } from "node:fs";',
           'import { createRequire } from "node:module";',
           "globalThis.WORKER_DEPLOY_BUILD = true;",
+          `process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = ${JSON.stringify(path.resolve("extensions"))};`,
           ...(sdkHost
             ? [
                 `process.env.OPENCLAW_DEV_SOURCE_ROOT = ${JSON.stringify(sdkHost)};`,
@@ -180,6 +184,17 @@ export function registerWorkerBackgroundExecLifecycleTests({
       let pendingCleanupObserved = false;
       let nodeHost: ChildProcess | undefined;
       let caseFailure: { error: unknown } | undefined;
+      const recordFailure = (error: unknown) => {
+        caseFailure = {
+          error: caseFailure
+            ? new AggregateError(
+                [caseFailure.error, error],
+                "registered worker fault and cleanup failed",
+                { cause: error },
+              )
+            : error,
+        };
+      };
       try {
         let running: NodeWorkerLaunchReceipt;
         if (crashed !== "node-host") {
@@ -311,7 +326,7 @@ export function registerWorkerBackgroundExecLifecycleTests({
           command: inspectNodeWorkerProcessIdentity(command!),
         }).toEqual({ worker: "dead", runtime: "dead", command: "dead" });
       } catch (error) {
-        caseFailure = { error };
+        recordFailure(error);
       } finally {
         try {
           if (runtimeStopped && runtime && inspectNodeWorkerProcessIdentity(runtime) === "live") {
@@ -331,30 +346,34 @@ export function registerWorkerBackgroundExecLifecycleTests({
               expect(inspectNodeWorkerProcessIdentity(command!)).toBe("dead"),
             );
           }
-          try {
-            await waitForFast(
-              async () =>
-                await supervisor.stopEnvironment({
-                  gatewayNamespace: input.gatewayNamespace,
-                  environmentId: plan.admission.environmentId,
-                  sessionId: plan.admission.sessionId,
-                  ownerEpoch: plan.admission.ownerEpoch,
-                }),
-              { timeout: 10_000 },
-            );
-          } finally {
-            await supervisor.close();
-          }
         } catch (cleanupError) {
-          caseFailure = {
-            error: caseFailure
-              ? new AggregateError(
-                  [caseFailure.error, cleanupError],
-                  "registered worker fault and cleanup failed",
-                  { cause: cleanupError },
-                )
-              : cleanupError,
-          };
+          recordFailure(cleanupError);
+        }
+        try {
+          await waitForFast(
+            async () =>
+              await supervisor.stopEnvironment({
+                gatewayNamespace: input.gatewayNamespace,
+                environmentId: plan.admission.environmentId,
+                sessionId: plan.admission.sessionId,
+                ownerEpoch: plan.admission.ownerEpoch,
+              }),
+            { timeout: 10_000 },
+          );
+        } catch (cleanupError) {
+          recordFailure(cleanupError);
+        }
+        try {
+          await supervisor.close();
+        } catch (cleanupError) {
+          recordFailure(cleanupError);
+        }
+        try {
+          await closeOpenClawStateDatabaseByPathAsync(
+            resolveOpenClawStateSqlitePath(supervisorOptions.env),
+          );
+        } catch (cleanupError) {
+          recordFailure(cleanupError);
         }
       }
       if (caseFailure) {
@@ -363,7 +382,9 @@ export function registerWorkerBackgroundExecLifecycleTests({
     },
   );
 
-  it("joins retained background processes before closing the managed owner on EOF", async () => {
+  it("joins retained background processes before closing the managed owner on EOF", async ({
+    signal,
+  }) => {
     const { launch } = await setup({ inferencePlans: ["background-tool", "text"] });
     const input = new PassThrough();
     const output = new PassThrough();
@@ -381,23 +402,25 @@ export function registerWorkerBackgroundExecLifecycleTests({
       input.write(
         `${JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch })}\n`,
       );
-      await expect(result.promise).resolves.toMatchObject({ retainWorker: true });
+      await expect(racePromiseWithAbortSignal(result.promise, signal)).resolves.toMatchObject({
+        retainWorker: true,
+      });
       const running = listRunningSessions().filter((session) => session.scopeKey === scopeKey);
       expect(running).toHaveLength(1);
       const pid = running[0]!.pid!;
       expect(pid).toBeGreaterThan(0);
       input.end();
-      await command;
+      await racePromiseWithAbortSignal(command, signal);
       expect(() => process.kill(pid, 0)).toThrow();
       expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
         0,
       );
     } finally {
       input.end();
+      supervisor.cancelScope(scopeKey, "manual-cancel");
       try {
         await command;
       } finally {
-        supervisor.cancelScope(scopeKey, "manual-cancel");
         await waitForExecScope(scopeKey);
       }
     }

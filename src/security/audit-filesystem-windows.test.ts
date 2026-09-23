@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import { AsyncTempCaseFactory } from "./test-temp-cases.js";
 
@@ -60,6 +61,7 @@ describe("security audit filesystem Windows findings", () => {
   });
 
   afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     await tempCases.cleanup();
   });
 

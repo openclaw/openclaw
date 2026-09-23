@@ -10,6 +10,7 @@ import {
 } from "../../plugin-state/plugin-state-store.js";
 import * as pluginStateSqlite from "../../plugin-state/plugin-state-store.sqlite.js";
 import { buildSafeExternalPrompt } from "../../security/external-content.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { buildChannelJoinIntroPrompt } from "./join-intro-prompt.js";
 import { reportChannelRoomJoin } from "./report-channel-room-join.js";
 
@@ -41,6 +42,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   resetPluginStateStoreForTests();
+  await closeOpenClawStateDatabaseAsync();
   vi.unstubAllEnvs();
   await fs.rm(stateDir, { recursive: true, force: true });
 });

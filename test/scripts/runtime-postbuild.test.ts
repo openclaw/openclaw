@@ -1153,6 +1153,7 @@ describe("runtime postbuild static assets", () => {
 
   it("keeps the 2026.9.1 Git updater restart import loadable after dist replacement", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-old-updater-");
+    await fs.writeFile(path.join(rootDir, "package.json"), '{"type":"module"}\n');
     const distDir = path.join(rootDir, "dist");
     const ownerPath = path.join(distDir, "update-command-service-command.mjs");
     await fs.mkdir(distDir, { recursive: true });

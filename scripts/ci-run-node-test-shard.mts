@@ -358,6 +358,7 @@ export function resolveShardChildCommand(
   const loaderArgs = testProjectsEntrypoint.endsWith(".mts") ? ["--import", "tsx"] : [];
   return {
     command: nodeExecPath,
+    nodeEntryIndex: loaderArgs.length,
     args: [
       ...loaderArgs,
       ...(workerRun
@@ -430,6 +431,7 @@ async function runChild(
     const owned = context.spawn({
       command: childCommand.command,
       args: childCommand.args,
+      nodeEntryIndex: childCommand.nodeEntryIndex,
       options: {
         env: childEnv,
         stdio: ["ignore", "pipe", "pipe", "ipc"],

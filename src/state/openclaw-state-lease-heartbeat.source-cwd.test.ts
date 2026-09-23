@@ -17,7 +17,7 @@ it("starts the real source heartbeat from a foreign cwd using the selected tscon
       const script = `
         import assert from "node:assert/strict";
         import { withOpenClawStateLease } from ${JSON.stringify(leaseModule)};
-        import { openOpenClawStateDatabase, closeOpenClawStateDatabaseForTest } from ${JSON.stringify(databaseModule)};
+        import { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } from ${JSON.stringify(databaseModule)};
         try {
           await withOpenClawStateLease({
             scope: "core:heartbeat-source-cwd", key: "source",
@@ -28,7 +28,7 @@ it("starts the real source heartbeat from a foreign cwd using the selected tscon
           assert.equal(db.prepare("SELECT count(*) AS n FROM state_leases WHERE scope = ?")
             .get("core:heartbeat-source-cwd").n, 0);
           console.log("heartbeat settled");
-        } finally { closeOpenClawStateDatabaseForTest(); }
+        } finally { await closeOpenClawStateDatabaseAsync(); }
       `;
       const { stdout } = await promisify(execFile)(
         process.execPath,

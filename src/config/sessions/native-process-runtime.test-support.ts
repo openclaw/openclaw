@@ -1,4 +1,15 @@
 export const sessionNativeProcessEntrypoints = {
+  agentDatabase: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../state/openclaw-agent-db",
+    distWorkerPath: "state/openclaw-agent-db.js",
+  },
+  stateDatabase: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../state/openclaw-state-db",
+    distWorkerPath: "state/openclaw-state-db.js",
+  },
+
   accessor: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "session-accessor",

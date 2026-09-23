@@ -8,6 +8,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { captureResourceOwnedNativeWorkerExit } from "../../infra/vitest-resource-ownership.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -192,6 +193,7 @@ describe.skipIf(Boolean(process.versions.bun))(
       if (!worker) {
         throw new Error("The actual reclamation Worker did not receive its native fixture");
       }
+      const settleNativeExit = unsafe ? captureResourceOwnedNativeWorkerExit(worker) : undefined;
       expect(existsSync(capturedTimer)).toBe(true);
       const raw = new DatabaseSync(source.path);
       raw.exec(
@@ -291,6 +293,7 @@ describe.skipIf(Boolean(process.versions.bun))(
         release();
         if (unsafe) {
           await worker.terminate();
+          await settleNativeExit?.();
         }
         await Promise.allSettled([outcome, follower]);
         probe?.close();

@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runActivePluginPayloadSmokeCheck } from "./active-payload-verification.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
@@ -13,7 +14,12 @@ import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { convergePluginReleaseCohort } from "./update-cohort.js";
 
 describe("plugin release cohort real synchronization", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
+      cleanup();
+    }),
+  );
 
   it.each([
     { channel: "stable", explicit: true, source: "path" },

@@ -21,6 +21,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -36,6 +37,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     for (const stateDir of tempDirs.dirs) {
       await cleanupSessionStateForTest({ stateDir });
     }
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );

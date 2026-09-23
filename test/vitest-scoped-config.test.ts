@@ -138,7 +138,7 @@ function expectDefaultNonIsolatedRunner(config: {
   test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
 }) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe(process.platform === "win32" ? "forks" : "threads");
+  expect(testConfig.pool).toBe(process.platform === "win32" ? diagnosticForksPool : "threads");
   expect(testConfig.isolate).toBe(false);
   expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
 }
@@ -146,26 +146,24 @@ function expectDefaultIsolatedRunner(config: {
   test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
 }) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe(process.platform === "win32" ? "forks" : "threads");
+  expect(testConfig.pool).toBe(process.platform === "win32" ? diagnosticForksPool : "threads");
   expect(testConfig.isolate).toBe(true);
   expect(testConfig.runner).toBeUndefined();
 }
-function expectForkedNonIsolatedRunner(
-  config: { test?: { pool?: unknown; isolate?: unknown; runner?: unknown } },
-  pool: "forks" | typeof diagnosticForksPool = "forks",
-) {
+function expectForkedNonIsolatedRunner(config: {
+  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
+}) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe(pool);
+  expect(testConfig.pool).toBe(diagnosticForksPool);
   expect(testConfig.isolate).toBe(false);
   expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
 }
 
-function expectForkedIsolatedRunner(
-  config: { test?: { pool?: unknown; isolate?: unknown; runner?: unknown } },
-  pool: "forks" | typeof diagnosticForksPool = "forks",
-) {
+function expectForkedIsolatedRunner(config: {
+  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
+}) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe(pool);
+  expect(testConfig.pool).toBe(diagnosticForksPool);
   expect(testConfig.isolate).toBe(true);
   expect(testConfig.runner).toBeUndefined();
 }
@@ -600,7 +598,7 @@ describe("scoped vitest configs", () => {
   const defaultUtilsConfig = createUtilsVitestConfig({});
   const defaultWizardConfig = createWizardVitestConfig({});
 
-  it("keeps scoped lanes on threads with the shared non-isolated runner", () => {
+  it("keeps scoped lanes on platform workers with the shared non-isolated runner", () => {
     for (const config of [
       defaultAcpConfig,
       defaultExtensionsConfig,
@@ -628,7 +626,7 @@ describe("scoped vitest configs", () => {
 
     expectDefaultNonIsolatedRunner(defaultUiConfig);
     expectDefaultIsolatedRunner(defaultExtensionMemoryConfig);
-    expectForkedIsolatedRunner(defaultInfraConfig, diagnosticForksPool);
+    expectForkedIsolatedRunner(defaultInfraConfig);
     expectForkedIsolatedRunner(defaultCliProcessConfig);
   });
 
@@ -721,7 +719,7 @@ describe("scoped vitest configs", () => {
     );
     expect(productionBoundaryConfig.fileParallelism).toBe(false);
     expect(productionBoundaryConfig.isolate).toBe(true);
-    expect(productionBoundaryConfig.pool).toBe("forks");
+    expect(productionBoundaryConfig.pool).toBe(diagnosticForksPool);
     expect(productionBoundaryConfig.runner).toBeUndefined();
   });
 
@@ -787,7 +785,7 @@ describe("scoped vitest configs", () => {
   });
 
   it("keeps Slack file-local fixtures on reusable forks with inherited scheduling", () => {
-    expectForkedNonIsolatedRunner(defaultExtensionSlackConfig, diagnosticForksPool);
+    expectForkedNonIsolatedRunner(defaultExtensionSlackConfig);
     expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(
       sharedVitestConfig.test.fileParallelism,
     );
@@ -1114,7 +1112,7 @@ describe("scoped vitest configs", () => {
         ).toBe(true);
         expect(projects.map((project) => project.name)).toEqual(names);
         expect(projects.map((project) => project.pool)).toEqual([
-          process.platform === "win32" ? "forks" : "threads",
+          process.platform === "win32" ? diagnosticForksPool.name : "threads",
           diagnosticForksPool.name,
         ]);
         expect(projects[0]?.setupFiles).toEqual(owner.test?.setupFiles);

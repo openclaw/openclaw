@@ -13,6 +13,7 @@ import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
@@ -20,7 +21,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
@@ -271,8 +275,10 @@ export function writeArchive(filePath: string, events: FixtureEvent[], compresse
   fs.writeFileSync(filePath, encoded.bytes);
 }
 
-export function cleanupMediaPersistenceFixtures(tempDirs: string[]): void {
+export async function cleanupMediaPersistenceFixtures(tempDirs: string[]): Promise<void> {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
 }

@@ -9399,7 +9399,6 @@ describe("package artifact reuse", () => {
     const discovery = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "discover");
     const prepare = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "prepare");
     const candidateBinding = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "resolve_candidate");
-    const summary = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
     const producer = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
     const binder = workflowJob(LIVE_E2E_WORKFLOW, "bind_full_release_candidate_evidence");
     const producerIdentity = workflowStepById(producer, "producer_identity");
@@ -9425,13 +9424,7 @@ describe("package artifact reuse", () => {
       "cancel-in-progress": false,
       queue: "max",
     });
-    for (const checkout of [
-      workflowStep(discovery, "Checkout trusted candidate discovery"),
-      workflowStep(candidateBinding, "Checkout candidate binding authority"),
-      workflowStep(summary, "Checkout release state verifier"),
-    ]) {
-      expect(checkout.with?.["sparse-checkout"]).toBe("scripts");
-    }
+    // Actual sparse helper imports are exercised by the continuation workflow suite.
     expect(discovery.outputs?.state).toBe("${{ steps.discover.outputs.state }}");
     expect(workflowStep(discovery, "Discover trusted release candidate").run).toContain(
       "full-release-candidate-reuse.mjs discover",

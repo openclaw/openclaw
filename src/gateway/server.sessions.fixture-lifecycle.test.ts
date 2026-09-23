@@ -8,8 +8,13 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { createGatewayFixtureFork } from "./server.fixture-lifetime.test-support.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { closeGatewayTestHomeDatabases } from "./test-helpers.server-storage.js";
 
 // Run the actual fixture hooks with controlled setup/teardown overlap instead
 // of waiting for the runner's 180s timeout. Consumer test bodies stay uncalled.
@@ -394,6 +399,63 @@ test("skipped environment setup does not release an enclosing suite's home", asy
   }
 });
 
+test("a projection settlement failure still retires the home and permits a fresh suite", async () => {
+  gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
+  const fixture = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+  const homeBefore = process.env.HOME;
+  const stateBefore = process.env.OPENCLAW_STATE_DIR;
+  const failure = new Error("injected settled projection failure");
+  const homes = new Set<string>();
+  let restoreSettlement: (() => void) | undefined;
+  let successor: typeof fixture | undefined;
+  try {
+    await setup(fixture);
+    const home = process.env.HOME!;
+    homes.add(home);
+    const database = openOpenClawStateDatabase();
+    const context = createDirectChatContext();
+    await initializeSessionReadContext(context);
+    const projection = getSessionRowProjection(context)!;
+    await projection.ensureMaterialized();
+    const ensureMaterialized = projection.ensureMaterialized.bind(projection);
+    const settlement = vi
+      .spyOn(projection, "ensureMaterialized")
+      .mockImplementationOnce(async () => {
+        await ensureMaterialized();
+        throw failure;
+      });
+    restoreSettlement = () => settlement.mockRestore();
+    await expect(cleanup(fixture)).rejects.toMatchObject({ errors: [failure] });
+    expect(database.db.isOpen).toBe(false);
+    expect(fsSync.existsSync(home)).toBe(false);
+    expect(process.env.HOME).toBe(homeBefore);
+    expect(process.env.OPENCLAW_STATE_DIR).toBe(stateBefore);
+    settlement.mockRestore();
+
+    gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
+    successor = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+    await setup(successor);
+    const nextHome = process.env.HOME!;
+    homes.add(nextHome);
+    expect(nextHome).not.toBe(home);
+    expect(fsSync.existsSync(nextHome)).toBe(true);
+    await cleanup(successor);
+    expect(fsSync.existsSync(nextHome)).toBe(false);
+    expect(process.env.HOME).toBe(homeBefore);
+  } finally {
+    restoreSettlement?.();
+    if (successor) {
+      await emergencyCleanup(successor);
+    }
+    await emergencyCleanup(fixture);
+    // The red side's rejected hook is cached; explicitly retire its real databases.
+    for (const home of homes) {
+      await closeGatewayTestHomeDatabases(home, { restoreEnv: true });
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  }
+});
+
 function retainedGatewayFixtureSource(repoRoot: string, root: string): string {
   const source = (file: string) => JSON.stringify(path.join(repoRoot, file));
   return `
@@ -414,6 +476,10 @@ const sessions = await import(${source("src/gateway/test/server-sessions.test-he
 const gatewayHelpers = await import(${source("src/gateway/test-helpers.server.ts")});
 const kernelModule = await import(${source("src/gateway/server-kernel.ts")});
 const { createDeferredCore } = await import(${source("src/shared/deferred.ts")});
+const { resolveStateLifecycleRuntimeDirectory } = await import(${source("src/infra/state-database-coordinator.ts")});
+const { resolveOpenClawStateSqlitePath } = await import(${source("src/state/openclaw-state-db.paths.ts")});
+const coordinatorRuntimeOwned = resolveStateLifecycleRuntimeDirectory(resolveOpenClawStateSqlitePath()) === ${JSON.stringify(root)};
+if (!coordinatorRuntimeOwned) throw new Error("Native fixture coordinator escaped its declared resource owner");
 const takeHooks = () => Object.fromEntries(
   Object.entries(hooks).map(([name, callbacks]) => [name, callbacks.splice(0)]),
 );
@@ -526,7 +592,7 @@ test("observes retained Gateway owners through fixture teardown", async () => {
       successorSuiteStarted = true;
     });
     fs.writeFileSync(${JSON.stringify(path.join(root, "journal.json"))}, JSON.stringify({
-      close, afterEach, caseReset, cleanup, repeatedCleanup, suiteSetup,
+      close, afterEach, caseReset, cleanup, repeatedCleanup, suiteSetup, coordinatorRuntimeOwned,
       afterClose, afterCaseReset, afterCleanup, afterModuleReset: readState(),
       producer: producerObservation, connectionCleanupFinished, stopCalls,
       harnessRetained, successorCaseStarted, successorSuiteStarted,
@@ -547,6 +613,7 @@ test("retains fixture state and fences successors after a required Gateway close
     const retained = { home: true, state: true, sessions: true, selectorsIntact: true };
     expect(journal, text).toMatchObject({
       close: { rejected: true, faultPreserved: true },
+      coordinatorRuntimeOwned: true,
       caseReset: { rejected: true },
       cleanup: { rejected: true, faultPreserved: true },
       repeatedCleanup: { rejected: true, faultPreserved: true },

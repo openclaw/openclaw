@@ -5457,7 +5457,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         extends: false,
         test: {
           name: "gateway-server-native",
-          pool: "forks",
+          pool: diagnosticForksPool,
           isolate: false,
           fileParallelism: false,
           maxWorkers: 1,
@@ -5471,7 +5471,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         extends: false,
         test: {
           name: "gateway-server-parallel",
-          pool: "forks",
+          pool: diagnosticForksPool,
           isolate: false,
           fileParallelism: true,
           maxWorkers: undefined,
@@ -5523,8 +5523,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(
       createGatewayServerVitestConfig({ OPENCLAW_VITEST_MAX_WORKERS: "1" }).test?.fileParallelism,
     ).toBe(false);
-    expect(methods.test?.pool).toBe("forks");
-    expect(worker.test?.pool).toBe("forks");
+    expect(methods.test?.pool).toBe(diagnosticForksPool);
+    expect(worker.test?.pool).toBe(diagnosticForksPool);
     expect(worker.test?.fileParallelism).toBe(true);
     expect(core.test?.isolate).toBe(true);
     for (const shared of [worker, server, methods]) {
@@ -5568,6 +5568,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const infra = createInfraVitestConfig({});
     const support = createAgentsSupportVitestConfig({});
     expect(infra.test?.pool).toBe(diagnosticForksPool);
+    expect(support.test?.pool).toBe(diagnosticForksPool);
+    expect(createCommandsVitestConfig({}).test?.pool).toBe(diagnosticForksPool);
     expect(infra.test?.isolate).toBe(true);
     expect(infra.test?.setupFiles).toEqual(support.test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));

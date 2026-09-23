@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { diagnosticForksPool } from "./vitest.forks-pool.ts";
 import { createGatewayDatabaseWorkersVitestConfig } from "./vitest.gateway-database-workers.config.ts";
 import {
   gatewayDatabaseWorkerTestFiles,
@@ -52,7 +53,7 @@ export function createGatewayProjectShardVitestConfig(
           ...ordinary,
           extends: false,
           // Unsharded Gateway tests still need the process-main-thread SQLite broker.
-          test: { ...ordinary.test, pool: "forks" },
+          test: { ...ordinary.test, pool: diagnosticForksPool },
         },
         { ...createGatewayDatabaseWorkersVitestConfig(env), extends: false },
       ],

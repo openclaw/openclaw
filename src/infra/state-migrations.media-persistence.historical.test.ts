@@ -2,27 +2,25 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   historicalV14AgentSchemaSql,
   historicalV15AgentSchemaSql,
 } from "./state-migrations.media-persistence.historical-schema.test-support.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
+import { cleanupMediaPersistenceFixtures } from "./state-migrations.media-persistence.test-support.js";
 
 const tempDirs: string[] = [];
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  cleanupTempDirs(tempDirs);
+afterEach(async () => {
+  await cleanupMediaPersistenceFixtures(tempDirs);
 });
 
 describe("legacy media persistence Doctor migration from historical schemas", () => {

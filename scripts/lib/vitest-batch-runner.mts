@@ -50,6 +50,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
     ],
     env,
   );
+  const nodeEntryIndex = testCommand.args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
   const workers =
     resolveExplicitVitestMode(["run", ...params.args]) === "watch"
       ? undefined
@@ -77,6 +78,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
     const { child, completion } = spawnOwnedVitestProcess({
       homeMode,
       ...testCommand,
+      nodeEntryIndex,
       options: {
         cwd: repoRoot,
         env,

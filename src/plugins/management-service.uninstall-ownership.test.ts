@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import { resolvePluginPackageUninstallPlan } from "./uninstall-package-plan.js";
@@ -61,7 +62,12 @@ vi.mock("./uninstall.js", async (importOriginal) => {
 const { listManagedPlugins } = await import("./management-service.js");
 const { uninstallManagedPlugin } = await import("./management-uninstall.js");
 const { planPluginUninstall } = await import("./uninstall.js");
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 
 describe("plugin management uninstall channel ownership", () => {
   beforeEach(() => {

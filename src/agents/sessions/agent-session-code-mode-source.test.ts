@@ -21,6 +21,7 @@ import {
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { isCodeModeExecTool } from "../code-mode-control-tools.js";
@@ -46,6 +47,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     for (const stateDir of tempDirs.dirs) {
       await cleanupSessionStateForTest({ stateDir });
     }
+    await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );

@@ -39,6 +39,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createAssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { normalizeAssistantReplayContent } from "./embedded-agent-runner/replay-history.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
@@ -53,7 +54,18 @@ import {
 } from "./transcript-code-mode-source.js";
 
 const listeners: Array<() => void> = [];
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    // Remove transcript listeners before draining the fixture owners.
+    while (listeners.length > 0) {
+      listeners.pop()?.();
+    }
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 let fixtureId = 0;
 
 async function openPersistedSessionManager(lifecycleRevision?: string) {
@@ -72,15 +84,6 @@ async function openPersistedSessionManager(lifecycleRevision?: string) {
   });
   return { root, sessionManager: SessionManager.open(target, root), target, sessionEntry };
 }
-
-afterEach(async () => {
-  // Remove all transcript listeners between tests to avoid duplicate broadcasts.
-  while (listeners.length > 0) {
-    listeners.pop()?.();
-  }
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-});
 
 describe("guardSessionManager transcript updates", () => {
   it("preserves prepared source and redaction when a concurrent append forces a retry", async () => {

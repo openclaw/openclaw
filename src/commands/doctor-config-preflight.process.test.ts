@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
@@ -16,6 +16,7 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   createBuiltRuntime,
   createSourceRuntime,
@@ -31,6 +32,7 @@ const STARTUP_REFUSAL =
 const STARTUP_RECOVERY =
   'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
 const tempDirs = createFixtureLifetime();
+afterEach(() => closeOpenClawStateDatabaseAsync());
 afterAll(() => tempDirs.cleanup());
 const DOCTOR_CHILD_TIMEOUT_MS = 60_000;
 const LEGACY_APPROVAL_CHILD_TIMEOUT_MS = 45_000;
@@ -463,13 +465,17 @@ describe("gateway startup-migration refusal", () => {
       const path = await import("node:path");
       const { DatabaseSync } = await import("node:sqlite");
       const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
-      const { closeOpenClawStateDatabase, openOpenClawStateDatabase } =
+      const { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } =
         await import(${JSON.stringify(stateDatabaseUrl)});
+      try {
       openOpenClawStateDatabase({ env: process.env });
-      closeOpenClawStateDatabase();
+      await closeOpenClawStateDatabaseAsync();
       const oldDatabase = new DatabaseSync(${JSON.stringify(databasePath)});
-      oldDatabase.exec("ALTER TABLE task_runs DROP COLUMN tool_use_count");
-      oldDatabase.close();
+      try {
+        oldDatabase.exec("ALTER TABLE task_runs DROP COLUMN tool_use_count");
+      } finally {
+        oldDatabase.close();
+      }
       const legacyIdentityPath = path.join(${JSON.stringify(stateDir)}, "identity", "device.json");
       fs.mkdirSync(path.dirname(legacyIdentityPath), { recursive: true });
       fs.writeFileSync(legacyIdentityPath, JSON.stringify({
@@ -487,11 +493,11 @@ describe("gateway startup-migration refusal", () => {
       });
       const config = JSON.parse(fs.readFileSync(${JSON.stringify(configPath)}, "utf8"));
       const repairedDatabase = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
+      try {
       const columns = repairedDatabase.prepare("PRAGMA table_info(task_runs)").all();
       const identity = repairedDatabase
         .prepare("SELECT device_id FROM device_identities WHERE identity_key = 'primary'")
         .get();
-      repairedDatabase.close();
       console.log("__RESULT__" + JSON.stringify({
         valid: result.snapshot.valid,
         hasLastTouchedAt: Object.hasOwn(config.meta ?? {}, "lastTouchedAt"),
@@ -500,6 +506,12 @@ describe("gateway startup-migration refusal", () => {
         migratedDeviceIdentity: identity?.device_id === "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
         removedLegacyDeviceIdentity: !fs.existsSync(legacyIdentityPath),
       }));
+      } finally {
+        repairedDatabase.close();
+      }
+      } finally {
+        await closeOpenClawStateDatabaseAsync();
+      }
     `;
 
     const result = await runIsolatedModuleScript(env, script, { timeoutMs: 60_000 });
@@ -799,6 +811,9 @@ describe("gateway startup-migration refusal", () => {
       doctorConfigRuntimeEntrypoints.stateHealth,
     ).href;
     const prompterUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.prompter).href;
+    const stateDatabaseUrl = resolveRuntimeWorkerUrl(
+      cronOwnerHardeningEntrypoints.stateDatabase,
+    ).href;
     const result = await runIsolatedModuleScript(
       env,
       `
@@ -808,6 +823,8 @@ describe("gateway startup-migration refusal", () => {
           await import(${JSON.stringify(currentSnapshotUrl)});
         const { runLegacyPluginManifestHealth } = await import(${JSON.stringify(healthRunnersUrl)});
         const { createDoctorPrompter } = await import(${JSON.stringify(prompterUrl)});
+        const { closeOpenClawStateDatabaseAsync } = await import(${JSON.stringify(stateDatabaseUrl)});
+        try {
         const options = { nonInteractive: true, repair: true };
         const runtime = {
           log: () => {},
@@ -846,6 +863,9 @@ describe("gateway startup-migration refusal", () => {
           legacyTools: manifest.tools,
           contractTools: manifest.contracts?.tools,
         }));
+        } finally {
+          await closeOpenClawStateDatabaseAsync();
+        }
       `,
       { timeoutMs: 60_000 },
     );

@@ -96,18 +96,22 @@ it.each(["unchanged", "pending edit", "replacement", "revoked", "unregistered"] 
              getOpenClawAgentDatabaseValidation,
              invalidateOpenClawAgentDatabaseValidation,
            } from ${JSON.stringify(validation)};
+           const { closeOpenClawStateDatabaseAsync } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(sessionNativeProcessEntrypoints.stateDatabase).href)});
+           try {
            if (${JSON.stringify(change)} === "revoked") {
              invalidateOpenClawAgentDatabaseValidation(${JSON.stringify(database.path)});
            } else if (${JSON.stringify(change)} === "unregistered") {
              unregisterOpenClawAgentDatabases({ agentId: "main" });
            }
            let workers = 0;
+           const workerAgents = [];
            let integrityReceipts = 0;
          const observed = new Error("canonical worker requested");
            for (const agentId of ${JSON.stringify(agentIds)}) {
              try {
                await certifySessionCanonicalValidationPending({ agentId }, async () => {
                  workers++;
+                 workerAgents.push(agentId);
                  throw observed;
                });
              } catch (error) {
@@ -118,13 +122,15 @@ it.each(["unchanged", "pending edit", "replacement", "revoked", "unregistered"] 
              if (getOpenClawAgentDatabaseValidation(opened.database)) integrityReceipts++;
              opened.database.close();
            }
-           process.stdout.write(JSON.stringify({ workers, integrityReceipts }));`,
+           process.stdout.write(JSON.stringify({ workers, workerAgents, integrityReceipts }));
+           } finally { await closeOpenClawStateDatabaseAsync(); }`,
         ],
         { env: { ...process.env, ...state.env }, encoding: "utf8", timeout: 30_000 },
       );
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({
         workers: change === "unchanged" ? 0 : 1,
+        workerAgents: change === "unchanged" ? [] : ["main"],
         integrityReceipts: 0,
       });
     });

@@ -1,17 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import * as tempRoot from "./tmp-openclaw-dir.js";
 import {
   UpdateCandidateSnapshotInventorySchema,
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 async function waitForFile(file: string): Promise<void> {
   await expect
@@ -31,6 +35,30 @@ it.each(["inventory", "snapshot"] as const)(
   "%s acquires coherent rehearsal copies while an independent WAL writer commits",
   async (mode) => {
     const root = await fs.realpath(tempDirs.make("rehearsal-online-backup-"));
+    const control = path.join(root, "handoff-control");
+    await fs.mkdir(control, { mode: 0o700 });
+    const databasePath = path.join(await fs.realpath(control), "managed-update-handoffs.sqlite");
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    expect(resolveManagedUpdateLeaseDatabasePath()).toBe(databasePath);
+    const isolation = path.join(root, "private-handoff.mjs");
+    await fs.writeFile(
+      isolation,
+      `
+      import assert from "node:assert/strict";
+      import fs from "node:fs";
+      import path from "node:path";
+      await import(${JSON.stringify(import.meta.resolve("tsx"))});
+      const { registerSealedRuntime } = await import(${JSON.stringify(new URL("./sealed-runtime-registry.ts", import.meta.url).href)});
+      const json5 = await import(${JSON.stringify(import.meta.resolve("json5"))});
+      const control = ${JSON.stringify(control)};
+      registerSealedRuntime({ json5, resolveSecureTempRoot: () => control });
+      const { resolveManagedUpdateLeaseDatabasePath } = await import(${JSON.stringify(new URL("./update-managed-service-handoff-lease.ts", import.meta.url).href)});
+      const resolved = resolveManagedUpdateLeaseDatabasePath();
+      assert.equal(resolved, ${JSON.stringify(databasePath)});
+      assert.equal(path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved)), resolved);
+      `,
+    );
+    const isolationArgv = ["--import", pathToFileURL(isolation).href];
     const stateDir = path.join(root, "source");
     const targetStateDir = path.join(root, "candidate");
     const candidateRoot = path.join(root, "package");
@@ -109,11 +137,12 @@ it.each(["inventory", "snapshot"] as const)(
         if (sources.has(String(file))) opened.set(fd, true);
         return fd;
       };
-      fs.readSync = function(fd, buffer, offset, length, position) {
+      fs.readSync = function(...args) {
+        const [fd, , , length] = args;
         if (opened.has(fd) && length >= 1024 * 1024) {
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40);
         }
-        return read.call(this, fd, buffer, offset, length, position);
+        return read.apply(this, args);
       };
       fs.closeSync = function(fd) { opened.delete(fd); return close.call(this, fd); };
     `,
@@ -122,6 +151,7 @@ it.each(["inventory", "snapshot"] as const)(
       process.execPath,
       "--require",
       preload,
+      ...isolationArgv,
       ...resolveRuntimeWorkerArgv(
         resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
       ),
@@ -155,7 +185,7 @@ it.each(["inventory", "snapshot"] as const)(
         databaseInventory: [...inventory.databases.keys()],
       };
     }
-    const writing = runCommandBuffered([process.execPath, writer], {
+    const writing = runCommandBuffered([process.execPath, ...isolationArgv, writer], {
       timeoutMs: 30_000,
       killGraceMs: 500,
       maxOutputBytes: { stdout: 4096, stderr: 4096 },

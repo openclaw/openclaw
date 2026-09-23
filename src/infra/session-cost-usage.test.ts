@@ -3,7 +3,7 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
@@ -14,7 +14,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
@@ -35,6 +34,7 @@ import {
   loadSessionUsageTimeSeries as loadSessionUsageTimeSeriesForAgent,
   resolveExistingUsageSessionFile as resolveExistingUsageSessionFileForAgent,
 } from "./session-cost-usage.js";
+import { createSessionCostTestRoots } from "./session-cost-usage.test-support.js";
 
 type WithOptionalAgentId<T> = T extends (params: infer P) => unknown
   ? Omit<P, "agentId"> & { agentId?: string }
@@ -87,11 +87,10 @@ async function refreshSessionCostUsageForTest(sessionFile: string): Promise<void
 }
 
 describe("session cost usage", () => {
-  const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-session-cost-" });
+  const suiteRoots = createSessionCostTestRoots();
+  const makeSessionCostRoot = suiteRoots.make;
   const withStateDir = async <T>(stateDir: string, fn: () => Promise<T>): Promise<T> =>
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, fn);
-  const makeSessionCostRoot = async (prefix: string): Promise<string> =>
-    await suiteRootTracker.make(prefix);
   const transcriptText = (sessionId: string, entry: unknown): string =>
     [
       JSON.stringify({ type: "session", version: 1, id: sessionId }),
@@ -106,8 +105,10 @@ describe("session cost usage", () => {
   };
 
   beforeAll(async () => {
-    await suiteRootTracker.setup();
+    await suiteRoots.setup();
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it("prefers a legacy entry marker over a stale JSONL usage artifact", async () => {
     const root = await makeSessionCostRoot("sqlite-cost-empty");
@@ -286,7 +287,7 @@ describe("session cost usage", () => {
   });
 
   afterAll(async () => {
-    await suiteRootTracker.cleanup();
+    await suiteRoots.cleanup();
   });
 
   it("aggregates daily totals with log cost and pricing fallback", async () => {
@@ -2215,7 +2216,7 @@ describe("session cost usage", () => {
     });
   });
 
-  it("keeps compressed archive rollup identity stable for direct session queries", async () => {
+  it("keeps encoded archive rollup identity stable for direct session queries", async () => {
     const root = await makeSessionCostRoot("session-compressed-archive");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -2229,9 +2230,6 @@ describe("session cost usage", () => {
         },
       }),
     );
-    if (!encoded.suffix) {
-      return;
-    }
     const archivePath = path.join(
       sessionsDir,
       `sess-compressed.jsonl.reset.2026-02-12T11-00-00.000Z${encoded.suffix}`,

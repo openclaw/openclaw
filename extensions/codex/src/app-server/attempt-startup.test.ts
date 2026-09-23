@@ -200,11 +200,16 @@ describe("startCodexAttemptThread", () => {
     await fs.mkdir(paths.workspaceDir, { recursive: true });
     const command = path.join(paths.workspaceDir, "codex-runtime");
     await fs.writeFile(command, "native-v1");
+    const configuredPlugin: CodexPluginConfig = { appServer: { command } };
+    const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: configuredPlugin });
+    // This mocked transport attests the fixture binary, not the test runner's preload.
+    appServer.start.env = { ...appServer.start.env, NODE_OPTIONS: "" };
     const harness = createAttemptClientHarness();
     const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
       harness,
       paths,
-      pluginConfig: { appServer: { command } },
+      appServer,
+      pluginConfig: configuredPlugin,
       runtimeArtifactRequest: {
         expected: { id: "codex-app-server:v1:wrong", fingerprint: "0".repeat(64) },
       },
@@ -212,9 +217,6 @@ describe("startCodexAttemptThread", () => {
 
     await expect(run).rejects.toThrow("does not match verified inference");
     expect(harness.writes).toEqual([]);
-    expect(
-      readHarnessMessages(harness.writes).some((entry) => entry.method === "thread/start"),
-    ).toBe(false);
   });
 
   it("returns a matching expected artifact with the started thread", async () => {
@@ -224,11 +226,13 @@ describe("startCodexAttemptThread", () => {
     await fs.writeFile(command, "native-v1");
     const configuredPlugin: CodexPluginConfig = { appServer: { command } };
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: configuredPlugin });
+    appServer.start.env = { ...appServer.start.env, NODE_OPTIONS: "" };
     const expected = await captureExpectedRuntimeArtifact(appServer);
     const harness = createAttemptClientHarness();
     const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
       harness,
       paths,
+      appServer,
       pluginConfig: configuredPlugin,
       runtimeArtifactRequest: { expected },
     });

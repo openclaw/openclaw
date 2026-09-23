@@ -5,11 +5,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
@@ -73,9 +74,10 @@ describe("Agent-specific exec tool defaults", () => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetProcessRegistryForTests();
     vi.useRealTimers();
+    await closeOpenClawStateDatabaseAsync();
     tempDirs.cleanup();
   });
 

@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../../gateway/server-methods.js";
 import type { RespondFn } from "../../gateway/server-methods/types.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn<() => AuthProfileStore>(),
@@ -88,18 +88,21 @@ vi.mock("../../wizard/clack-prompter.js", () => ({
 
 const { modelsAuthLogoutCommand } = await import("./auth-logout.js");
 
-async function runRegisteredLogout(profileId: string): Promise<void> {
-  const errors: string[] = [];
-  const error = vi.spyOn(defaultRuntime, "error").mockImplementation((message) => {
-    errors.push(String(message));
-  });
+async function expectRegisteredLogoutFailure(profileId: string, diagnostic: string): Promise<void> {
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
-    throw new Error(errors.join("\n"));
+    throw new Error("Registered logout must defer process exit until CLI cleanup");
   });
   try {
     const program = new Command().exitOverride();
     registerModelsCli(program);
-    await program.parseAsync(["models", "auth", "logout", profileId, "--yes"], { from: "user" });
+    const result = program.parseAsync(["models", "auth", "logout", profileId, "--yes"], {
+      from: "user",
+    });
+    await expect(result).rejects.toBeInstanceOf(ExitError);
+    await expect(result).rejects.toMatchObject({ code: 1 });
+    expect(error).toHaveBeenCalledWith(expect.stringContaining(diagnostic));
+    expect(exit).not.toHaveBeenCalled();
   } finally {
     error.mockRestore();
     exit.mockRestore();
@@ -403,7 +406,8 @@ describe("models auth logout", () => {
     });
 
     mocks.loadModelsConfig.mockImplementation(async () => liveConfig);
-    await expect(runRegisteredLogout(profileId)).rejects.toThrow(
+    await expectRegisteredLogoutFailure(
+      profileId,
       throws ? "store write failed" : "could not be removed",
     );
 

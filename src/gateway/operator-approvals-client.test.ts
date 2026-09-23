@@ -1,6 +1,7 @@
 // Operator approvals client tests cover connect lifecycle, request framing,
 // scope-upgrade errors, and graceful shutdown behavior for approval operations.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 
 const clientState = vi.hoisted(() => ({
@@ -81,6 +82,8 @@ vi.mock("./client.js", () => ({
 }));
 
 const { withOperatorApprovalsGatewayClient } = await import("./operator-approvals-client.js");
+
+afterAll(() => closeOpenClawStateDatabaseAsync());
 
 const DEFAULT_APPROVAL_CLIENT_DISPLAY_NAME = "Matrix approval (@owner:example.org)";
 

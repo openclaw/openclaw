@@ -464,33 +464,33 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   gatewayFixtureLifetime.assertReleased();
   vi.useRealTimers();
-  // Direct handler projections outlive replies and must release reads before registry closure.
-  await disposeSessionReadContexts();
-  await resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
-  resetLogger();
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
-  if (tempHome) {
-    await closeGatewayTestHomeDatabases(tempHome, options);
-  }
-  if (options.restoreEnv) {
-    gatewayEnvSnapshot?.restore();
-    gatewayEnvSnapshot = undefined;
-  }
-  if (options.restoreEnv && tempHome) {
-    await fs.rm(tempHome, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
-    tempHome = undefined;
-  }
-  tempConfigRoot = undefined;
-  tempControlUiRoot = undefined;
-  if (options.restoreEnv) {
-    suiteConfigRootSeq = 0;
-  }
+  // Preserve a settled projection error while still retiring the fixture's other owners.
+  await runQaGatewayFixture(disposeSessionReadContexts, async () => {
+    await resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
+    resetLogger();
+    if (tempHome) {
+      await closeGatewayTestHomeDatabases(tempHome, options);
+    }
+    // Registry reset closes native handles synchronously; retire their async borrowers first.
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    if (options.restoreEnv) {
+      gatewayEnvSnapshot?.restore();
+      gatewayEnvSnapshot = undefined;
+      if (tempHome) {
+        await fs.rm(tempHome, {
+          recursive: true,
+          force: true,
+          maxRetries: 20,
+          retryDelay: 25,
+        });
+        tempHome = undefined;
+      }
+      suiteConfigRootSeq = 0;
+    }
+    tempConfigRoot = undefined;
+    tempControlUiRoot = undefined;
+  });
 }
 
 async function resetGatewayTestRuntimeOnly() {
@@ -598,10 +598,10 @@ export function installGatewayTestHooks(
         async () => {
           // Inner scopes may finish around a live shared server; the final scope
           // keeps its home and selectors until every Gateway owner has closed.
-          if (activeSuiteHookScopeCount === 1) {
+          activeSuiteHookScopeCount -= 1;
+          if (activeSuiteHookScopeCount === 0) {
             await cleanupGatewayTestHome({ restoreEnv: true });
           }
-          activeSuiteHookScopeCount -= 1;
         },
       ));
     }, 300_000);

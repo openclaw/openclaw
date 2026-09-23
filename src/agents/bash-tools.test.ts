@@ -1,7 +1,7 @@
 /** Integration tests for the public Bash/process tool barrel and shared tool factory. */
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
@@ -11,6 +11,7 @@ import {
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   addSession,
@@ -691,6 +692,10 @@ const runNotifyNoopCase = async ({ label, defaults, expectNotification }: Notify
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
   expectNotifyNoopEvents(events, expectNotification, sessionId, label);
 };
+
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 beforeEach(() => {
   callIdCounter = 0;

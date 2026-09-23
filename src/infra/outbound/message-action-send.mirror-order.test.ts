@@ -14,7 +14,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -94,9 +95,10 @@ describe("outbound mirror route ordering", () => {
     await seedMainSessionWithDiscordOrigin();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     setActivePluginRegistry(createTestRegistry([]));
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it("leaves the main session route untouched when the send fails", async () => {
