@@ -11,8 +11,6 @@ type CategoryCellProps = {
   onRequestNewCategory: (sessionKey?: string) => void;
 };
 
-const NEW_GROUP_OPTION = "__new-group__";
-
 export function renderCategoryCell(row: GatewaySessionRow, props: CategoryCellProps) {
   const current = normalizeOptionalString(row.category) ?? "";
   const options = [...props.knownCategories];
@@ -34,7 +32,7 @@ export function renderCategoryCell(row: GatewaySessionRow, props: CategoryCellPr
           if (!(select instanceof HTMLSelectElement)) {
             return;
           }
-          if (select.value === NEW_GROUP_OPTION) {
+          if (select.options[select.selectedIndex]?.dataset.action === "create") {
             // The page prompts for a name and patches; restore until the refresh lands.
             select.value = current;
             props.onRequestNewCategory(row.key);
@@ -47,7 +45,7 @@ export function renderCategoryCell(row: GatewaySessionRow, props: CategoryCellPr
         ${options.map(
           (name) => html`<option value=${name} ?selected=${current === name}>${name}</option>`,
         )}
-        <option value=${NEW_GROUP_OPTION}>${t("sessionsView.newGroup")}</option>
+        <option data-action="create">${t("sessionsView.newGroup")}</option>
       </select>
     </td>
   `;
