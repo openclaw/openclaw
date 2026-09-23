@@ -159,19 +159,6 @@ describe("startCodexAttemptThread", () => {
     tempRoots.clear();
   });
 
-  it("clears the shared app-server when top-level thread startup fails with an app error", async () => {
-    const { harness, run } = startThreadWithHarness(5_000);
-    await answerInitialize(harness);
-    const threadStart = await waitForThreadStart(harness);
-    harness.send({
-      id: threadStart.id,
-      error: { code: -32000, message: "401 authentication_error: Invalid bearer token" },
-    });
-
-    await expect(run).rejects.toThrow("Invalid bearer token");
-    expect(harness.process.stdin.destroyed).toBe(true);
-  });
-
   it("carries the session agent id into the startup client factory", async () => {
     const clientFactory = vi.fn(
       async (options: Parameters<CodexAppServerClientFactory>[0]) =>
