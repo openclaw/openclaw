@@ -71,6 +71,7 @@ export class CodexNativeToolLifecycleProjector {
       toolName: string;
       unfinishedStatus: CodexNativeToolUnfinishedStatus;
       mcpToolCall?: CodexThreadItem;
+      commandProcessId?: string;
     }
   >();
   private readonly webSearchCompletionByItem = new Map<
@@ -251,6 +252,7 @@ export class CodexNativeToolLifecycleProjector {
         auditNativeToolUnfinishedStatus(params.item),
         params.sourceTimestampMs,
         params.item.type === "mcpToolCall" ? params.item : undefined,
+        params.item.type === "commandExecution" ? readString(params.item, "processId") : undefined,
       );
       return;
     }
@@ -412,14 +414,31 @@ export class CodexNativeToolLifecycleProjector {
     });
   }
 
-  finalizeActive(runWasAborted = this.options.runAbortSignal?.aborted === true): void {
+  pendingCommands(): ReadonlyMap<string, string> {
+    const commands = new Map<string, string>();
+    for (const [id, item] of this.activeItems) {
+      if (item.commandProcessId) {
+        commands.set(id, item.commandProcessId);
+      }
+    }
+    return commands;
+  }
+
+  finalizeActive(
+    runWasAborted = this.options.runAbortSignal?.aborted === true,
+    retainedCommands: ReadonlyMap<string, string> = new Map(),
+  ): void {
     this.finalized = true;
-    for (const [toolCallId, { toolName, unfinishedStatus }] of this.activeItems) {
+    for (const [toolCallId, { toolName, unfinishedStatus, commandProcessId }] of this.activeItems) {
       const webSearchCompletion = this.webSearchCompletionByItem.get(toolCallId);
       const itemRunWasAborted = webSearchCompletion
         ? webSearchCompletion.runWasAborted
         : runWasAborted;
-      this.recordTerminal(toolCallId, toolName, unfinishedStatus, {
+      const retained =
+        !itemRunWasAborted &&
+        commandProcessId !== undefined &&
+        retainedCommands.get(toolCallId) === commandProcessId;
+      this.recordTerminal(toolCallId, toolName, retained ? "unknown" : unfinishedStatus, {
         runWasAborted: itemRunWasAborted,
         sourceTimestampMs: webSearchCompletion?.sourceTimestampMs,
       });
@@ -476,12 +495,13 @@ export class CodexNativeToolLifecycleProjector {
     unfinishedStatus: CodexNativeToolUnfinishedStatus,
     sourceTimestampMs?: number,
     mcpToolCall?: CodexThreadItem,
+    commandProcessId?: string,
   ): void {
     if (this.activeItems.has(toolCallId)) {
       return;
     }
     this.startedAtByItem.set(toolCallId, sourceTimestampMs ?? Date.now());
-    this.activeItems.set(toolCallId, { toolName, unfinishedStatus, mcpToolCall });
+    this.activeItems.set(toolCallId, { toolName, unfinishedStatus, mcpToolCall, commandProcessId });
     emitTrustedDiagnosticEvent({
       type: "tool.execution.started",
       ...this.buildBase(toolCallId, toolName),
