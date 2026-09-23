@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -8,6 +8,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
@@ -23,6 +24,36 @@ beforeEach(async () => {
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   await state.cleanup();
+});
+
+it("admits a worker operation after the previous turn's schema probe expires", async () => {
+  vi.useFakeTimers({ toFake: ["setImmediate"] });
+  const context = captureOpenClawStateWorkerContext();
+  const backend = runWithSqliteWorkerStateContext(context, () =>
+    createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+  );
+  const peer = new (requireNodeSqlite().DatabaseSync)(context.admission.databasePath);
+  try {
+    peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    const command = { type: "database.inspectIdle" as const, input: undefined };
+    const result = Promise.resolve(backend.prepare?.(command))
+      .then(() => runWithSqliteWorkerStateContext(context, () => backend.execute(command)))
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    await Promise.resolve();
+    vi.runOnlyPendingTimers();
+    expect(await result).toMatchObject({
+      message: expect.stringContaining("newer schema version"),
+    });
+  } finally {
+    peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+    peer.close();
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    await backend.close();
+  }
 });
 
 it("retires an existing-only idle actor without opening its missing database", async () => {

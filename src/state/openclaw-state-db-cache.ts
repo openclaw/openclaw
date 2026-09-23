@@ -15,6 +15,7 @@ import {
   confirmSqliteFileIntegrity,
   type SqliteIntegrityConfirmation,
 } from "../infra/sqlite-integrity.js";
+import { admitSqliteSchema, waitForSqliteSchemaProbeTurn } from "../infra/sqlite-schema-facts.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { registerSqliteCacheExitClose, type SqliteWalHealth } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
@@ -49,6 +50,7 @@ import {
 import { closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { createOpenClawStateDatabaseRuntimeFailureOwner } from "./openclaw-state-db-runtime-failure.js";
 import { assertExistingOpenClawStateSchemaCacheAdmission } from "./openclaw-state-db-schema-policy.js";
+import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { openClawStateSnapshotOwners } from "./openclaw-state-db-snapshot-owner.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
@@ -61,12 +63,6 @@ const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
     idleTimers: new WeakMap(),
     idleReferences: new WeakMap(),
     unregisterRetainedExitClose: undefined,
-    // The plain owner key must not retain the statement's own native database.
-    cachedDataVersionStatements: new WeakMap<
-      OpenClawStateDatabase,
-      ReturnType<DatabaseSync["prepare"]>
-    >(),
-    cachedDataVersions: new WeakMap<DatabaseSync, number>(),
     databaseIdentities: new WeakMap<DatabaseSync, DatabasePathIdentity>(),
     borrowers: new WeakMap<DatabaseSync, StateDatabaseBorrowers>(),
     databaseLifecycleListeners: new Set<(event: OpenClawStateDatabaseLifecycleEvent) => void>(),
@@ -82,8 +78,6 @@ const {
   retainedDatabaseHandles,
   idleTimers,
   idleReferences,
-  cachedDataVersionStatements,
-  cachedDataVersions,
   databaseIdentities,
   borrowers,
   databaseLifecycleListeners,
@@ -125,8 +119,6 @@ export function requireOpenClawStateDatabaseIdentity(
 
 const runtimeFailures = createOpenClawStateDatabaseRuntimeFailureOwner({
   cachedDatabases,
-  statements: cachedDataVersionStatements,
-  dataVersions: cachedDataVersions,
   latch: terminalOpenLatch,
   evict: evictCachedOpenClawStateDatabase,
   invalidate: (pathname) => asyncResources.invalidate(pathname),
@@ -300,9 +292,10 @@ function evictOpenClawStateDatabaseAfterCorruption(
 /** Publish a fully opened handle and bind query corruption to its exact cache owner. */
 function publishOpenClawStateDatabase(database: OpenClawStateDatabase): OpenClawStateDatabase {
   const { db, path: pathname } = database;
+  admitSqliteSchema(db);
+  assertSupportedStateSchemaVersion(db, pathname);
   const identity = asyncResources.publish(pathname);
   databaseIdentities.set(db, identity);
-  runtimeFailures.recordPublishedVersion(database);
   cachedDatabases.set(pathname, database);
   touchStateDatabase(database);
   openClawStateSnapshotOwners.register(database, () => cachedDatabases.get(pathname));
@@ -316,6 +309,11 @@ function publishOpenClawStateDatabase(database: OpenClawStateDatabase): OpenClaw
   });
   terminalOpenLatch.clear(pathname);
   return database;
+}
+
+function waitForCachedOpenClawStateSchemaProbe(pathname: string): Promise<void> | undefined {
+  const database = cachedDatabases.get(pathname);
+  return database ? waitForSqliteSchemaProbeTurn(database.db) : undefined;
 }
 
 function getCachedOpenClawStateDatabase(pathname: string): OpenClawStateDatabase | undefined {
@@ -612,6 +610,7 @@ export const openClawStateDatabaseCache = {
   evictCachedOpenClawStateDatabase,
   evictOpenClawStateDatabaseAfterCorruption,
   getCachedOpenClawStateDatabase,
+  waitForCachedOpenClawStateSchemaProbe,
   getOpenClawStateDatabaseRuntimeFailure: runtimeFailures.get,
   getOpenClawStateDatabaseIfOpenAtPath,
   getKnownOpenClawStateDatabaseIdentity: asyncResources.knownIdentity,

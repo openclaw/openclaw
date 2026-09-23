@@ -12,6 +12,7 @@ import {
   stageSqliteTransactionState,
   withSqlitePostCommitPublications,
 } from "../../infra/sqlite-post-commit.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
@@ -408,7 +409,9 @@ export function canonicalSessionValidationQuery(
 
 /** Older supported maintenance readers keep their existing full-validation path. */
 export function hasCanonicalSessionValidationProjection(database: { db: DatabaseSync }): boolean {
-  if (readSqliteUserVersion(database.db) < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
+  const version =
+    getAdmittedSqliteSchemaFacts(database.db)?.userVersion ?? readSqliteUserVersion(database.db);
+  if (version < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
     return false;
   }
   assertCanonicalSessionValidationSchema(database.db);

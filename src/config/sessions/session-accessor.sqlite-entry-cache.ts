@@ -414,7 +414,7 @@ export function readSessionEntryCache(
       options.deferParticipants,
     );
   }
-  const validityToken = readSessionEntryCacheValidityToken(database.db);
+  const validityToken = readSessionEntryCacheValidityToken(database.db, "cached");
   const cached = sessionEntryCaches.get(database.db);
   if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
     return cached;

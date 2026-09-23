@@ -108,6 +108,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.interaction.Interaction
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -567,6 +570,15 @@ internal fun ChatScreen(
         viewModel.isCurrentChatComposerOwner(expected) && (canChangeThinking() || canChangeFastMode(expected))
       }
     }
+  var effortPreview by remember(
+    effortPicker.visible,
+    composerOwner,
+    selectedModelRef,
+    selectionGeneration,
+    thinkingLevel,
+    thinkingLevelSelection.options,
+    canAdminSessionSettings,
+  ) { mutableStateOf<String?>(null) }
   val backgroundTasks =
     remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
       ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
@@ -1081,7 +1093,7 @@ internal fun ChatScreen(
         inputDrafts[composerOwner] = it
       },
       attachments = attachments,
-      thinkingLevel = thinkingLevel,
+      thinkingLevel = effortPreview ?: thinkingLevel,
       thinkingOptions = thinkingLevelSelection.options,
       thinkingSupported = thinkingSupported,
       thinkingLevelEnabled = canAdminSessionSettings,
@@ -1264,22 +1276,42 @@ internal fun ChatScreen(
   }
 
   effortPicker.visible?.let { opening ->
+    // Capture values, not the collectAsState delegates: an old callback must not
+    // adopt a new model/profile before Compose replaces its slider subtree.
+    val modelRef = selectedModelRef
+    val generation = selectionGeneration
+    val selectedId = thinkingLevel
+    val options = thinkingLevelSelection.options
+
+    fun selectionIsCurrent() =
+      viewModel.isCurrentChatSelection(opening.composerOwner, generation) &&
+        viewModel.chatSelectedModelRef.value == modelRef &&
+        viewModel.chatThinkingLevel.value == selectedId &&
+        viewModel.chatThinkingLevelSelection.value.options == options
+
     key(opening) {
       ChatEffortSheet(
         opening = opening,
-        options = thinkingLevelSelection.options,
-        selectedId = thinkingLevel,
+        modelRef = modelRef,
+        selectionGeneration = generation,
+        options = options,
+        selectedId = selectedId,
         thinkingSupported = thinkingSupported,
         thinkingLevelEnabled = canAdminSessionSettings,
         fastMode = fastMode,
         fastModeEnabled = canChangeFastMode(opening.composerOwner),
+        onPreviewChange = { level ->
+          if (level == null || (selectionIsCurrent() && effortPicker.admit(opening) && canChangeThinking())) {
+            effortPreview = level
+          }
+        },
         onSelect = { level ->
-          if (effortPicker.admit(opening) && canChangeThinking()) {
+          if (selectionIsCurrent() && effortPicker.admit(opening) && canChangeThinking()) {
             viewModel.setChatThinkingLevel(level)
           }
         },
         onFastModeChange = { enabled ->
-          if (effortPicker.admit(opening) && canChangeFastMode(opening.composerOwner)) {
+          if (selectionIsCurrent() && effortPicker.admit(opening) && canChangeFastMode(opening.composerOwner)) {
             viewModel.setChatSessionFastMode(
               sessionKey = opening.sessionKey,
               enabled = enabled,
@@ -3573,29 +3605,64 @@ internal fun ChatEffortSliderControl(
   options: List<ChatThinkingLevelOption>,
   selectedId: String,
   enabled: Boolean,
+  onPreviewChange: (String?) -> Unit = {},
   onSelect: (String) -> Unit,
 ) {
   val languageTag = currentAppLanguage().languageTag
   val selectedPosition = resolveChatEffortPosition(selectedId, options)
-  var previewing by remember(selectedId, options) { mutableStateOf(false) }
+  var previewing by remember(selectedId, options, enabled) { mutableStateOf(false) }
   val sliderState =
-    remember(selectedId, options) {
+    remember(selectedId, options, enabled) {
       SliderState(
         value = selectedPosition.optionIndex.coerceAtLeast(0).toFloat(),
         steps = (options.size - 2).coerceAtLeast(0),
         valueRange = 0f..options.lastIndex.coerceAtLeast(0).toFloat(),
       )
     }
-  sliderState.onValueChange = { value ->
-    sliderState.value = value
-    previewing = true
-  }
-  sliderState.onValueChangeFinished = {
-    options.getOrNull(sliderState.value.roundToInt())?.let { option ->
-      if (!option.id.equals(selectedId, ignoreCase = true)) onSelect(option.id)
-    }
+  var active by remember(sliderState) { mutableStateOf(true) }
+
+  fun resetPreview() {
     sliderState.value = selectedPosition.optionIndex.coerceAtLeast(0).toFloat()
     previewing = false
+    onPreviewChange(null)
+  }
+  val interactionSource =
+    remember(sliderState) {
+      val delegate = MutableInteractionSource()
+      object : MutableInteractionSource by delegate {
+        // Material finishes both releases and cancellations. Foundation emits
+        // Cancel first; observe it synchronously rather than racing a collector.
+        override suspend fun emit(interaction: Interaction) {
+          if (interaction is DragInteraction.Cancel) resetPreview()
+          delegate.emit(interaction)
+        }
+
+        override fun tryEmit(interaction: Interaction): Boolean {
+          if (interaction is DragInteraction.Cancel) resetPreview()
+          return delegate.tryEmit(interaction)
+        }
+      }
+    }
+  DisposableEffect(sliderState) {
+    onDispose {
+      active = false
+      resetPreview()
+    }
+  }
+  sliderState.onValueChange = { value ->
+    if (active && enabled) {
+      sliderState.value = value
+      previewing = true
+      onPreviewChange(options.getOrNull(sliderState.value.roundToInt())?.id)
+    }
+  }
+  sliderState.onValueChangeFinished = {
+    if (active && enabled && previewing) {
+      options.getOrNull(sliderState.value.roundToInt())?.let { option ->
+        if (!option.id.equals(selectedId, ignoreCase = true)) onSelect(option.id)
+      }
+    }
+    resetPreview()
   }
   val sliderIndex = sliderState.value.roundToInt()
   val selectedLabel =
@@ -3623,6 +3690,7 @@ internal fun ChatEffortSliderControl(
       Slider(
         state = sliderState,
         enabled = enabled,
+        interactionSource = interactionSource,
         modifier =
           Modifier.padding(horizontal = 20.dp).semantics {
             contentDescription = nativeString("Thinking")
@@ -3710,12 +3778,15 @@ private fun ChatEffortSliderTrack(
 @Composable
 private fun ChatEffortSheet(
   opening: ChatModelPickerSession,
+  modelRef: String?,
+  selectionGeneration: Long,
   options: List<ChatThinkingLevelOption>,
   selectedId: String,
   thinkingSupported: Boolean,
   thinkingLevelEnabled: Boolean,
   fastMode: Boolean,
   fastModeEnabled: Boolean,
+  onPreviewChange: (String?) -> Unit,
   onSelect: (String) -> Unit,
   onFastModeChange: (Boolean) -> Unit,
   onDismiss: () -> Unit,
@@ -3737,12 +3808,17 @@ private fun ChatEffortSheet(
           .padding(bottom = 24.dp),
     ) {
       if (thinkingOptions.isNotEmpty()) {
-        ChatEffortSliderControl(
-          options = thinkingOptions,
-          selectedId = selectedId,
-          enabled = thinkingLevelEnabled,
-          onSelect = onSelect,
-        )
+        // Geometry belongs to the native opening. Only the gesture subtree may
+        // restart when the model/selection changes; detaching the sheet revokes it.
+        key(modelRef, selectionGeneration) {
+          ChatEffortSliderControl(
+            options = thinkingOptions,
+            selectedId = selectedId,
+            enabled = thinkingLevelEnabled,
+            onPreviewChange = onPreviewChange,
+            onSelect = onSelect,
+          )
+        }
       }
       if (thinkingOptions.isNotEmpty()) {
         HorizontalDivider(color = ClawTheme.colors.border, modifier = Modifier.padding(top = 14.dp))

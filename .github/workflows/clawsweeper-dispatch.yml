@@ -20,8 +20,9 @@ permissions:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
     if: >-
-      ${{
+      ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (
         (github.event.action != 'edited' ||
           (github.event_name != 'issues' && github.event_name != 'pull_request_target') ||
           !github.event.changes || toJSON(github.event.changes) != '{}') &&
@@ -38,7 +39,7 @@ jobs:
             (github.actor_id == '257215752' || github.actor_id == '264559031')
           )
         )
-      }}
+      ) }}
     # Admission runs before job concurrency, so an empty metadata edit cannot
     # cancel a useful dispatch. Other changes retain the receiver's policy.
     concurrency:
