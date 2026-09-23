@@ -13,6 +13,7 @@ import {
   initSubagentRegistry,
 } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
+import { prepareDynamicsSpawn } from "./subagents/swarm/dynamics/dynamics-spawn.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -74,7 +75,7 @@ function readOptionalStringOption(
 }
 
 async function runAgentSpawnBridge(params: {
-  runtime: ToolSearchRuntime;
+  runtime: Pick<ToolSearchRuntime, "callExactId">;
   parentToolCallId: string;
   request: PendingBridgeRequest;
   codeModeRunId: string;
@@ -124,10 +125,16 @@ async function runAgentSpawnBridge(params: {
     runAgentToolSourceExecutionGuard(spawnTool);
   };
   assertCurrent();
+  const groupId = resolveCodeModeSwarmGroupId(params.ctx);
   const spawnInput: Record<PropertyKey, unknown> = {
-    task: prompt.trim(),
+    ...prepareDynamicsSpawn({
+      task: prompt.trim(),
+      dynamics: options.dynamics,
+      sourceReplicaId: groupId,
+      targetReplicaId: `${params.codeModeRunId}:${params.request.id}`,
+    }),
     collect: true,
-    groupId: resolveCodeModeSwarmGroupId(params.ctx),
+    groupId,
     ...(label ? { label } : {}),
     ...(model ? { model } : {}),
     ...(thinking ? { thinking } : {}),

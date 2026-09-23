@@ -4922,5 +4922,9 @@
   {
     "source": "Onnx plugin reference",
     "target": "ONNX 插件参考"
+  },
+  {
+    "source": "Swarm dynamics",
+    "target": "Swarm 动态"
   }
 ]

@@ -422,6 +422,8 @@ describe("Code Mode swarm guest", () => {
     expect(files.map((file) => file.path)).toEqual(["agents.d.ts"]);
     expect(files[0]?.content).toContain("Promise.allSettled");
     expect(files[0]?.content).toContain("schema: AgentJsonSchema");
+    expect(files[0]?.content).toContain("dynamics?: DynamicsOptions");
+    expect(files[0]?.content).toContain('"artifact-only"');
   });
 });
 

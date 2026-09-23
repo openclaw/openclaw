@@ -125,6 +125,9 @@ When the [requirements](/tools/swarm#requirements) are met, Code Mode exposes
 this guest API:
 
 ```typescript
+type DynamicsBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
+type DynamicsRequirement = "optional" | "required";
+
 type AgentRunOptions = {
   label?: string;
   model?: string;
@@ -133,6 +136,27 @@ type AgentRunOptions = {
   agentId?: string;
   schema?: Record<string, unknown>;
   phase?: string;
+  dynamics?: {
+    boundary: DynamicsBoundary;
+    requirements?: {
+      sandbox?: "inherit" | "require";
+      candidateDigest?: DynamicsRequirement;
+      artifactRefs?: DynamicsRequirement;
+    };
+    handoff?: {
+      candidateDigest?: string;
+      artifactRefs?: string[];
+      evidenceRefs?: string[];
+      summary?: string;
+    };
+    candidate?: {
+      version: 1;
+      candidateDigest: string;
+      sourceDigest: string;
+      recipeDigest: string;
+      policyDigest: string;
+    };
+  };
 };
 
 agents.run(prompt: string, options?: AgentRunOptions & { schema?: undefined }): Promise<string>;
@@ -156,6 +180,28 @@ Use `label` for a recognizable child name in transcript activity and Tasks views
 starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
 They do not delay the script if the UI is unavailable.
+
+The optional `dynamics` field is an experimental generic launch contract. Core
+owns information-boundary filtering plus monotone requests for stricter existing
+admission. It does not ship role/personality names, grant tools, change approvals,
+or set model sampling parameters.
+
+For example, an independent-verification recipe can choose
+`boundary: "artifact-only"` and require `sandbox: "require"`, a candidate
+digest, and artifact references. If that sandbox cannot be provided, the launch
+fails rather than retrying unsandboxed. Handoff filtering only controls the
+explicit `dynamics.handoff` payload; it is not a security boundary for the
+original task, workspace, memory, or tool visibility.
+
+Caller-side role names and allocation policy are orchestration recipes, not core API values.
+
+When `dynamics.candidate` is present, OpenClaw validates the complete
+candidate/source/recipe/policy manifest, computes a stable candidate identity,
+and binds both manifest and identity into the native launch bytes before the
+existing replay fingerprint is computed. A conflicting
+`handoff.candidateDigest` is rejected. This identity proves which exact
+candidate a verifier received; it does not prove that verification succeeded
+or that two verifier runs were independent.
 
 ### Fan out in parallel with structured results
 
