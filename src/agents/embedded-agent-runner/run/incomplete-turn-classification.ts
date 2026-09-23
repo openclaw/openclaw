@@ -19,6 +19,7 @@ export type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
   | "clientToolCalls"
+  | "codexAppServerFailure"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
   | "yieldDetected"

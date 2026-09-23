@@ -477,6 +477,40 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
+  it("reports a WebSocket close after tool effects without replay or model fallback", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      codexClientClosedAttempt({
+        toolMetas: [{ toolName: "write" }],
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        codexAppServerFailure: {
+          kind: "client_closed_before_turn_completed",
+          transport: "websocket",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          replaySafe: false,
+          replayBlockedReason: "potential_side_effect",
+        },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      provider: "codex",
+      model: "gpt-5.5",
+      runId: "run-codex-websocket-close-after-tool-effects",
+      config: createModelFallbackConfig("openai/gpt-5.5", ["anthropic/claude-opus-4-6"]),
+    });
+
+    expect(result.payloads?.[0]).toMatchObject({
+      isError: true,
+      text: "⚠️ The connection to Codex closed before this turn finished. Some tool actions may already have been executed. This turn was not replayed automatically; verify the current task state before continuing.",
+    });
+    expect(result.meta.replayInvalid).toBe(true);
+    expect(result.meta.error).toMatchObject({ fallbackSafe: false });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
   it("keeps retry ownership open for an outer fallback after local recovery is exhausted", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt())

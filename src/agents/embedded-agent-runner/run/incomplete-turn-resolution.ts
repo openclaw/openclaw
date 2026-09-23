@@ -137,6 +137,12 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
+    if (
+      params.attempt.codexAppServerFailure?.kind === "client_closed_before_turn_completed" &&
+      params.attempt.codexAppServerFailure.transport === "websocket"
+    ) {
+      return "⚠️ The connection to Codex closed before this turn finished. Some tool actions may already have been executed. This turn was not replayed automatically; verify the current task state before continuing.";
+    }
     return "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.";
   }
   if (assistant && isProviderRefusalAssistantError(assistant)) {

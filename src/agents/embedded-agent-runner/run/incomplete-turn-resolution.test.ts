@@ -72,6 +72,64 @@ describe("incomplete-turn terminal metadata", () => {
     expect(resolveReplayInvalidFlag({ attempt, incompleteTurnText })).toBe(false);
   });
 
+  it.each(["websocket", "stdio"] as const)(
+    "preserves the cause of a %s close after possible tool side effects",
+    (transport) => {
+      const attempt = makeEmbeddedRunnerAttempt({
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        codexAppServerFailure: {
+          kind: "client_closed_before_turn_completed",
+          transport,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          replaySafe: false,
+          replayBlockedReason: "potential_side_effect",
+          diagnostics: { transportError: "private transport diagnostic" },
+        },
+      });
+
+      const text = resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        attempt,
+      });
+
+      expect(text).toBe(
+        transport === "websocket"
+          ? "⚠️ The connection to Codex closed before this turn finished. Some tool actions may already have been executed. This turn was not replayed automatically; verify the current task state before continuing."
+          : "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+      );
+      expect(text).not.toContain("private transport diagnostic");
+      expect(text).not.toContain("thread-1");
+    },
+  );
+
+  it.each([
+    { aborted: true, externalAbort: true, timedOut: false },
+    { aborted: true, externalAbort: false, timedOut: true },
+  ])("preserves abort and timeout ownership after a WebSocket close: %j", (terminal) => {
+    const attempt = makeEmbeddedRunnerAttempt({
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      codexAppServerFailure: {
+        kind: "client_closed_before_turn_completed",
+        transport: "websocket",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        replaySafe: false,
+      },
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        ...terminal,
+        attempt,
+      }),
+    ).toBeNull();
+  });
+
   it("uses the current completed assistant instead of stale session tool-use evidence", () => {
     const staleAssistant = buildEmbeddedRunnerAssistant({ stopReason: "toolUse" });
     const currentAssistant = buildEmbeddedRunnerAssistant({
