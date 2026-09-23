@@ -1044,8 +1044,8 @@ function applyCompactGroupWorkerPins(
     return {
       ...group,
       fallbackMaxWorkers: 2,
-      // Refit must not fold parallel spans back into the serial observations.
-      timing_key: `${group.shard_name}${COMMANDS_PARALLEL_TIMING_SUFFIX}`,
+      // Preserve the coverage tier while separating parallel and serial samples.
+      timing_key: `${compactGroupTimingKey(group)}${COMMANDS_PARALLEL_TIMING_SUFFIX}`,
     };
   }
   const timedGroup =

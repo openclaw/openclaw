@@ -4031,10 +4031,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps lifecycle proofs on main while excluding PR and manual PR-fallback plans", () => {
-    const proofFiles = [
-      "src/commands/doctor-config-preflight.refusal.process.test.ts",
-      "src/gateway/server.codex-failure-recovery.test.ts",
-    ];
+    const proofFiles = ["src/gateway/server.codex-failure-recovery.test.ts"];
     const files = (mode: "push" | "pull-request") =>
       getCommittedCompactPlan(mode).flatMap((shard) =>
         shard.groups.flatMap((group) => group.includePatterns ?? []),
@@ -4076,6 +4073,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           plan.flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns ?? []));
         const beforeFiles = files(before);
         const afterFiles = files(after);
+        const fullCommandTimingParents = new Set(
+          before.flatMap((shard) =>
+            shard.groups
+              .filter((group) => group.configs.includes("test/vitest/vitest.commands.config.ts"))
+              .map((group) => {
+                const key = group.timing_key ?? group.shard_name;
+                return parseCompactSplitTimingKey(key)?.parentShardName ?? key;
+              }),
+          ),
+        );
         expect(beforeFiles.filter((file) => !afterFiles.includes(file)).toSorted()).toEqual(
           [...RELEASE_ONLY_RUNTIME_TEST_FILES].toSorted(),
         );
@@ -4085,12 +4092,22 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           const owns = (group: { shard_name: string }) =>
             group.shard_name === owner || group.shard_name.startsWith(`${owner}-hosted-`);
           const reduced = after.flatMap((shard) => shard.groups).filter(owns);
-          expect(reduced.length, owner).toBeGreaterThan(0);
+          const retainedFiles = before
+            .flatMap((shard) => shard.groups)
+            .filter(owns)
+            .flatMap((group) => group.includePatterns ?? [])
+            .filter((file) => !isReleaseOnlyRuntimeTestFile(file));
+          expect(reduced.flatMap((group) => group.includePatterns ?? []).toSorted(), owner).toEqual(
+            retainedFiles.toSorted(),
+          );
           for (const group of reduced) {
             const timingKey = expectDefined(group.timing_key, "reduced runtime timing identity");
-            expect(parseCompactSplitTimingKey(timingKey)?.parentShardName ?? timingKey).toBe(
-              `changed-${owner}`,
+            const timingParent =
+              parseCompactSplitTimingKey(timingKey)?.parentShardName ?? timingKey;
+            expect(fullCommandTimingParents.has(timingParent), `${owner}: ${timingParent}`).toBe(
+              false,
             );
+            expect(timingParent.replace(/#file-parallel-(?:2|8)$/u, "")).toBe(`changed-${owner}`);
           }
         }
       }
