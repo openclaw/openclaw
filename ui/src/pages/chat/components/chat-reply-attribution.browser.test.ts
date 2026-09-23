@@ -146,8 +146,10 @@ describe.each(cells)("reply attribution ($theme, $width px)", ({ theme, width })
         const rowBounds = row.getBoundingClientRect();
         expect(Math.abs(rowBounds.left - bounds.left)).toBeLessThanOrEqual(1);
         expect(Math.abs(rowBounds.right - bounds.right)).toBeLessThanOrEqual(1);
-        const content = group.querySelector(".chat-bubble > .chat-text")!.getBoundingClientRect();
-        expect(content.top - rowBounds.bottom).toBeCloseTo(8, 1);
+        const bubble = group.querySelector(".chat-bubble")!;
+        const content = bubble.querySelector(".chat-text")!.getBoundingClientRect();
+        expect(content.top - bubble.getBoundingClientRect().top).toBeCloseTo(4, 1);
+        expect(content.top - rowBounds.bottom).toBeCloseTo(12, 1);
         return;
       }
       expect(icon.getBoundingClientRect().width).toBe(0);

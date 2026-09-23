@@ -846,9 +846,12 @@ img.chat-avatar {
   box-shadow: none;
 }
 
-/* Share the footer row so the avatar does not add space below short replies. */
+/* Align with the text inside the native 4px-padded assistant bubble. */
 .chat-group.assistant.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot) {
   grid-row: 1 / span 2;
+  margin-top: calc(
+    var(--chat-reply-attribution-font-size) * 1.5 + var(--chat-reply-attribution-gap) + 4px
+  );
 }
 
 /* A peer quote and its avatar belong to this message, including in multi-message groups. */
@@ -908,14 +911,6 @@ img.chat-avatar {
 
 .chat-group--reply .chat-reply-attribution--reply {
   margin-bottom: calc(var(--chat-reply-attribution-gap) - var(--chat-message-gap));
-}
-
-/* Account for the native assistant bubble's 4px padding in the caption gap.
-   Changing bubble padding when attribution arrives shifts the reader anchor. */
-.chat-group.assistant:not(.chat-group--forwarded)
-  > .chat-group-messages
-  > .chat-reply-attribution--reply {
-  margin-bottom: calc(var(--chat-reply-attribution-gap) - var(--chat-message-gap) - 4px);
 }
 
 /* Identity sizes short bubbles; only the excerpt yields its intrinsic width. */
