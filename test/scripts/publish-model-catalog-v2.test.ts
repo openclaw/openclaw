@@ -18,7 +18,9 @@ import {
 const roots: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function fixtureRoot() {
@@ -57,7 +59,7 @@ function fixtureRoot() {
 
 function fixtureFetch() {
   return vi.fn<typeof fetch>(async (url) => {
-    if (String(url) === "https://models.opencode.ai/api.json") {
+    if (url === "https://models.opencode.ai/api.json") {
       return Response.json({
         upstream: {
           id: "upstream",
@@ -193,7 +195,7 @@ describe("publish model catalog v2", () => {
     expect(v1.pricing?.["fixture-native/extra"]).toBeDefined();
     expect(v2.models.some((model) => model.id === "extra")).toBe(false);
     expect(
-      fetchImpl.mock.calls.filter(([url]) => String(url) === "https://models.opencode.ai/api.json"),
+      fetchImpl.mock.calls.filter(([url]) => url === "https://models.opencode.ai/api.json"),
     ).toHaveLength(1);
     await runPublishModelCatalog({
       rootDir,
