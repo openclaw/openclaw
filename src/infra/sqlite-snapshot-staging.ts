@@ -16,23 +16,24 @@ import {
   removeTempDirectoryAsync,
   retainSnapshotWork,
   SqliteSnapshotCleanupError,
-  SQLITE_SNAPSHOT_CONTROL_FILES,
+  retireSqliteSnapshotPayload,
 } from "./sqlite-readonly-location-cleanup.js";
 import {
-  acquireSqliteStagingToken,
-  type SqliteStagingToken as SnapshotToken,
-} from "./sqlite-staging-token.js";
+  acquireSqliteSnapshotToken as snapshotToken,
+  beginSqliteSnapshotRetirement,
+  drainPendingSqliteSnapshotRootTokens,
+  drainPendingSqliteSnapshotTokens,
+  isSqliteSnapshotStagingName as isStagingName,
+  SQLITE_SNAPSHOT_LEGACY_AGE_MS as legacyAgeMs,
+  SQLITE_SNAPSHOT_LEGACY_MARKER as legacyMarker,
+  SQLITE_SNAPSHOT_PREFIX as prefix,
+} from "./sqlite-snapshot-retirement.js";
+import type { SqliteStagingToken as SnapshotToken } from "./sqlite-staging-token.js";
 
-const prefix = "openclaw-sqlite-readonly-v2-";
-const suffix = "(?:[A-Za-z0-9]{6}|[\\da-f]{8}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{12})$";
-const legacyMarker = new RegExp(`^openclaw-sqlite-readonly-[1-9]\\d*-${suffix}`, "u");
-const tokenMarker = new RegExp(`^${prefix}${suffix}`, "u");
 type ReclamationPass = { controller: AbortController; done: Promise<void> };
 const pendingReclamations = new Map<string, ReclamationPass>();
-const legacyAgeMs = 24 * 60 * 60 * 1000;
 const currentAgeMs = 15 * 60 * 1000;
 const reclamationByteBudget = 512 * 1024 * 1024;
-const isStagingName = (name: string) => legacyMarker.test(name) || tokenMarker.test(name);
 
 function stagingParent(root: string): string | undefined {
   const parent = path.basename(root) === "openclaw" ? path.dirname(root) : root;
@@ -50,107 +51,23 @@ function warn(message: string, error?: unknown): void {
   }
 }
 
-function snapshotToken(directory: string, mode: "create" | "read" | "reclaim"): SnapshotToken {
-  return acquireSqliteStagingToken(directory, mode, {
-    allowMissing: legacyMarker.test(path.basename(directory)),
-  });
-}
-
 /** A private reader protects its bytes independently of the staging child. */
 export function acquireSqliteSnapshotReadToken(directory: string): () => void {
   return snapshotToken(directory, "read");
 }
 
-function inspectSnapshot(
-  directory: string,
-  tokens: SnapshotToken[] | undefined,
-  inheritedCutoff: number,
-  layout = "",
-): { bytes: number; newest: number } {
-  const stat = fs.lstatSync(directory);
-  if (!stat.isDirectory() || (process.getuid && stat.uid !== process.getuid())) {
-    throw new Error("Snapshot directory ownership is unknown");
-  }
-  const legacy = !layout && legacyMarker.test(path.basename(directory));
-  // A current parent never shortens the compatibility grace of a legacy child.
-  const cutoff = legacy ? Math.min(inheritedCutoff, Date.now() - legacyAgeMs) : inheritedCutoff;
-  // Check all legacy activity without creating tokens, then repeat under locks.
-  // Even creating an empty token would otherwise postpone a recent copy's expiry.
-  if (legacy && tokens) {
-    inspectSnapshot(directory, undefined, cutoff, layout);
-  }
-  if (!layout && tokens) {
-    tokens.push(snapshotToken(directory, "reclaim"));
-  }
-  let bytes = 0;
-  let newest = stat.mtimeMs;
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const location = path.join(directory, entry.name);
-    const item = fs.lstatSync(location);
-    if (process.getuid && item.uid !== process.getuid()) {
-      throw new Error("Snapshot file ownership is unknown");
-    }
-    // Coordination files are neither copied data nor evidence of legacy activity.
-    if (
-      !layout &&
-      item.isFile() &&
-      SQLITE_SNAPSHOT_CONTROL_FILES.some((file) => file === entry.name)
-    ) {
-      continue;
-    }
-    newest = Math.max(newest, item.mtimeMs);
-    if (item.isDirectory()) {
-      const nested = (!layout || layout === "openclaw") && isStagingName(entry.name);
-      const childLayout = nested ? "" : [layout, entry.name].filter(Boolean).join("/");
-      if (
-        !nested &&
-        !["openclaw", "openclaw-state", "openclaw-state/state"].includes(childLayout)
-      ) {
-        throw new Error("Unrecognized snapshot directory");
-      }
-      const child = inspectSnapshot(location, tokens, cutoff, childLayout);
-      bytes += child.bytes;
-      newest = Math.max(newest, child.newest);
-    } else if (
-      item.isFile() &&
-      (layout === "openclaw-state/state"
-        ? /^openclaw\.sqlite(?:-wal|-shm|-journal)?$/u.test(entry.name)
-        : !layout &&
-          /^(?:first|database\.sqlite(?:\.partial)?(?:-wal|-shm|-journal)?)$/u.test(entry.name))
-    ) {
-      bytes += item.size;
-    } else {
-      throw new Error("Unrecognized snapshot artifact");
-    }
-  }
-  // Token ownership proves abandonment; age still gives terminating owners and
-  // slow filesystems a bounded grace period before copied bytes are reclaimed.
-  if (newest >= cutoff) {
-    throw new Error(
-      legacy
-        ? "Legacy snapshot contains activity newer than 24 hours"
-        : "Snapshot contains activity within the reclamation grace period",
-    );
-  }
-  return { bytes, newest };
-}
-
 /** Reconcile only after the token process closed; active readers still fence reclamation. */
 export function reconcileSqliteSnapshotRetirement(directory: string): void {
+  drainPendingSqliteSnapshotTokens(directory);
   if (!fs.lstatSync(directory, { throwIfNoEntry: false })) {
     return;
   }
-  const tokens: SnapshotToken[] = [];
+  // Explicit retirement has confirmed owner exit; nested legacy layouts keep their age clamp.
+  const retirement = beginSqliteSnapshotRetirement(directory, { cutoff: Number.POSITIVE_INFINITY });
   try {
-    // Explicit retirement has confirmed owner exit; nested legacy layouts keep their age clamp.
-    inspectSnapshot(directory, tokens, Number.POSITIVE_INFINITY);
-    for (const token of tokens) {
-      token(true);
-    }
+    retireSqliteSnapshotPayload(retirement);
   } finally {
-    for (const token of tokens) {
-      token();
-    }
+    retirement.release();
   }
 }
 
@@ -159,6 +76,9 @@ export function* reclaimAbandonedSqliteSnapshots(root: string, report = warn): G
     return;
   }
   try {
+    drainPendingSqliteSnapshotRootTokens(root, (error) =>
+      report("SQLite snapshot token close failed; retaining native cleanup custody.", error),
+    );
     let admittedBytes = 0;
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (admittedBytes >= reclamationByteBudget) {
@@ -170,22 +90,19 @@ export function* reclaimAbandonedSqliteSnapshots(root: string, report = warn): G
         continue;
       }
       const directory = path.join(root, entry.name);
-      const tokens: SnapshotToken[] = [];
+      let retirement: ReturnType<typeof beginSqliteSnapshotRetirement> | undefined;
       try {
-        const { bytes } = inspectSnapshot(
-          directory,
-          tokens,
-          Date.now() - (legacy ? legacyAgeMs : currentAgeMs),
-        );
+        retirement = beginSqliteSnapshotRetirement(directory, {
+          cutoff: Date.now() - (legacy ? legacyAgeMs : currentAgeMs),
+        });
+        const { bytes } = retirement;
         // Admit one oversized directory before spending the pass budget; otherwise
         // interrupted multi-gigabyte copies can never be reclaimed.
         if (admittedBytes > 0 && bytes > reclamationByteBudget - admittedBytes) {
           throw new Error("Snapshot reclamation byte budget exhausted for this pass");
         }
         admittedBytes += bytes;
-        for (const token of tokens) {
-          token(true);
-        }
+        retireSqliteSnapshotPayload(retirement);
         const claimed = path.join(
           root,
           `${legacy ? `openclaw-sqlite-readonly-${process.pid}-` : prefix}${randomUUID()}`,
@@ -198,8 +115,10 @@ export function* reclaimAbandonedSqliteSnapshots(root: string, report = warn): G
       } catch (error) {
         report(`Skipped SQLite snapshot reclamation: ${formatErrorMessage(error)}`, error);
       } finally {
-        for (const token of tokens) {
-          token();
+        try {
+          retirement?.release();
+        } catch (error) {
+          report("SQLite snapshot token close failed; retaining native cleanup custody.", error);
         }
       }
       // Yield only after retirement, removal, and token release settle together.
@@ -337,7 +256,7 @@ export function createSqliteSnapshotStagingDirectorySync(
   return owned.directory;
 }
 
-/** Token workers retain native handles; only the calling process owns byte cleanup. */
+/** Token workers remove disposable payload under their own native retirement fences. */
 export function createSqliteSnapshotStagingTokenSync(
   root = resolvePrivateSqliteSnapshotStagingRoot(),
   allowLegacyWorker = false,

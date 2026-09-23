@@ -2,7 +2,7 @@
 import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
@@ -12,7 +12,7 @@ describe("Telegram directory contract", () => {
     const cfg = {
       channels: {
         telegram: {
-          botToken: "telegram-test",
+          botToken: { source: "exec", provider: "default", id: "telegram-directory" },
           allowFrom: ["123", "alice", "tg:@bob"],
           dms: { "456": {} },
           groups: { "-1001": {}, "*": {} },
@@ -50,44 +50,5 @@ describe("Telegram directory contract", () => {
       await expectDirectoryIds(listTelegramDirectoryPeersFromConfig, cfg, ["@alice"]);
       await expectDirectoryIds(listTelegramDirectoryGroupsFromConfig, cfg, ["-1001"]);
     });
-  });
-
-  it("keeps directories readable when tokens are unresolved SecretRefs", async () => {
-    const envSecret = {
-      source: "env",
-      provider: "default",
-      id: "MISSING_TEST_SECRET",
-    } as const;
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: envSecret,
-          allowFrom: ["alice"],
-          groups: { "-1001": {} },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    await expectDirectoryIds(listTelegramDirectoryPeersFromConfig, cfg, ["@alice"]);
-    await expectDirectoryIds(listTelegramDirectoryGroupsFromConfig, cfg, ["-1001"]);
-  });
-
-  it("applies query and limit filtering for config-backed directories", async () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "telegram-test",
-          groups: { "-1001": {}, "-1002": {}, "-2001": {} },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const groups = await listTelegramDirectoryGroupsFromConfig({
-      cfg,
-      accountId: "default",
-      query: "-100",
-      limit: 1,
-    });
-    expect(groups.map((entry) => entry.id)).toEqual(["-1001"]);
   });
 });

@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
@@ -12,6 +15,50 @@ afterEach(() => {
 });
 
 describe("worktrees cli", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const exactRequest = {
+    ownerKind: "session",
+    ownerId: "example-owner",
+    createdAt: 1,
+    lastActiveAt: 2,
+    head: "1".repeat(40),
+    branchHead: "2".repeat(40),
+    indexSha256: "a".repeat(64),
+  };
+  it("passes a validated exact-state request through the removal CLI", async () => {
+    const filename = path.join(tempDirs.make("openclaw-exact-cli-"), "request.json");
+    await fs.writeFile(filename, JSON.stringify(exactRequest));
+    const remove = vi.spyOn(managedWorktrees, "remove").mockResolvedValue({ removed: true });
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+    const program = new Command().name("openclaw");
+    registerWorktreesCli(program);
+    await program.parseAsync(
+      ["worktrees", "remove", "worktree-id", "--exact-state", filename, "--json"],
+      { from: "user" },
+    );
+    expect(remove).toHaveBeenCalledWith({
+      id: "worktree-id",
+      reason: "manual-delete",
+      allowSnapshotLoss: false,
+      exactState: exactRequest,
+    });
+  });
+  it.each(["--force", "--if-lossless"])(
+    "rejects exact-state retirement with %s before reading its request",
+    async (conflict) => {
+      const remove = vi.spyOn(managedWorktrees, "remove");
+      const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
+      registerWorktreesCli(program);
+      await expect(
+        program.parseAsync(
+          ["worktrees", "remove", "worktree-id", "--exact-state", "/missing-request", conflict],
+          { from: "user" },
+        ),
+      ).rejects.toThrow(/cannot be used with/);
+      expect(remove).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { runtime: [], selected: [], profiles: undefined, state: null },
     { runtime: [], selected: ["--source-profile", "alpha"], profiles: ["alpha"], state: null },

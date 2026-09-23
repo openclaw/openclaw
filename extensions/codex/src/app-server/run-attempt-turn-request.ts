@@ -15,6 +15,7 @@ import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
+import { prepareCodexProviderReviewContinuation } from "./provider-review-continuation.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
 import {
   emitCodexAppServerEvent,
@@ -52,6 +53,7 @@ export async function prepareCodexAttemptTurnRequest(
   const { tools, toolBridge } = attemptTools;
   const {
     params,
+    sessionAgentId,
     usesSupervisionConnection,
     codexModelCallId,
     codexModelCallTrace,
@@ -73,6 +75,7 @@ export async function prepareCodexAttemptTurnRequest(
   const codexModelCallDiagnostics = createCodexModelCallDiagnosticEmitter({
     baseFields: {
       runId: params.runId,
+      agentId: sessionAgentId,
       callId: codexModelCallId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       sessionId: params.sessionId,
@@ -134,15 +137,29 @@ export async function prepareCodexAttemptTurnRequest(
       resourceState.thread,
       params.expectedSessionRuntimeOwnership,
     );
+    // Each retry selects anew, but an accepted write must settle its original thread.
+    const selectedThread = resourceState.thread;
+    const { threadId, liveThreadOwnership, model, modelProvider } = selectedThread;
+    const turnClient = resourceState.client;
+    const assertTurnCurrent = () => {
+      connection.assertCurrent();
+      liveThreadOwnership?.assertCurrent();
+      if (
+        resourceState.thread !== selectedThread ||
+        selectedThread.threadId !== threadId ||
+        selectedThread.liveThreadOwnership !== liveThreadOwnership ||
+        selectedThread.model !== model ||
+        selectedThread.modelProvider !== modelProvider
+      ) {
+        throw new Error("Codex native model or thread ownership changed during turn start.");
+      }
+    };
     const turnAppServer = withCodexAppServerFastModeServiceTier(
       connection.mutable.pluginAppServer,
       runtimeParams,
     );
     connection.mutable.pluginAppServer = turnAppServer;
     const references = prepareWorkspaceReferences();
-    const referencesRetained = turnState.codexTurnPromptText.includes(
-      workspaceBootstrapContext.promptContext ?? "",
-    );
     const inferenceRoute = usesSupervisionConnection
       ? undefined
       : getCodexInferenceThread(resourceState.client, resourceState.thread.threadId);
@@ -224,6 +241,17 @@ export async function prepareCodexAttemptTurnRequest(
             : file,
         );
     }
+    const continuation = await prepareCodexProviderReviewContinuation({
+      acknowledgment: params.providerReviewAcknowledgment,
+      client: resourceState.client,
+      turnStartParams,
+      provider: params.provider,
+      model: params.modelId,
+      api: runtimeParams.model.api,
+      signal: runAbortController.signal,
+      timeoutMs: params.timeoutMs,
+      assertCurrent: assertTurnCurrent,
+    });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     recordCodexTrajectoryContext(resources.trajectoryRecorder, {
       attempt: params,
@@ -255,24 +283,24 @@ export async function prepareCodexAttemptTurnRequest(
       .join("\n");
     try {
       const startedTurn = assertCodexTurnStartResponse(
-        await resourceState.client.request("turn/start", turnStartParams, {
+        await turnClient.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
-          assertCurrent: connection.assertCurrent,
+          assertCurrent: () => {
+            assertTurnCurrent();
+            continuation?.dispatch();
+          },
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
-      resources.nativeProcessAuthority?.bindTurn(
-        resourceState.client,
-        resourceState.thread.threadId,
-        acceptedTurnId,
-      );
-      connection.assertCurrent();
+      resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
+      assertTurnCurrent();
       // Fitting may drop or truncate references; only acknowledge the complete block.
-      if (referencesRetained) {
+      if (upstreamUserText.includes(workspaceBootstrapContext.promptContext ?? "")) {
         references.accepted();
       }
       throwIfTurnStartAcceptedAfterAbort();
+      await continuation?.accept(acceptedTurnId);
       return { turn: startedTurn, upstreamUserText };
     } catch (error) {
       if (acceptedTurnId || isCodexAppServerIndeterminateRequestCancellationError(error)) {
@@ -280,11 +308,11 @@ export async function prepareCodexAttemptTurnRequest(
         // the accepted native turn even when local cancellation hid its response.
         try {
           resourceState.startupClientUnsafe = !(await interruptCodexTurnAndWaitBestEffort(
-            resourceState.client,
-            { threadId: resourceState.thread.threadId, turnId: acceptedTurnId ?? "" },
+            turnClient,
+            { threadId, turnId: acceptedTurnId ?? "" },
           ));
           if (resourceState.startupClientUnsafe) {
-            await retireUnsafeCodexTurnClientBestEffort(resourceState.client, "startup interrupt");
+            await retireUnsafeCodexTurnClientBestEffort(turnClient, "startup interrupt");
           }
         } finally {
           await releaseCurrentRoute();
@@ -292,7 +320,15 @@ export async function prepareCodexAttemptTurnRequest(
       } else {
         await activeTurnRoute.cancelTurn();
       }
+      if (params.providerReviewAcknowledgment) {
+        // oxlint-disable-next-line preserve-caught-error -- Native RPC errors can contain the submitted steer; continuation diagnostics must stay generic.
+        throw new Error(
+          "Could not continue this chat. Review its latest status before trying again.",
+        );
+      }
       throw error;
+    } finally {
+      continuation?.dispose();
     }
   };
   if (

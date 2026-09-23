@@ -271,7 +271,7 @@ describe("AgentSession runtime and transcript projections", () => {
           providerContext.messages.indexOf(assistant) + 1,
         );
       } finally {
-        resetCodeModeTestState();
+        await resetCodeModeTestState();
       }
     },
   );
@@ -473,7 +473,7 @@ describe("AgentSession runtime and transcript projections", () => {
         ).toBe(true);
         expect(SessionManager.open(scope, dir).buildSessionContext()).toEqual(cached);
       } finally {
-        resetCodeModeTestState();
+        await resetCodeModeTestState();
         resetGlobalHookRunner();
       }
     },
@@ -593,7 +593,7 @@ describe("AgentSession runtime and transcript projections", () => {
       expect(SessionManager.open(scope, dir).buildSessionContext()).toEqual(cached);
     } finally {
       resetGlobalHookRunner();
-      resetCodeModeTestState();
+      await resetCodeModeTestState();
     }
   });
 
@@ -727,7 +727,7 @@ describe("AgentSession runtime and transcript projections", () => {
         },
       });
     } finally {
-      resetCodeModeTestState();
+      await resetCodeModeTestState();
     }
   });
 });

@@ -81,7 +81,6 @@ export const forcedUnitFastTestFiles = [
   "src/acp/control-plane/manager.failover.test.ts",
   "src/acp/control-plane/manager.runtime-config.test.ts",
   "src/acp/control-plane/manager.runtime-handles.test.ts",
-  "src/acp/control-plane/manager.test.ts",
   "src/acp/control-plane/manager.turn-results.test.ts",
   "src/acp/persistent-bindings.lifecycle.test.ts",
   "src/acp/translator.prompt-prefix.test.ts",
@@ -166,7 +165,7 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
 const ownerRoutedUnitTestPatterns = [
   ...gatewayPluginTestFiles,
   ...cliProcessTestFiles,
-  // Real Git process-tree fixtures stay in serial tooling even when their
+  // Real Git process-tree fixtures stay in tooling even when their
   // subprocess harness moves into shared test support.
   "test/scripts/ci-git-owner.test.ts",
   "test/scripts/openclaw-performance-git-lifecycle.test.ts",
@@ -188,6 +187,8 @@ const ownerRoutedUnitTestPatterns = [
   "src/agents/agent-harness-completion-ownership.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
+  // Source plugin workers retain the agent runtime owner after test extraction.
+  "src/agents/code-mode-quickjs.integration.test.ts",
   "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
   "src/agents/embedded-agent-runner/run.incomplete-turn.*.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",

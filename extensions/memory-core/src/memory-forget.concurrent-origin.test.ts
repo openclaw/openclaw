@@ -40,7 +40,7 @@ describe("Forget with origins committed by another workspace", () => {
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
       db.prepare(`INSERT INTO memory_index_chunks
         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-        VALUES ('selected-snapshot', 'MEMORY.md', 'memory', 1, 3, 'fixture', 'test', ?, '[]', 1)`).run(
+        VALUES ('selected-snapshot', 'MEMORY.md', 'memory', 1, 3, 'fixture', 'test', ?, x'', 1)`).run(
         content,
       );
       const publishOrigin = () =>

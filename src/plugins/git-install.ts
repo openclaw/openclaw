@@ -270,7 +270,7 @@ async function withGitStagingDir<T>(
   }
   const targetParent = path.dirname(persistentRepoDir);
   try {
-    await fs.mkdir(targetParent, { recursive: true });
+    await fs.mkdir(targetParent, { recursive: true, mode: 0o700 });
   } catch {
     return await withInstallWorkspace("openclaw-git-plugin-", fn);
   }

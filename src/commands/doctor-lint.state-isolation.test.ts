@@ -13,14 +13,12 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider } from "../agents/mcp-oauth-provider.js";
 import { resolveMcpOAuthAccessToken } from "../agents/mcp-oauth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePathFromConfig, saveCronStore } from "../cron/store.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import type { HealthCheckContext } from "../flows/health-checks.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createSkillProposalEvent } from "../skills/workshop/plugin-hooks.js";
 import { appendSkillProposalEvent } from "../skills/workshop/store-sqlite-event.js";
 import { importLegacySkillProposal } from "../skills/workshop/store.js";
@@ -39,9 +37,15 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
+import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectDoctorFindings, runDoctorLintCli } from "./doctor-lint.js";
-import { snapshotDoctorLintSqliteFamily } from "./doctor-lint.test-support.js";
+import {
+  seedDoctorLintMcpToken,
+  snapshotDoctorLintSqliteFamily,
+} from "./doctor-lint.test-support.js";
 import { createAppliedLegacyProposal } from "./doctor-skill-workshop-sqlite.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -85,11 +89,7 @@ const workshopCheck = (await actualContributions.resolveDoctorContributionHealth
 );
 const runtime = createTestRuntime();
 
-const originalEnv = {
-  HOME: process.env.HOME,
-  OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-  OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-};
+const originalEnv = captureEnv(["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 
 describe("doctor lint state isolation", () => {
   beforeEach(() => {
@@ -102,7 +102,7 @@ describe("doctor lint state isolation", () => {
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    restoreEnv(originalEnv);
+    originalEnv.restore();
   });
 
   it.each([false, true])(
@@ -905,11 +905,7 @@ describe("doctor lint state isolation", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(configPath, "{}\n");
-    await createMcpOAuthClientProvider({ identity }).saveTokens({
-      access_token: "stored-inspection-token-not-real",
-      token_type: "Bearer",
-      expires_in: 3600,
-    });
+    await seedDoctorLintMcpToken(identity);
     const databasePath = resolveOpenClawStateSqlitePath(process.env);
     await closeOpenClawStateDatabaseByPathAsync(databasePath);
     const lock = new DatabaseSync(databasePath);
@@ -925,27 +921,48 @@ describe("doctor lint state isolation", () => {
         async detect() {
           const privateDatabasePath = resolveOpenClawStateSqlitePath(process.env);
           expect(privateDatabasePath).not.toBe(databasePath);
-          const competingWriter = openNodeSqliteDatabase(privateDatabasePath);
-          competingWriter.exec("BEGIN IMMEDIATE");
-          const signal = AbortSignal.timeout(250);
-          const releaseWriter = () => {
-            if (competingWriter.isTransaction) {
-              competingWriter.exec("ROLLBACK");
-            }
-          };
-          signal.addEventListener("abort", releaseWriter, { once: true });
-          try {
-            resolvedToken = await resolveMcpOAuthAccessToken({
-              identity,
-              acceptUnknownExpiry: true,
-              signal,
-            });
-            return [];
-          } finally {
-            signal.removeEventListener("abort", releaseWriter);
-            releaseWriter();
-            competingWriter.close();
-          }
+          const controller = new AbortController();
+          return await withOpenClawStateLease(
+            {
+              scope: "core:mcp-oauth",
+              key: identity.storeKey,
+              database: { scope: "shared", options: { path: privateDatabasePath } },
+              leaseMs: 60_000,
+              waitMs: 0,
+            },
+            async () => {
+              const acquire = leaseAcquisition.acquireOpenClawStateLease;
+              let acquisitionOutcome:
+                | Awaited<ReturnType<Parameters<typeof acquire>[0]["acquire"]>>
+                | undefined;
+              const acquisition = vi
+                .spyOn(leaseAcquisition, "acquireOpenClawStateLease")
+                .mockImplementation((params) =>
+                  acquire({
+                    ...params,
+                    async acquire(...args) {
+                      const outcome = await params.acquire(...args);
+                      acquisitionOutcome = outcome;
+                      // Observe real native or worker contention before its owner consumes it.
+                      // A raw SQLite write lock can fail before an unrelated abort timer runs.
+                      controller.abort(new Error("cancel pending OAuth inspection"));
+                      return outcome;
+                    },
+                  }),
+                );
+              try {
+                resolvedToken = await resolveMcpOAuthAccessToken({
+                  identity,
+                  acceptUnknownExpiry: true,
+                  signal: controller.signal,
+                });
+                return [];
+              } finally {
+                acquisition.mockRestore();
+                expect(acquisitionOutcome).toMatchObject({ kind: "held" });
+              }
+            },
+          );
         },
       },
     ]);
@@ -1009,22 +1026,4 @@ function selectWorkshopCheckWithUnavailableSource(databasePath: string) {
     },
   ]);
   return check;
-}
-
-function restoreEnv(values: typeof originalEnv): void {
-  if (values.HOME === undefined) {
-    delete process.env.HOME;
-  } else {
-    process.env.HOME = values.HOME;
-  }
-  if (values.OPENCLAW_CONFIG_PATH === undefined) {
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  } else {
-    process.env.OPENCLAW_CONFIG_PATH = values.OPENCLAW_CONFIG_PATH;
-  }
-  if (values.OPENCLAW_STATE_DIR === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = values.OPENCLAW_STATE_DIR;
-  }
 }

@@ -783,6 +783,7 @@ render_github_release_notes() {
   local output_file="$1"
   local verification_file="${2:-}"
   local metadata_file="${3:-}"
+  local regular_stable_version=""
   local -a render_args=(
     node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
     --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
@@ -796,6 +797,10 @@ render_github_release_notes() {
   fi
   if [[ -n "${metadata_file}" ]]; then
     render_args+=(--metadata-output "${metadata_file}")
+  fi
+  if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
+    regular_stable_version="$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")"
+    render_args+=(--regular-stable-version "${regular_stable_version}")
   fi
   "${render_args[@]}"
 }

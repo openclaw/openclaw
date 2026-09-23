@@ -12,8 +12,16 @@ export class McpStdioFrameDecoder {
   constructor(private readonly maxFrameBytes: number) {}
 
   append(chunk: Buffer): void {
-    if (this.pendingBytes + chunk.length > this.maxFrameBytes) {
-      throw new McpStdioFrameError("response exceeded the line-size limit");
+    let pendingBytes = this.pendingBytes;
+    let offset = 0;
+    // Reject a bad wire frame before retaining any of this chunk, including valid predecessors.
+    while (pendingBytes + chunk.length - offset > this.maxFrameBytes) {
+      const newline = chunk.indexOf(0x0a, offset);
+      if (newline < 0 || pendingBytes + newline + 1 - offset > this.maxFrameBytes) {
+        throw new McpStdioFrameError("response exceeded the line-size limit");
+      }
+      offset = newline + 1;
+      pendingBytes = 0;
     }
     this.chunk = chunk;
     this.cursor = 0;

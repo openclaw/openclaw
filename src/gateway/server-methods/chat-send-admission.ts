@@ -6,7 +6,6 @@ import {
   isAgentRunDirectAbortReason,
 } from "../../agents/run-termination.js";
 import type { ReplySessionBinding } from "../../auto-reply/reply/get-reply.types.js";
-import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   interruptReplyRunTarget,
   isReplyRunAbortableForSignal,
@@ -26,6 +25,7 @@ import {
   isProgressCardRefreshInputProvenance,
   progressCardRefreshRunProjection,
 } from "../../sessions/input-provenance.js";
+import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import {
   beginSessionWorkAdmission,
   interruptSessionWorkAdmissions,
@@ -64,7 +64,10 @@ import {
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
 import { prepareChatSendSessionEntry, type PreparedChatSendSession } from "./chat-send-session.js";
-import { createChatSendWorkAdmission } from "./chat-send-work-admission.js";
+import {
+  assertChatSendExclusiveAdmission,
+  createChatSendWorkAdmission,
+} from "./chat-send-work-admission.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -167,6 +170,7 @@ export async function admitChatSend(params: {
       attemptId: pendingAttemptId,
       status: "accepted" as const,
       sessionKey,
+      ...(backingSessionId ? { sessionId: backingSessionId } : {}),
       ...(rawSessionKey === sessionKey ? {} : { sessionKeyAliases: [rawSessionKey] }),
       ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
       ownerConnId: normalizeOptionalChatText(client?.connId),
@@ -273,14 +277,7 @@ export async function admitChatSend(params: {
       expectedPermissionMode: p.expectedPermissionMode,
       expectedToolOverrides: p.expectedToolOverrides,
     });
-    if (
-      request.goalOperation &&
-      (isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, backingSessionId]) ||
-        hasPendingFollowupQueueWork([sessionKey, backingSessionId, activeRunScopeKey]) ||
-        replyRunRegistry.isActive(activeRunScopeKey))
-    ) {
-      throw new Error("goal-session-busy");
-    }
+    assertChatSendExclusiveAdmission(request, session);
     if (entry && !latestEntry) {
       throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
     }
@@ -335,6 +332,8 @@ export async function admitChatSend(params: {
     }
     const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry, {
       allowPendingWorkspace: true,
+      providerReviewAcknowledgment: request.providerReviewAcknowledgment,
+      runId: clientRunId,
     });
     if (archivedError) {
       throw new Error(archivedError);
@@ -372,7 +371,7 @@ export async function admitChatSend(params: {
     });
     if (request.goalOperation && !restartSafeAdmission) {
       throw new Error(
-        "Goal start or resume requires an idle local session with recoverable history. Finish current work or start a fresh session, then retry.",
+        "Goal start or resume requires the built-in OpenClaw runtime and an idle local session with recoverable history. This action is unavailable for native Codex and other external runtimes.",
       );
     }
     if (retryableClaim && !restartSafeAdmission) {
@@ -558,7 +557,15 @@ export async function admitChatSend(params: {
       runId: clientRunId,
       entry: activeRunAbort.entry,
     });
-    releaseCallerAuthority = capturedOperator.release;
+    releaseCallerAuthority = () => {
+      try {
+        capturedOperator.release?.();
+      } finally {
+        if (request.providerReviewAcknowledgment) {
+          retireProviderReviewAcknowledgment(request.providerReviewAcknowledgment);
+        }
+      }
+    };
     let interruptionSettled = true;
     if (runInterruptTarget) {
       interruptedActiveRun = true;

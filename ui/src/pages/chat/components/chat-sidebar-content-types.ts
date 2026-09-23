@@ -90,6 +90,8 @@ type AttachmentSidebarContent = {
   voiceNote?: boolean;
   plainText?: boolean;
   renderActions?: () => TemplateResult;
+  /** Authorize and read fresh bytes for each explicit download. */
+  download?: (signal: AbortSignal) => Promise<Blob | null>;
   resolveSource?: (
     onRequestUpdate: () => void,
     runtime: AttachmentSidebarRuntime,

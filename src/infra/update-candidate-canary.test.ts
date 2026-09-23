@@ -697,7 +697,7 @@ describe("update candidate canary", () => {
           expect(output).toContain("gateway.host: unknown");
           expect(updateRunStepsFromResultStep(failed).map((step) => step.detail)).toContainEqual(
             expect.stringContaining(
-              scenario === "multiline" ? "gateway.port: invalid" : "gateway.host: unknown",
+              scenario === "multiline" ? "gateway.port: invalid" : "Invalid config",
             ),
           );
         } else {

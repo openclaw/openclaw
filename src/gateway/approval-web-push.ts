@@ -306,7 +306,7 @@ export function createApprovalWebPushDelivery(params: {
         requestDelivery?.sender ?? (await prepareWebPushNotificationSender(params.stateDir));
       const durableLookup = requestDelivery
         ? null
-        : getOperatorApprovalDetailed({
+        : await getOperatorApprovalDetailed({
             id: approval.id,
             databaseOptions: params.stateDir
               ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } }

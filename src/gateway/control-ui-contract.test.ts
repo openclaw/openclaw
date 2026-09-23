@@ -42,6 +42,27 @@ describe("Control UI resource route contract", () => {
     });
   });
 
+  it("round-trips plugin artwork components while preserving scoped plugin IDs", () => {
+    const pathname = "/control/__openclaw__/plugin-theme-art/%40scope%2Fpack/neon/hat/beret";
+    expect(
+      buildControlUiResourcePath("pluginThemeArt", "/control", "@scope/pack", [
+        "neon",
+        "hat",
+        "beret",
+      ]),
+    ).toBe(pathname);
+    expect(parseControlUiResourcePath("pluginThemeArt", pathname, "/control")).toEqual({
+      matched: true,
+      value: "@scope/pack",
+      segments: ["neon", "hat", "beret"],
+    });
+    expect(matchControlUiResourceUrl("pluginThemeArt", `${pathname}?v=123`, "/control")).toEqual({
+      value: "@scope/pack",
+      search: "?v=123",
+      hash: "",
+    });
+  });
+
   it.each([
     ["blank segment", "/__openclaw__/workspace-icon/"],
     ["raw nested segment", "/__openclaw__/workspace-icon/agent/main"],

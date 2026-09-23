@@ -57,7 +57,7 @@ async function retireSystemAgentProposal(
     if (pending?.proposalHash === proposalHash) {
       // Retire the exact local owner before closing its record; storage failure cannot retain it.
       session.pendingApproval = undefined;
-      manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
+      await manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
     }
   } finally {
     await session.engine.resolveOperatorApproval(null, proposalHash, undefined, "cancelled");
@@ -73,8 +73,8 @@ async function reconcileSystemAgentApproval(
   if (!pending) {
     return undefined;
   }
-  const closed = manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
-  const snapshot = manager?.getSnapshot(pending.id);
+  const closed = await manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
+  const snapshot = await manager?.getSnapshot(pending.id);
   if (
     !closed &&
     snapshot &&
@@ -300,7 +300,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       if (callerIdentity?.approvalSignals?.length) {
         record.approvalSignals = callerIdentity.approvalSignals;
       }
-      void manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
+      await manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
       const requestEvent = buildRequestedApprovalEvent(record, "system-agent");
       const publishApplicationResult = (
         decision: ExecApprovalDecision,

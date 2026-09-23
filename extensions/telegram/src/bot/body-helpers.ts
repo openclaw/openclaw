@@ -293,28 +293,32 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
 
 export function joinTelegramTextParts(
   messages: readonly Message[],
-  separator: string,
+  separator: string | ((previous: Message) => string),
 ): { text: string; entities: TelegramTextEntity[] } {
   const textParts: string[] = [];
   const entities: TelegramTextEntity[] = [];
   let offset = 0;
+  let previous: Message | undefined;
 
   for (const message of messages) {
     const textPart = getTelegramTextParts(message);
     if (!textPart.text) {
       continue;
     }
-    if (textParts.length > 0) {
-      offset += separator.length;
+    if (previous) {
+      const gap = typeof separator === "string" ? separator : separator(previous);
+      textParts.push(gap);
+      offset += gap.length;
     }
     entities.push(
       ...textPart.entities.map((entity) => ({ ...entity, offset: entity.offset + offset })),
     );
     textParts.push(textPart.text);
     offset += textPart.text.length;
+    previous = message;
   }
 
-  return { text: textParts.join(separator), entities };
+  return { text: textParts.join(""), entities };
 }
 
 function isTelegramMentionWordChar(char: string | undefined): boolean {

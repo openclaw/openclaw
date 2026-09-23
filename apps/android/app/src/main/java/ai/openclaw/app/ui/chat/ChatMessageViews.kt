@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -56,6 +58,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
@@ -69,12 +72,14 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import kotlin.math.roundToInt
 
-/** Role owns message geometry; delivery state belongs in the content, not the shell. */
+/** Role owns alignment; text surfaces and detached media share this action boundary. */
 @Composable
 internal fun ChatBubbleContainer(
   user: Boolean,
   speaker: String,
+  separateContent: Boolean = false,
   messageActions: @Composable (Modifier, @Composable () -> Unit) -> Unit = { modifier, body ->
     Box(modifier = modifier) { body() }
   },
@@ -84,38 +89,53 @@ internal fun ChatBubbleContainer(
     modifier = Modifier.fillMaxWidth(),
     horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
   ) {
-    // Keep the action host on the complete bubble, including padding, without
-    // extending its hit area into the empty part of a user row.
+    // Measure the action host around actual content, never the empty row gutter.
+    // Text keeps its own width budget; media can use a wider wrapping envelope.
     messageActions(
       Modifier
-        .fillMaxWidth(chatBubbleWidthFraction(user))
         .semantics(mergeDescendants = true) { contentDescription = speaker },
     ) {
-      Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(if (user) CHAT_BUBBLE_CORNER_RADIUS_DP.dp else 0.dp),
-        color = if (user) ClawTheme.colors.userMessageSurface else Color.Transparent,
-        contentColor = ClawTheme.colors.text,
-        border = null,
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-      ) {
+      if (separateContent) {
         Column(
-          modifier =
-            if (user) {
-              Modifier.padding(horizontal = 11.dp, vertical = 8.dp)
-            } else {
-              Modifier.padding(vertical = 4.dp)
-            },
-          verticalArrangement = Arrangement.spacedBy(4.dp),
+          horizontalAlignment = if (user) Alignment.End else Alignment.Start,
+          verticalArrangement = Arrangement.spacedBy(8.dp),
           content = content,
         )
+      } else {
+        ChatMessageTextSurface(user, content)
       }
     }
   }
 }
 
+@Composable
+internal fun ChatMessageTextSurface(
+  user: Boolean,
+  content: @Composable ColumnScope.() -> Unit,
+) {
+  Surface(
+    modifier =
+      Modifier.layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints.copy(minWidth = 0, maxWidth = (constraints.maxWidth * chatBubbleWidthFraction(user)).roundToInt()))
+        layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
+      },
+    shape = RoundedCornerShape(if (user) CHAT_BUBBLE_CORNER_RADIUS_DP.dp else 0.dp),
+    color = if (user) ClawTheme.colors.userMessageSurface else Color.Transparent,
+    contentColor = ClawTheme.colors.text,
+    tonalElevation = 0.dp,
+    shadowElevation = 0.dp,
+  ) {
+    Column(
+      modifier = Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp, vertical = if (user) 8.dp else 4.dp),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+      content = content,
+    )
+  }
+}
+
 internal fun chatBubbleWidthFraction(isUser: Boolean): Float = if (isUser) 0.78f else 1f
+
+internal const val CHAT_MESSAGE_TEXT_INSET_DP = 12
 
 internal const val CHAT_BUBBLE_CORNER_RADIUS_DP = 24
 
@@ -396,16 +416,80 @@ private fun ChatOutboxAction(
   }
 }
 
+internal const val CHAT_MESSAGE_IMAGE_WINDOW = 4
+
+/** Players remain in their existing playback owner; only passive attachments detach. */
+internal fun ChatMessageContent.isDetachedChatAttachment(): Boolean = (type == "image" || type == "file") && !isAudioAttachment() && !isVideoAttachment()
+
+/** Adjacent runs only: authored assistant text/image order must not change. */
+internal fun chatMessageContentGroups(content: List<ChatMessageContent>): List<List<ChatMessageContent>> {
+  val groups = mutableListOf<MutableList<ChatMessageContent>>()
+  content.forEach { part ->
+    if (groups.lastOrNull()?.last()?.isDetachedChatAttachment() != part.isDetachedChatAttachment()) groups.add(mutableListOf())
+    groups.last().add(part)
+  }
+  return groups
+}
+
+@Composable
+internal fun ChatMessageAttachmentGroup(
+  parts: List<ChatMessageContent>,
+  user: Boolean,
+  firstImageIndex: Int,
+  imagePage: Int,
+  resolverReady: Boolean,
+  loadImage: suspend (String) -> GatewayLoadedImage?,
+) {
+  val compact = parts.count { it.type == "image" } > 1
+  var imageIndex = firstImageIndex
+  FlowRow(
+    modifier = Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp),
+    horizontalArrangement = Arrangement.spacedBy(8.dp, if (user) Alignment.End else Alignment.Start),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    parts.forEachIndexed { index, part ->
+      val visible = part.type != "image" || imageIndex++ / CHAT_MESSAGE_IMAGE_WINDOW == imagePage
+      if (visible) {
+        key(index, part.artifactId, part.base64) {
+          Box(Modifier.widthIn(max = if (compact && part.type == "image") 136.dp else 360.dp)) {
+            when {
+              part.type == "image" && !part.base64.isNullOrBlank() -> {
+                ChatBase64Image(part.base64, part.mimeType, compact = compact)
+              }
+
+              part.type == "image" && !part.artifactId.isNullOrBlank() -> {
+                ChatManagedImage(
+                  artifactId = part.artifactId,
+                  label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
+                  resolverReady = resolverReady,
+                  loadImage = loadImage,
+                  compact = compact,
+                )
+              }
+
+              else -> {
+                Text(part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 @Composable
 internal fun ChatBase64Image(
   base64: String,
   mimeType: String?,
+  source: Base64ImageSource = Base64ImageSource.Inline,
+  compact: Boolean = false,
 ) {
-  val imageState = rememberBase64ImageState(base64)
+  val imageState = rememberBase64ImageState(base64, source)
   val image = imageState.image
 
   if (image != null) {
-    ChatImagePreview(image = image, description = mimeType ?: nativeString("Attachment"), stateKey = base64)
+    ChatImagePreview(image = image, description = mimeType ?: nativeString("Attachment"), stateKey = base64, compact = compact)
   } else if (imageState.failed) {
     Text(nativeString("Unsupported attachment"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
   }
@@ -416,6 +500,7 @@ internal fun ChatManagedImage(
   artifactId: String,
   label: String,
   resolverReady: Boolean,
+  compact: Boolean = false,
   loadImage: suspend (String) -> GatewayLoadedImage?,
 ) {
   var image by remember(artifactId) { mutableStateOf<ImageBitmap?>(null) }
@@ -440,7 +525,7 @@ internal fun ChatManagedImage(
 
   when {
     image != null -> {
-      ChatImagePreview(image = checkNotNull(image), description = label, stateKey = artifactId)
+      ChatImagePreview(image = checkNotNull(image), description = label, stateKey = artifactId, compact = compact)
     }
 
     failed -> {
@@ -476,6 +561,7 @@ private fun ChatImagePreview(
   image: ImageBitmap,
   description: String,
   stateKey: String,
+  compact: Boolean,
 ) {
   val anchor = rememberChatReaderAnchor(stateKey)
   var previewVisible by rememberSaveable(stateKey) { mutableStateOf(false) }
@@ -484,14 +570,26 @@ private fun ChatImagePreview(
     shape = RoundedCornerShape(10.dp),
     border = BorderStroke(1.dp, ClawTheme.colors.border),
     color = ClawTheme.colors.surfaceRaised,
-    modifier = Modifier.fillMaxWidth(),
+    modifier =
+      Modifier
+        .widthIn(min = 48.dp, max = if (compact) 136.dp else 360.dp)
+        .heightIn(min = 48.dp, max = if (compact) 144.dp else 320.dp)
+        .layout { measurable, constraints ->
+          // aspectRatio can discard bounds when an extreme ratio rounds one edge
+          // to zero. Fit explicitly and keep the preview target operable.
+          val scale = minOf(constraints.maxWidth.toFloat() / image.width, constraints.maxHeight.toFloat() / image.height)
+          val width = (image.width * scale).roundToInt().coerceIn(constraints.minWidth, constraints.maxWidth)
+          val height = (image.height * scale).roundToInt().coerceIn(constraints.minHeight, constraints.maxHeight)
+          val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width, minHeight = height, maxHeight = height))
+          layout(width, height) { placeable.placeRelative(0, 0) }
+        },
   ) {
     Box {
       Image(
         bitmap = image,
         contentDescription = description,
         contentScale = ContentScale.Fit,
-        modifier = Modifier.fillMaxWidth().then(anchor?.modifier ?: Modifier),
+        modifier = Modifier.matchParentSize().then(anchor?.modifier ?: Modifier),
       )
       Surface(
         modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).size(32.dp),

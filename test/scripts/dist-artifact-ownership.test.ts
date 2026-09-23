@@ -372,7 +372,7 @@ describe("native check launchers in paths with spaces", () => {
         );
         expect(child.argv).toEqual(
           compiler
-            ? ["-b", TSGO_CORE_TEST_SHARDS[0].config, "--builders", "1"]
+            ? ["-p", TSGO_CORE_TEST_SHARDS[0].config, "--incremental"]
             : ["--mode=package-boundary"],
         );
         const lock = resolveDistArtifactLockPath(root);

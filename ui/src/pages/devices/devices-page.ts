@@ -175,6 +175,7 @@ class DevicesPage extends OpenClawLightDomElement {
     SYSTEM_INFO_POLL_INTERVAL_MS,
     () => this.refreshSystemInfo(),
     false,
+    "visible",
   );
   private readonly polling = new PollController(
     this,
@@ -186,6 +187,7 @@ class DevicesPage extends OpenClawLightDomElement {
       }
     },
     false,
+    "visible",
   );
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(

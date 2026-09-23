@@ -81,7 +81,7 @@ describe("doctor canonical session-key retention repair", () => {
         },
         env,
         eventText: "winner history",
-        sessionKey: "agent:main:main ",
+        sessionKey: "agent:main:shared ",
         storePath: opsStore,
       });
       const sourceDatabase = openOpenClawAgentDatabase({
@@ -90,8 +90,8 @@ describe("doctor canonical session-key retention repair", () => {
         path: resolveSqliteTargetFromSessionStorePath(opsStore, { agentId: "ops", env }).path,
       });
       for (const [label, sourceSessionKey] of [
-        ["winner", "agent:main:main "],
-        ["loser", "agent:main:main"],
+        ["winner", "agent:main:shared "],
+        ["loser", "agent:main:shared"],
       ] as const) {
         sourceDatabase.db
           .prepare(
@@ -109,7 +109,7 @@ describe("doctor canonical session-key retention repair", () => {
         entry: { sessionId: "loser", updatedAt: 10 },
         env,
         eventText: "loser history",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:main:shared",
         storePath: opsStore,
       });
 
@@ -133,7 +133,7 @@ describe("doctor canonical session-key retention repair", () => {
         loadExactSessionEntryReadOnly({
           agentId: "ops",
           env,
-          sessionKey: "agent:main:main ",
+          sessionKey: "agent:main:shared ",
           storePath: opsStore,
         }),
       ).toBeUndefined();
@@ -141,7 +141,7 @@ describe("doctor canonical session-key retention repair", () => {
         loadExactSessionEntryReadOnly({
           agentId: "ops",
           env,
-          sessionKey: "agent:main:main",
+          sessionKey: "agent:main:shared",
           storePath: opsStore,
         }),
       ).toBeUndefined();
@@ -228,7 +228,7 @@ describe("doctor canonical session-key retention repair", () => {
           agentId: "ops",
           entry: { sessionId: "winner", updatedAt: 20 },
           env,
-          sessionKey: "agent:main:main ",
+          sessionKey: "agent:main:work ",
           storePath: opsStore,
         });
         const sourceDatabase = openOpenClawAgentDatabase({
@@ -253,7 +253,7 @@ describe("doctor canonical session-key retention repair", () => {
         recordConversationProgressReceipt(sourceScope, {
           ...progressInput,
           operationId: "winner-operation",
-          sourceSessionKey: "agent:main:main",
+          sourceSessionKey: "agent:main:work",
         });
         sourceDatabase.db
           .prepare(

@@ -895,9 +895,13 @@ describe("DraftSubmissionFlow", () => {
       },
     ]);
 
+    if (background) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
     const submission = flow.submit(undefined, background);
     if (background) {
-      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      await submission;
+      expect(start).toHaveBeenCalledOnce();
       expect(navigateAndWait).not.toHaveBeenCalled();
     } else {
       await vi.waitFor(() => expect(navigateAndWait).toHaveBeenCalledOnce());
@@ -913,13 +917,7 @@ describe("DraftSubmissionFlow", () => {
     await submission;
     if (background) {
       context.gateway.snapshot.phase = "connected";
-      await vi.waitFor(
-        () =>
-          expect(
-            client.request.mock.calls.filter(([method]) => method === "agent.wait"),
-          ).toHaveLength(4),
-        { timeout: 4_000 },
-      );
+      await vi.advanceTimersByTimeAsync(3_000);
     }
 
     expect(start).toHaveBeenCalledOnce();

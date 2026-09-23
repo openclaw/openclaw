@@ -29,7 +29,10 @@ describe("worker transcript claim fences", () => {
   it.each(["released", "replaced", "preparation"] as const)(
     "does not persist or publish a transcript after its worker claim is fenced: %s",
     async (scenario) => {
-      const identity = support.seedAttachedIdentity("worker-commit-race", "session-commit-race");
+      const identity = await support.seedAttachedIdentity(
+        "worker-commit-race",
+        "session-commit-race",
+      );
       const { claim, store } = claimWorkerPlacement({
         environmentId: identity.environmentId,
         ownerEpoch: identity.ownerEpoch,
@@ -130,7 +133,7 @@ describe("worker transcript claim fences", () => {
         });
         const credential = await workerService.acquireTurnCredential(replacement);
         expect(credential.ownerEpoch).toBe(identity.ownerEpoch);
-        expect(workerService.acknowledgeCredentialDelivery(credential)).toBe(true);
+        expect(await workerService.acknowledgeCredentialDelivery(credential)).toBe(true);
         const admitted = await workerService.admitWorker({
           environmentId: identity.environmentId,
           credential: credential.credential,

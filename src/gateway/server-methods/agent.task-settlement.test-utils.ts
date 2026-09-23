@@ -1,18 +1,17 @@
 // Register these cases from their original describes in the shared agent.test.ts graph.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
-import type { SubagentRegistryDeps } from "../../agents/subagents/registry/subagent-registry-deps.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
   markRequesterTurnYielded,
   registerSubagentRun,
-  resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
@@ -29,9 +28,9 @@ import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-suppor
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
+import { withPluginSubagentTestState } from "./agent-task-tracking.test-helpers.js";
 import { observeCronContinuationLifetime } from "./agent.cron-continuation-lifetime.test-support.js";
 import {
-  applyGatewaySubagentRegistryTestDeps,
   backendGatewayClient,
   cronContinuationGatewayClient,
   cronMediaCompletionEvent,
@@ -307,11 +306,10 @@ export function registerYieldedRequesterSettlementCase(
   mockSpawnedChildSessionEntry: (sessionKey: string, root: string) => void,
 ) {
   it("keeps one task when a completed child wakes its requester before the yielded lifecycle ends", async () => {
-    await withTestDir({ prefix: "openclaw-gateway-yield-settlement-race-" }, async (root) => {
-      useTestStateDir(root);
+    await withPluginSubagentTestState("openclaw-gateway-yield-settlement-race-", async (state) => {
+      const root = state.stateDir;
       // Adoption commits the registry and its canonical task together in SQLite.
       resetTaskRegistryForTests({ persist: false });
-      resetSubagentRegistryForTests({ persist: false });
       const requesterSessionKey = "agent:main:main";
       const childSessionKey = "agent:main:subagent:settlement-orchestrator";
       const workerSessionKey = "agent:main:subagent:settlement-worker";
@@ -321,10 +319,7 @@ export function registerYieldedRequesterSettlementCase(
       const result = "The completed worker result has been checked.";
       const completion = createDeferred<AgentWaitResult>();
       const previousWait = createDeferred<AgentWaitResult>();
-      const announce = vi.fn<SubagentRegistryDeps["runSubagentAnnounceFlow"]>(
-        async () => "delivered",
-      );
-      let lifecycleHandler: Parameters<SubagentRegistryDeps["onAgentEvent"]>[0] | undefined;
+      const announce = mocks.registryAnnounce.mockResolvedValue("delivered");
       let continuedAtDispatch: ReturnType<typeof getSubagentRunByChildSessionKey> | undefined;
       const executionWork = new AsyncWorkScope();
       const context = makeContext();
@@ -345,48 +340,40 @@ export function registerYieldedRequesterSettlementCase(
           wakeCompleted.resolve();
         }
       });
-      const wake = vi.fn<SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]>(
-        async (params) => {
-          if (params.requesterSessionKey !== childSessionKey) {
-            return false;
-          }
-          // The transport crosses the real agent admission boundary before the
-          // predecessor's lifecycle end is delivered, as in the production race.
-          await invokeAgent(
-            {
-              message: "The worker finished; verify and return its result.",
-              sessionKey: childSessionKey,
-              idempotencyKey: nextRunId,
-              inputProvenance: {
-                kind: "inter_session",
-                sourceSessionKey: workerSessionKey,
-                sourceTool: "subagent_settle",
-              },
+      const wake = mocks.registryWake.mockImplementation(async (params) => {
+        if (params.requesterSessionKey !== childSessionKey) {
+          return false;
+        }
+        // The transport crosses the real agent admission boundary before the
+        // predecessor's lifecycle end is delivered, as in the production race.
+        await invokeAgent(
+          {
+            message: "The worker finished; verify and return its result.",
+            sessionKey: childSessionKey,
+            idempotencyKey: nextRunId,
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: workerSessionKey,
+              sourceTool: "subagent_settle",
             },
-            {
-              context,
-              reqId: nextRunId,
-              client: backendGatewayClient(),
-              respond: wakeRespond,
-              // This wake awaits SQLite; keep the outer lifecycle wait on real timers.
-              flushDispatch: false,
-            },
-          );
-          return true;
-        },
-      );
-      applyGatewaySubagentRegistryTestDeps({
-        callGateway: (async ({ params }: { params?: { runId?: string } }) =>
-          await (params?.runId === previousRunId
-            ? previousWait.promise
-            : completion.promise)) as SubagentRegistryDeps["callGateway"],
-        runSubagentAnnounceFlow: announce,
-        maybeWakeRequesterAfterAllChildrenSettled: wake,
-        onAgentEvent: (handler) => {
-          lifecycleHandler = handler;
-          return () => {};
-        },
+          },
+          {
+            context,
+            reqId: nextRunId,
+            client: backendGatewayClient(),
+            respond: wakeRespond,
+            // This wake awaits SQLite; keep the outer lifecycle wait on real timers.
+            flushDispatch: false,
+          },
+        );
+        return true;
       });
+      mocks.registryCallGateway.mockImplementation(
+        async ({ params }) =>
+          await (asOptionalRecord(params)?.runId === previousRunId
+            ? previousWait.promise
+            : completion.promise),
+      );
       registerSubagentRun({
         runId: previousRunId,
         childSessionKey,
@@ -475,14 +462,12 @@ export function registerYieldedRequesterSettlementCase(
         });
       });
       expect(findTaskByRunId(nextRunId)).toBeUndefined();
-      requireValue(
-        lifecycleHandler,
-        "registry lifecycle listener",
-      )({
+      const { emitAgentEvent } = await vi.importActual<
+        typeof import("../../infra/agent-events.js")
+      >("../../infra/agent-events.js");
+      emitAgentEvent({
         runId: previousRunId,
         sessionKey: childSessionKey,
-        seq: 1,
-        ts: Date.now(),
         stream: "lifecycle",
         data: { phase: "end", endedAt: Date.now(), yielded: true },
       });

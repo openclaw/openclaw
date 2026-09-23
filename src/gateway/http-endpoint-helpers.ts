@@ -1,33 +1,26 @@
 // Gateway HTTP endpoint helpers.
 // Wraps common POST JSON method, auth, scope, and body handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
 } from "./http-common.js";
-import { sendGatewayHttpAuthFailure } from "./http-operator-access.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   type AuthorizedGatewayHttpRequest,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 
 /** Handles a gateway POST JSON endpoint and returns the parsed body when authorized. */
 export async function handleGatewayPostJsonEndpoint(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
+  opts: GatewayHttpRequestAuthOptions & {
     pathname: string;
-    auth: ResolvedGatewayAuth;
     maxBodyBytes: number;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
     requiredOperatorMethod?: "chat.send" | (string & Record<never, never>);
     resolveOperatorScopes?: (
       req: IncomingMessage,
@@ -50,12 +43,9 @@ export async function handleGatewayPostJsonEndpoint(
   }
 
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
   });
   if (!requestAuth) {
     return undefined;
@@ -76,11 +66,13 @@ export async function handleGatewayPostJsonEndpoint(
   if (body === undefined) {
     return undefined;
   }
-  if (!hasCurrentGatewayOperatorAccess(requestAuth.operatorAccessAuthority)) {
-    if (!res.writableEnded && !res.destroyed) {
-      sendGatewayHttpAuthFailure(res, { ok: false, reason: "operator_access_denied" });
+  try {
+    await requestAuth.revalidate();
+  } catch (error) {
+    if (res.writableEnded || res.destroyed) {
+      return undefined;
     }
-    return undefined;
+    throw error;
   }
 
   return { body, requestAuth, operatorScopes };

@@ -193,7 +193,7 @@ suite.define(() => {
         };
       });
       expect(nesting.childLeft - nesting.parentLeft).toBeGreaterThan(8);
-      expect(nesting.guide).not.toBe("none");
+      expect(nesting.guide).toBe("none");
 
       const completedChild = childRows.nth(1);
       const childArchiveButton = completedChild.getByRole("button", {

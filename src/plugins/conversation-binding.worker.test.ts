@@ -16,6 +16,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
+  getCurrentPluginConversationBinding,
   requestPluginConversationBinding,
   resolvePluginConversationBindingApproval,
 } from "./conversation-binding.js";
@@ -31,6 +32,7 @@ function createBindingFixture() {
   const records = new Map<string, SessionBindingRecord>();
   return {
     bind: vi.fn(async (input: SessionBindingBindInput): Promise<SessionBindingRecord> => {
+      input.assertCurrent?.();
       const record: SessionBindingRecord = {
         bindingId: `binding-${records.size + 1}`,
         targetSessionKey: input.targetSessionKey,
@@ -123,6 +125,54 @@ describe("plugin conversation approval worker lifetime", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     registerSessionBindingAdapter(createAdapter("discord", "isolated"));
   });
+
+  it.each(["before-commit", "after-commit"] as const)(
+    "preserves binding admission and settlement when authority changes %s",
+    async (revokeAt) => {
+      const input = createDiscordCodexBindRequest("channel:owner-check", "original binding");
+      const pending = await requestPendingBinding(input);
+      const approved = await approveBindingRequest(pending.approvalId, "allow-once");
+      expect(approved.status).toBe("approved");
+      if (approved.status !== "approved") {
+        throw new Error("expected approved bind result");
+      }
+      const original = approved.binding;
+      const bind = sessionBindingState.bind.getMockImplementation();
+      if (!bind) {
+        throw new Error("expected binding adapter fixture");
+      }
+      let ownerCurrent = true;
+      sessionBindingState.bind.mockImplementationOnce(async (request) => {
+        if (revokeAt === "before-commit") {
+          ownerCurrent = false;
+        }
+        const result = await bind(request);
+        ownerCurrent = false;
+        return result;
+      });
+      const result = requestPluginConversationBinding({
+        ...input,
+        binding: { summary: "replacement binding" },
+        assertCurrent: () => {
+          if (!ownerCurrent) {
+            throw new Error("Command owner was revoked");
+          }
+        },
+      });
+      if (revokeAt === "before-commit") {
+        await expect(result).rejects.toThrow("Command owner was revoked");
+        await expect(getCurrentPluginConversationBinding(input)).resolves.toEqual(original);
+      } else {
+        await expect(result).resolves.toMatchObject({
+          status: "bound",
+          binding: { summary: "replacement binding" },
+        });
+        await expect(getCurrentPluginConversationBinding(input)).resolves.toMatchObject({
+          summary: "replacement binding",
+        });
+      }
+    },
+  );
 
   it("keeps the actual approval and reopen flow off the application SQLite thread", async () => {
     await closeOpenClawStateDatabaseAsync();

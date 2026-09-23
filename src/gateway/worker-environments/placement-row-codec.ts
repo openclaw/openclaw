@@ -19,6 +19,7 @@ import {
   nullableRequired,
   required,
   type PersistedTurnClaim,
+  type WorkerSessionPlacementChangeSnapshot,
   type WorkerSessionPlacementIdentity,
   type WorkerSessionPlacementRecord,
   type WorkerSessionPlacementTransitionPatch,
@@ -117,6 +118,25 @@ export function find(
       .where("session_id", "=", sessionId),
   );
   return row ? fromRow(row) : undefined;
+}
+
+export function readWorkerPlacementChangeSnapshotInDatabase(
+  db: DatabaseSync,
+): WorkerSessionPlacementChangeSnapshot[] {
+  return executeSqliteQuerySync(
+    db,
+    query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
+  ).rows.map((row) => {
+    const { sessionId, state, generation, updatedAtMs, sessionKey, agentId } = fromRow(row);
+    return {
+      sessionId,
+      state,
+      generation,
+      updatedAtMs,
+      sessionKey,
+      agentId,
+    };
+  });
 }
 
 export function getRequired(db: DatabaseSync, sessionId: string): WorkerSessionPlacementRecord {

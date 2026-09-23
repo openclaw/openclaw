@@ -2410,7 +2410,7 @@ class ChatComposerLayoutTest {
   @Config(qualifiers = "w800dp-h800dp-mdpi", instrumentedPackages = ["ai.openclaw.app.AndroidScreenshotFixture"])
   fun branchSheetRealRowSwitchesTheLiteralFixture() =
     withBranchRequests { _, calls, _ ->
-      openBranchSheet()
+      openBranchSheet(calls)
       branchRow(2).assertIsEnabled().performTouchInput {
         down(center)
         up()
@@ -2435,12 +2435,12 @@ class ChatComposerLayoutTest {
     }
 
   private fun assertBranchPanes(direction: LayoutDirection) =
-    withBranchRequests(direction = direction) { _, _, _ ->
+    withBranchRequests(direction = direction) { _, calls, _ ->
       val editor = composeRule.onNode(hasSetTextAction())
       editor.performTextReplacement("branch reading draft")
       editor.performSemanticsAction(SemanticsActions.SetSelection) { assertTrue(it(2, 7, false)) }
       val editorId = editor.fetchSemanticsNode().id
-      val dialog = openBranchSheet()
+      val dialog = openBranchSheet(calls)
       val cases =
         listOf(
           emptyList<DisplayFeature>() to Rect(0, 0, 800, 800),
@@ -2488,7 +2488,7 @@ class ChatComposerLayoutTest {
   private fun assertTerminalBranchInput(keyboard: Boolean) {
     val postHistoryListReply = BranchPostHistoryListReplyHold()
     withBranchRequests(holdPostHistoryListReply = postHistoryListReply) { _, calls, release ->
-      val old = openBranchSheet()
+      val old = openBranchSheet(calls)
       val row = branchRow(2).assertIsEnabled().assertIsDisplayed()
       val bounds = row.getUnclippedBoundsInRoot()
       val x = (bounds.left.value + bounds.right.value) / 2
@@ -2523,7 +2523,7 @@ class ChatComposerLayoutTest {
       composeRule.waitForIdle()
       assertEquals("Recovered geometry cannot authorize A's held input", 0, calls.count { it.method == "sessions.branches.switch" })
       composeRule.onNode(isDialog()).assertDoesNotExist()
-      val fresh = openBranchSheet()
+      val fresh = openBranchSheet(calls)
       assertNotSame(old.window, fresh.window)
       postHistoryListReply.armed.complete(Unit)
       branchRow(2).performTouchInput {
@@ -2589,7 +2589,7 @@ class ChatComposerLayoutTest {
             .action,
         )
       } else {
-        openBranchSheet()
+        openBranchSheet(calls)
         checkNotNull(branchRow(2).fetchSemanticsNode().config[SemanticsActions.OnClick].action)
       }
     val before = controller.selectionGeneration.value
@@ -2653,7 +2653,7 @@ class ChatComposerLayoutTest {
   @Config(qualifiers = "w800dp-h800dp-mdpi", instrumentedPackages = ["ai.openclaw.app.AndroidScreenshotFixture"])
   fun branchOpeningRejectsSavedSelectionAfterUnsafeRecovery() =
     withBranchRequests { _, calls, _ ->
-      val old = openBranchSheet()
+      val old = openBranchSheet(calls)
       val select = checkNotNull(branchRow(2).fetchSemanticsNode().config[SemanticsActions.OnClick].action)
       composeRule.mainClock.autoAdvance = false
       composeRule.runOnUiThread {
@@ -2668,7 +2668,7 @@ class ChatComposerLayoutTest {
       composeRule.waitForIdle()
       assertEquals(0, calls.count { it.method == "sessions.branches.switch" })
       composeRule.onNode(isDialog()).assertDoesNotExist()
-      val fresh = openBranchSheet()
+      val fresh = openBranchSheet(calls)
       assertTrue("Explicit reopening creates a usable branch window", fresh.isShowing)
       assertNotSame(old.window, fresh.window)
       branchRow(2).assertIsEnabled()
@@ -2680,7 +2680,7 @@ class ChatComposerLayoutTest {
     withBranchRequests { model, calls, _ ->
       composeRule.runOnIdle { runtimeScopes().value = listOf("operator.read") }
       composeRule.waitUntil { "operator.admin" !in model.operatorScopes.value }
-      val old = openBranchSheet()
+      val old = openBranchSheet(calls)
       val read = calls.single { it.method == "sessions.branches.list" }
       assertEquals(JsonPrimitive(AndroidScreenshotFixture.mainSessionKey), read.params["sessionKey"])
       assertEquals(JsonPrimitive("main"), read.params["agentId"])
@@ -2697,7 +2697,7 @@ class ChatComposerLayoutTest {
       val assertDraft = prepareBranchEligibilityDraft()
       composeRule.runOnIdle { controllerFlow<Int>("_pendingRunCount").value = 1 }
       composeRule.waitUntil { model.pendingRunCount.value == 1 }
-      val dialog = openBranchSheet()
+      val dialog = openBranchSheet(calls)
       val read = calls.single { it.method == "sessions.branches.list" }
       assertEquals(JsonPrimitive(AndroidScreenshotFixture.mainSessionKey), read.params["sessionKey"])
       assertEquals(JsonPrimitive("main"), read.params["agentId"])
@@ -2724,7 +2724,7 @@ class ChatComposerLayoutTest {
   fun branchRowsDisableUntilOutboxRestored() =
     withBranchRequests { model, calls, _ ->
       val assertDraft = prepareBranchEligibilityDraft()
-      val dialog = openBranchSheet()
+      val dialog = openBranchSheet(calls)
       assertEquals(1, calls.count { it.method == "sessions.branches.list" })
       branchList().performScrollToNode(hasText("Release plan 12"))
       branchRow(12).assertIsDisplayed().assertIsEnabled()
@@ -2755,7 +2755,7 @@ class ChatComposerLayoutTest {
   fun branchRowsRespectCanonicalOutboxScope() =
     withBranchRequests { model, calls, _ ->
       val assertDraft = prepareBranchEligibilityDraft()
-      val dialog = openBranchSheet()
+      val dialog = openBranchSheet(calls)
       branchList().performScrollToNode(hasText("Release plan 12"))
       branchRow(12).assertIsDisplayed().assertIsEnabled()
       val assertReading = captureBranchEligibilityReading(dialog)
@@ -2878,7 +2878,7 @@ class ChatComposerLayoutTest {
       val cases = listOf("admin", "loading", "active", "missing", "switching")
       for (condition in cases) {
         branchDiagnosticCase = condition
-        val dialog = openBranchSheet()
+        val dialog = openBranchSheet(calls)
         val select = checkNotNull(branchRow(2).fetchSemanticsNode().config[SemanticsActions.OnClick].action)
         val branches = controller.sessionBranches.value
         composeRule.mainClock.autoAdvance = false
@@ -2923,7 +2923,7 @@ class ChatComposerLayoutTest {
         composeRule.onNode(isDialog()).assertDoesNotExist()
       }
       branchDiagnosticCase = "eligible"
-      openBranchSheet()
+      openBranchSheet(calls)
       branchRow(2).assertIsEnabled().performClick()
       composeRule.waitUntil {
         controller.messages.value
@@ -2937,7 +2937,7 @@ class ChatComposerLayoutTest {
   @Config(qualifiers = "w800dp-h800dp-mdpi", instrumentedPackages = ["ai.openclaw.app.AndroidScreenshotFixture"])
   fun branchOpeningPreservesAdmittedSwitchAndReplacementWindow() =
     withBranchRequests(hold = "sessions.branches.switch") { _, calls, release ->
-      val old = openBranchSheet()
+      val old = openBranchSheet(calls)
       branchRow(2).performClick()
       composeRule.waitUntil { calls.any { it.method == "sessions.branches.switch" } }
       composeRule.runOnUiThread {
@@ -2948,7 +2948,7 @@ class ChatComposerLayoutTest {
       }
       composeRule.waitForIdle()
       composeRule.onNode(isDialog()).assertDoesNotExist()
-      val fresh = openBranchSheet()
+      val fresh = openBranchSheet(calls)
       assertNotSame(old.window, fresh.window)
       assertTrue("The admitted switch remains in flight while B is open", controller.sessionBranchSwitching.value)
       branchRow(2).assertIsNotEnabled()
@@ -2974,10 +2974,19 @@ class ChatComposerLayoutTest {
 
   private fun branchList() = composeRule.onNode(hasScrollAction() and hasAnyAncestor(isDialog()))
 
-  private fun openBranchSheet(): ComponentDialog {
+  private fun openBranchSheet(calls: Collection<BranchRequest>): ComponentDialog {
+    val previousJobs = calls.mapTo(mutableSetOf()) { it.job }
     composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
     composeRule.onNodeWithText(nativeString("Switch branch")).assertIsEnabled().performClick()
-    composeRule.waitUntil { !controller.sessionBranchesLoading.value }
+    // Loading stays false while the opening waits for its first Room read.
+    var refresh: Job? = null
+    composeRule.waitUntil {
+      composeRule.runOnIdle {
+        refresh = refresh ?: calls.firstOrNull { it.method == "sessions.branches.list" && it.job !in previousJobs }?.job
+        refresh?.isCompleted == true && !controller.sessionBranchesLoading.value
+      }
+    }
+    assertFalse("The opening read must finish normally", checkNotNull(refresh).isCancelled)
     composeRule.onNode(isDialog()).assertExists()
     branchRow(2).assertIsDisplayed()
     return checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
@@ -3018,6 +3027,7 @@ class ChatComposerLayoutTest {
   private data class BranchRequest(
     val method: String,
     val params: JsonObject,
+    val job: Job,
   )
 
   private class BranchPostHistoryListReplyHold {
@@ -3112,9 +3122,10 @@ class ChatComposerLayoutTest {
         job.invokeOnCompletion { recordPhase(if (job.isCancelled) "job-cancelled" else "job-completed") }
       }
       if (method.startsWith("sessions.branches.")) {
-        observedJobs.add(currentCoroutineContext().job)
+        val job = currentCoroutineContext().job
+        observedJobs.add(job)
         assertEquals(AndroidScreenshotFixture.gatewayId, gateway)
-        calls.add(BranchRequest(method, Json.parseToJsonElement(checkNotNull(params)).jsonObject))
+        calls.add(BranchRequest(method, Json.parseToJsonElement(checkNotNull(params)).jsonObject, job))
         if (method == hold) {
           recordPhase("held")
           release.await()
@@ -4573,6 +4584,40 @@ class ChatComposerLayoutTest {
     }
   }
 
+  @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun admittedLargePhotoPreviewsInComposerWithoutSending() {
+    val model = showChat(viewportHeight = { 720.dp })
+    val owner = model.captureChatShareOwner()
+    val photo = PendingAttachment("preview-photo", "synthetic-photo.jpg", "image/jpeg", syntheticLargeChatPhotoBase64())
+    val messages = model.chatMessages.value
+    val outbox = model.chatOutboxItems.value
+    composeRule.runOnIdle {
+      assertEquals(0, model.chatComposerState.addAttachments(owner, listOf(photo)))
+    }
+    composeRule.waitForIdle()
+    try {
+      composeRule.waitUntil {
+        composeRule.onAllNodesWithContentDescription("image/jpeg").fetchSemanticsNodes().isNotEmpty()
+      }
+    } finally {
+      captureComposerProof("composer-photo")
+    }
+    composeRule.onNodeWithContentDescription("image/jpeg").assertIsDisplayed().performClick()
+    composeRule.onNodeWithContentDescription(nativeString("Close image preview")).assertIsDisplayed()
+    composeRule.onNodeWithText("100%").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription(nativeString("Close image preview")).performClick()
+    composeRule.onNodeWithContentDescription(nativeString("Remove attachment")).performClick()
+    composeRule.runOnIdle {
+      assertTrue(
+        model.chatComposerState.attachments.value[owner]
+          .isNullOrEmpty(),
+      )
+      assertEquals(messages, model.chatMessages.value)
+      assertEquals(outbox, model.chatOutboxItems.value)
+    }
+  }
+
   private fun captureComposerProof(name: String) {
     val directory = System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR") ?: return
     val folder = File(directory)
@@ -5334,6 +5379,11 @@ class ChatComposerLayoutTest {
       val geometryFailures = mutableListOf<String>()
 
       fun verifyGeometry(label: String) {
+        val transcriptWidth =
+          composeRule
+            .onNodeWithTag("chat-viewport")
+            .fetchSemanticsNode()
+            .boundsInRoot.width - with(composeRule.density) { 32.dp.toPx() }
         val reference = composeRule.onNode(hasContentDescription("You") and hasText("Summarize the release checklist.")).fetchSemanticsNode().boundsInRoot
         val actual =
           composeRule
@@ -5342,8 +5392,8 @@ class ChatComposerLayoutTest {
             .fetchSemanticsNode()
             .boundsInRoot
         val assistant = composeRule.onNode(hasContentDescription("OpenClaw") and hasText("I will keep the summary concise.")).fetchSemanticsNode().boundsInRoot
-        if (kotlin.math.abs(reference.width - actual.width) > 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
-          geometryFailures += "$label: pending user width/edge differs from confirmed user: $actual vs $reference"
+        if (actual.width > transcriptWidth * 0.78f + 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
+          geometryFailures += "$label: pending user exceeds text budget or differs from confirmed trailing edge: $actual vs $reference"
         }
         if (model.chatSelectedActiveRunPresentation.value.count > 0 && model.chatStreamingAssistantText.value == null) {
           val typing =
@@ -5352,8 +5402,8 @@ class ChatComposerLayoutTest {
               .assertIsDisplayed()
               .fetchSemanticsNode()
               .boundsInRoot
-          if (kotlin.math.abs(assistant.width - typing.width) > 1f || kotlin.math.abs(assistant.left - typing.left) > 1f) {
-            geometryFailures += "$label: typing width/edge differs from assistant: $typing vs $assistant"
+          if (typing.width > transcriptWidth + 1f || kotlin.math.abs(assistant.left - typing.left) > 1f) {
+            geometryFailures += "$label: typing exceeds assistant width or differs from its leading edge: $typing vs $assistant"
           }
         }
       }

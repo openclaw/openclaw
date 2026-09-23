@@ -401,7 +401,7 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   const session = findSession(payload, "agent:main:main");
   expectFields(session, {
     thinkingDefault: "medium",
-    thinkingOptions: ["off", "minimal", "low", "medium", "high"],
+    thinkingOptions: ["off", "minimal", "low", "medium", "high", "ultra"],
   });
 });
 

@@ -1,9 +1,7 @@
 // Qa Lab plugin module provides reusable fixture utilities.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type QaFixtureFetchJsonOptions = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
@@ -345,25 +343,11 @@ async function visitSessionLogEvents(
   if (!sqlitePath) {
     return;
   }
-  let db: DatabaseSync | null = null;
   try {
-    db = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const hasTranscriptEvents = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'")
-      .get();
-    if (!hasTranscriptEvents) {
-      return;
-    }
-    const rows = db.prepare("SELECT event_json FROM transcript_events ORDER BY session_id, seq");
-    for (const row of rows.iterate() as Iterable<{ event_json?: unknown }>) {
-      if (typeof row.event_json === "string") {
-        visit(row.event_json);
-      }
-    }
+    const { visitQaSqliteTranscriptEvents } = await import("openclaw/plugin-sdk/qa-runtime");
+    await visitQaSqliteTranscriptEvents(sqlitePath, visit);
   } catch {
     // Missing or unreadable stores contribute no events.
-  } finally {
-    db?.close();
   }
 }
 

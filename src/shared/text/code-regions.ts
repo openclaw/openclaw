@@ -83,9 +83,20 @@ export function createTextPartCodeRegionResolver(parts: readonly string[]) {
 }
 
 /** Canonical code ranges, stable-prefix boundary, and completed top-level paragraphs. */
-export function findCodeOwnership(text: string) {
-  const { regions, retainStart, completedParagraphs } = parseMarkdownOwnership(text);
-  return { regions, retainStart, completedParagraphs };
+export function findCodeOwnership(
+  text: string,
+  options?: Parameters<typeof parseMarkdownOwnership>[1],
+) {
+  const { regions, retainStart, completedParagraphs, paragraphs } = parseMarkdownOwnership(
+    text,
+    options,
+  );
+  return {
+    regions,
+    retainStart,
+    completedParagraphs,
+    ...(paragraphs ? { paragraphs } : {}),
+  };
 }
 
 /** Returns true when a character offset falls inside one of the discovered code regions. */

@@ -8,6 +8,26 @@ import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capt
 const temp = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["import.meta", 'import.meta["url"]', "import.meta.main"])(
+  "captures dependencies beside retained %s without evaluating the plugin",
+  (expression) => {
+    const root = temp.make("plugin-inspection-meta-");
+    const entryFile = path.join(root, "index.mjs");
+    const dependency = path.join(root, "dependency.mjs");
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+    fs.writeFileSync(dependency, "export const value = 42;");
+    fs.writeFileSync(
+      entryFile,
+      `const meta = ${expression}; import { value } from "./dependency.mjs"; throw new Error("inspection must not execute plugin code");`,
+    );
+
+    const inspection = inspectPluginSourceDependencies([{ rootDir: root, entryFile }]);
+    expect(inspection.unresolved).toEqual([]);
+    expect(inspection.files).toContain(dependency);
+    expect(() => inspection.assertSourceCurrent()).not.toThrow();
+  },
+);
+
 it("inspects a captured cyclic dependency graph without following its dependency links", () => {
   const root = temp.make("plugin-inspection-cycle-");
   const captures = fs.realpathSync(temp.make("plugin-inspection-captures-"));

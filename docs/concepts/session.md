@@ -344,7 +344,8 @@ The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before a
 after, and the checkpoint outcome. Automatic and manual budget passes remain
 deferred until the checkpoint owner observes a completed checkpoint; elapsed time
 or a budget change alone does not retry pruning. Normal periodic checkpointing
-continues, and subsequent activity can resume cleanup after recovery.
+continues, and subsequent activity can resume cleanup after recovery, including
+after a system clock correction.
 
 Look for `session history disk budget deferred until a completed WAL checkpoint is observed`
 in the Gateway log. Its checkpoint fields include bounded operation names for

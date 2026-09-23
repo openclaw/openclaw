@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  captureUiProof,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -45,7 +49,16 @@ suite.define(() => {
         await search.fill("shared");
         await expect.poll(() => beta.isVisible()).toBe(true);
         expect(await openai.getAttribute("aria-expanded")).toBe("true");
-        await search.fill("");
+        await search.fill("shared-beta");
+        await captureUiProof(suite, page, "model-id-search", `${width}.png`);
+        expect(await beta.isVisible()).toBe(true);
+        expect(await alpha.isVisible()).toBe(false);
+        await search.fill("ANTHROPIC/SHARED-BETA");
+        expect(await beta.isVisible()).toBe(true);
+        expect(await alpha.isVisible()).toBe(false);
+        await search.press("ControlOrMeta+A");
+        await search.press("Backspace");
+        expect(await search.inputValue()).toBe("");
         expect(await alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
         await search.press("Escape");

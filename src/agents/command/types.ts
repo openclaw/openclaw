@@ -247,6 +247,7 @@ type AgentCommandGatewayOnlyKey =
   | "executionIdentityAdmission"
   | "operationalRunInstance"
   | "operatorAuthority"
+  | "assertSourceCurrent"
   | "skillLibraryAuthoring"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
@@ -255,7 +256,7 @@ type AgentCommandGatewayOnlyKey =
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride" | "assertSourceCurrent"
+  AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride"
 > & {
   /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
   senderIsOwner?: boolean;

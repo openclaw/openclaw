@@ -6,6 +6,15 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { hasDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  findLatestFailedSessionSqliteMigrationManifest,
+  resolveSessionSqliteMigrationRunsDir,
+  type SessionSqliteMigrationTargetInput,
+} from "../infra/session-sqlite-migration-manifest.js";
+import {
+  resolveTargetSqliteOptions,
+  resolveTargetSqlitePath,
+} from "../infra/session-sqlite-migration-readers.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   inspectSqliteRecoveryFiles,
@@ -30,15 +39,6 @@ import {
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
-import {
-  findLatestFailedSessionSqliteMigrationManifest,
-  resolveSessionSqliteMigrationRunsDir,
-  type SessionSqliteMigrationTargetInput,
-} from "./doctor-session-sqlite-migration-run.js";
-import {
-  resolveTargetSqliteOptions,
-  resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTargetReport,
@@ -60,6 +60,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   env: NodeJS.ProcessEnv;
   options: DoctorSessionSqliteOptions;
   targets: readonly SessionStoreTarget[];
+  historicalArchiveStores?: ReadonlySet<string>;
   validateTarget: SessionSqliteRecoverTargetValidator;
 }): Promise<DoctorSessionSqliteReport> {
   const trustedTargets = resolveRecoverTargets(params.targets, params.env);
@@ -81,7 +82,8 @@ export async function recoverDoctorSessionSqliteTargets(params: {
             sqlitePath: target.sqlitePath,
             env: params.env,
           }) ||
-          readActiveSqliteTranscriptFiles(target).length > 0
+          readActiveSqliteTranscriptFiles(target).length > 0 ||
+          params.historicalArchiveStores?.has(target.storePath)
         ) {
           retainedReports.push(await params.validateTarget(target));
         }
@@ -107,7 +109,13 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     trustedTargets,
   });
   const targetReports: DoctorSessionSqliteTargetReport[] = [];
-  for (const manifestTarget of failedRun.targets) {
+  const recoveryTargets = trustedTargets.filter(
+    (target) =>
+      failedRun.targets.some(
+        (failed) => failed.agentId === target.agentId && failed.storePath === target.storePath,
+      ) || params.historicalArchiveStores?.has(target.storePath),
+  );
+  for (const manifestTarget of recoveryTargets) {
     targetReports.push(
       await params.validateTarget({
         agentId: manifestTarget.agentId,
@@ -126,11 +134,15 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     })),
   );
   const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
+  if (report.totals.issues === 0) {
+    report.migrationRun = {
+      manifestPath: failedRun.manifestPath,
+      runId: failedRun.manifest.runId,
+    };
+    return report;
+  }
   const failureReports = writeSessionSqliteMigrationFailureReports(failedRun.manifestPath, {
-    reason:
-      report.totals.issues > 0
-        ? "doctor recover completed with remaining issues"
-        : "doctor recover completed validation of a failed session SQLite migration run",
+    reason: "doctor recover completed with remaining issues",
     recoveryTargets: report.targets,
     trustedTargets,
   });

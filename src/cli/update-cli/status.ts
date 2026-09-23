@@ -104,6 +104,10 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const updateAvailability = resolveUpdateAvailability(update);
 
   const runStatus = readUpdateRunStatus();
+  const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
+  const updateInProgress =
+    !("runStatusError" in runStatus) && activeRun && !runStatus.staleRun && !runStatus.abandonedRun;
+
   const safeMessage = (message: string) =>
     sanitizeTerminalText(redactSensitiveText(message, { mode: "tools" }));
   const replacement =
@@ -152,7 +156,13 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const migrationWarnings: string[] = [];
   const migrationWarningErrors: string[] = [];
   for (const readWarnings of [
-    () => readDeferredPluginMigrations().map((pending) => formatDeferredPluginMigration(pending)),
+    () =>
+      readDeferredPluginMigrations().map((pending) =>
+        formatDeferredPluginMigration(
+          pending,
+          updateInProgress ? { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" } : process.env,
+        ),
+      ),
     () => readSessionSqliteMigrationWarnings(),
   ]) {
     try {
@@ -200,7 +210,13 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
-      Value: updateAvailability.available ? theme.warn(`available · ${updateLine}`) : updateLine,
+      Value: activeRun
+        ? updateInProgress
+          ? `in progress · ${activeRun.phase}`
+          : "needs attention · see run details below"
+        : updateAvailability.available
+          ? theme.warn(`available · ${updateLine}`)
+          : updateLine,
     },
   ];
 
@@ -273,7 +289,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     defaultRuntime.log(theme.warn(`Update run status unavailable: ${runStatus.runStatusError}`));
     defaultRuntime.log("");
   } else {
-    const { activeRun, lastRun, staleRun, abandonedRun, advisories } = runStatus;
+    const { lastRun, staleRun, abandonedRun, advisories } = runStatus;
     const run = activeRun ?? lastRun;
     for (const advisory of advisories ?? []) {
       if (advisory.runId !== run?.runId) {
@@ -305,7 +321,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     }
   }
 
-  const updateHint = formatUpdateAvailableHint(update);
+  const updateHint = activeRun ? null : formatUpdateAvailableHint(update);
   if (updateHint) {
     defaultRuntime.log(theme.warn(updateHint));
   }

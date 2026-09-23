@@ -1,4 +1,7 @@
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDrainError,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
@@ -25,7 +28,8 @@ export function createTaskMaintenanceScheduler(
       admission.signal,
     )
       .catch((error: unknown) => {
-        if (admitted || !admission.signal.aborted) {
+        // A restart can refuse the tick before a sweep starts; admitted failures still need reporting.
+        if (admitted || (!admission.signal.aborted && !isGatewayRestartDrainError(error))) {
           onError(error);
         }
       })

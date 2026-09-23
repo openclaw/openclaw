@@ -15,6 +15,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionSuggestionHandlers } from "./server-methods/sessions-suggestions.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import { getHealthVersion, incrementPresenceVersion } from "./server/health-state.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -260,7 +261,7 @@ describe("createGatewayRequestContext presence", () => {
       authenticatedUserId: "live@activity.test",
       personPresence: { onlineSince: 9_000 },
     };
-    const clients = new Set([client]);
+    const clients = new GatewayClientRegistry([client]);
     const params = makeContextParams({ clients });
     const context = createGatewayRequestContext(params);
     context.recordClientActivity?.({ ...client });
@@ -337,7 +338,7 @@ describe("createGatewayRequestContext presence", () => {
           },
         ),
       );
-      const params = makeContextParams({ clients: new Set(tabs) });
+      const params = makeContextParams({ clients: new GatewayClientRegistry(tabs) });
       const context = createGatewayRequestContext(params);
       const events = () =>
         vi.mocked(params.runtime.broadcast).mock.calls.filter(([event]) => event === "presence");
@@ -446,7 +447,9 @@ describe("createGatewayRequestContext presence", () => {
         presenceKey: `profile-${state}`,
         invalidated: state === "invalidated",
       };
-      const params = makeContextParams({ clients: new Set(state === "removed" ? [] : [client]) });
+      const params = makeContextParams({
+        clients: new GatewayClientRegistry(state === "removed" ? [] : [client]),
+      });
       createGatewayRequestContext(params).refreshConnectedUserProfile?.({
         id: `inactive-${state}`,
         displayName: "After",

@@ -42,18 +42,19 @@ import {
   resolveAssistantTextStreamDelta,
   type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   parseGatewayJsonRequest,
   sendInvalidRequest,
   sendJson,
   sendMissingScopeForbidden,
+  sendUnauthorized,
   setSseHeaders,
   watchClientDisconnect,
   writeDone,
 } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
+import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
 import {
   type AuthorizedGatewayHttpRequest,
   authorizeOpenAiCompatibleHttpModelOverride,
@@ -67,7 +68,7 @@ import {
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
@@ -85,6 +86,7 @@ import {
   type OpenAiCompatiblePendingToolCall,
   readOpenAiHttpRunTerminal,
   runOpenAiCompatibleAgentCommand,
+  type OpenAiCompatibleHttpOptions,
 } from "./openai-compatible-agent-run.js";
 import {
   applyToolChoice,
@@ -97,17 +99,6 @@ import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
-import type { GatewayContextResolver } from "./server-methods/types.js";
-
-type OpenResponsesHttpOptions = {
-  auth: ResolvedGatewayAuth;
-  maxBodyBytes?: number;
-  config?: GatewayHttpResponsesConfig;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-  resolveGatewayContext?: GatewayContextResolver;
-};
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
@@ -339,22 +330,19 @@ function createResponseResource(params: {
 export async function handleOpenResponsesHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: OpenResponsesHttpOptions,
+  opts: OpenAiCompatibleHttpOptions<GatewayHttpResponsesConfig>,
 ): Promise<boolean> {
   const limits = resolveResponsesLimits(opts.config);
   const maxBodyBytes =
     opts.maxBodyBytes ??
     Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
+    ...opts,
     pathname: "/v1/responses",
     requiredOperatorMethod: "chat.send",
     // Compat HTTP uses a different scope model from generic HTTP helpers:
     // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
+    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes,
   });
   if (handled === false) {
@@ -440,6 +428,7 @@ export async function handleOpenResponsesHttpRequest(
             if (part.type !== "input_image" && part.type !== "input_file") {
               continue;
             }
+            assertGatewayHttpRequestCurrent(handled.requestAuth);
             if (part.source.type === "url") {
               markUrlPart();
             }
@@ -513,6 +502,10 @@ export async function handleOpenResponsesHttpRequest(
     }
   } catch (err) {
     if (abortController.signal.aborted) {
+      return true;
+    }
+    if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
+      sendUnauthorized(res);
       return true;
     }
     logWarn(`openresponses: request parsing failed: ${String(err)}`);
@@ -648,6 +641,7 @@ export async function handleOpenResponsesHttpRequest(
       operatorScopes: handled.operatorScopes,
       resolveGatewayContext: opts.resolveGatewayContext,
       abortSignal: abortController.signal,
+      hasCurrentClientAuthority: handled.requestAuth.hasCurrentClientAuthority,
     });
 
   if (!stream) {

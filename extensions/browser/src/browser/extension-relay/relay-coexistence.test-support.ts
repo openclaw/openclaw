@@ -99,7 +99,7 @@ export async function withConnectedDaemon(
     port: number,
     stateDir: string,
     config: object,
-  ) => Promise<{ stop: () => void; done: Promise<unknown> }>,
+  ) => Promise<{ port: number | null; stop: () => void; done: Promise<unknown> }>,
   handleExtensionCommand?: (
     command: Record<string, unknown>,
     send: (message: Record<string, unknown>) => void,
@@ -122,9 +122,20 @@ export async function withConnectedDaemon(
     await withEnvAsync(
       { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_OAUTH_DIR: credentials },
       async () => {
-        let daemon = startDaemon
-          ? await startDaemon(port, stateDir, config)
-          : await runExtensionRelayDaemon({ port });
+        const start = async () => {
+          const started = startDaemon
+            ? await startDaemon(port, stateDir, config)
+            : await runExtensionRelayDaemon({ port });
+          if (started.port !== port) {
+            started.stop();
+            const reason = await started.done;
+            throw new Error(
+              `Relay fixture startup failed: expected port ${port}, got ${started.port ?? "no listener"} (${String(reason)})`,
+            );
+          }
+          return started;
+        };
+        let daemon = await start();
         const extension = new WebSocket(
           `ws://127.0.0.1:${port}/extension`,
           BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
@@ -228,9 +239,7 @@ export async function withConnectedDaemon(
             restartDaemon: async () => {
               daemon.stop();
               await daemon.done;
-              daemon = startDaemon
-                ? await startDaemon(port, stateDir, config)
-                : await runExtensionRelayDaemon({ port });
+              daemon = await start();
             },
             holdDetach: () => {
               detachHeld = true;

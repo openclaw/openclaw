@@ -1,5 +1,6 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
+import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
@@ -31,6 +32,7 @@ export async function prepareAndAdmitChatSend(
   options?: {
     trustedSystemInput?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
+    providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
 ) {
   const assertCurrent =
@@ -47,6 +49,9 @@ export async function prepareAndAdmitChatSend(
     client,
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
     ...(options?.goalResume ? { goalResume: options.goalResume } : {}),
+    ...(options?.providerReviewAcknowledgment
+      ? { providerReviewAcknowledgment: options.providerReviewAcknowledgment }
+      : {}),
   });
   if (!normalizedRequest.ok) {
     respond(

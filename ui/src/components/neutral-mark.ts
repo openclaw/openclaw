@@ -1,8 +1,5 @@
 import { svg } from "lit";
-import {
-  THEME_AVATAR_HAT_IDS,
-  type ThemeBranding,
-} from "../../../packages/gateway-protocol/src/theme.ts";
+export { currentThemeBranding } from "../app/theme-branding.ts";
 
 const MARK = {
   viewBox: "0 0 120 120",
@@ -35,13 +32,4 @@ export function neutralMarkSvg({ fill, glyph }: { fill: string; glyph: string })
   const attribute = (value: string) =>
     value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${MARK.viewBox}" fill="none"><rect x="${MARK.inset}" y="${MARK.inset}" width="${MARK.size}" height="${MARK.size}" rx="${MARK.radius}" fill="${attribute(fill)}"/><path d="${MARK.glyph}" fill="none" stroke="${attribute(glyph)}" stroke-width="${MARK.strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-}
-
-export function currentThemeBranding(): Pick<ThemeBranding, "mascot" | "avatarHat"> {
-  // Leaf glyphs follow a theme switch on their next render.
-  const data = typeof document === "undefined" ? undefined : document.documentElement.dataset;
-  return {
-    mascot: data?.themeMascot === "none" ? "none" : "claw",
-    avatarHat: THEME_AVATAR_HAT_IDS.find((id) => id === data?.themeAvatarHat),
-  };
 }

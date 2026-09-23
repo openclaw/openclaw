@@ -72,3 +72,22 @@ export function createMockCommandInteraction(
   };
   return interaction;
 }
+
+export function createConfiguredAcpBinding(params: {
+  channelId: string;
+  peerKind: "channel" | "direct";
+  agentId?: string;
+}) {
+  return {
+    type: "acp",
+    agentId: params.agentId ?? "codex",
+    match: {
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: params.peerKind, id: params.channelId },
+    },
+    acp: {
+      mode: "persistent",
+    },
+  } as const;
+}

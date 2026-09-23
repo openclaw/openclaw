@@ -331,12 +331,17 @@ function renderBuildFacts(props: UpdatesViewProps) {
 }
 
 function renderScheduleStatus(props: UpdatesViewProps): TemplateResult {
+  const run = props.update.updateRun;
+  const running = run?.status === "running";
   const campaign = props.update.updateSchedule?.campaign;
   const campaignLabel = formatUpdateCampaignLabel(props.update.updateSchedule, props.nowMs);
   const target = formatUpdateTargetLabel(props.update.updateSchedule, props.update.updateAvailable);
   let kind: Parameters<typeof renderSettingsStatus>[0]["kind"] = "muted";
   let label: string;
-  if (props.update.updateStatusRefreshing && !props.updateBusy) {
+  if (running) {
+    kind = "accent";
+    label = t("updates.page.activePhase", { phase: t(`updates.run.phase.${run.phase}`) });
+  } else if (props.update.updateStatusRefreshing && !props.updateBusy) {
     label = t("updates.page.checking");
   } else if (props.update.updateStatusCheckBanner && !props.updateBusy) {
     kind = "warn";
@@ -399,7 +404,8 @@ function renderScheduleStatus(props: UpdatesViewProps): TemplateResult {
     props.update.updateStatusCheckBanner &&
     !props.update.updateStatusRefreshing &&
     !props.updateBusy;
-  const countdown = campaign?.state === "waiting-for-idle" || campaign?.state === "countdown";
+  const countdown =
+    !running && (campaign?.state === "waiting-for-idle" || campaign?.state === "countdown");
   return html`<span
     class=${checkFailed ? "updates-status-check-failed" : nothing}
     role=${countdown ? "timer" : nothing}
@@ -453,6 +459,14 @@ function renderCommitList(props: UpdatesViewProps) {
 }
 
 export function renderUpdates(props: UpdatesViewProps): TemplateResult {
+  const run = props.update.updateRun?.status === "running" ? props.update.updateRun : null;
+  const step = run?.steps.findLast(
+    (entry) =>
+      entry.status === "in_progress" &&
+      entry.step !== run.phase &&
+      !entry.step.startsWith("notice:"),
+  );
+  const runTarget = run?.target.sha ?? run?.target.version ?? run?.target.tag;
   const settings = readUpdatesSettings(props.configObject, props.update.updateSchedule);
   const channelOptions: Array<{ value: UpdatesChannel; label: string }> = [
     { value: "stable", label: t("updates.channel.stable") },
@@ -470,9 +484,11 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
   const devPackageInstall =
     settings.channel === "dev" && props.update.updateSchedule?.install?.kind === "package";
   const campaign = props.update.updateSchedule?.campaign;
+  const separateCampaign = run && campaign && run.origin.campaignId !== campaign.id;
   const holdActive =
     campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > (props.nowMs ?? Date.now());
   const showHold = Boolean(
+    !run &&
     campaign &&
     campaign.state !== "applying" &&
     props.canUpdate &&
@@ -547,11 +563,15 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
         renderSettingsSection({ title: t("updates.page.statusTitle") }, [
           renderSettingsRow({
             title: t("updates.page.scheduleStatus"),
+            description:
+              run && props.update.updateStatusBanner?.source === "read"
+                ? props.update.updateStatusBanner.text
+                : undefined,
             control: html`
               <div class="updates-status-control">
                 <div>
                   ${renderScheduleStatus(props)}
-                  ${!props.update.updateStatusRefreshing ? renderUpdateGitRevisions(props.update.updateSchedule, props.update.updateAvailable) : nothing}
+                  ${!run && !props.update.updateStatusRefreshing ? renderUpdateGitRevisions(props.update.updateSchedule, props.update.updateAvailable) : nothing}
                 </div>
                 ${
                   props.update.updateStatusCheckBanner
@@ -585,7 +605,40 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
               </div>
             `,
           }),
-          renderCommitList(props),
+          step
+            ? renderSettingsRow({
+                title: t("updates.page.currentStep"),
+                control: renderSettingsValue(step.step),
+              })
+            : nothing,
+          runTarget
+            ? renderSettingsRow({
+                title: t("updates.page.runTarget"),
+                control: renderSettingsValue(
+                  html`<code dir="ltr" title=${runTarget}
+                    >${run?.target.sha ? runTarget.slice(0, 12) : runTarget}</code
+                  >`,
+                ),
+              })
+            : nothing,
+          run
+            ? renderSettingsRow({
+                title: t("updates.page.lastProgress"),
+                control: renderTimestamp(run.updatedAtMs, props.nowMs),
+              })
+            : nothing,
+          separateCampaign
+            ? renderSettingsRow({
+                title: t("updates.page.scheduledUpdate"),
+                control: html`<div>
+                  <span role="timer" aria-live="off"
+                    >${formatUpdateCampaignLabel(props.update.updateSchedule, props.nowMs)}</span
+                  >
+                  ${renderUpdateGitRevisions(props.update.updateSchedule, props.update.updateAvailable)}
+                </div>`,
+              })
+            : nothing,
+          !run ? renderCommitList(props) : nothing,
           renderSettingsRow({
             title: t("updates.page.updateNow"),
             description: t("updates.page.updateNowDescription"),

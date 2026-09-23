@@ -2,6 +2,7 @@ import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-ev
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
+  bindOperatorModelExecution,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
 } from "../admitted-run-context.js";
@@ -30,20 +31,21 @@ export function retainHarnessSource(
   if (!source) {
     return undefined;
   }
-  const release = source.retain?.();
+  // A retained source does not attest the model used by independent native work.
+  const modelExecution = bindOperatorModelExecution(source, undefined);
   try {
     assertActive();
-    source.assertCurrent();
+    modelExecution?.assertCurrent();
     assertActive();
   } catch (error) {
-    release?.();
+    modelExecution?.release();
     throw error;
   }
   let released = false;
   const lifecycle = new AbortController();
   retainedSources.add(lifecycle);
-  const signal = source.signal
-    ? AbortSignal.any([source.signal, lifecycle.signal])
+  const signal = modelExecution
+    ? AbortSignal.any([modelExecution.signal, lifecycle.signal])
     : lifecycle.signal;
   const assertRetained = () => {
     if (released || getAgentRunLifecycleGeneration() !== lifecycleGeneration) {
@@ -55,14 +57,14 @@ export function retainHarnessSource(
     signal,
     assertCurrent: () => {
       assertRetained();
-      source.assertCurrent();
+      modelExecution?.assertCurrent();
       assertRetained();
     },
     release: () => {
       if (!released) {
         released = true;
         retainedSources.delete(lifecycle);
-        release?.();
+        modelExecution?.release();
       }
     },
   });

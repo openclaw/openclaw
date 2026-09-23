@@ -9,7 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   createPersonalGitHubOAuthLifecycle,
   personalGitHubStatus,
@@ -73,8 +73,8 @@ export async function expectPersonalPublicationReplay(
 }
 
 export async function createPersonalPublicationFixture() {
-  const owner = ensureProfileForEmail("alice@example.test").id;
-  const otherOwner = ensureProfileForEmail("bob@example.test").id;
+  const owner = (await ensureCanonicalUserProfileForEmail("alice@example.test")).id;
+  const otherOwner = (await ensureCanonicalUserProfileForEmail("bob@example.test")).id;
   const generation = randomUUID();
   const personalToken = `synthetic-personal-credential-${generation}`;
   updateUserGitHubConnection(

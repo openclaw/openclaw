@@ -236,7 +236,7 @@ describe("execution identity context storage", () => {
       executionId: "execution-second",
       runtimeInstanceId: "runtime-1",
     });
-    recordDeniedApprovalForRun("session-run", database, "shared-run-approval", {
+    await recordDeniedApprovalForRun("session-run", database, "shared-run-approval", {
       contextId: "context-first",
       executionId: "execution-first",
     });
@@ -914,7 +914,7 @@ describe("execution identity context storage", () => {
       executionId: "execution-denied-receipt",
       runtimeInstanceId: "runtime-1",
     });
-    recordDeniedApprovalForRun("run-denied-receipt", database, "denied-approval", {
+    await recordDeniedApprovalForRun("run-denied-receipt", database, "denied-approval", {
       contextId: "context-denied-receipt",
       executionId: "execution-denied-receipt",
     });
@@ -978,7 +978,7 @@ describe("execution identity context storage", () => {
       executionId: "execution-corrupt-approval",
       runtimeInstanceId: "runtime-1",
     });
-    recordDeniedApprovalForRun("run-corrupt-approval", database, "corrupt-approval", {
+    await recordDeniedApprovalForRun("run-corrupt-approval", database, "corrupt-approval", {
       contextId: "context-corrupt-approval",
       executionId: "execution-corrupt-approval",
     });
@@ -1003,7 +1003,7 @@ describe("execution identity context storage", () => {
 
   it("reports a retained approval with no identity context as an unknown missing link", async () => {
     const database = databaseOptions();
-    recordDeniedApprovalForRun("run-missing-context", database);
+    await recordDeniedApprovalForRun("run-missing-context", database);
 
     expect(
       await inspectExecutionIdentityRun(

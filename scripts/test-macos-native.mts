@@ -72,6 +72,11 @@ await runWithFailedTrailer("macos-native", async () => {
       TMPDIR: `${tmp}/`,
       TMP: tmp,
       TEMP: tmp,
+      // macOS defaults to terminal-only backtraces; CI must never wait for crash interaction.
+      SWIFT_BACKTRACE:
+        "enable=yes,interactive=no,color=no,sanitize=yes,threads=crashed,registers=none,images=mentioned",
+      // SwiftPM forwards test output through buffered print calls, including stalled diagnostics.
+      NSUnbufferedIO: "YES",
       // The full suite protects default-profile lifecycle behavior. Named-profile
       // construction is exercised separately; both use the disposable runner's account.
       OPENCLAW_PROFILE: profileMode === "named" ? `test-${randomUUID()}` : "default",

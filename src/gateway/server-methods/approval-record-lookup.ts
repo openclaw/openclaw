@@ -11,6 +11,7 @@ import type {
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "../session-sharing.js";
+import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 const APPROVAL_NOT_FOUND_DETAILS = {
@@ -119,26 +120,34 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   return true;
 }
 
-export function listVisiblePendingApprovalRequests<TPayload>(params: {
+export async function listVisiblePendingApprovalRequests<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
+  authority?: ApprovalRequestAuthority;
   client?: GatewayClient | null;
   cfg?: OpenClawConfig;
   approvalKind?: ChannelApprovalKind;
-}): Array<{
-  approvalKind?: ChannelApprovalKind;
-  id: string;
-  request: TPayload;
-  createdAtMs: number;
-  expiresAtMs: number;
-}> {
-  return params.manager
-    .listPendingRecords()
-    .filter((record) =>
-      isApprovalRecordVisibleToClient({
-        record,
-        client: params.client ?? null,
-        ...(params.cfg ? { cfg: params.cfg } : {}),
-      }),
+  getCfg?: () => OpenClawConfig;
+}): Promise<
+  Array<{
+    approvalKind?: ChannelApprovalKind;
+    id: string;
+    request: TPayload;
+    createdAtMs: number;
+    expiresAtMs: number;
+  }>
+> {
+  const records = await params.manager.listPendingRecords(params.authority);
+  params.authority?.assertCurrent();
+  const cfg = params.getCfg?.() ?? params.cfg;
+  return records
+    .filter(
+      (record) =>
+        !params.client?.invalidated &&
+        isApprovalRecordVisibleToClient({
+          record,
+          client: params.client ?? null,
+          ...(cfg ? { cfg } : {}),
+        }),
     )
     .map(({ id, request, createdAtMs, expiresAtMs }) => {
       const approval = { id, request, createdAtMs, expiresAtMs };
@@ -164,51 +173,64 @@ function resolveLookupError(params: {
   };
 }
 
-function resolveApprovalRecordForState<TPayload>(
+async function resolveApprovalRecordForState<TPayload>(
   params: {
     manager: ExecApprovalManager<TPayload>;
+    authority?: ApprovalRequestAuthority;
     inputId: string;
     client?: GatewayClient | null;
     cfg?: OpenClawConfig;
+    getCfg?: () => OpenClawConfig;
     exposeAmbiguousPrefixError?: boolean;
     recordFilter?: (record: ExecApprovalRecord<TPayload>) => boolean;
   },
   expectedState: "pending" | "resolved",
-): ApprovalRecordLookupResult<TPayload> {
-  const resolvedId = params.manager.lookupApprovalId(params.inputId, {
-    includeResolved: expectedState === "resolved",
-    filter: (record) =>
+): Promise<ApprovalRecordLookupResult<TPayload>> {
+  const visible = (record: ExecApprovalRecord<TPayload>) => {
+    const cfg = params.getCfg?.() ?? params.cfg;
+    return (
+      !params.client?.invalidated &&
       isApprovalRecordVisibleToClient({
         record,
         client: params.client ?? null,
-        ...(params.cfg ? { cfg: params.cfg } : {}),
+        ...(cfg ? { cfg } : {}),
       }) &&
-      (params.recordFilter?.(record) ?? true),
+      (params.recordFilter?.(record) ?? true)
+    );
+  };
+  const resolvedId = await params.manager.lookupApprovalId(params.inputId, {
+    includeResolved: expectedState === "resolved",
+    filter: visible,
+    authority: params.authority,
   });
+  params.authority?.assertCurrent();
   if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
     return { ok: false, response: resolveLookupError({ ...params, resolvedId }) };
   }
-  const snapshot = params.manager.getSnapshot(resolvedId.id);
+  const snapshot = await params.manager.getSnapshot(resolvedId.id, params.authority);
+  params.authority?.assertCurrent();
   const isResolved = snapshot?.resolvedAtMs !== undefined;
-  return !snapshot || isResolved !== (expectedState === "resolved")
+  return !snapshot || isResolved !== (expectedState === "resolved") || !visible(snapshot)
     ? { ok: false, response: "missing" }
     : { ok: true, approvalId: resolvedId.id, snapshot };
 }
 
 export function resolvePendingApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
+  authority?: ApprovalRequestAuthority;
   inputId: string;
   client?: GatewayClient | null;
   cfg?: OpenClawConfig;
+  getCfg?: () => OpenClawConfig;
   exposeAmbiguousPrefixError?: boolean;
   recordFilter?: (record: ExecApprovalRecord<TPayload>) => boolean;
-}): ApprovalRecordLookupResult<TPayload> {
+}): Promise<ApprovalRecordLookupResult<TPayload>> {
   return resolveApprovalRecordForState(params, "pending");
 }
 
 export function resolveResolvedApprovalRecord<TPayload>(
   params: Parameters<typeof resolvePendingApprovalRecord<TPayload>>[0],
-): ApprovalRecordLookupResult<TPayload> {
+): Promise<ApprovalRecordLookupResult<TPayload>> {
   return resolveApprovalRecordForState(params, "resolved");
 }
 

@@ -22,7 +22,7 @@ import {
   createInMemoryTaskFlowRegistryStore,
   reconcileTaskFlowRestoreForTests,
 } from "../test-utils/task-registry-store.js";
-import { ensureTaskFlowRegistryReadyAsync } from "./task-flow-registry.js";
+import { ensureTaskFlowRegistryReadyAsync, readResidentTaskFlow } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { markTaskTerminalById } from "./task-registry-record-api.js";
 import type { TaskRegistryRestoreResult } from "./task-registry-restore.worker.js";
@@ -365,17 +365,7 @@ it.each(["live", "restored"] as const)(
         ),
       );
     }
-    let published: TaskFlowRecord | undefined;
-    configureTaskFlowRegistryRuntime({
-      store: flows,
-      observers: {
-        onEvent(event) {
-          if (event.kind === "upserted" && event.flow.flowId === flow.flowId) {
-            published = event.flow;
-          }
-        },
-      },
-    });
+    configureTaskFlowRegistryRuntime({ store: flows });
     configureTaskRegistryRuntime({ store });
     const context = captureOpenClawStateWorkerContext();
     await ensureTaskFlowRegistryReadyAsync(context);
@@ -448,7 +438,7 @@ it.each(["live", "restored"] as const)(
       suspension?.release();
       await setImmediate();
       expect(enter).toHaveBeenCalledOnce();
-      expect(published).toMatchObject({ revision: 1, status: "succeeded" });
+      expect(readResidentTaskFlow(flow.flowId)).toMatchObject({ revision: 1, status: "succeeded" });
       expect.soft(retrySignal).toBeDefined();
       expect.soft(retrySignal).not.toBe(foreground.signal);
       expect.soft(retrySignal?.aborted).toBe(false);

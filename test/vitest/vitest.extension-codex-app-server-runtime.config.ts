@@ -25,7 +25,7 @@ function createExtensionCodexAppServerRuntimeVitestConfig(
       dir: "extensions",
       env,
       exclude: databaseWorkerExtensionTestFiles,
-      fileParallelism: false,
+      isolate: true,
       name: "extension-codex-app-server-runtime",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],

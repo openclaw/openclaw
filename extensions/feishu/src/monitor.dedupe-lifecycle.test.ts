@@ -7,6 +7,7 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuBroadcastIngressSettlement } from "./bot-broadcast.js";
+import type { handleFeishuMessage } from "./bot.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import type { FeishuMessageProcessingClaim } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
@@ -271,6 +272,9 @@ describe("Feishu account replay work ownership", () => {
           throw new Error("Expected synthetic event replay claim");
         }
         const commit = claimed.handle.commit;
+        if (kind === "meeting") {
+          mocks.claim.mockResolvedValue(claimed);
+        }
         const processingFinished = createDeferred<void>();
         const broadcastDeferred = createDeferred<void>();
         let broadcastLane: FeishuIngressLifecycle | undefined;
@@ -281,7 +285,10 @@ describe("Feishu account replay work ownership", () => {
           return commit();
         });
         mocks.handleMessage.mockImplementation(
-          async ({ trackTask }: Parameters<typeof import("./bot.js").handleFeishuMessage>[0]) => {
+          async ({
+            trackTask,
+            turnAdoptionLifecycle,
+          }: Parameters<typeof handleFeishuMessage>[0]) => {
             try {
               if (kind === "card-broadcast") {
                 const broadcast = createFeishuBroadcastIngressSettlement({
@@ -294,7 +301,11 @@ describe("Feishu account replay work ownership", () => {
                 broadcastDeferred.resolve();
                 return;
               }
-              await claimed.handle.commit();
+              if (kind === "meeting") {
+                await turnAdoptionLifecycle?.onAdopted();
+              } else {
+                await claimed.handle.commit();
+              }
             } finally {
               processingFinished.resolve();
             }
@@ -414,111 +425,124 @@ describe("Feishu account replay work ownership", () => {
     expect(mocks.createBindings).not.toHaveBeenCalled();
   });
 
-  it.each(["claim", "commit", "forget"] as const)(
-    "joins detached bot-menu %s before retiring the account",
-    async (phase) => {
-      const controller = new AbortController();
-      const reached = createDeferred<void>();
-      const release = createDeferred<void>();
-      const settled = createDeferred<void>();
-      let claimStarted = false;
-      const ready = createDeferred<(data: unknown) => Promise<void>>();
-      const transportClosed = createDeferred<void>();
-      const claim: FeishuMessageProcessingClaim = {
-        keys: ["fixture-menu"],
-        commit: vi.fn(async () => {
-          if (phase === "commit") {
-            reached.resolve();
-            await release.promise;
-          }
-          settled.resolve();
-          return true;
+  it.each([
+    ["menu", "claim"],
+    ["menu", "commit"],
+    ["menu", "forget"],
+    ["meeting", "claim"],
+  ] as const)("joins detached %s %s before retiring the account", async (kind, phase) => {
+    const controller = new AbortController();
+    const reached = createDeferred<void>();
+    const release = createDeferred<void>();
+    const settled = createDeferred<void>();
+    let claimStarted = false;
+    const ready = createDeferred<(data: unknown) => Promise<void>>();
+    const transportClosed = createDeferred<void>();
+    const claim: FeishuMessageProcessingClaim = {
+      keys: ["fixture-menu"],
+      commit: vi.fn(async () => {
+        if (phase === "commit") {
+          reached.resolve();
+          await release.promise;
+        }
+        settled.resolve();
+        return true;
+      }),
+      release: vi.fn(() => settled.resolve()),
+    };
+    mocks.claim.mockImplementation(async () => {
+      claimStarted = true;
+      if (phase === "claim") {
+        reached.resolve();
+        await release.promise;
+      }
+      return { kind: "claimed", handle: claim };
+    });
+    if (phase === "forget") {
+      mocks.forget.mockImplementation(async () => {
+        reached.resolve();
+        await release.promise;
+        return true;
+      });
+      mocks.menu.mockRejectedValue(
+        Object.assign(new Error("retryable-menu"), {
+          name: "FeishuRetryableSyntheticEventError",
         }),
-        release: vi.fn(() => settled.resolve()),
-      };
-      mocks.claim.mockImplementation(async () => {
-        claimStarted = true;
-        if (phase === "claim") {
-          reached.resolve();
-          await release.promise;
-        }
-        return { kind: "claimed", handle: claim };
-      });
-      if (phase === "forget") {
-        mocks.forget.mockImplementation(async () => {
-          reached.resolve();
-          await release.promise;
-          return true;
-        });
-        mocks.menu.mockRejectedValue(
-          Object.assign(new Error("retryable-menu"), {
-            name: "FeishuRetryableSyntheticEventError",
-          }),
-        );
-      }
-      mocks.register.mockImplementation(
-        (handlers: Record<string, (data: unknown) => Promise<void>>) => {
-          const menu = handlers["application.bot.menu_v6"];
-          if (!menu) {
-            throw new Error("Menu handler was not registered");
-          }
-          ready.resolve(menu);
-        },
       );
-      mocks.transport.mockImplementation(async () => {
-        if (!controller.signal.aborted) {
-          await new Promise<void>((resolve) => {
-            controller.signal.addEventListener("abort", () => resolve(), { once: true });
-          });
+    }
+    mocks.register.mockImplementation(
+      (handlers: Record<string, (data: unknown) => Promise<void>>) => {
+        const menu =
+          handlers[kind === "meeting" ? "vc.bot.meeting_invited_v1" : "application.bot.menu_v6"];
+        if (!menu) {
+          throw new Error("Menu handler was not registered");
         }
-        transportClosed.resolve();
-      });
-      let stopped = false;
-      const monitor = startAccount(controller).finally(() => {
-        stopped = true;
-      });
-      void monitor.catch(ready.reject);
-      try {
-        const menu = await ready.promise;
-        const acknowledgement = menu({
-          event_key: "quick-actions",
-          timestamp: "fixture-time",
-          operator: { operator_id: { open_id: "fixture-user" } },
-        });
-        await reached.promise;
-        if (phase !== "claim") {
-          await acknowledgement;
-        }
-        controller.abort();
-        await transportClosed.promise;
+        ready.resolve(menu);
+      },
+    );
+    mocks.transport.mockImplementation(async () => {
+      if (!controller.signal.aborted) {
         await new Promise<void>((resolve) => {
-          setImmediate(resolve);
+          controller.signal.addEventListener("abort", () => resolve(), { once: true });
         });
-        expect(stopped).toBe(false);
-        expect(mocks.stopBindings).not.toHaveBeenCalled();
-        release.resolve();
-        await acknowledgement;
-        await monitor;
-        expect(mocks.stopBindings).toHaveBeenCalledOnce();
-        if (phase === "claim") {
-          expect(mocks.menu).not.toHaveBeenCalled();
-          expect(claim.release).toHaveBeenCalledOnce();
-          expect(claim.commit).not.toHaveBeenCalled();
-        } else if (phase === "commit") {
-          expect(claim.commit).toHaveBeenCalledOnce();
-          expect(claim.release).not.toHaveBeenCalled();
-        } else {
-          expect(mocks.forget).toHaveBeenCalledOnce();
-          expect(claim.release).toHaveBeenCalledOnce();
-        }
-      } finally {
-        release.resolve();
-        controller.abort();
-        await monitor;
-        if (claimStarted) {
-          await settled.promise;
-        }
       }
-    },
-  );
+      transportClosed.resolve();
+    });
+    let stopped = false;
+    const monitor = startAccount(controller, kind === "meeting").finally(() => {
+      stopped = true;
+    });
+    void monitor.catch(ready.reject);
+    try {
+      const menu = await ready.promise;
+      const acknowledgement = menu(
+        kind === "meeting"
+          ? {
+              event_id: "fixture-pending-meeting",
+              meeting: { meeting_no: "123456789" },
+              inviter: { id: { open_id: "fixture-user" } },
+              invite_time: "1712345678",
+            }
+          : {
+              event_key: "quick-actions",
+              timestamp: "fixture-time",
+              operator: { operator_id: { open_id: "fixture-user" } },
+            },
+      );
+      await reached.promise;
+      if (phase !== "claim") {
+        await acknowledgement;
+      }
+      controller.abort();
+      await transportClosed.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(stopped).toBe(false);
+      expect(mocks.stopBindings).not.toHaveBeenCalled();
+      release.resolve();
+      await acknowledgement;
+      await monitor;
+      expect(mocks.stopBindings).toHaveBeenCalledOnce();
+      if (phase === "claim") {
+        expect(mocks.menu).not.toHaveBeenCalled();
+        expect(mocks.handleMessage).not.toHaveBeenCalled();
+        expect(claim.release).toHaveBeenCalledOnce();
+        expect(claim.commit).not.toHaveBeenCalled();
+      } else if (phase === "commit") {
+        expect(claim.commit).toHaveBeenCalledOnce();
+        expect(claim.release).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.forget).toHaveBeenCalledOnce();
+        expect(claim.release).toHaveBeenCalledOnce();
+      }
+    } finally {
+      release.resolve();
+      controller.abort();
+      await monitor;
+      if (claimStarted) {
+        await settled.promise;
+      }
+    }
+  });
 });

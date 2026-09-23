@@ -13,6 +13,7 @@ import {
   compareTasksNewestFirst,
   listTasksFromIndex,
   selectTaskRecordsForOwnerTree,
+  selectTaskRecordsWithAncestors,
 } from "./task-registry-records.js";
 import {
   assertTaskRegistryOwnerCurrent,
@@ -44,6 +45,10 @@ export type TaskRegistryRead = {
   getTasksByRunId: (runId: string) => TaskRecord[];
   listTaskRecordsForChildSessionKey: (childSessionKey: string) => TaskRecord[];
   listTaskRecordsForOwnerTree: (rootOwnerKeys: ReadonlySet<string>) => TaskRecord[];
+  listTaskRecordsWithAncestors: (
+    taskIds: readonly string[],
+    isRootTask: (task: Readonly<TaskRecord>) => boolean,
+  ) => TaskRecord[];
   listTasksForRelatedSessionKey: (sessionKey: string, sessionAgentId?: string) => TaskRecord[];
   listTasksForAgentId: (agentId: string) => TaskRecord[];
 };
@@ -82,26 +87,51 @@ function isTaskRegistryReadCurrent(taskId: string, mode: "identity" | "settled")
     return true;
   }
   const task = tasks.get(taskId);
-  const preserved = new Set<TaskRegistryMutationScope>();
+  const currentScopes = new Set<TaskRegistryMutationScope>();
   for (const pending of projection.pending) {
     if (mode === "identity" && pending.readIdentity === "preserved") {
-      preserved.add(pending.scope);
-    } else if (
-      pending.scope.taskId === taskId ||
-      pending.published.has(taskId) ||
-      pending.publication?.records.has(taskId) ||
-      (task && matchesScope(task, pending.scope))
-    ) {
+      currentScopes.add(pending.scope);
+      continue;
+    }
+    const creation =
+      mode === "identity" &&
+      typeof pending.readIdentity === "object" &&
+      pending.readIdentity.kind === "creation"
+        ? pending.readIdentity
+        : undefined;
+    const changesIdentity = creation
+      ? creation.taskId === taskId ||
+        Boolean(
+          creation.runId &&
+          (task?.runId?.trim() === creation.runId ||
+            pending.published.get(taskId)?.runId?.trim() === creation.runId),
+        )
+      : pending.scope.taskId === taskId ||
+        pending.published.has(taskId) ||
+        (task && matchesScope(task, pending.scope));
+    if (changesIdentity || pending.publication?.records.has(taskId)) {
       return false;
+    }
+    if (creation) {
+      // Its broad readback includes sibling session rows that creation cannot rewrite.
+      currentScopes.add(pending.scope);
     }
   }
   // Failed publication can leave a dirty scope after its mutation owner retires.
   for (const scope of projection.dirtyScopes) {
-    if (!preserved.has(scope) && (scope.taskId === taskId || (task && matchesScope(task, scope)))) {
+    if (
+      !currentScopes.has(scope) &&
+      (scope.taskId === taskId || (task && matchesScope(task, scope)))
+    ) {
       return false;
     }
   }
   return true;
+}
+
+/** Inspect resident settlement inside an already admitted synchronous read batch. */
+export function isTaskRegistryTaskSettled(taskId: string): boolean {
+  return !hasPendingTaskRegistryEvents(taskId) && isTaskRegistryReadCurrent(taskId, "settled");
 }
 
 type TaskRegistryReadOwner = {
@@ -225,7 +255,7 @@ export async function prepareTaskRegistryRead(
     isTaskCurrent,
     isTaskSettled(taskId) {
       assertCurrent();
-      return !hasPendingTaskRegistryEvents(taskId) && isTaskRegistryReadCurrent(taskId, "settled");
+      return isTaskRegistryTaskSettled(taskId);
     },
     isChildSessionCurrent(childSessionKey) {
       assertCurrent();
@@ -305,6 +335,20 @@ export async function prepareTaskRegistryRead(
         normalized,
         taskIdsByRelatedSessionKey.get(normalized) ?? [],
       );
+    },
+    listTaskRecordsWithAncestors(taskIds, isRootTask) {
+      assertCurrent();
+      return selectTaskRecordsWithAncestors(
+        tasks,
+        getTaskRegistryProcessState().taskIdsByChildSessionKey,
+        taskIds,
+        isRootTask,
+      ).map((task) => {
+        if (!isTaskCurrent(task.taskId)) {
+          throw new Error("Task registry read identity requires preparation");
+        }
+        return cloneTaskRecord(task);
+      });
     },
     listTaskRecordsForOwnerTree(rootOwnerKeys) {
       assertCurrent();

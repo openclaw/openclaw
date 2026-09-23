@@ -539,7 +539,7 @@ export async function getStatusSummary(
     startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
     startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
     installationReplacementWarning: getGatewayInstallationReplacement()?.message,
-    secretEgressProxy: getSecretEgressCertificateStatus(),
+    secretEgressProxy: await getSecretEgressCertificateStatus(),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
       ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
         const redactedReason: string = redactSecretDegradationReason(reason);

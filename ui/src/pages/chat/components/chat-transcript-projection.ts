@@ -575,7 +575,13 @@ export function projectChatTranscript(
       }
     }
   }
-  const realtimeConversation = renderRealtimeTalkConversation(props);
+  const persistedIds = new Set(props.messages.map(persistedMessageEntryId));
+  const realtimeConversation = renderRealtimeTalkConversation({
+    ...props,
+    realtimeTalkConversation: props.realtimeTalkConversation?.filter(
+      (entry) => !entry.transcriptId || !persistedIds.has(entry.transcriptId),
+    ),
+  });
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
       kind: "content",
@@ -611,6 +617,7 @@ export function projectChatTranscript(
     locale,
     props.branding?.mascot,
     props.branding?.avatarHat,
+    props.branding?.artwork,
     props.branding?.workingPhrases,
     appliedBranding.mascot,
     appliedBranding.avatarHat,

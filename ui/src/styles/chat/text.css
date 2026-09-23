@@ -390,9 +390,10 @@
 }
 
 /* Keep bullets, checkboxes, and numbers in one marker column while their text
-   shares the same start edge. */
-:is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item))::marker {
-  content: "";
+   shares the same start edge. Suppress native bullets on the item itself:
+   Safari does not reliably support content on ::marker. */
+:is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item)) {
+  list-style: none;
 }
 
 :is(.chat-text, .chat-thinking) :where(ul > .task-list-item) {

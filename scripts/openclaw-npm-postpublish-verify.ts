@@ -28,6 +28,7 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-pa
 import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+  WORKER_BUNDLE_SQLITE_STORE_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
@@ -89,6 +90,7 @@ const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
 const SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS = new Set([
   `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
   `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+  `worker/${WORKER_BUNDLE_SQLITE_STORE_PATH}`,
 ]);
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Optional A2UI markdown renderer. The Canvas host bundle catches the missing

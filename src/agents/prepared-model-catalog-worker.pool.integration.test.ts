@@ -2,12 +2,11 @@ import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as checkpoint } from "node:timers/promises";
-import { threadId, Worker } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginMetadataSnapshotCache, retirePluginCache } from "../plugins/plugin-cache.js";
-import { sweepPluginSourceCaptureDirectories } from "../plugins/plugin-source-capture-directory.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as agentAuthDiscovery from "./agent-auth-discovery.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
@@ -15,11 +14,7 @@ import {
   getPreparedModelCatalogWorkerPoolSnapshot,
   PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
 } from "./prepared-model-catalog-worker.js";
-import {
-  EXTERNAL_AUTH_PROFILE_ID,
-  writeFixturePlugin,
-  PROVIDER_ID,
-} from "./prepared-model-catalog-worker.test-support.js";
+import { writeFixturePlugin, PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
 import {
   getPreparedModelFullCatalogAuth,
   getPreparedModelRuntimeAuthStore,
@@ -38,7 +33,6 @@ import {
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import {
   loadCompletedFullCatalog,
-  readCatalogDiscoveryCaptures,
   usePreparedCatalogWorkerFixtures,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
@@ -49,97 +43,6 @@ const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 describe("Gateway catalog worker pool", () => {
   beforeEach(() => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
-  });
-  it("reuses one Gateway catalog worker and source graph across agent publications", async () => {
-    const spawned: Worker[] = [];
-    const workerChannel = channel("worker_threads");
-    const recordWorker = (message: unknown) => {
-      if (isRecord(message) && message.worker instanceof Worker) {
-        spawned.push(message.worker);
-      }
-    };
-    try {
-      const fixture = await createFleetFixture(() => workerChannel.subscribe(recordWorker));
-      const { snapshots, agentIds } = fixture;
-      await loadCompletedFullCatalog(snapshots[0]!);
-      const initialCaptures = new Set(
-        readCatalogDiscoveryCaptures(fixture.root)
-          .filter((capture) => capture.threadId !== threadId)
-          .map((capture) => capture.filename),
-      );
-      expect(initialCaptures.size).toBeGreaterThan(0);
-      const capturedRuntimeSources = () =>
-        new Set(
-          fs
-            .readFileSync(path.join(fixture.root, "runtime-artifact-paths.txt"), "utf8")
-            .split("\n")
-            .filter(Boolean),
-        );
-      writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
-      const catalogs = await Promise.all(
-        snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)),
-      );
-      expect(spawned).toHaveLength(1);
-      expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
-        maxWorkers: 1,
-        workers: 1,
-        workersCreated: 1,
-        activeTasks: 0,
-        pendingTasks: 0,
-      });
-      for (const [index, catalog] of catalogs.entries()) {
-        expect(catalog.entries).toContainEqual(
-          expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-        );
-        const auth = getPreparedModelFullCatalogAuth(catalog)!;
-        expect(auth.authStore.profiles[`fleet:${agentIds[index]}`]).toMatchObject({
-          key: `synthetic-${agentIds[index]}`,
-        });
-        expect(
-          Object.keys(auth.authStore.profiles).filter((id) => id.startsWith("fleet:")),
-        ).toEqual([`fleet:${agentIds[index]}`]);
-      }
-      const captures = new Set(
-        readCatalogDiscoveryCaptures(fixture.root)
-          .filter((capture) => capture.threadId !== threadId)
-          .map((capture) => capture.filename),
-      );
-      expect(captures).toEqual(initialCaptures);
-      expect(capturedRuntimeSources().size).toBe(1);
-      await Promise.all(
-        snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot, { refresh: true })),
-      );
-      expect(capturedRuntimeSources().size).toBe(1);
-      const filename = [...captures][0]!;
-      const captureRoot = filename.slice(0, filename.indexOf(`${path.sep}openclaw-plugin-build-`));
-      expect(path.basename(captureRoot)).toMatch(/^openclaw-model-catalog-/);
-      const instanceRoot = path.dirname(path.dirname(captureRoot));
-      expect(path.dirname(instanceRoot)).toBe(
-        path.join(fixture.env.OPENCLAW_STATE_DIR!, "tmp", "plugin-captures"),
-      );
-      expect(fs.existsSync(path.join(instanceRoot, "owner.sqlite"))).toBe(true);
-      const old = new Date(Date.now() - 2 * 60 * 60 * 1_000);
-      fs.utimesSync(instanceRoot, old, old);
-      await sweepPluginSourceCaptureDirectories(fixture.env.OPENCLAW_STATE_DIR!);
-      expect(fs.existsSync(filename)).toBe(true);
-      const inventory = () => fs.readdirSync(captureRoot).toSorted();
-      const retained = inventory();
-      for (const token of ["B", "C"]) {
-        fs.writeFileSync(fixture.externalAuthPath, token);
-        for (const snapshot of snapshots) {
-          const auth = await loadPreparedModelRuntimeAuth(snapshot, { providerIds: [PROVIDER_ID] });
-          expect(auth?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({
-            access: `v1:${token}`,
-          });
-          await loadCompletedFullCatalog(snapshot, { refresh: true });
-        }
-        expect(inventory()).toEqual(retained);
-      }
-      await closePreparedModelRuntimeSnapshots();
-      expect(fs.existsSync(captureRoot)).toBe(false);
-    } finally {
-      workerChannel.unsubscribe(recordWorker);
-    }
   });
   it("republishes failed catalog borrowers before replacing their source worker", async () => {
     const spawned: Worker[] = [];

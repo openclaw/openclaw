@@ -49,6 +49,7 @@ import type {
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
 } from "./session-cold-storage-worker.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -187,7 +188,7 @@ function stageTranscriptArchiveContent(
       database,
       db
         .selectFrom("transcript_events")
-        .select("event_json")
+        .select(transcriptEventJsonSql(database).as("event_json"))
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     )) {

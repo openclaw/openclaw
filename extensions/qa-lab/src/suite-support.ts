@@ -80,6 +80,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
     thinkingDefault: params.input?.thinkingDefault,
     claudeCliAuthMode: params.input?.claudeCliAuthMode,
     scenarioIds: [params.scenario.id],
+    ...(params.input?.scenarioDefinitions ? { scenarioDefinitions: [params.scenario] } : {}),
     enabledPluginIds: params.input?.enabledPluginIds,
     concurrency: 1,
     startLab: params.startLab,

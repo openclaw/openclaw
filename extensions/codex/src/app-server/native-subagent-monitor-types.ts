@@ -1,8 +1,12 @@
 import type {
+  captureAgentHarnessCompletionCustody,
+  createAgentHarnessTaskEventSink,
+  AgentHarnessCompletionCustody,
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
   AgentHarnessTaskRuntime,
   AgentHarnessTaskRuntimeScope,
+  AgentHarnessTaskAssignment,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
@@ -16,6 +20,8 @@ import type { NativeSubagentAssignment } from "./native-subagent-task-ids.js";
 import type { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 
 export type NativeSubagentMonitorRuntime = {
+  captureAgentHarnessCompletionCustody: typeof captureAgentHarnessCompletionCustody;
+  createAgentHarnessTaskEventSink: typeof createAgentHarnessTaskEventSink;
   createAgentHarnessTaskRuntime: typeof createAgentHarnessTaskRuntime;
   deliverAgentHarnessTaskCompletion: typeof deliverAgentHarnessTaskCompletion;
 };
@@ -26,6 +32,7 @@ export type NativeSubagentMonitorClient = Pick<
 >;
 
 export type ParentOwner = {
+  completionCustody?: AgentHarnessCompletionCustody;
   turnId?: string;
   claimDirectChild?: (threadId: string) => (() => void) | undefined;
   rejectPendingDirectChild?: (threadId: string, reason: string) => void;
@@ -46,6 +53,7 @@ export type NativeChildAdmissionEvidence = DirectSpawnEvidence &
         itemId?: string;
         owner?: ParentOwner;
         admittedOwner?: ParentOwner;
+        completionCustody?: AgentHarnessCompletionCustody;
       }
   );
 export type ParentState = {
@@ -81,6 +89,9 @@ export type NativeTurnObservation = {
 };
 
 export type ChildState = NativeSubagentAssignment & {
+  expectedTask?: AgentHarnessTaskAssignment;
+  completionCustody?: AgentHarnessCompletionCustody;
+  emitTaskEvent?: ReturnType<typeof createAgentHarnessTaskEventSink>;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   parentThreadId: string;
   nativeParentThreadId: string;
@@ -95,7 +106,6 @@ export type ChildState = NativeSubagentAssignment & {
   fallbackCompletion?: RecoveredCompletion;
   pendingCompletion?: RecoveredCompletion;
   completionTaskPhase?: "finalize" | "delivery";
-  completionTaskId?: string;
   // Cold reconstruction requires its saved requester, not a later live registration.
   requiresHistoryOwner?: true;
   subscriptionClosed?: true;
@@ -121,6 +131,7 @@ export type KnownChild = {
     state: NativeTurnState | undefined;
     admittedOwner?: ParentOwner;
     admittedSubmission?: CodexNativeSubagentSubmission;
+    completionCustody?: AgentHarnessCompletionCustody;
   }>;
   agentPaths: Set<string>;
 };
@@ -151,6 +162,8 @@ export type ThreadStatusRevision = {
 };
 
 export type TaskRecoveryCandidate = NativeSubagentAssignment & {
+  expectedTask: AgentHarnessTaskAssignment;
+  completionCustody?: AgentHarnessCompletionCustody;
   readonly taskId: string;
   terminal: boolean;
   observedTurns: NativeTurnObservation[];

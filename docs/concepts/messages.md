@@ -32,7 +32,7 @@ Channels can redeliver the same message after a reconnect. OpenClaw keeps an in-
 
 ## Inbound debouncing
 
-Rapid consecutive text messages from the same sender can be batched into one agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation and uses the most recent message for reply threading/IDs.
+Rapid text messages from the same sender can be batched into one agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation and uses the most recent message for reply threading/IDs. It is a quiet-window heuristic, not a guarantee that every part of a long message will arrive in one turn.
 
 ```json5
 {
@@ -51,8 +51,9 @@ Rapid consecutive text messages from the same sender can be batched into one age
 
 - Debounce applies to text-only messages; media/attachments flush immediately.
 - Control commands (stop/abort/status, etc.) bypass debouncing so they dispatch immediately.
-- For non-forwarded Telegram text, a near-limit fragment starts a separate batch and flushes earlier ordinary text from the same sender and conversation. This preserves order without merging the two batches.
-- Disabled by default: `messages.inbound.debounceMs` has no built-in default, so debouncing only activates once you set it (globally or per channel).
+- Telegram batches ordinary text by default after a 300ms quiet window. Other channels have no generic debounce delay unless configured.
+- `messages.inbound.byChannel.<channel>` takes precedence over `messages.inbound.debounceMs`; either overrides the channel default. Set `0` to disable ordinary burst batching.
+- For non-forwarded Telegram text, messages of at least 4000 characters allow up to 1500ms for continuations. Short and long messages share the same batch, without requiring consecutive message IDs. This automatic long-paste assembly remains active when ordinary batching is disabled.
 - iMessage follows the same generic debounce policy. `imsg` 0.13.1 and newer coalesces Apple URL-preview split-sends before OpenClaw receives them, so no iMessage-specific debounce setting is needed.
 
 Changes to `messages.inbound.debounceMs` and `messages.inbound.byChannel` apply without

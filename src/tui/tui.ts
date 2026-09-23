@@ -70,12 +70,14 @@ import {
   resolveRememberedTuiSessionKey,
   writeTuiLastSessionKey,
 } from "./tui-last-session.js";
+import { createTuiLocalCliRunner } from "./tui-local-cli.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 import { createTuiQuestionController } from "./tui-questions.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { createTuiRunIdTracker } from "./tui-session-run-coordinator.js";
+import { beginTuiShutdown } from "./tui-shutdown.js";
 import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
@@ -507,61 +509,6 @@ const TUI_SHUTDOWN_DRAIN_MAX_MS = 500;
 const TUI_SHUTDOWN_DRAIN_IDLE_MS = 100;
 const TUI_SHUTDOWN_HARD_EXIT_MS = 2000;
 const TUI_PROCESS_EXIT_AFTER_RETURN_MS = 2000;
-
-type TuiShutdownTask = () => void | Promise<void>;
-
-export function beginTuiShutdown(params: {
-  stopCommandScopes?: TuiShutdownTask;
-  stopClient: TuiShutdownTask;
-  stopTui: TuiShutdownTask;
-  disposeStatus: () => void;
-  requestFinish: () => void;
-  forceExit: () => void;
-  hardExitMs: number;
-  keepHardExitArmed?: boolean;
-  onError: (error: unknown) => void;
-}): ReturnType<typeof setTimeout> {
-  const hardExitTimer = setTimeout(params.forceExit, params.hardExitMs);
-  hardExitTimer.unref();
-  // Stop referenced animations before transport teardown can stall or redraw.
-  params.disposeStatus();
-  void Promise.resolve()
-    .then(async () => {
-      const errors: unknown[] = [];
-      const runtimeTasks = [params.stopCommandScopes, params.stopClient].map(async (task) =>
-        task?.(),
-      );
-      for (const result of await Promise.allSettled(runtimeTasks)) {
-        if (result.status === "rejected") {
-          errors.push(result.reason);
-        }
-      }
-      // Terminal ownership must be released even when transport teardown fails.
-      try {
-        await params.stopTui();
-      } catch (error) {
-        errors.push(error);
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "TUI shutdown failed");
-      }
-    })
-    .finally(() => {
-      if (params.keepHardExitArmed !== true) {
-        clearTimeout(hardExitTimer);
-      }
-      params.disposeStatus();
-    })
-    .catch(params.onError)
-    .finally(params.requestFinish);
-
-  // For the standalone command, settled teardown is not proof that runTui
-  // returned. Its unref keeps clean exits fast while preserving the deadline.
-  return hardExitTimer;
-}
 
 export function createTuiSignalHandlers(params: {
   handleCtrlC: () => void;
@@ -1580,6 +1527,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     clearLocalBtwRunIds: localBtwRunIds.clear,
   });
   reconcileReconnectRun = reconnectStreamingWatchdog;
+  const localCli = createTuiLocalCliRunner();
   const localShell = createLocalShellRunner({
     chatLog,
     tui,
@@ -1623,7 +1571,9 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     taskSuggestions?.dispose();
     chatLog.dispose();
     beginTuiShutdown({
-      stopCommandScopes: () => localShell.shutdown(),
+      stopCommandScopes: async () => {
+        await Promise.all([localShell.shutdown(), localCli.shutdown()]);
+      },
       stopClient: () => client.stop(),
       stopTui: () => drainAndStopTuiSafely(tui),
       disposeStatus,
@@ -1682,6 +1632,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     isRunObserved,
     flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
+    localCli,
     reopenQuestion: () => questions.reopen().catch(reportQuestionRefreshError),
     requestExit,
   });
@@ -1717,6 +1668,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       tui.requestRender();
       return;
     }
+    localCli.cancel();
     void abortActive();
   };
   const handleCtrlC = () => {

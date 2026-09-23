@@ -20,7 +20,6 @@ import {
   listSessionTranscriptInstances,
   loadSessionEntry,
   openSessionEntryReadView,
-  recordSessionParticipant,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
@@ -30,6 +29,7 @@ import {
   iterateSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
 import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());

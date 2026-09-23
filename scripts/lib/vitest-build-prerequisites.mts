@@ -42,7 +42,7 @@ const runtimeConsumers = [
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime",
-    dir: "src/gateway",
+    dir: "",
   },
   {
     file: "src/plugins/loader.test.ts",
@@ -140,7 +140,7 @@ const runtimeConsumers = [
   {
     file: "test/plugins/codex-model-catalog.gateway.test.ts",
     configs: [
-      "test/vitest/vitest.gateway-methods.config.ts",
+      "test/vitest/vitest.gateway-database-workers.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime",
@@ -153,7 +153,7 @@ const runtimeConsumers = [
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime",
-    dir: "src/gateway",
+    dir: "",
   },
   {
     file: "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts",
@@ -278,6 +278,7 @@ const runtimeConsumers = [
     dir: "",
   })),
   ...[
+    "src/gateway/server.acp-native-model.product.test.ts",
     "src/gateway/server-sidecar-retention.test.ts",
     "src/gateway/server.config-patch.test.ts",
   ].map((file) => ({
@@ -303,6 +304,8 @@ const runtimeConsumers = [
     "src/gateway/gateway-cron-process-identity.windows.test.ts",
     "src/gateway/gateway-route-model-reuse.test.ts",
     "src/gateway/gateway-ssh-upload-signal.test.ts",
+    "src/gateway/github-publication-requester-aliases.test.ts",
+    "src/gateway/github-publication-requester.test.ts",
   ].map((file) => ({
     file,
     configs: [
@@ -310,7 +313,7 @@ const runtimeConsumers = [
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime" as const,
-    dir: "src/gateway",
+    dir: "",
   })),
 ] as const;
 
@@ -402,7 +405,7 @@ export async function prepareVitestRuntime(
   });
 }
 
-export function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
+function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_E2E_SKIP_BUILD === "1" || env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1";
 }
 

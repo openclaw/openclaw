@@ -1,4 +1,5 @@
 import { captureChatSessionScrollPosition } from "../scroll.ts";
+import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "a[href]",
@@ -38,7 +39,6 @@ const composerPopoverAnchorObservers = new WeakMap<
   ComposerPopoverAnchorObserverState
 >();
 
-const COMPOSER_POPOVER_GAP_PX = 6;
 // max-height constrains the menu's scrollable box before its border/padding;
 // include that chrome so the outer panel retains a viewport gutter.
 const COMPOSER_POPOVER_VIEWPORT_INSET_PX = 28;
@@ -46,11 +46,8 @@ const COMPOSER_POPOVER_VIEWPORT_INSET_PX = 28;
 function updateComposerPopoverAnchor(el: HTMLElement) {
   const viewport = window.visualViewport;
   const viewportTop = viewport?.offsetTop ?? 0;
-  const layoutViewportHeight = document.documentElement.clientHeight || window.innerHeight;
   const composerTop = el.getBoundingClientRect().top;
-  const bottom = layoutViewportHeight - composerTop + COMPOSER_POPOVER_GAP_PX;
   const maxHeight = composerTop - viewportTop - COMPOSER_POPOVER_VIEWPORT_INSET_PX;
-  el.style.setProperty("--chat-composer-popover-bottom", `${Math.max(0, bottom)}px`);
   el.style.setProperty("--chat-composer-popover-max-height", `${Math.max(0, maxHeight)}px`);
 }
 
@@ -151,9 +148,7 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
     return;
   }
   const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread") ?? null;
-  const preserveBottomAnchor = thread
-    ? captureChatSessionScrollPosition(thread).anchorToEnd
-    : false;
+  const scrollPosition = thread ? captureChatSessionScrollPosition(thread) : null;
   // Hide the browser's scrollbar while measuring; restore it only when the
   // final CSS-constrained height actually clips the draft.
   el.style.overflowY = "hidden";
@@ -171,8 +166,18 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
   updateTextareaOverflow(el);
   // Once capped, the textarea can perturb the sibling transcript without
   // resizing its viewport, so ResizeObserver has no correction to apply.
-  if (thread && preserveBottomAnchor) {
-    thread.scrollTop = thread.scrollHeight;
+  if (thread) {
+    if (scrollPosition?.anchorToEnd) {
+      thread.scrollTop = thread.scrollHeight;
+    }
+    // A following composer commit can hide this viewport from browser observers.
+    const after = thread.scrollTop;
+    publishTranscriptScroll(thread, {
+      type: "resize",
+      ...(scrollPosition?.anchorToEnd && scrollPosition.scrollTop !== after
+        ? { scrollCorrection: { before: scrollPosition.scrollTop, after } }
+        : {}),
+    });
   }
 }
 

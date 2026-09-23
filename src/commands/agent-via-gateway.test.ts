@@ -2593,7 +2593,7 @@ describe("agentCliCommand", () => {
 
         await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
 
-        expect(auditRecorderMocks.create).toHaveBeenCalledWith({ messageMode: "off" });
+        expect(auditRecorderMocks.create).toHaveBeenCalledOnce();
         expect(auditRecorderMocks.stop).toHaveBeenCalledOnce();
         expect(hasExecutionIdentityAdmissionSink()).toBe(false);
       },

@@ -152,7 +152,8 @@ export function createCodexAppServerAgentHarness(
     },
     ...(sessionCatalogControlFactory && sessionRuntime
       ? {
-          sessionFork: {
+          sessionForkV2: {
+            executionEnvironment: "host-only" as const,
             upstreamKinds: ["codex-app-server"] as const,
             fork: async (params) => {
               const { forkCodexUpstreamSession } =
@@ -212,10 +213,12 @@ export function createCodexAppServerAgentHarness(
       const { createCodexAppServerModelCatalog } =
         await import("./src/app-server/model-catalog.js");
       if (disposed) {
-        return [];
+        return { entries: [] };
       }
       modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
-      return await modelCatalog.load(params, resolveAttemptPluginConfig(params.config));
+      return {
+        entries: await modelCatalog.load(params, resolveAttemptPluginConfig(params.config)),
+      };
     },
     readModelCatalogReadiness: (params) =>
       modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
@@ -447,6 +450,12 @@ export function createCodexAppServerAgentHarness(
         await import("./src/app-server/session-retirement.js");
       params.assertCurrent();
       return withCodexAppServerSessionDeletion(options.bindingStore, params, run);
+    },
+    withSessionContextReset: async (params, run) => {
+      const { withCodexAppServerSessionContextReset } =
+        await import("./src/app-server/session-retirement.js");
+      params.assertCurrent();
+      return withCodexAppServerSessionContextReset(options.bindingStore, params, run);
     },
     reset: async (params) => {
       if (params.sessionId && params.reason !== "deleted") {

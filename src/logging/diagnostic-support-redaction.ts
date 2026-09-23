@@ -488,7 +488,7 @@ export function redactPublicSupportDiagnosticLine(
     return line;
   }
   const maintenance =
-    /^(?:Error: )?Doctor could not enter maintenance\.(?: Error: The update parent owns Gateway activation\.)?/u.exec(
+    /^(?:(?:Error|DoctorMaintenanceRefusalError): )?Doctor could not enter maintenance\.(?: Error: The update parent owns Gateway activation\.)?/u.exec(
       line,
     );
   if (maintenance) {
@@ -519,7 +519,7 @@ export function redactPublicSupportDiagnosticLine(
   );
   const causes = (
     lines.match(
-      /\b(?:[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
+      /\b(?:[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
     ) ?? []
   ).map((cause) => cause.replace(/^permission denied$/u, "Permission denied"));
   return truncateUtf16Safe(

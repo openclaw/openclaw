@@ -33,6 +33,7 @@ const toolCall = {
     properties: { id: { type: "string" }, args: { type: "object" } },
   },
 };
+const sessionsSpawnTool = { type: "function", name: "sessions_spawn" } as const;
 // The failed QA request exposes shell exec and catalog controls, not Code Mode or spawn.
 const catalogTools = [
   shellExec,
@@ -60,6 +61,30 @@ function catalogResult(name: string, details: Record<string, unknown>) {
 }
 
 describe("mock scenario tool routing", () => {
+  it("plans runtime-fixture sessions_spawn happy and failure calls deterministically", async () => {
+    const server = await startMockServer();
+    const request = (prompt: string) =>
+      expectOpenAiNonStreamingResponsesJson(server, {
+        tools: [sessionsSpawnTool],
+        input: [makeUserInput(prompt)],
+      });
+
+    const happy = await request(
+      "QA routing marker: tool search qa check target=sessions_spawn. Call sessions_spawn directly exactly once and summarize its acceptance.",
+    );
+    expect(outputItem(happy)).toMatchObject({ type: "function_call", name: "sessions_spawn" });
+    expect(outputToolArgs(happy)).toMatchObject({
+      mode: "run",
+      expectsCompletionMessage: false,
+    });
+
+    const failure = await request(
+      'QA routing marker: tool search qa failure target=sessions_spawn. Call sessions_spawn directly exactly once with task="". Do not repair, omit, replace, or retry the empty task.',
+    );
+    expect(outputItem(failure)).toMatchObject({ type: "function_call", name: "sessions_spawn" });
+    expect(outputToolArgs(failure)).toEqual({ task: "" });
+  });
+
   it.each(["visible", "empty"])(
     "spawns the %s terminal worker through the declared catalog",
     async (kind) => {

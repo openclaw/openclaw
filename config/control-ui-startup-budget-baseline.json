@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 369600,
-  "reason": "Portable theme branding integration measured 369,497 B on Linux CI against main baseline 366,336 B (enforcement 366,912 B). The 369,600 B baseline rounds up, and the unchanged 512 B growth and 64 B build-variance allowances give a 370,176 B enforcement limit. The measured overage is 2,585 B (0.70%) above the base limit; the enforcement limit is 3,264 B (0.89%) above it, inside the approved 1%.",
-  "updatedAt": "2026-09-21"
+  "startupJsGzipBytes": 370756,
+  "reason": "Main 05804bcf passes at 370,367 B under its 370,876 B limit; this PR adds 389 B for a 370,756 B startup bundle. Set the paired measured baseline and cap to main plus this PR delta. The unchanged 512 B growth and 64 B build-variance allowances give a 371,332 B enforcement limit; KiB rounding is display-only.",
+  "updatedAt": "2026-09-22"
 }

@@ -10,6 +10,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
+import * as hostAccountAvatar from "../infra/host-account-avatar.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import * as userProfiles from "../state/user-profiles.js";
 import {
   ensureGatewayOwnerProfile,
@@ -53,10 +55,17 @@ describe("personal avatar HTTP authentication", () => {
           }
           return;
         }
-        await handleUserProfileAvatarHttpRequest(req, res, pathname, { auth, rateLimiter });
+        await handleUserProfileAvatarHttpRequest(req, res, pathname, {
+          auth,
+          rateLimiter,
+          getResolvedAuth: () => auth,
+          getRuntimeConfig: () => cfg,
+        });
       })().catch(() => {
-        res.statusCode = 500;
-        res.end();
+        if (!res.writableEnded) {
+          res.statusCode = 500;
+          res.end();
+        }
       });
     });
     await new Promise<void>((resolve) => {
@@ -130,6 +139,50 @@ describe("personal avatar HTTP authentication", () => {
     }
     return fetch(origin + avatarPath, { ...init, headers });
   }
+
+  it.each(["host", "Gravatar"])(
+    "withholds a prepared %s avatar after credentials rotate",
+    async (source) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      vi.spyOn(userProfiles, "getProfileAvatar").mockReturnValue(undefined);
+      if (source === "host") {
+        vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockImplementation(async () => {
+          entered.resolve();
+          await release.promise;
+          return { bytes: PNG, mime: "image/jpeg", sha256: "synthetic-avatar" };
+        });
+      } else {
+        vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockResolvedValue(null);
+        const profile = syncGitHubIdentity({
+          identity: { accountId: 9871, login: "avatar-authority" },
+          authenticationAlias: { kind: "email", email: "avatar-authority@example.test" },
+        });
+        avatarPath = `/api/users/${profile.id}/avatar`;
+        const fetch = globalThis.fetch;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          if (url.startsWith("https://www.gravatar.com/avatar/")) {
+            entered.resolve();
+            await release.promise;
+            return new Response(PNG, { headers: { "content-type": "image/png" } });
+          }
+          return fetch(input, init);
+        });
+      }
+      const pending = request("test-shared-secret");
+      await entered.promise;
+      auth = { ...auth, token: "replacement-token" };
+      release.resolve();
+      const response = await pending;
+
+      expect(response.status).toBe(401);
+      expect(response.headers.get("content-type")).not.toMatch(/^image\//);
+      expect(response.headers.get("etag")).toBeNull();
+      expect(Buffer.from(await response.arrayBuffer())).not.toEqual(PNG);
+    },
+  );
 
   it.each(["token", "password", "trusted-proxy"] as const)(
     "loads the saved personal photo with the connected credentials under %s auth",

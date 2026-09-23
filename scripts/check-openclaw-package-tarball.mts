@@ -7,10 +7,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { gte as semverGte, valid as validSemver } from "semver";
 import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
 import { coerceErrorMessage } from "./lib/error-format.mts";
-import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mts";
 import { collectNpmPackInventory, compareNpmPackInventory } from "./lib/npm-pack-inventory.mts";
 import { assertNpmShrinkwrapDependencies } from "./lib/npm-shrinkwrap-dependencies.mjs";
 import { collectBundledDependencyErrors } from "./lib/package-bundled-dependencies.mts";
@@ -422,44 +420,12 @@ try {
 const entrySet = new Set(normalized);
 const errors: string[] = [];
 const warnings: string[] = [];
-const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
-const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
+const LEGACY_CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
+const CODE_MODE_WORKER_PATH = "dist/agents/code-mode-node.worker.js";
 const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
-const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
-const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
 // 2026.8.1 shipped the old dist guard. Historical inspection must still accept it.
 const LEGACY_LIFECYCLE_MARKER_COMPAT_MAX = { year: 2026, month: 8, day: 1 };
-const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set<string>(LOCAL_BUILD_METADATA_DIST_PATHS);
-
-const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
-  "dist/extensions/qa-channel/",
-  "dist/extensions/qa-lab/",
-  "dist/extensions/qa-matrix/",
-  "dist/plugin-sdk/extensions/qa-channel/",
-  "dist/plugin-sdk/extensions/qa-lab/",
-];
-const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_FILES = new Set([
-  "dist/plugin-sdk/qa-channel.d.ts",
-  "dist/plugin-sdk/qa-channel.js",
-  "dist/plugin-sdk/qa-channel-protocol.d.ts",
-  "dist/plugin-sdk/qa-channel-protocol.js",
-  "dist/plugin-sdk/qa-lab.d.ts",
-  "dist/plugin-sdk/qa-lab.js",
-  "dist/plugin-sdk/qa-runtime.d.ts",
-  "dist/plugin-sdk/qa-runtime.js",
-  "dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
-]);
-
-function isLegacyOmittedPrivateQaInventoryEntry(relativePath: string): boolean {
-  return (
-    LEGACY_OMITTED_PRIVATE_QA_INVENTORY_FILES.has(relativePath) ||
-    LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
-  );
-}
 
 function parseCalver(version: string): Calver | null {
   const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/u.exec(version);
@@ -480,16 +446,6 @@ function compareCalver(left: Calver, right: Calver): number {
     }
   }
   return 0;
-}
-
-function isLegacyPackageAcceptanceCompatVersion(version: string): boolean {
-  const parsed = parseCalver(version);
-  return parsed ? compareCalver(parsed, LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX) <= 0 : false;
-}
-
-function isLegacyLocalBuildMetadataCompatVersion(version: string): boolean {
-  const parsed = parseCalver(version);
-  return parsed ? compareCalver(parsed, LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX) <= 0 : false;
 }
 
 function isLegacyLifecycleMarkerCompatVersion(version: string): boolean {
@@ -568,19 +524,15 @@ if (packageJson) {
     errors.push(`unreadable packaged extension asset metadata: ${coerceErrorMessage(error)}`);
   }
 }
-const allowsLegacyLocalBuildMetadata = isLegacyLocalBuildMetadataCompatVersion(packageVersion);
-errors.push(
-  ...collectForbiddenPackedPathErrors(
-    allowsLegacyLocalBuildMetadata
-      ? normalized.filter((entry) => !FORBIDDEN_LOCAL_BUILD_METADATA_FILES.has(entry))
-      : normalized,
-  ),
-);
-const validPackageVersion = validSemver(packageVersion);
-const requiresCodeModeWorker =
-  validPackageVersion !== null && semverGte(validPackageVersion, FIRST_CODE_MODE_WORKER_VERSION);
-if (requiresCodeModeWorker && !entrySet.has(CODE_MODE_WORKER_PATH)) {
-  errors.push(`missing required tar entry ${CODE_MODE_WORKER_PATH}`);
+errors.push(...collectForbiddenPackedPathErrors(normalized));
+// Published packages before executor plugins retain the original QuickJS worker.
+const codeModeWorkerPath =
+  isRecord(packageJson?.exports) &&
+  Object.hasOwn(packageJson.exports, "./plugin-sdk/code-mode-executor-runtime")
+    ? CODE_MODE_WORKER_PATH
+    : LEGACY_CODE_MODE_WORKER_PATH;
+if (!entrySet.has(codeModeWorkerPath)) {
+  errors.push(`missing required tar entry ${codeModeWorkerPath}`);
 }
 const hasShrinkwrap = entrySet.has("npm-shrinkwrap.json");
 const declaresShrinkwrap =
@@ -678,20 +630,11 @@ if (
 ) {
   errors.push(`forbidden legacy tar entry ${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
 }
-if (allowsLegacyLocalBuildMetadata) {
-  for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
-    if (entrySet.has(forbiddenEntry)) {
-      warnings.push(`legacy package includes local build metadata tar entry ${forbiddenEntry}`);
-    }
-  }
-}
 if (!entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
   errors.push(`missing ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
 }
 if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
   try {
-    const allowLegacyPrivateQaInventoryOmissions =
-      isLegacyPackageAcceptanceCompatVersion(packageVersion);
     const inventory = JSON.parse(readTarEntry(PACKAGE_DIST_INVENTORY_RELATIVE_PATH));
     if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
       errors.push(`invalid ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
@@ -733,13 +676,6 @@ if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
         }
       }
       for (const missingEntry of parity.inventoryEntriesMissingFromPackage) {
-        if (
-          allowLegacyPrivateQaInventoryOmissions &&
-          isLegacyOmittedPrivateQaInventoryEntry(missingEntry)
-        ) {
-          warnings.push(`legacy inventory references omitted private QA tar entry ${missingEntry}`);
-          continue;
-        }
         errors.push(`inventory references missing tar entry ${missingEntry}`);
       }
     }

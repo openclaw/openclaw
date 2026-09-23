@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as artworkLoader from "../pages/plugins/icon-loader.ts";
 import { getLobsterdex } from "./lobster-dex.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
-import { planLobsterPasser } from "./lobster-pet-plans.ts";
+import { planLobsterPasser, resolveLobsterPasserCrossMs } from "./lobster-pet-plans.ts";
 import { arrive, createPet, spritePresent } from "./lobster-pet.test-support.ts";
 
 afterEach(() => {
@@ -226,5 +227,80 @@ describe("theme visitors and resident presence", () => {
     element.visitsEnabled = false;
     await element.updateComplete;
     expect(element.hasAttribute("data-dex-complete")).toBe(false);
+  });
+  it("plans plugin ids and resolves catalog, artwork, and default crossing durations", () => {
+    expect(planLobsterPasser(21, { critters: ["ferris"], strangers: false })?.kind).toBe("ferris");
+    const artwork = {
+      ferris: { url: "/ferris", crossMs: 5000 },
+      snail: { url: "/snail", crossMs: 5000 },
+    };
+    expect(resolveLobsterPasserCrossMs("snail", artwork)).toBe(90000);
+    expect(resolveLobsterPasserCrossMs("ferris", artwork)).toBe(5000);
+    expect(resolveLobsterPasserCrossMs("constructor")).toBe(12000);
+  });
+
+  it.each(["crab", "stranger"])(
+    "renders declared %s artwork without the resident",
+    async (kind) => {
+      const fetchArtwork = vi
+        .spyOn(artworkLoader, "fetchPluginThemeArtworkBlobUrl")
+        .mockResolvedValue("blob:plugin-visitor");
+      onTestFinished(() => fetchArtwork.mockRestore());
+      vi.useFakeTimers();
+      const element = createPet(21);
+      element.residentEnabled = false;
+      element.critters = [kind];
+      element.critterArtwork = {
+        [kind]: { url: `/plugin/${kind}`, title: "a plugin visitor", crossMs: 5000 },
+      };
+      await element.updateComplete;
+      await vi.advanceTimersByTimeAsync(9000);
+      await element.updateComplete;
+      await vi.dynamicImportSettled();
+      const passer = element.querySelector<HTMLElement>(".lobster-pet--passer")!;
+      expect(passer.title).toBe("a plugin visitor");
+      expect(passer.style.getPropertyValue("--lob-scale")).toBe("1.8");
+      expect(passer.style.getPropertyValue("--lob-cross")).toBe("11000ms");
+      expect(passer.querySelector(".lobster-pet__body img")?.getAttribute("src")).toBe(
+        "blob:plugin-visitor",
+      );
+      expect(passer.querySelector("svg")).toBeNull();
+      element.critters = [...element.critters];
+      await element.updateComplete;
+      expect(element.querySelector(".lobster-pet--passer")).toBe(passer);
+    },
+  );
+
+  it("renders plugin visitors, refreshes their artwork, and retires a removed visitor", async () => {
+    const fetchArtwork = vi
+      .spyOn(artworkLoader, "fetchPluginThemeArtworkBlobUrl")
+      .mockImplementation(async ({ url }) => `blob:${url}`);
+    onTestFinished(() => fetchArtwork.mockRestore());
+    vi.useFakeTimers();
+    const element = createPet(21);
+    element.residentEnabled = false;
+    element.critters = ["ferris"];
+    element.critterArtwork = {
+      ferris: { url: "/ferris?v=1", title: "a crab, allegedly", crossMs: 5000 },
+    };
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(9000);
+    await element.updateComplete;
+    await vi.dynamicImportSettled();
+    const passer = element.querySelector<HTMLElement>(".lobster-pet--ferris")!;
+    expect(passer.title).toBe("a crab, allegedly");
+    expect(passer.style.getPropertyValue("--lob-cross")).toBe("5000ms");
+    expect(passer.querySelector(".lobster-pet__body img")?.getAttribute("src")).toBe(
+      "blob:/ferris?v=1",
+    );
+    element.critterArtwork = { ferris: { url: "/ferris?v=2", crossMs: 90000 } };
+    await element.updateComplete;
+    await vi.dynamicImportSettled();
+    expect(passer.title).toBe("ferris");
+    expect(passer.querySelector("img")?.getAttribute("src")).toBe("blob:/ferris?v=2");
+    expect(passer.style.getPropertyValue("--lob-cross")).toBe("5000ms");
+    element.critters = [];
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet--passer")).toBeNull();
   });
 });

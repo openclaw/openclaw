@@ -50,6 +50,8 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-user-version.ts",
     "src/infra/sqlite-wal.ts",
+    // Historical structural migrations extracted from the admitted schema owner.
+    "src/state/openclaw-agent-db-legacy-schema.ts",
     "src/state/openclaw-agent-db-maintenance.ts",
     "src/state/openclaw-agent-db-registry.ts",
     "src/state/openclaw-agent-db-registry-listing.ts",
@@ -62,6 +64,9 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-session-migrations.ts",
     "src/state/openclaw-agent-db-session-provenance.ts",
     "src/state/openclaw-agent-db.ts",
+    // Versioned payload rebuild preserves native bytes and 64-bit physical rowids.
+    "src/state/openclaw-agent-transcript-payload-migration.ts",
+    "src/state/openclaw-agent-transcript-fts-schema.ts",
     "src/state/openclaw-state-db-audit-migration.ts",
     "src/state/openclaw-state-db-delivery-queue-backfill.ts",
     "src/state/openclaw-state-db-legacy-backfills.ts",
@@ -116,13 +121,12 @@ const rawSqliteAllowPathGroups = {
     "src/commands/doctor/cron/migration-ledger.ts",
     "src/commands/doctor-sqlite-compact.ts",
     "src/commands/doctor-session-sqlite.ts",
-    "src/commands/doctor-session-sqlite-readers.ts",
+    "src/infra/session-sqlite-migration-readers.ts",
     "src/commands/doctor-session-sqlite-transcript-readers.ts",
     "src/commands/doctor-session-sqlite-recover-report.ts",
     "src/commands/doctor-state-sqlite-compact.ts",
     // Disposable import planning only; canonical session tables still use Kysely.
     "src/config/sessions/session-accessor.sqlite-import-stage.ts",
-    "src/infra/state-migrations.task-sidecar-rows.ts",
     "src/infra/state-migrations.storage.ts",
     "src/infra/state-migrations.cron-run-logs.ts",
     "src/infra/state-migrations.debug-proxy.ts",

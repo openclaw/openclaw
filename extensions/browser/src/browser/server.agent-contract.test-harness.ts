@@ -9,6 +9,11 @@ import {
 } from "./server.control-server.test-harness.js";
 import { getBrowserTestFetch } from "./test-support/fetch.js";
 
+type StartupFetch = (
+  url: string,
+  init: { method: "POST" },
+) => Promise<{ json(): Promise<unknown> }>;
+
 /** Installs Browser control-server hooks for agent-contract tests. */
 export function installAgentContractHooks() {
   installBrowserControlServerHooks();
@@ -31,10 +36,7 @@ async function sleep(ms: number): Promise<void> {
   });
 }
 
-async function postStartWithRetry(params: {
-  fetch: ReturnType<typeof getBrowserTestFetch>;
-  url: string;
-}): Promise<void> {
+async function postStartWithRetry(params: { fetch: StartupFetch; url: string }): Promise<void> {
   const delaysMs = [0, 25, 50, 100, 200] as const;
   let lastError: unknown;
   for (const delayMs of delaysMs) {
@@ -56,10 +58,10 @@ async function postStartWithRetry(params: {
 }
 
 /** Starts the Browser control server and returns its base URL. */
-export async function startServerAndBase(): Promise<string> {
+export async function startServerAndBase(fetch?: StartupFetch): Promise<string> {
   await startBrowserControlServerFromConfig();
   const base = getBrowserControlServerBaseUrl();
-  const realFetch = getBrowserTestFetch();
+  const realFetch = fetch ?? getBrowserTestFetch();
   await postStartWithRetry({ fetch: realFetch, url: `${base}/start` });
   return base;
 }

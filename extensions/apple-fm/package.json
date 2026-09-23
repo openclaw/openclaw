@@ -5,7 +5,7 @@
   "description": "OpenClaw on-device Apple Foundation Models provider",
   "type": "module",
   "dependencies": {
-    "zod": "4.6.4"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

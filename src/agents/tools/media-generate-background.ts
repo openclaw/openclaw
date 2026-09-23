@@ -24,12 +24,11 @@ import {
 import type { MediaGenerateActionResult } from "./media-generate-tool-actions-shared.js";
 import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 import {
-  applyAgentDefaultModelConfig,
   hasExplicitMediaModel,
   resolveCapabilityModelConfigForTool,
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
-import type { ToolModelConfig } from "./model-config.helpers.js";
+import { applyAgentDefaultModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 import type { ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 export type MediaGenerateToolOptions = {

@@ -39,7 +39,7 @@ export type TelegramMessageContextOptions = {
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
   receivedAtMs?: number;
-  ingressBuffer?: "inbound-debounce" | "text-fragment";
+  ingressBuffer?: "inbound-debounce" | "text-batch";
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   ambientTranscriptBody?: string;

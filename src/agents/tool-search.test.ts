@@ -1124,21 +1124,21 @@ describe("Tool Search", () => {
       agentId: "openclaw",
       denyOpenClaw: false,
       expected:
-        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
+        "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell.",
     },
     {
       scenario: "policy removed delegation",
       agentId: "main",
       denyOpenClaw: true,
       expected:
-        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
+        "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell.",
     },
     {
       scenario: "delegation remains authorized",
       agentId: "main",
       denyOpenClaw: false,
       expected:
-        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell. Other system changes: use openclaw tool.",
+        "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell. Other system changes: use openclaw tool.",
     },
   ])(
     "keeps gateway guidance consistent across final and deferred surfaces when $scenario",

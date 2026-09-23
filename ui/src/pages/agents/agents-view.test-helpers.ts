@@ -1,5 +1,5 @@
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import type { renderAgentFiles } from "./panels-status-files.ts";
+import type { renderAgentFiles } from "./panels-files.ts";
 import type { renderAgents } from "./view.ts";
 
 type AgentsViewProps = Parameters<typeof renderAgents>[0];

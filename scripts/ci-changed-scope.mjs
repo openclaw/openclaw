@@ -44,6 +44,7 @@ const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|skills\/pyproject\.toml$)/;
 const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
 const APPLE_SWIFT_CONFIG_RE = /^config\/(?:swiftformat|swiftlint\.yml)$/;
+const SWIFT_LINT_OWNER_RE = /^scripts\/(?:run-swiftlint|lib\/check-limits)\.mts$/;
 const APPLE_SHARED_CONTRACT_FIXTURE_RE =
   /^test\/fixtures\/(?:device-identity-coordinator|talk-config)-contract\.json$/;
 const MACOS_NATIVE_RE =
@@ -55,13 +56,13 @@ const MACOS_SCRIPT_SCOPE_RE =
 const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
-  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
 // Tests and WatchTests Swift sources belong only to retained native unit-test targets.
 // UITests, resources, and project changes still prove the screenshot target graph.
 const IOS_SCREENSHOT_APP_SCOPE_RE =
   /^(?:apps\/ios\/(?!(?:Tests|WatchTests)\/.*\.swift$)|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
 const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
-  /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
+  /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE =
   /^(apps\/android\/|apps\/shared\/|\.github\/actions\/setup-android-toolchain\/)/;
 // Native bundling reads the root aliases and this shared coercion dependency.
@@ -95,7 +96,7 @@ const WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE =
 const WINDOWS_HOME_DISPLAY_SCOPE_RE =
   /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths|sessions\/tools\/render-utils)(?:\.test)?)|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
 const WINDOWS_CHILD_ENV_SCOPE_RE =
-  /^src\/(?:agents\/provider-local-service(?:\.env-case\.test)?|cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
+  /^src\/(?:agents\/provider-local-service(?:-process|\.(?:env-case|shutdown|settlement)\.test)?|cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
 const WINDOWS_SOURCE_CLI_SCOPE_RE =
   /^src\/infra\/openclaw-cli-(?:invocation(?:\.test(?:-support)?)?|shim(?:\.(?:windows\.)?test)?)\.ts$/;
 // The helper is test-only, but its command and receipt owners need native process proof.
@@ -155,13 +156,14 @@ const NODE_FAST_SCOPE_RE = new RegExp(
 
 /** @param {string} path Canonical repository-relative script or test path. */
 export function isMacosToolingPath(path) {
-  return MACOS_SCRIPT_SCOPE_RE.test(path);
+  return MACOS_SCRIPT_SCOPE_RE.test(path) || SWIFT_LINT_OWNER_RE.test(path);
 }
 
 /** @param {string} path Canonical repository-relative build input. */
 function isAppleSharedBuildInput(path) {
   return (
     APPLE_SWIFT_CONFIG_RE.test(path) ||
+    SWIFT_LINT_OWNER_RE.test(path) ||
     MERMAID_ASSET_INPUT_RE.test(path) ||
     path === "scripts/prepare-apple-mermaid.mjs"
   );
@@ -261,6 +263,7 @@ export function detectChangedScope(changedPaths) {
 
     if (
       windowsCiTests.has(path) ||
+      path === "test/vitest/vitest.shared.config.ts" ||
       WINDOWS_LAN_ADVERTISEMENT_SCOPE_RE.test(path) ||
       WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
       WINDOWS_DAEMON_SCOPE_RE.test(path) ||

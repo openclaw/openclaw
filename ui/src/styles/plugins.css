@@ -83,7 +83,6 @@
   display: grid;
   place-items: center;
   overflow: hidden;
-  border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg);
 }
@@ -91,28 +90,24 @@
 .installed-plugins-card__art img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-}
-
-.installed-plugins-card__art img.plugins-icon {
   object-fit: contain;
-  padding: 7px;
 }
 
 .installed-plugins-card__identity {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: center;
   gap: 0;
 }
 
-.installed-plugins-card__identity h3,
+.installed-plugins-card__identity :is(h2, h3),
 .installed-plugins-card__summary {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.installed-plugins-card__identity h3 {
+.installed-plugins-card__identity :is(h2, h3) {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
@@ -127,7 +122,7 @@
   gap: 6px;
 }
 
-.plugin-card-title-row h3 {
+.plugin-card-title-row :is(h2, h3) {
   min-width: 0;
 }
 
@@ -150,6 +145,9 @@
   z-index: 3;
   width: max-content;
   max-width: 100%;
+  min-width: 24px;
+  min-height: 24px;
+  align-content: center;
   justify-self: start;
   text-decoration: none;
 }
@@ -365,18 +363,6 @@
 .plugin-catalog-card:has(.plugin-catalog-card__primary-link:focus-visible) {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-}
-
-.plugin-catalog-card__art {
-  border: 0;
-}
-
-.plugin-catalog-card__art img,
-.plugin-catalog-card__art img.plugins-icon {
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  object-fit: cover;
 }
 
 .plugin-catalog-card__head {
@@ -696,7 +682,6 @@ h3.settings-row__title {
   flex: 0 0 40px;
   place-items: center;
   overflow: hidden;
-  border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-elevated);
 }
@@ -704,17 +689,11 @@ h3.settings-row__title {
 .plugins-tile img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-}
-
-.plugins-tile img.plugins-icon {
   object-fit: contain;
-  padding: 6px;
 }
 
 .plugins-tile--fallback {
   background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
-  border-color: transparent;
   color: rgb(255 255 255 / 92%);
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
@@ -742,8 +721,6 @@ h3.settings-row__title {
   gap: var(--space-3);
   border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-3);
-  background: var(--ok-subtle);
-  color: var(--ok);
   font-size: var(--control-ui-text-xs);
   line-height: 1.45;
   white-space: pre-wrap;
@@ -751,6 +728,11 @@ h3.settings-row__title {
 }
 
 /* Row-local message: full-width line under the row's text + controls. */
+.plugin-catalog-card > .plugins-row-message {
+  position: relative;
+  z-index: 3;
+}
+
 .plugins-item > .plugins-row-message {
   flex: 1 1 100%;
 }
@@ -791,32 +773,6 @@ h3.settings-row__title {
   font-size: 20px;
   font-weight: 680;
   letter-spacing: -0.02em;
-}
-
-.plugins-detail__meta-row {
-  display: grid;
-  grid-template-columns: 130px minmax(0, 1fr);
-  gap: var(--space-3);
-  border-bottom: 1px solid var(--border);
-  padding: var(--space-2) 2px;
-}
-
-.plugins-detail__meta-label {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.plugins-detail__meta-value {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-sm);
-  text-overflow: ellipsis;
-}
-
-.plugins-detail__meta-value code {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
 }
 
 .plugins-consent {
@@ -876,8 +832,7 @@ h3.settings-row__title {
   overflow-wrap: anywhere;
 }
 
-.plugins-consent__row--warning .plugins-detail__meta-label,
-.plugins-consent__row--warning .plugins-detail__meta-value {
+.plugins-consent__row--warning {
   color: var(--warn);
 }
 
@@ -917,11 +872,6 @@ h3.settings-row__title {
 }
 
 /* ---------- plugin settings ---------- */
-
-.plugins-settings-title {
-  margin: 0;
-  font: inherit;
-}
 
 /* The inventory header is already inside the padded settings page. Remove the
    shared outer-header inset so its title aligns with this page's rows. */
@@ -1073,8 +1023,7 @@ h3.settings-row__title {
   align-items: start;
 }
 
-.plugin-catalog-detail__icon,
-.plugin-catalog-detail__icon > span {
+.plugin-catalog-detail__icon {
   display: grid;
   place-items: center;
   width: 112px;
@@ -1083,6 +1032,12 @@ h3.settings-row__title {
   border-radius: 20px;
   background: var(--bg-elevated);
   color: var(--accent);
+}
+.plugin-catalog-detail__icon > .plugins-tile {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  font-size: 36px;
 }
 .plugin-catalog-detail__icon img {
   width: 100%;
@@ -1104,12 +1059,20 @@ h3.settings-row__title {
   padding: 4px 10px;
   font-size: var(--control-ui-text-sm);
 }
+.settings-page.oc-app-surface .plugin-catalog-detail__actions .btn.oc-action {
+  height: var(--settings-control-height);
+}
+.settings-page.oc-app-surface .plugin-catalog-detail__actions .btn.oc-action-icon {
+  width: var(--settings-control-height);
+  min-width: var(--settings-control-height);
+  padding: 0;
+}
 .plugin-catalog-detail__actions svg {
   width: 16px;
   height: 16px;
 }
 
-.plugin-catalog-detail__hero main {
+.plugin-catalog-detail__heading {
   min-width: 0;
 }
 
@@ -1141,9 +1104,31 @@ h3.settings-row__title {
 
 .plugin-catalog-detail__publisher {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
   margin-top: var(--space-3);
+  font-size: var(--control-ui-text-lg);
+  line-height: 1.4;
+}
+
+.plugin-catalog-detail__publisher-name {
+  display: flex;
+  align-items: center;
+  max-width: 100%;
+  gap: var(--space-1);
+  color: var(--text-strong);
+}
+
+.plugin-catalog-detail__publisher-name strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-catalog-detail__publisher .plugin-card-author {
+  font: inherit;
 }
 
 .plugin-catalog-detail__sidebar {
@@ -1189,6 +1174,7 @@ h3.settings-row__title {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  text-transform: capitalize;
 }
 .plugin-metadata__section a {
   color: var(--text-strong);
@@ -1201,8 +1187,7 @@ h3.settings-row__title {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
-.plugin-metadata__section svg,
-.plugin-catalog-detail__security svg {
+.plugin-metadata__section svg {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
@@ -1224,6 +1209,13 @@ h3.settings-row__title {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.plugin-catalog-detail__security h2 > span {
+  display: inline-flex;
+}
+.plugin-catalog-detail__security h2 svg {
+  width: 1em;
+  height: 1em;
 }
 .plugin-catalog-detail__security-score {
   display: grid;
@@ -1267,7 +1259,17 @@ h3.settings-row__title {
   border-bottom: 1px solid var(--border);
   font-size: var(--control-ui-text-lg);
 }
+.plugin-capabilities h2 {
+  margin-bottom: 0;
+}
 .plugin-capabilities h2 > span {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 24px;
+  padding-inline: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   font-weight: 400;
@@ -1436,212 +1438,6 @@ h3.settings-row__title {
   color: var(--muted);
 }
 
-/* ---------- install wizard ---------- */
-
-.plugin-install-wizard {
-  display: grid;
-  max-height: min(88dvh, 840px);
-  overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
-}
-
-.plugin-install-wizard__header,
-.plugin-install-wizard__body,
-.plugin-install-wizard__actions {
-  padding: var(--space-5);
-}
-
-.plugin-install-wizard__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  border-bottom: 1px solid var(--border);
-}
-
-.plugin-install-wizard__header > div {
-  display: grid;
-  gap: var(--space-1);
-}
-
-.plugin-install-wizard__title-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.plugin-install-wizard__title-row h2 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-xl);
-}
-
-.plugin-install-wizard__progress {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  margin: 0;
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--border);
-  list-style: none;
-}
-
-.plugin-install-wizard__progress li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
-.plugin-install-wizard__progress li > span {
-  display: inline-grid;
-  width: 22px;
-  height: 22px;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-}
-
-.plugin-install-wizard__progress li > span svg {
-  width: 14px;
-  height: 14px;
-}
-
-.plugin-install-wizard__progress li.is-active {
-  color: var(--text-strong);
-  font-weight: 600;
-}
-
-.plugin-install-wizard__progress li.is-active > span {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.plugin-install-wizard__progress li.is-complete,
-.plugin-install-wizard__success {
-  color: var(--ok);
-}
-
-.plugin-install-wizard__progress li.is-complete > span {
-  border-color: var(--ok);
-  background: var(--ok-subtle);
-}
-
-.plugin-install-wizard__body {
-  min-height: 210px;
-}
-
-.plugin-install-wizard__review dl {
-  display: grid;
-  margin: 0;
-}
-
-.plugin-install-wizard__review dl > div {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: var(--space-4);
-  padding-block: var(--space-3);
-  border-bottom: 1px solid var(--border);
-}
-
-.plugin-install-wizard__review dt {
-  color: var(--muted);
-}
-
-.plugin-install-wizard__review dd {
-  margin: 0;
-  color: var(--text-strong);
-  overflow-wrap: anywhere;
-}
-
-.plugin-install-wizard__review > p,
-.plugin-install-wizard__status,
-.plugin-install-wizard__working p,
-.plugin-install-wizard__success p,
-.plugin-install-wizard__alert p {
-  margin: var(--space-3) 0 0;
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-.plugin-install-wizard__working,
-.plugin-install-wizard__success {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 180px;
-  gap: var(--space-3);
-  text-align: left;
-}
-
-.plugin-install-wizard__working p,
-.plugin-install-wizard__success p {
-  margin: 0;
-}
-
-.plugin-install-wizard__success > span,
-.plugin-install-wizard__success > span svg {
-  width: 40px;
-  height: 40px;
-}
-
-.plugin-install-wizard__success strong {
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-}
-
-.plugin-install-wizard__spinner {
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: plugin-install-spin 800ms linear infinite;
-}
-
-@keyframes plugin-install-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .plugin-install-wizard__spinner {
-    animation: none;
-  }
-}
-
-.plugin-install-wizard__alert {
-  padding: var(--space-4);
-  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
-  border-radius: var(--radius-lg);
-  background: var(--danger-subtle);
-  color: var(--danger);
-}
-
-.plugin-install-wizard__alert--warning {
-  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
-  background: var(--warn-subtle);
-  color: var(--warn);
-}
-
-.plugin-install-wizard__config {
-  margin-top: var(--space-4);
-}
-
-.plugin-install-wizard__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  border-top: 1px solid var(--border);
-}
-
 .skill-library-import {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1693,27 +1489,6 @@ h3.settings-row__title {
 }
 
 @media (max-width: 560px) {
-  .plugin-install-wizard__header,
-  .plugin-install-wizard__body,
-  .plugin-install-wizard__actions {
-    padding: var(--space-4);
-  }
-
-  .plugin-install-wizard__progress {
-    grid-template-columns: repeat(5, auto);
-    justify-content: space-between;
-    padding: var(--space-3) var(--space-4);
-  }
-
-  .plugin-install-wizard__progress li {
-    font-size: 0;
-  }
-
-  .plugin-install-wizard__review dl > div {
-    grid-template-columns: 1fr;
-    gap: var(--space-1);
-  }
-
   .plugins-toolbar--fields > .settings-segmented {
     height: auto;
   }
@@ -1726,4 +1501,21 @@ h3.settings-row__title {
   .plugins-row-message--warning {
     padding: var(--space-2) 0 0;
   }
+}
+
+.plugin-metadata__placeholder {
+  display: block;
+  width: 72%;
+  height: 14px;
+  border-radius: var(--radius-sm);
+}
+.plugin-metadata__loading {
+  display: grid;
+  gap: 20px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.plugin-metadata__loading > :last-child {
+  width: 100%;
+  height: 20px;
 }

@@ -5,6 +5,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   withSqliteWorkerLifecycleCoordination,
@@ -32,6 +33,10 @@ const runtime = resolveGlobalSingleton<ReconcileRuntime>(
 );
 
 export type SessionTranscriptReconcileOperation = {
+  signal: AbortSignal;
+  retainLeaseForCleanup(
+    lease: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }>,
+  ): void;
   startTask: typeof startReconcileWorkerTask;
 };
 
@@ -47,23 +52,58 @@ export function isSessionTranscriptReconcileGenerationCurrent(generation: number
 export function runSessionTranscriptReconcileOperation<T>(
   generation: number,
   run: (operation: SessionTranscriptReconcileOperation) => Promise<T>,
+  owner?: { agentId: string; path: string },
 ): Promise<T> {
   if (!isSessionTranscriptReconcileGenerationCurrent(generation)) {
     return Promise.reject(new Error("Session transcript reconciliation lifecycle is closed"));
   }
   let active = true;
+  const controller = new AbortController();
+  let cleanupLease: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }> | undefined;
+  let unregister: (() => void) | undefined;
   const completion = createDeferredCore<T>();
   const promise = completion.promise.finally(() => {
     active = false;
     runtime.operations.delete(promise);
+    if (!cleanupLease) {
+      unregister?.();
+    }
   });
   runtime.operations.add(promise);
   try {
+    unregister =
+      owner &&
+      registerOpenClawAgentDatabaseAsyncResource({
+        ...owner,
+        revoke: () => controller.abort(new Error("Session transcript reconciliation was revoked")),
+        close() {
+          // Failed projection work is advisory; an unsettled native lease retains custody.
+          const closing = promise
+            .catch(() => {})
+            .then(async () => {
+              if (cleanupLease) {
+                await releaseReconcileWorkerLease(cleanupLease);
+                cleanupLease = undefined;
+                unregister?.();
+              }
+            });
+          runtime.operations.add(closing);
+          return closing.finally(() => runtime.operations.delete(closing));
+        },
+      });
     completion.resolve(
       run({
+        signal: controller.signal,
+        retainLeaseForCleanup: (lease) => {
+          cleanupLease ??= lease;
+        },
         startTask: (input) => {
           if (!active) {
             throw new Error("Session transcript reconciliation operation is closed");
+          }
+          // Native exit may require a release task after the agent owner revokes new work.
+          if (input.mode !== "release") {
+            controller.signal.throwIfAborted();
           }
           return startReconcileWorkerTask(input);
         },
@@ -73,6 +113,21 @@ export function runSessionTranscriptReconcileOperation<T>(
     completion.reject(error);
   }
   return promise;
+}
+
+async function releaseReconcileWorkerLease(
+  input: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }>,
+): Promise<void> {
+  const task = startReconcileWorkerTask(input);
+  try {
+    const cleanup = await task.leaseRelease;
+    if (cleanup.failure) {
+      throw cleanup.failure;
+    }
+  } finally {
+    task.port.close();
+    task.port.removeAllListeners();
+  }
 }
 
 /** Close admission first; accepted owners may still dispatch their lease-release tasks. */

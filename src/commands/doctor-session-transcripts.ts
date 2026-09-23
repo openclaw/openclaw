@@ -18,6 +18,7 @@ import {
 } from "../config/sessions/legacy-transcript-repair.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { listExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
 import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
 import type {
@@ -39,7 +40,6 @@ import {
   repairReservedIncognitoSessionKeys,
   type ReservedIncognitoKeyRepairReport,
 } from "./doctor-session-incognito-key-repair.js";
-import { listExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
 import { isInformationalMissingSessionIndex } from "./doctor-session-sqlite-types.js";
 import { formatSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
 import {
@@ -203,6 +203,7 @@ export async function noteSessionTranscriptHealth(params?: {
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
+  onWarnings?: (warnings: readonly string[]) => void;
 }): Promise<LegacyStateMigrationStepReceipt | undefined> {
   return await noteSessionSqliteMigrationHealth({
     cfg: params?.cfg,
@@ -215,6 +216,7 @@ export async function noteSessionTranscriptHealth(params?: {
       ? { postSessionPluginMigrationPlanBound: true }
       : {}),
     ...(params?.onStepReceipt ? { onStepReceipt: params.onStepReceipt } : {}),
+    ...(params?.onWarnings ? { onWarnings: params.onWarnings } : {}),
   });
 }
 
@@ -225,6 +227,7 @@ async function noteSessionSqliteMigrationHealth(params: {
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
+  onWarnings?: (warnings: readonly string[]) => void;
 }): Promise<LegacyStateMigrationStepReceipt | undefined> {
   // Public doctor owns the operator-facing SQLite import; the targeted
   // --session-sqlite subcommand remains the diagnostic/proof surface.
@@ -522,9 +525,20 @@ async function noteSessionSqliteMigrationHealth(params: {
     );
   }
   if (actionableIssues > 0) {
-    lines.push(
-      ...formatSessionSqliteMigrationWarnings(actionableTargets).map((warning) => `- ${warning}`),
+    const warnings = formatSessionSqliteMigrationWarnings(actionableTargets);
+    const deferredHistory = actionableTargets.reduce(
+      (count, target) =>
+        count +
+        target.issues.filter((issue) => issue.code === "historical_transcript_deferred").length,
+      0,
     );
+    if (deferredHistory > 0) {
+      warnings.unshift(
+        `Deferred ${deferredHistory} historical transcript claim(s); originals remain protected. Preserve the named files and migration manifests, resolve the reported conflicts, then rerun "${formatCliCommand("openclaw doctor --fix", params.env)}".`,
+      );
+    }
+    params.onWarnings?.(warnings);
+    lines.push(...warnings.map((warning) => `- ${warning}`));
     lines.push(
       `- Found ${actionableIssues} session SQLite issue(s). Inspect with "${formatCliCommand("openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents", params.env)}".`,
     );

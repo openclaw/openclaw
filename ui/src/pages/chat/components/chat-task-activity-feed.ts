@@ -270,6 +270,11 @@ export function renderTaskActivityFeed(
         >
         <div class="chat-task-feed__body">
           ${
+            entry.kind === "user" || entry.kind === "assistant"
+              ? html`<span class="sr-only">${t(`sessionsView.${entry.kind}`)}: </span>`
+              : nothing
+          }
+          ${
             entry.kind === "tools"
               ? renderToolGroup(entry)
               : entry.kind === "assistant"

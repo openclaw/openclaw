@@ -38,6 +38,7 @@ vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) 
   createWorkerPlacementDiskSpaceMonitor: runtimeFactoryMocks.createDiskSpace,
 }));
 
+import { getRuntimeConfig } from "../config/config.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 
 type PlacementFixture = {
@@ -104,6 +105,7 @@ function createMaintenanceRuntime(params: {
     stop,
   };
   const runtime = createGatewayWorkerPlacementRuntime({
+    getCommittedRuntimeConfig: getRuntimeConfig,
     cancelSessionWork: vi.fn(async () => {}),
     placements: {
       workspaceResultInstanceId: () => "gateway-test",

@@ -183,8 +183,23 @@ async function withConcurrentPreferenceSnapshots<T>(count: number, run: () => Pr
 
 describe("theme RPC", () => {
   it("lists descriptive choices and inspects a plugin definition without exposing palettes in list entries", async () => {
-    pluginThemes.push(pluginTheme());
-    const { definition, ...descriptor } = pluginTheme();
+    const entry = {
+      ...pluginTheme(),
+      artwork: {
+        hats: {
+          beret: { url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/hat/beret?v=abc" },
+        },
+        critters: {
+          ferris: {
+            url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/critter/ferris?v=def",
+            title: "a crab, allegedly",
+            crossMs: 15000,
+          },
+        },
+      },
+    };
+    pluginThemes.push(entry);
+    const { definition, ...descriptor } = entry;
     const listed = await invoke("themes.list");
     expect(listed).toMatchObject({
       ok: true,
@@ -198,8 +213,9 @@ describe("theme RPC", () => {
     });
     expect(await invoke("themes.get", { id: descriptor.id })).toMatchObject({
       ok: true,
-      payload: { theme: descriptor, definition },
+      payload: { theme: descriptor, definition, artwork: entry.artwork },
     });
+    expect(await invoke("themes.get", { id: "claw" })).not.toHaveProperty("payload.artwork");
   });
 
   it("imports and applies in one durable profile mutation, preserving other preferences and notifying only that profile", async () => {

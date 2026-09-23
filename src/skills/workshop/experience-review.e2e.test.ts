@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import { text as readText } from "node:stream/consumers";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   writeOpenAiResponsesSse,
@@ -74,12 +75,17 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-function writeToolCall(response: ServerResponse, args: Record<string, unknown>): void {
+function writeToolCall(
+  response: ServerResponse,
+  name: "tool_search" | "tool_call",
+  args: Record<string, unknown>,
+  callId: string,
+): void {
   const item = {
     type: "function_call",
-    id: "fc_workshop_contract",
-    call_id: "call_workshop_contract",
-    name: "skill_workshop",
+    id: `fc_${callId}`,
+    call_id: callId,
+    name,
     arguments: JSON.stringify(args),
     status: "completed",
   };
@@ -99,7 +105,7 @@ function writeToolCall(response: ServerResponse, args: Record<string, unknown>):
     {
       type: "response.completed",
       response: {
-        id: "resp_workshop_contract_tool",
+        id: `resp_${callId}`,
         status: "completed",
         output: [item],
         usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
@@ -190,8 +196,9 @@ describe("Workshop draft-only review through the real provider and tool owners",
             config: candidate.config,
             source,
           });
+          const laterSession = SessionManager.open(target);
           for (const message of laterMessages) {
-            SessionManager.appendMessageToTranscript(target, message, {
+            laterSession.appendMessage(message, {
               config: candidate.config,
             });
           }
@@ -268,14 +275,54 @@ describe("Workshop draft-only review through the real provider and tool owners",
               return;
             }
             requests.push(JSON.parse(await readText(request)) as Request);
-            if (scenario === "failed" || requests.length > 2) {
+            if (scenario === "failed" || requests.length > 3) {
               response.writeHead(400, { "content-type": "application/json" });
               response.end(JSON.stringify({ error: { message: "Controlled provider rejection" } }));
               return;
             }
-            if (requests.length === 1 && (scenario === "proposed" || scenario === "rejected")) {
-              writeToolCall(response, scenario === "proposed" ? createArgs : { action: "create" });
-              return;
+            if (scenario === "proposed" || scenario === "rejected") {
+              if (requests.length === 1) {
+                writeToolCall(
+                  response,
+                  "tool_search",
+                  { query: "skill_workshop", limit: 1 },
+                  "call_workshop_search",
+                );
+                return;
+              }
+              if (requests.length === 2) {
+                const searchOutput = requests[1]?.input?.find(
+                  (item) =>
+                    item.type === "function_call_output" && item.call_id === "call_workshop_search",
+                )?.output;
+                if (typeof searchOutput !== "string") {
+                  throw new Error("Workshop discovery did not return a provider-visible result");
+                }
+                const candidates: unknown = JSON.parse(searchOutput);
+                expect(candidates).toEqual(
+                  expect.arrayContaining([
+                    expect.objectContaining({ name: "skill_workshop", source: "openclaw" }),
+                  ]),
+                );
+                const workshop: unknown = Array.isArray(candidates)
+                  ? candidates.find(
+                      (item: unknown) => isRecord(item) && item.name === "skill_workshop",
+                    )
+                  : undefined;
+                if (!isRecord(workshop) || typeof workshop.id !== "string") {
+                  throw new Error("Workshop discovery did not return an exact callable ID");
+                }
+                writeToolCall(
+                  response,
+                  "tool_call",
+                  {
+                    id: workshop.id,
+                    args: scenario === "proposed" ? createArgs : { action: "create" },
+                  },
+                  "call_workshop_contract",
+                );
+                return;
+              }
             }
             writeOpenAiResponsesText(response, {
               text: "NO_REPLY",
@@ -338,7 +385,7 @@ describe("Workshop draft-only review through the real provider and tool owners",
               await expect(run).rejects.toThrow(
                 scenario === "failed"
                   ? "provider rejected the request schema or tool payload"
-                  : "Skill Workshop failed",
+                  : "Tool Call failed",
               );
             } else {
               observation = await run;
@@ -351,10 +398,10 @@ describe("Workshop draft-only review through the real provider and tool owners",
           expect(foregroundFingerprint()).toBe(storedBefore);
 
           expect(handlerErrors).toEqual([]);
-          expect(requests).toHaveLength(scenario === "proposed" || scenario === "rejected" ? 2 : 1);
+          expect(requests).toHaveLength(scenario === "proposed" || scenario === "rejected" ? 3 : 1);
           expect(requests[0]?.model).toBe(modelId);
           expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual(
-            expect.arrayContaining(["exec", "read", "skill_workshop"]),
+            expect.arrayContaining(["exec", "read", "tool_search", "tool_describe", "tool_call"]),
           );
           // Request IDs are rewritten for provider replay. Compare the actual output bodies.
           expect(
@@ -398,7 +445,7 @@ describe("Workshop draft-only review through the real provider and tool owners",
               code: "ENOENT",
             });
             expect(outcome).toMatchObject({ outcome: "proposed", proposalId: proposal.id });
-            const toolOutput = requests[1]?.input?.find(
+            const toolOutput = requests[2]?.input?.find(
               (item) =>
                 item.type === "function_call_output" && item.call_id === "call_workshop_contract",
             );
@@ -410,7 +457,7 @@ describe("Workshop draft-only review through the real provider and tool owners",
               outcome: failedReview ? "failed" : "nothing",
             });
             if (scenario === "rejected") {
-              const toolOutput = requests[1]?.input?.find(
+              const toolOutput = requests[2]?.input?.find(
                 (item) =>
                   item.type === "function_call_output" && item.call_id === "call_workshop_contract",
               );

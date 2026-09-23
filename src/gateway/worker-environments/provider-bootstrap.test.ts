@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import { writeSessionStore } from "../test-helpers.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
@@ -349,7 +350,10 @@ describe("worker environment service", () => {
   });
 
   it("bounds worker identity resolution as a provider operation", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const events: string[] = [];
+    const identityStarted = createDeferred();
+    const destroying = createDeferred();
     const { promise: identityPending, resolve: finishIdentity } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async ({ installation, resolveIdentity, signal }) => {
       signal.addEventListener("abort", () => void events.push("abort"), { once: true });
@@ -367,30 +371,55 @@ describe("worker environment service", () => {
       providerCallTimeoutMs: 5,
       resolveSshIdentity: async () => {
         events.push("identity:start");
+        identityStarted.resolve();
         await identityPending;
         events.push("identity:end");
         return { kind: "path", path: "/keys/worker" };
       },
     });
-
+    const unsubscribe = sessionChanges.subscribe((change) => {
+      if (
+        "all" in change &&
+        change.scope === "worker-environments" &&
+        support.testState.store.list()[0]?.state === "destroying"
+      ) {
+        destroying.resolve();
+      }
+    });
     const creation = workerService.createWithRequest({
       profileId: "development",
       idempotencyKey: "request-identity-timeout",
     });
-    const creationResult = expect(creation).rejects.toMatchObject({
-      code: "bootstrap_failure",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
+    const creationResult = creation.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
     try {
-      await support.waitForFast(() =>
-        expect(support.testState.store.list()[0]).toMatchObject({ state: "destroying" }),
-      );
+      await Promise.race([
+        identityStarted.promise,
+        creationResult.then((result) => {
+          throw new Error("Creation ended before identity resolution", { cause: result });
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(5);
+      await Promise.race([
+        destroying.promise,
+        creationResult.then((result) => {
+          throw new Error("Creation ended before bootstrap teardown", { cause: result });
+        }),
+      ]);
       expect(events).toEqual(["identity:start", "abort"]);
       expect(destroy).not.toHaveBeenCalled();
     } finally {
-      finishIdentity?.();
+      unsubscribe();
+      finishIdentity();
+      await creationResult;
     }
 
-    await creationResult;
+    expect(await creationResult).toMatchObject({
+      ok: false,
+      error: { code: "bootstrap_failure" } satisfies Partial<WorkerEnvironmentServiceError>,
+    });
     expect(destroy).toHaveBeenCalledOnce();
     expect(events).toEqual(["identity:start", "abort", "identity:end", "destroy"]);
     expect(support.testState.store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
@@ -432,7 +461,8 @@ describe("worker environment service", () => {
   });
 
   it("allows a large bundle bootstrap to outlive the former service deadline", async () => {
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     support.testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
       tarballBytes: 243_000_000,

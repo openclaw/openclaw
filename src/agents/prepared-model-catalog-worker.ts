@@ -95,7 +95,6 @@ export type PreparedModelWorkerResult =
       snapshot: ModelCatalogSnapshot;
       runtimeModels: Map<string, Model[]>;
       providerExpiries: Map<string, number>;
-      configuredProviderModelIds: Map<string, readonly string[]>;
       configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
       credentials: Readonly<AuthStorageData>;
       providerAuthLabels: ModelCatalogAuthLabels;
@@ -414,7 +413,6 @@ type PreparedModelCatalogWorker = Readonly<{
     Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels"> & {
       runtimeModels: Map<string, Model[]>;
       providerExpiries: Map<string, number>;
-      configuredProviderModelIds: Map<string, readonly string[]>;
     }
   >;
 }>;
@@ -702,7 +700,6 @@ export function createPreparedModelCatalogWorker(
         configuredRuntimeModels: message.configuredRuntimeModels,
         runtimeModels: message.runtimeModels,
         providerExpiries: message.providerExpiries,
-        configuredProviderModelIds: message.configuredProviderModelIds,
       };
     },
     loadAuth: async ({ providerIds, profileIds }) => {

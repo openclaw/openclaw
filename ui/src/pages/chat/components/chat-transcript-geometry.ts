@@ -70,6 +70,63 @@ export function measureConnectedTranscriptRows(
   return changed;
 }
 
+export function measureTranscriptRowRefs(
+  elements: readonly HTMLElement[],
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  canMeasureVisibleRows: boolean,
+): void {
+  const range = virtualizer.range;
+  const candidates =
+    canMeasureVisibleRows && !virtualizer.options.useCachedMeasurements && range
+      ? elements.flatMap((element) => {
+          const index = virtualizer.indexFromElement(element);
+          return element.isConnected &&
+            index >= range.startIndex &&
+            index <= range.endIndex &&
+            !virtualizer.itemSizeCache.has(virtualizer.options.getItemKey(index))
+            ? [{ element, index }]
+            : [];
+        })
+      : [];
+  // Cached and overscan mounts must not force even a viewport layout read.
+  if (candidates.length > 0 && virtualizer.scrollElement?.clientHeight) {
+    const rows = candidates.map(({ element, index }) => ({
+      element,
+      index,
+      visibility: element.style.getPropertyValue("content-visibility"),
+      priority: element.style.getPropertyPriority("content-visibility"),
+    }));
+    const measurements: Array<{ index: number; size: number }> = [];
+    try {
+      // Resolve intrinsic placeholders before paint, with all writes before
+      // all reads. resizeItem can write scrollTop, so defer it until afterward.
+      for (const { element } of rows) {
+        element.style.setProperty("content-visibility", "visible");
+      }
+      for (const { element, index } of rows) {
+        measurements.push({
+          index,
+          size: virtualizer.options.measureElement(element, undefined, virtualizer),
+        });
+      }
+    } finally {
+      for (const { element, visibility, priority } of rows) {
+        if (visibility) {
+          element.style.setProperty("content-visibility", visibility, priority);
+        } else {
+          element.style.removeProperty("content-visibility");
+        }
+      }
+    }
+    for (const { index, size } of measurements) {
+      virtualizer.resizeItem(index, size);
+    }
+  }
+  for (const element of elements) {
+    virtualizer.measureElement(element);
+  }
+}
+
 export function measureTranscriptRow(
   element: HTMLElement,
   entry: ResizeObserverEntry | undefined,

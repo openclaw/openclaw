@@ -2,7 +2,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveGatewayAuthPolicyGeneration } from "./auth-policy.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { resolveControlUiPluginAuthCookieGrants } from "./control-ui-plugin-auth-cookie.js";
 import {
@@ -15,10 +18,20 @@ import {
   bindHttpOperatorAccessAuthority,
   sendGatewayHttpAuthFailure,
 } from "./http-operator-access.js";
+import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 type CookieRequestAuth = NonNullable<ReturnType<typeof authorizeControlUiPluginCookieRequest>>;
+
+export function resolveControlUiPluginAuthCookieGeneration(
+  authGeneration: string | undefined,
+  cfg: OpenClawConfig,
+): string | undefined {
+  return authGeneration
+    ? sha256Base64Url(`${authGeneration}\0${resolveGatewayAuthPolicyGeneration(cfg)}`)
+    : undefined;
+}
 
 export function authorizeControlUiPluginCookieRequest(
   req: IncomingMessage,
@@ -34,14 +47,14 @@ export function authorizeControlUiPluginCookieRequest(
   // Native plugins and the UI they serve share the Gateway's trusted in-process
   // boundary. Cross-site sandbox descendants need an ambient cookie, so this
   // handoff is read-only; mutations stay on explicit Gateway auth surfaces.
+  const cfg = getRuntimeConfig();
   const grants = resolveControlUiPluginAuthCookieGrants(req, {
     requestPath: params.requestPath,
-    generation: params.authGeneration,
+    generation: resolveControlUiPluginAuthCookieGeneration(params.authGeneration, cfg),
   });
   if (grants.length === 0) {
     return null;
   }
-  const cfg = getRuntimeConfig();
   const profileAuth = checkHttpCookieUserProfile(
     cfg,
     grants.map((grant) => grant.profileId),
@@ -86,8 +99,14 @@ export function bindControlUiPluginCookieRequestAuthority(
     auth: ResolvedGatewayAuth;
     getResolvedAuth?: () => ResolvedGatewayAuth;
     trustedProxies?: string[];
+    hasCurrentClientAuthority: () => boolean;
   },
 ) {
+  const hasCurrentClientAuthority = () =>
+    !params.res.writableEnded &&
+    !params.res.destroyed &&
+    params.hasCurrentClientAuthority() &&
+    hasCurrentGatewayOperatorAccess(cookieAuth.requestAuth.operatorAccessAuthority);
   const revalidate = async () => {
     if (params.res.writableEnded || params.res.destroyed) {
       throw new Error("HTTP request authority expired");
@@ -100,13 +119,14 @@ export function bindControlUiPluginCookieRequestAuthority(
       requestPath: params.requestPath,
       authGeneration: resolveSharedGatewaySessionGeneration(
         params.getResolvedAuth?.() ?? params.auth,
-        getRuntimeConfig().gateway?.trustedProxies ?? params.trustedProxies,
+        params.trustedProxies ?? getRuntimeConfig().gateway?.trustedProxies,
       ),
     });
     const currentGrants = current?.requestAuth.controlUiPluginGrants ?? [];
     // Prepared data used the admitted policy, not just its operator scopes. A
     // policy change requires a fresh request before that data can be disclosed.
     if (
+      !hasCurrentClientAuthority() ||
       !isDeepStrictEqual(
         current?.requestAuth.operatorRolePolicy,
         cookieAuth.requestAuth.operatorRolePolicy,
@@ -132,6 +152,10 @@ export function bindControlUiPluginCookieRequestAuthority(
   };
   return {
     ...cookieAuth,
-    requestAuth: { ...cookieAuth.requestAuth, revalidate },
+    requestAuth: {
+      ...cookieAuth.requestAuth,
+      hasCurrentClientAuthority,
+      revalidate,
+    },
   };
 }

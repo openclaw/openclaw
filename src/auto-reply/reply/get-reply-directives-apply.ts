@@ -203,6 +203,7 @@ export async function applyInlineDirectiveOverrides(params: {
   let { contextTokens } = params;
   const directiveModelState = {
     modelPolicy: modelState.modelPolicy,
+    operatorAuthority: modelState.operatorAuthority,
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
     policyAliasIndex: modelState.policyAliasIndex,
@@ -308,6 +309,7 @@ export async function applyInlineDirectiveOverrides(params: {
       defaultModel,
       aliasIndex,
       modelPolicy: modelState.modelPolicy,
+      operatorAuthority: modelState.operatorAuthority,
       allowedModelKeys: modelState.allowedModelKeys,
       allowedModelCatalog: modelState.allowedModelCatalog,
       provider,
@@ -420,6 +422,7 @@ export async function applyInlineDirectiveOverrides(params: {
         defaultModel,
         aliasIndex,
         modelPolicy: modelState.modelPolicy,
+        operatorAuthority: modelState.operatorAuthority,
         allowedModelKeys: modelState.allowedModelKeys,
         allowedModelCatalog: modelState.allowedModelCatalog,
         provider,
@@ -456,6 +459,7 @@ export async function applyInlineDirectiveOverrides(params: {
           currentProvider: provider,
           currentModel: model,
           modelPolicy: modelState.modelPolicy,
+          operatorAuthority: modelState.operatorAuthority,
           modelCatalog: modelState.allowedModelCatalog,
           thinkingCatalog: modelState.allowedModelCatalog,
           canPersistStickyModelSelection,
@@ -464,7 +468,9 @@ export async function applyInlineDirectiveOverrides(params: {
           request: {
             ...modelSelection,
             profileOverride: modelResolution.profileOverride,
-            runtime,
+            // Preserve model-only intent so the service prepares the configured runtime
+            // after discarding an incompatible inherited pin.
+            runtime: directives.rawModelRuntime ? runtime : { kind: "unchanged" },
           },
           patchModel: effectiveModelDirective,
           markLiveSwitchPending: true,

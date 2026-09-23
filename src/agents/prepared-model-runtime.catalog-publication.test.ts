@@ -201,7 +201,7 @@ describe("catalog publication session rows", () => {
       mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
       mocks.authStorage.getAll.mockReturnValue({});
       mocks.modelRegistry.getAll.mockReturnValue([model]);
-      mocks.resolveAgentEffectiveModelPrimary.mockReturnValue(
+      mocks.resolveNativeModelPrimary.mockReturnValue(
         configured ? "custom/synthetic-model" : undefined,
       );
       const owner = await publishPreparedModelRuntimeSnapshot(
@@ -480,7 +480,7 @@ describe("catalog publication session rows", () => {
         changed.sessions.every((row) =>
           currentModel.reasoning
             ? row.thinkingLevels!.some((level) => level.id === "high")
-            : row.thinkingLevels!.every((level) => level.id === "off"),
+            : row.thinkingLevels!.every((level) => level.id === "off" || level.id === "ultra"),
         ),
       ).toBe(true);
       expect(rows.materializedCount - previousCount).toBe(rowCount);
@@ -495,7 +495,9 @@ describe("catalog publication session rows", () => {
     const rerouted = await list();
     expect(rerouted.sessions.every((row) => row.contextTokens === 48_000)).toBe(true);
     expect(
-      rerouted.sessions.every((row) => row.thinkingLevels!.every((level) => level.id === "off")),
+      rerouted.sessions.every((row) =>
+        row.thinkingLevels!.every((level) => level.id === "off" || level.id === "ultra"),
+      ),
     ).toBe(true);
     expect(rows.materializedCount - previousCount).toBe(rowCount);
 
@@ -541,13 +543,30 @@ describe("catalog publication session rows", () => {
   it.each(["unchanged", "changed", "failed"] as const)(
     "converges when a %s publication arrives during a yielded drain",
     async (outcome) => {
-      const { rows, list, refresh } = await setup();
-      const before = rows.materializedCount;
-      const yieldWork = projectionWork.yieldSessionListWork;
       let publishedDuringDrain = false;
-      vi.spyOn(projectionWork, "yieldSessionListWork").mockImplementation(async () => {
-        if (!publishedDuringDrain && rows.materializedCount > before && rows.dirtyRowCount > 0) {
-          publishedDuringDrain = true;
+      let publication: Promise<void> | undefined;
+      let afterRefresh: (() => void) | undefined;
+      const createDrain = projectionWork.createSessionProjectionDrain;
+      const drains = vi
+        .spyOn(projectionWork, "createSessionProjectionDrain")
+        .mockImplementation((params) =>
+          createDrain({
+            ...params,
+            async refresh() {
+              if (publication) {
+                expect(publishedDuringDrain).toBe(true);
+                await publication;
+              }
+              await params.refresh();
+              afterRefresh?.();
+            },
+          }),
+        );
+      try {
+        const { rows, list, refresh } = await setup();
+        const before = rows.materializedCount;
+        const publish = async () => {
+          publishedDuringDrain = rows.materializedCount > before && rows.dirtyRowCount > 0;
           if (outcome === "changed") {
             mocks.runPreparedModelCatalogWorker.mockResolvedValue(
               catalog({ ...model, contextWindow: 64_000 }),
@@ -560,21 +579,39 @@ describe("catalog publication session rows", () => {
           } else {
             await refresh();
           }
+        };
+        afterRefresh = () => {
+          if (publication || rows.materializedCount === before || rows.dirtyRowCount === 0) {
+            return;
+          }
+          publication = new Promise<void>((resolve, reject) => {
+            setImmediate(() => {
+              void publish().then(resolve, reject);
+            });
+          });
+          // The next batch joins this result after the real event-loop turn.
+          void publication.catch(() => {});
+        };
+        sessionChanges.emit({ all: true, scope: "config" });
+        const result = await list();
+        expect(publishedDuringDrain).toBe(true);
+        expect(result.sessions).toHaveLength(rowCount);
+        expect(
+          result.sessions.every(
+            (row) => row.contextTokens === (outcome === "changed" ? 64_000 : 32_000),
+          ),
+        ).toBe(true);
+        expect(rows.dirtyRowCount).toBe(0);
+        if (outcome !== "changed") {
+          expect(rows.materializedCount - before).toBe(rowCount);
         }
-        await yieldWork();
-      });
-      sessionChanges.emit({ all: true, scope: "config" });
-      const result = await list();
-      expect(publishedDuringDrain).toBe(true);
-      expect(result.sessions).toHaveLength(rowCount);
-      expect(
-        result.sessions.every(
-          (row) => row.contextTokens === (outcome === "changed" ? 64_000 : 32_000),
-        ),
-      ).toBe(true);
-      expect(rows.dirtyRowCount).toBe(0);
-      if (outcome !== "changed") {
-        expect(rows.materializedCount - before).toBe(rowCount);
+      } finally {
+        afterRefresh = undefined;
+        try {
+          await publication;
+        } finally {
+          drains.mockRestore();
+        }
       }
     },
   );

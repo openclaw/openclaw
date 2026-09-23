@@ -4,7 +4,8 @@ import type { PluginExecutionScopes } from "../plugin-instance-invocation.types.
 import type { PluginRegistry } from "../registry-types.js";
 import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.types.js";
 
-// Source and built modules must share the constructor used for typed narrowing.
+// The frame store is one process-wide singleton, so every module instance that
+// reads it (source, built chunks, reloaded graphs) must narrow with one constructor.
 export const PluginRuntimeExecutionFrame = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginRuntimeExecutionFrame"),
   () =>

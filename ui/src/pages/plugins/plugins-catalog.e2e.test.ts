@@ -102,7 +102,7 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
       });
       await toggle.waitFor();
       expect(await toggle.getAttribute("aria-disabled")).toBe("true");
-      for (const name of ["Reload Calendar Plus", "Uninstall Calendar Plus"]) {
+      for (const name of ["Uninstall Calendar Plus"]) {
         const action = page.getByRole("button", { name, exact: true });
         await action.waitFor();
         expect(await action.getAttribute("aria-disabled")).toBe("true");

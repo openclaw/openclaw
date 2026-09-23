@@ -8,7 +8,7 @@
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
+import { resolveExecCode, resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
 import {
   buildWriteDiffLines,
   computeLineDiff,
@@ -346,7 +346,7 @@ function buildToolCallView(
       kind,
       title: COMMAND_TOOL_NAMES.has(key) ? resolveExecTitle(args) : undefined,
       command: command ? unwrapShellWrapperCommand(command) : command,
-      code: args ? readNonBlankString(args.code) : undefined,
+      code: resolveExecCode(args),
     };
   }
 

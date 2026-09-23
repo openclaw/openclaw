@@ -1,5 +1,6 @@
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
@@ -374,6 +375,9 @@ export async function executeFollowupTurn(params: {
     };
   } else {
     try {
+      turn.queued.run.bootstrapUserProfileId = turn.queued.personalBootstrapEligible
+        ? sessionPersonalProfileId(turn.session.current())
+        : undefined;
       turn.operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(turn.queued));
       turn.operation.setPhase("running");
       const gatewayOwnsCompletion =

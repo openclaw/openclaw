@@ -125,6 +125,44 @@ export function createAgentDedupeLifecycle(params: {
     reserved = false;
   };
 
+  const bindSessionTarget = (target: {
+    sessionKey: string;
+    agentId?: string;
+    sessionId?: string;
+  }) => {
+    const entry = readGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      keys: params.agentDedupeKeys,
+    });
+    if (
+      !entry?.ok ||
+      !isAcceptedAgentDedupePayload(entry.payload) ||
+      entry.payload.reservationId !== reservationId
+    ) {
+      return;
+    }
+    const previousKey =
+      typeof entry.payload.sessionKey === "string" ? entry.payload.sessionKey : undefined;
+    // Routing and the session COMMIT owner publish this attempt's target. Stop
+    // never manufactures a pending-run incarnation from its own row lookup.
+    setGatewayDedupeEntries({
+      dedupe: params.context.dedupe,
+      keys: params.agentDedupeKeys.filter(
+        (key) => params.context.dedupe.get(key)?.payload === entry.payload,
+      ),
+      entry: {
+        ...entry,
+        payload: {
+          ...entry.payload,
+          ...target,
+          ...(previousKey && previousKey !== target.sessionKey
+            ? { sessionKeyAliases: [previousKey] }
+            : {}),
+        },
+      },
+    });
+  };
+
   const abortForLifecycleRotation = (target?: { sessionKey?: string; agentId?: string }) => {
     if (params.lifecycleGeneration === getAgentEventLifecycleGeneration()) {
       return false;
@@ -185,6 +223,7 @@ export function createAgentDedupeLifecycle(params: {
   return {
     reservationId,
     reserve,
+    bindSessionTarget,
     clearUnaccepted,
     abortForLifecycleRotation,
     isReserved: () => reserved,

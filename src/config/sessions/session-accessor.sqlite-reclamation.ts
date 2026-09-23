@@ -267,9 +267,22 @@ export function reclaimSqliteSessionInTransaction(
         maxPages: plan.maxPages,
         beforeMutation: callbacks.beforeMutation,
         onCommit: () => callbacks.onCommit?.(database),
+        afterCommit: callbacks.afterCommit,
       }),
     };
   }
+  const result = reclaimSqliteRowsInTransaction(plan, callbacks);
+  callbacks.afterCommit?.();
+  if (result.kind === "history-eviction" && result.value.deleted) {
+    reclaimSqliteFreePagesBestEffort(plan.databaseOptions);
+  }
+  return result;
+}
+
+function reclaimSqliteRowsInTransaction(
+  plan: Exclude<SqliteSessionReclamationPlan, { kind: "maintenance-pages" }>,
+  callbacks: SqliteSessionReclamationCallbacks,
+): SqliteSessionReclamationResult {
   if (
     plan.kind === "maintenance-plan" ||
     plan.kind === "maintenance-finalize" ||
@@ -391,9 +404,6 @@ export function reclaimSqliteSessionInTransaction(
     }
     return { archivedTranscripts: deleted ? archivedTranscripts : [], deleted };
   }, plan.databaseOptions);
-  if (plan.kind === "history-eviction" && value.deleted) {
-    reclaimSqliteFreePagesBestEffort(plan.databaseOptions);
-  }
   return { kind: plan.kind, value };
 }
 
@@ -452,7 +462,7 @@ export async function runSqliteSessionReclamation(params: {
   }
   return await withSqliteMutationWorkerLifetime(
     params.plan.databaseOptions,
-    async ({ assertCurrent, commitGate }) => {
+    async ({ assertCurrent, commitGate, signal }) => {
       const assertRequestCurrent = () => {
         assertCurrent();
         params.assertCommitAllowed?.();
@@ -494,6 +504,7 @@ export async function runSqliteSessionReclamation(params: {
             );
           },
           assertRequestCurrent,
+          signal,
         );
       } finally {
         claim.release();

@@ -71,7 +71,7 @@ describe("private session source staging", () => {
         {
           id: expect.any(String),
           text: expect.stringContaining("Violet session preference."),
-          embedding: vectorEnabled ? "[0,1,0,0]" : "[]",
+          embedding: storage.encodeMemoryEmbedding(vectorEnabled ? [0, 1, 0, 0] : []),
         },
       ]);
       if (vectorEnabled) {

@@ -26,6 +26,7 @@ type OperatorRolePolicyChange =
   | { kind: "assignment"; profileId: string }
   | { kind: "config"; context: object };
 const policyListeners = new Set<(change: OperatorRolePolicyChange) => void>();
+let assignmentRevision = 0;
 const deniedOperatorRole: GatewayOperatorRoleDefinition = {
   sessions: { others: "none" },
   agents: [],
@@ -63,6 +64,7 @@ function readOperatorRoleAssignment(profileId: string): string | null {
 
 /** Drops a changed assignment so subsequent authorization reads the durable owner. */
 export function invalidateOperatorRolePolicy(profileId: string): void {
+  assignmentRevision += 1;
   bumpGatewayAccessRevision();
   operatorRoleAssignments.delete(profileId);
   for (const reported of reportedUnknownAssignments) {
@@ -84,6 +86,10 @@ export function publishOperatorRoleConfigChange(context: object | undefined): vo
   if (context) {
     notifyListeners([...policyListeners], { kind: "config", context });
   }
+}
+
+export function readOperatorRolePolicyRevision(): number {
+  return assignmentRevision;
 }
 
 /** An enabled role boundary denies missing identity and unresolvable assignments. */
@@ -204,6 +210,7 @@ export function hasOperatorBoundary(client: GatewayClient | null, cfg: OpenClawC
 /** Enforces the owning agent ceiling for session creation and run-start targets. */
 export function authorizeGatewaySessionCreation(
   params: GatewaySessionAgentAuthorization,
+  prepared?: { policy: GatewayOperatorRoleDefinition | undefined },
 ): ErrorShape | undefined {
   const actor =
     params.actor ??
@@ -212,7 +219,9 @@ export function authorizeGatewaySessionCreation(
     return undefined;
   }
   const profileId = actor?.profileId ?? params.profileId;
-  const role = resolveOperatorRolePolicyForProfile(profileId, params.cfg);
+  const role = prepared
+    ? prepared.policy
+    : resolveOperatorRolePolicyForProfile(profileId, params.cfg);
   if (!role || role.agents === "*" || role.agents.includes(params.agentId)) {
     return undefined;
   }

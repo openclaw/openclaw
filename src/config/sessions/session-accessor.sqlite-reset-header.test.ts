@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -17,7 +16,7 @@ import {
   replaceSessionEntry,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
@@ -49,15 +48,7 @@ describe("SQLite reset boundary transcript header", () => {
       agentId: target.agentId ?? "main",
       path: target.path,
     });
-    const db = getSessionKysely(owner.db);
-    return executeSqliteQuerySync(
-      owner.db,
-      db
-        .selectFrom("transcript_events")
-        .select(["seq", "event_json"])
-        .where("session_id", "=", sessionId)
-        .orderBy("seq", "asc"),
-    ).rows.map((row) => JSON.parse(row.event_json));
+    return readTranscriptEventRows(owner, sessionId).map((row) => JSON.parse(row.eventJson));
   }
 
   // Regression: a session window can exist with a still-empty transcript when a

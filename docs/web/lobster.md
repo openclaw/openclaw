@@ -46,7 +46,9 @@ The toggle is browser-local and does exactly what it says. Off means never, incl
 
 A theme without a mascot hides the resident lobster and visiting lobster strangers while it is active. Ordinary critters can still cross the composer ledge when **Lobster visits** is enabled. Your toggle stays unchanged, and enabled lobster visits return when you switch to a theme with the mascot.
 
-Themes can add occasional penguin or fedora visitors to that ledge traffic. These visitors follow the same visits toggle. A theme can also add occasional decorative fedora hats to agent avatars; those hats are separate from composer visits.
+Themes can add occasional penguin or fedora visitors to that ledge traffic. These visitors follow the same visits toggle. A theme can also add occasional decorative hats to agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog; those hats are separate from composer visits.
+
+Plugin themes can bring their own [SVG hats and visitors](/plugins/manifest/surfaces#themes), with visitors following the same visits toggle.
 
 Reduced-motion users get calm, stationary lobsters automatically.
 

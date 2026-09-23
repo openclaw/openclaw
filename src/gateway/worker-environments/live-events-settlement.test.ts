@@ -35,7 +35,7 @@ describe("worker live event write settlement", () => {
         startupBindings: [],
         startupOwners: new Map(),
       });
-      const { identity, placementStore, workerService } = support.placementHarness(
+      const { identity, placementStore, workerService } = await support.placementHarness(
         "worker-live-settlement",
         sessionId,
         { liveEvents: receiver },

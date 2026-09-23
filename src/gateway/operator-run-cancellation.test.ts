@@ -64,7 +64,7 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
     nodeSendToSession: vi.fn(),
     removeChatRun: (sessionId, runId, sessionKey) =>
       chatRunState.registry.remove(sessionId, runId, sessionKey),
-    cancelRunBoundApprovals: vi.fn(() => 0),
+    cancelRunBoundApprovals: vi.fn().mockResolvedValue(0),
     getRuntimeConfig: () => cfg,
     trackExecution: (work) => execution.track(work),
     logGateway,

@@ -33,6 +33,8 @@ The native Codex app-server harness exposes `turn/steer` instead of OpenClaw run
 
 Codex review and manual compaction turns reject same-turn steering. When a runtime cannot accept steering in `steer` mode, OpenClaw waits for the active run to finish before starting the prompt.
 
+Once an OpenClaw turn has finished or handed off, new prompts wait for the next turn even while cleanup is still running. Retries and compaction within the current turn can still receive steering.
+
 ## Tool launch boundaries
 
 OpenClaw distinguishes started work from requested work:
@@ -69,6 +71,14 @@ Authorized participants with matching tool permissions can steer from different
 browsers. The running turn keeps its original approval destination. A different
 browser identity alone does not defer the message, but changes to permissions,
 execution policy, workspace, or bound tools can require a followup turn.
+
+[Personal `USER.md` context](/concepts/user-model#personal-user-files-on-a-shared-gateway)
+follows the session's assigned human owner, otherwise its authenticated human
+creator. Another participant can steer normally without switching that personal
+context, and collected messages keep the same session selection. Reassignment
+takes effect on the next new turn; it does not replace the running turn's personal
+instructions. Personal context selection does not grant tool permissions or
+change the approval destination.
 
 A visible message or send acknowledgment does not mean the active runtime has
 consumed it. The Control UI shows specific notices when an accepted message is
