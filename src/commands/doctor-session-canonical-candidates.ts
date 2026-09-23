@@ -73,6 +73,7 @@ function collectCanonicalSessionCandidateFacts(
         cfg: params.cfg,
         agentId: target.agentId,
         sessionKey,
+        preserveQualifiedAddress: true,
       });
       return {
         canonicalKey: storedKey
@@ -101,6 +102,7 @@ function collectCanonicalSessionCandidateFacts(
           cfg: params.cfg,
           agentId: canonicalAgentId,
           sessionKey: value,
+          preserveQualifiedAddress: true,
         });
         const ownerAgentId = parseAgentSessionKey(storedKey)?.agentId ?? canonicalAgentId;
         for (const key of [value, storedKey]) {

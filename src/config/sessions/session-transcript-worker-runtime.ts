@@ -34,13 +34,13 @@ import {
   costRefreshLane,
   historyClearTimeout,
   historyLane,
-  historyPages,
   pruneHistoryDatabases,
   releaseRetiredDatabaseCustody,
   rotateDatabaseWorkers,
   type HistoryDatabaseResource,
   type SessionCostWorkerLane,
   type SessionDatabaseCleanup,
+  type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import type {
   SessionHistoryWorkerDatabase,
@@ -99,7 +99,10 @@ export function prepareSessionEntryPresenceRead(input: SessionAccessScope): Read
 }
 
 /** Single and batch reads synchronously retain the same lane-aware database owner. */
-export function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOptions) {
+export function retainSessionHistoryWorkerDatabase(
+  options: OpenClawAgentDatabaseOptions,
+  lane: SessionHistoryWorkerLane = historyLane,
+) {
   const owned = acquireHistoryDatabaseResource(options);
   const { database } = owned;
   const assertCurrent = () => {
@@ -107,14 +110,14 @@ export function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabas
       throw new WorkerTaskError("Session history database read was revoked", "unavailable");
     }
   };
-  historyClearTimeout(historyLane.idleTimer);
-  historyLane.pending++;
+  historyClearTimeout(lane.idleTimer);
+  lane.pending++;
   owned.pending++;
   const release = () => {
     owned.pending--;
-    historyLane.pending--;
+    lane.pending--;
     pruneHistoryDatabases();
-    armDatabaseWorkerIdleRetirement(historyLane);
+    armDatabaseWorkerIdleRetirement(lane);
   };
   try {
     assertCurrent();
@@ -130,13 +133,13 @@ export function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabas
       let sequence = 0;
       let executionRetired = false;
       try {
-        const reply = await historyPages.run(
+        const reply = await lane.pool.run(
           () => {
             assertCurrent();
             const input = prepare();
             assertCurrent();
-            sequence = ++historyLane.nativeSequence;
-            owned.nativeSequences.set(historyLane, sequence);
+            sequence = ++lane.nativeSequence;
+            owned.nativeSequences.set(lane, sequence);
             return { ...input, database };
           },
           {
@@ -159,7 +162,7 @@ export function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabas
             onExecutionSettled: ({ retired }) => {
               if (retired) {
                 executionRetired = true;
-                releaseRetiredDatabaseCustody(historyLane, sequence);
+                releaseRetiredDatabaseCustody(lane, sequence);
               }
             },
           },
@@ -169,14 +172,14 @@ export function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabas
         );
         if (reply.ok && reply.closedHistoryDatabase) {
           // A later dispatched request may already hold this target's next native custody.
-          clearClosedDatabaseCustody(historyLane, sequence, [reply.closedHistoryDatabase]);
+          clearClosedDatabaseCustody(lane, sequence, [reply.closedHistoryDatabase]);
         }
         assertCurrent();
         return value;
       } catch (error) {
         if (sequence > 0 && !executionRetired) {
           try {
-            await rotateDatabaseWorkers(historyLane);
+            await rotateDatabaseWorkers(lane);
           } catch (cleanupError) {
             throw sessionHistoryCleanupError(error, cleanupError, "worker retirement");
           }
@@ -208,12 +211,13 @@ export function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabas
 export async function withSessionHistoryWorkerDatabases<T>(
   options: readonly OpenClawAgentDatabaseOptions[],
   operation: (owners: readonly SessionHistoryWorkerDatabase[]) => Promise<T>,
+  lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
   const retained: ReturnType<typeof retainSessionHistoryWorkerDatabase>[] = [];
   let outcome: { value: T } | { error: unknown };
   try {
     for (const target of options) {
-      retained.push(retainSessionHistoryWorkerDatabase(target));
+      retained.push(retainSessionHistoryWorkerDatabase(target, lane));
     }
     const value = await operation(retained.map(({ owner }) => owner));
     for (const { owner } of retained) {
@@ -248,9 +252,12 @@ export async function withSessionHistoryWorkerDatabases<T>(
 export function withSessionHistoryWorkerDatabase<T>(
   options: OpenClawAgentDatabaseOptions,
   operation: (owner: SessionHistoryWorkerDatabase) => Promise<T>,
+  lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
-  return withSessionHistoryWorkerDatabases([options], (owners) =>
-    operation(expectDefined(owners[0], "retained session history reader")),
+  return withSessionHistoryWorkerDatabases(
+    [options],
+    (owners) => operation(expectDefined(owners[0], "retained session history reader")),
+    lane,
   );
 }
 

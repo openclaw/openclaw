@@ -155,6 +155,6 @@ export async function runCodexAppServerAttempt(
     }
   } finally {
     // Preparation can fail before the active turn installs its terminal freeze.
-    params.abortSignal?.removeEventListener("abort", connection.abortFromUpstream);
+    connection.cancellation.dispose();
   }
 }

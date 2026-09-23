@@ -441,6 +441,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Code Execution",
       detailKeys: ["task"],
     },
+    decision_evaluate: {
+      emoji: "⚖️",
+      title: "Decision Evaluation",
+      detailKeys: [],
+    },
     message: MESSAGE_TOOL_DISPLAY_SPEC,
     apply_patch: {
       emoji: "🩹",

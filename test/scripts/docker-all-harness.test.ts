@@ -309,6 +309,134 @@ function startOwnedScheduler(
   };
 }
 
+function observeCleanupClock() {
+  const advances = [10_000, 1_000];
+  const prefix = "DOCKER_CLEANUP_CLOCK ";
+  function waitForReceipt(
+    owner: ReturnType<typeof startOwnedScheduler>,
+    event: "ready" | "advanced",
+    step: number,
+  ) {
+    return new Promise<{ pid: number; advances: number[] }>((resolve, reject) => {
+      let settled = false;
+      const fail = (error: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        owner.shim.stderr.off("data", check);
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("Cleanup clock observation failed", { cause: error }),
+        );
+      };
+      const check = () => {
+        if (settled) {
+          return;
+        }
+        try {
+          for (const line of owner.stderr().split("\n").slice(0, -1)) {
+            if (!line.startsWith(prefix)) {
+              continue;
+            }
+            const receipt: { event: string; pid: number; step: number; advances: number[] } =
+              JSON.parse(line.slice(prefix.length));
+            if (receipt.event !== event || receipt.step !== step) {
+              continue;
+            }
+            expect(receipt).toEqual({
+              event,
+              pid: receipt.pid,
+              step,
+              advances: advances.slice(0, step),
+            });
+            expect(owner.children()).toContainEqual({
+              owner: owner.shim.pid,
+              pid: receipt.pid,
+            });
+            settled = true;
+            owner.shim.stderr.off("data", check);
+            resolve(receipt);
+            return;
+          }
+        } catch (error) {
+          fail(error);
+        }
+      };
+      owner.shim.stderr.on("data", check);
+      void owner.result.then(() => {
+        check();
+        fail(new Error(`Scheduler exited before cleanup clock ${event} ${step}`));
+      }, fail);
+      check();
+    });
+  }
+  return {
+    // Keep native polling timers and signals; advance only after the denied
+    // inspection reaches each production grace window in the owned scheduler.
+    probe: `
+      const cleanupClockAdvances = ${JSON.stringify(advances)};
+      const cleanupClockNow = Date.now.bind(Date);
+      let cleanupClockOffset = 0;
+      let cleanupClockStep = 0;
+      let cleanupClockWaiting = false;
+      let cleanupClockDenied = false;
+      let cleanupClockGroup;
+      let cleanupClockForced = false;
+      const cleanupClockReceipt = event => process.stderr.write('\\n' + ${JSON.stringify(prefix)} + JSON.stringify({
+        event, pid: process.pid, step: cleanupClockStep,
+        advances: cleanupClockAdvances.slice(0, cleanupClockStep),
+      }) + '\\n');
+      Date.now = () => cleanupClockNow() + cleanupClockOffset;
+      const cleanupClockKill = process.kill.bind(process);
+      process.kill = (pid, signal) => {
+        if (signal === 0) cleanupClockDenied = false;
+        try { return cleanupClockKill(pid, signal); }
+        catch (error) {
+          if (signal === 0 && error.code === 'EPERM') {
+            cleanupClockDenied = true;
+            cleanupClockGroup ??= pid;
+          }
+          throw error;
+        } finally {
+          if (pid === cleanupClockGroup && signal === 'SIGKILL') cleanupClockForced = true;
+        }
+      };
+      const cleanupClockTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = (...args) => {
+        const timer = cleanupClockTimeout(...args);
+        const denied = cleanupClockDenied;
+        cleanupClockDenied = false;
+        if (denied && !cleanupClockWaiting && cleanupClockStep < cleanupClockAdvances.length) {
+          if (cleanupClockStep === 1 && !cleanupClockForced) {
+            throw new Error('cleanup clock reached its force-kill wait before forwarding SIGKILL');
+          }
+          cleanupClockWaiting = true;
+          cleanupClockReceipt('ready');
+        }
+        return timer;
+      };
+      process.on('SIGUSR1', () => {
+        if (!cleanupClockWaiting) throw new Error('cleanup clock advanced before its owner waited');
+        cleanupClockOffset += cleanupClockAdvances[cleanupClockStep++];
+        cleanupClockWaiting = false;
+        cleanupClockReceipt('advanced');
+      });
+    `,
+    async advance(owner: ReturnType<typeof startOwnedScheduler>) {
+      for (let step = 0; step < advances.length; step += 1) {
+        const ready = await waitForReceipt(owner, "ready", step);
+        process.kill(ready.pid, "SIGUSR1");
+        const advanced = await waitForReceipt(owner, "advanced", step + 1);
+        if (step === advances.length - 1) {
+          expect(advanced.advances).toEqual([10_000, 1_000]);
+        }
+      }
+    },
+  };
+}
+
 function observeStaggerTimer(fixture: Pick<ReturnType<typeof setupFixture>, "root" | "marker">) {
   const { root } = fixture;
   const ready = path.join(root, "stagger-timer.pid");
@@ -660,6 +788,7 @@ describe("Docker scheduler trusted harness execution", () => {
       const groupPath = path.join(fixture.root, "stagger-group.pid");
       const faultPath = path.join(fixture.root, "stagger-probe-rejected");
       const timer = observeStaggerTimer(fixture);
+      const cleanupClock = fatal ? observeCleanupClock() : undefined;
       const laneOrder = ["gateway-concurrency", "live-models"];
       writeFileSync(
         path.join(fixture.selectedHarness, "marker.cjs"),
@@ -702,7 +831,7 @@ describe("Docker scheduler trusted harness execution", () => {
           OPENCLAW_DOCKER_ALL_START_STAGGER_MS: fatal || failFast ? "600000" : "3000",
           OPENCLAW_DOCKER_ALL_FAIL_FAST: failFast ? "1" : "0",
         },
-        `${timer.probe}\n${probe}`,
+        `${timer.probe}\n${probe}\n${cleanupClock?.probe ?? ""}`,
         [leaderPath],
       );
       await runQaGatewayFixture(
@@ -717,6 +846,7 @@ describe("Docker scheduler trusted harness execution", () => {
           process.kill(leaderPid, "SIGUSR1");
           await waitForFile(path.join(owner.events, `${group}.close`), 5_000);
           if (fatal) {
+            await cleanupClock!.advance(owner);
             await waitForFixtureFile(faultPath, owner.result, "final-verification");
           }
           await waitForFixtureFile(timer.checkpoint, owner.result);
@@ -1054,6 +1184,7 @@ describe("Docker scheduler trusted harness execution", () => {
       const groupPath = path.join(fixture.root, "group.pid");
       const unjoined = failure !== "ordinary command failure";
       const priorFailure = failure === "ordinary failure then unjoined cleanup";
+      const cleanupClock = unjoined ? observeCleanupClock() : undefined;
       let leafPid: number | undefined;
       const leafScript = [
         "process.on('SIGTERM', () => {});",
@@ -1104,6 +1235,7 @@ describe("Docker scheduler trusted harness execution", () => {
           "    }",
           "    return kill(pid, signal);",
           "  };",
+          cleanupClock?.probe ?? "",
         ].join("\n"),
         [leaderPath, leafPath],
       );
@@ -1114,6 +1246,7 @@ describe("Docker scheduler trusted harness execution", () => {
             writeFileSync(groupPath, String(owner.captureGroup(leafPid)));
             const leader = await owner.ready(leaderPath);
             process.kill(leader, "SIGUSR1");
+            await cleanupClock!.advance(owner);
           }
           expect(await owner.result).toEqual({ code: unjoined ? 2 : 1, signal: null });
           if (leafPid) {
@@ -1443,6 +1576,10 @@ describe("Docker scheduler publication settlement", () => {
       const fence = mode === "tree error fences admission" || mode === "log error fences admission";
       const shutdownOnly = mode === "shutdown-only sibling cleanup error";
       const siblingLogs = mode === "sibling log errors";
+      const cleanupClock =
+        mode === "tree and log errors" || mode === "tree error fences admission" || shutdownOnly
+          ? observeCleanupClock()
+          : undefined;
       if (siblingLogs) {
         const marker = path.join(fixture.selectedHarness, "marker.cjs");
         writeFileSync(
@@ -1649,10 +1786,11 @@ describe("Docker scheduler publication settlement", () => {
               }
             : {}),
         },
-        `${fence ? timer.probe : ""}\n${probe}`,
+        `${fence ? timer.probe : ""}\n${probe}\n${cleanupClock?.probe ?? ""}`,
       );
       await runQaGatewayFixture(
         async () => {
+          await cleanupClock?.advance(owner);
           const held = [
             "delayed close",
             "repeated signals after group join",

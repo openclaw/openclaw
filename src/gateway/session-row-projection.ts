@@ -94,7 +94,8 @@ export async function createSessionRowProjection(params: {
   );
   let epoch = 0;
   let databaseRevision = 0;
-  // Releasing the token also releases weakly held list selections from the previous revision.
+  // Stored-entry and row-identity changes release weakly held list selections.
+  // Live presentation facts do not change the resident roster or its entry tuples.
   let revisionToken: object | undefined;
   let materializedCount = 0;
   let scope: ReturnType<typeof prepareSessionRowScopes>;
@@ -134,12 +135,9 @@ export async function createSessionRowProjection(params: {
     current: (row) => !topologyDirty && archive.isCurrentMaterialization(row) && isCurrent(row),
     publish(row, fields) {
       const current = rows.get(records.identity(row));
-      if (
-        records.ready(current) &&
-        records.publishTranscriptFields(current, fields, cfg, metadata.current)
-      ) {
-        // Optional presentation leaves independently pending stored facts dirty.
-        revisionToken = undefined;
+      if (records.ready(current)) {
+        // Preview publication changes this live row in place, without replacing selection inputs.
+        records.publishTranscriptFields(current, fields, cfg, metadata.current);
       }
     },
   });
@@ -291,9 +289,9 @@ export async function createSessionRowProjection(params: {
   }
   function mark(change: SessionRowChange) {
     epoch++;
-    revisionToken = undefined;
     const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
     if (!presentationOnly) {
+      revisionToken = undefined;
       databaseRevision++;
     }
     if ("all" in change) {

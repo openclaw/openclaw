@@ -163,7 +163,12 @@ Synchronous operator inspection uses the same selected-row reader. An unavailabl
 schema refuses the read rather than reporting missing backing sessions. Canonical
 admission, malformed-row handling, retention, and update behavior are unchanged.
 
-Cron retention discovery also uses the session reader worker. It validates the
+Cron retention discovery uses a separate, single-worker maintenance lane within the
+same session database lifecycle owner. Foreground history and exact-entry reads
+keep their own queue while full-store validation runs. Both lanes retain the same
+admission, revocation, cleanup, and idle-retirement rules; a database close joins
+every lane that holds it. The additional worker is created on demand and retires
+on idle timeout or critical memory pressure. Discovery validates the
 complete physical store's metadata and participants in one read snapshot. Its
 existing full-row decoder streams JSON once and retains prompt snapshots only
 for expired cron runs belonging to the logical agent. The
@@ -229,6 +234,13 @@ owners; these reporting snapshots grant no execution or deletion authority.
 This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the
 [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
+
+iMessage resource authorization reads uncached message-to-chat membership through
+its existing read-only Messages database worker and joins reader cleanup before
+returning. The resource owner retains local executable attestation, exclusive
+account binding, and conversation matching; reply sends recheck live caller
+authority after the read. Missing or failed reads retain the existing delegated
+refusal and direct-operator behavior, without falling back to host SQLite.
 
 Administrative skill archive uploads use the shared-state worker for staging,
 expiry cleanup, commit, installation claims, lease renewal, and consumption. The
