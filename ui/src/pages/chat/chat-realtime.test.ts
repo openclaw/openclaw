@@ -467,6 +467,19 @@ describe("chat realtime actions", () => {
     expect(state.realtimeTalkCameraError).toBe(true);
   });
 
+  it("shows microphone input-loss guidance without leaving listening", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const session = inspectSession(state);
+    session.callbacks.onStatus?.("listening");
+
+    session.callbacks.onInputNotice?.("Microphone input recovered; repeat the last part");
+
+    expect(state.realtimeTalkStatus).toBe("listening");
+    expect(state.realtimeTalkActive).toBe(true);
+    expect(state.realtimeTalkInputNotice).toBe("Microphone input recovered; repeat the last part");
+  });
+
   it("cycles live cameras in enumeration order and persists the successful switch", async () => {
     const state = createState();
     const switchCamera = vi
