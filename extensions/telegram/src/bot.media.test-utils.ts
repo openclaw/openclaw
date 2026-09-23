@@ -1,15 +1,8 @@
-// Telegram helper module supports bot.media utils behavior.
 import type { PhotoSize } from "grammy/types";
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import * as harness from "./bot.media.e2e.test-harness.js";
-
-type StickerSpy = Mock<(...args: unknown[]) => unknown>;
-
-export const cacheStickerSpy: StickerSpy = vi.fn();
-export const getCachedStickerSpy: StickerSpy = vi.fn();
-export const describeStickerImageSpy: StickerSpy = vi.fn();
 
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
 const lookupMock = vi.fn();
@@ -90,24 +83,6 @@ export async function createBotHandlerWithOptions(options: {
   return { handler, replySpy: replySpyRef, runtimeError };
 }
 
-export function mockTelegramFileDownload(params: {
-  contentType: string;
-  bytes: Uint8Array;
-}): FetchMockHandle {
-  undiciFetchSpyRef.mockResolvedValueOnce(
-    new Response(Buffer.from(params.bytes), {
-      status: 200,
-      headers: { "content-type": params.contentType },
-    }),
-  );
-  readRemoteMediaBufferSpyRef.mockResolvedValueOnce({
-    buffer: Buffer.from(params.bytes),
-    contentType: params.contentType,
-    fileName: "mock-file",
-  });
-  return createFetchMockHandle();
-}
-
 export function mockTelegramPngDownload(): FetchMockHandle {
   undiciFetchSpyRef.mockResolvedValue(
     new Response(Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47])), {
@@ -120,10 +95,6 @@ export function mockTelegramPngDownload(): FetchMockHandle {
     contentType: "image/png",
     fileName: "mock-file.png",
   });
-  return createFetchMockHandle();
-}
-
-export function watchTelegramFetch(): FetchMockHandle {
   return createFetchMockHandle();
 }
 
@@ -162,12 +133,3 @@ afterEach(() => {
   resolvePinnedHostnameSpy?.mockRestore();
   resolvePinnedHostnameSpy = null;
 });
-
-vi.mock("./sticker-cache.js", () => ({
-  cacheSticker: (...args: unknown[]) => cacheStickerSpy(...args),
-  getCachedSticker: (...args: unknown[]) => getCachedStickerSpy(...args),
-  describeStickerImage: (...args: unknown[]) => describeStickerImageSpy(...args),
-  getAllCachedStickers: vi.fn(() => []),
-  getCacheStats: vi.fn(() => ({ count: 0 })),
-  searchStickers: vi.fn(() => []),
-}));

@@ -192,7 +192,16 @@ jobs:
       - name: Check source, test types, and architecture
         env:
           OPENCLAW_LOCAL_CHECK: "0"
-        run: pnpm check --include-test-types --include-architecture
+        run: |
+          set -euo pipefail
+          harness_root="$RUNNER_TEMP/npm-preflight-release-harness"
+          [[ ! -e "$harness_root" ]]
+          mv .release-harness "$harness_root"
+          restore_harness() { mv "$harness_root" .release-harness; }
+          trap restore_harness EXIT
+          pnpm check --include-test-types --include-architecture
+          restore_harness
+          trap - EXIT
 
       - name: Enforce plugin compatibility release readiness
         env:

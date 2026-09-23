@@ -1,7 +1,10 @@
 import { registerControlUiReloadGuard } from "../../../app/document-reload-guard.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { showToast } from "../../../lib/toast.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+
+registerFilePreviewEnglish();
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
 

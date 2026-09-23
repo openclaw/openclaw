@@ -1,3 +1,4 @@
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
@@ -21,6 +22,12 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
   let acknowledgedSignature: string | null = null;
   let acknowledgedGeneration = 0;
   let requestGeneration = 0;
+  let requestController: AbortController | null = null;
+
+  const retireRequest = () => {
+    requestController?.abort();
+    requestController = null;
+  };
 
   const isActive = () => watchedByOwner.size > 0;
 
@@ -49,6 +56,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     },
     onDetach: () => {
       requestGeneration += 1;
+      retireRequest();
       lastHello = null;
       lastSignature = null;
       acknowledgedSignature = null;
@@ -76,6 +84,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     if (!available) {
       lastHello = null;
       lastSignature = null;
+      retireRequest();
       acknowledgedSignature = null;
       acknowledgedGeneration = 0;
       if (!isActive()) {
@@ -104,16 +113,20 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     lastHello = snapshot.hello;
     lastSignature = signature;
     const currentGeneration = ++requestGeneration;
+    // Same-set churn keeps its attempt; only supersession retires the old waiter.
+    retireRequest();
+    requestController = new AbortController();
     const isCurrentRequest = () =>
       lifecycle.attached &&
       currentGeneration === requestGeneration &&
       snapshot.hello === lastHello &&
       signature === lastSignature;
     retry.cancel();
-    const request = client.request(SESSION_VIEWERS_SET_METHOD, {
-      ...(agentId ? { agentId } : {}),
-      sessionKeys,
-    });
+    const request = client.request(
+      SESSION_VIEWERS_SET_METHOD,
+      { ...(agentId ? { agentId } : {}), sessionKeys },
+      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, signal: requestController.signal },
+    );
     void request
       .then(() => {
         if (isCurrentRequest()) {
