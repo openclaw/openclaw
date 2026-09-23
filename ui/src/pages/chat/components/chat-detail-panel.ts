@@ -230,11 +230,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   };
 
   private scrollToFileLine(content: FileSidebarContent) {
-    if (this.visibleContent !== content || this.showingRawText) {
-      return;
-    }
     const line = this.fileNavigation?.line ?? content.line;
-    if (line != null) {
+    if (this.visibleContent === content && !this.showingRawText && line != null) {
       this.fileEditor?.scrollToLine(line, true);
     }
   }
