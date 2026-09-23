@@ -150,13 +150,15 @@ class OpenClawShell
   previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;
-  storedOutboxes: ReturnType<OutboxStoreRuntime["summarizeStoredChatOutboxes"]> | undefined;
+  storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   private outboxStoreUnsubscribe: (() => void) | null = null;
   private lastDeletedSessions: ApplicationContext["sessions"]["state"]["deletedSessions"] | null =
     null;
   readonly outboxStoreImport = createIdleImport(
     () =>
-      import("../lib/chat/outbox-store-projection.ts").then((module): OutboxStoreRuntime => module),
+      import("../lib/chat/outbox-store-projection.ts").then((module) =>
+        module.createStoredChatOutboxReader(),
+      ),
     (runtime) => this.installOutboxStoreRuntime(runtime),
   );
   private lastNativeNavState: NativeNavState | undefined;
@@ -485,20 +487,19 @@ class OpenClawShell
 
   private installOutboxStoreRuntime(runtime: OutboxStoreRuntime) {
     this.outboxStoreRuntime = runtime;
+    runtime.invalidate();
     if (!this.isConnected) {
       return;
     }
     this.outboxStoreUnsubscribe?.();
-    this.outboxStoreUnsubscribe = runtime.subscribeStoredChatOutboxChanges(
-      this.refreshStoredOutboxPresentation,
-    );
+    this.outboxStoreUnsubscribe = runtime.subscribe(this.refreshStoredOutboxPresentation);
     this.refreshStoredOutboxPresentation();
   }
 
   private refreshStoredOutboxSummary() {
     const context = this.context;
     this.storedOutboxes = context
-      ? this.outboxStoreRuntime?.summarizeStoredChatOutboxes(this.storedOutboxScopeHost(context))
+      ? this.outboxStoreRuntime?.read(this.storedOutboxScopeHost(context))
       : undefined;
   }
 
@@ -520,6 +521,7 @@ class OpenClawShell
   }
 
   private resetShellState() {
+    this.outboxStoreRuntime?.invalidate();
     this.navDrawerOpen = false;
     this.desktopNavigationExpanded = false;
     this.navDrawerTrigger = null;
@@ -657,7 +659,6 @@ class OpenClawShell
     });
   };
   readonly handleShellNavDrawerToggle = this.shellChrome.handleShellNavDrawerToggle;
-  readonly openApprovals = this.shellChrome.openApprovals;
   readonly handleCommandPaletteSlashCommand = this.shellChrome.handleCommandPaletteSlashCommand;
   readonly restorePendingLazyAction = this.shellChrome.restorePendingLazyAction;
   readonly nativeNavCollapsed = this.shellChrome.nativeNavCollapsed;

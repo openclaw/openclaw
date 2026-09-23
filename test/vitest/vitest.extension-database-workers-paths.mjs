@@ -12,6 +12,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/mattermost/src/outbound-delivery.test.ts",
   "extensions/googlechat/src/api.fetchok.transport.test.ts",
   "extensions/googlechat/src/sender-authority.transport.test.ts",
+  "extensions/matrix/src/actions.credentials.test.ts",
   "extensions/matrix/src/matrix/monitor/inbound-dedupe.test.ts",
   "extensions/nextcloud-talk/src/doctor.test.ts",
   "extensions/raft/src/gateway.test.ts",

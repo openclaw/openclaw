@@ -74,6 +74,14 @@ export function createMessageToolDecisionRecorder(params: {
         throw error;
       }
     },
+    async runBoundaryAsync<T>(operation: () => Promise<T>): Promise<T> {
+      try {
+        return await operation();
+      } catch (error) {
+        recordTypedDenial(error);
+        throw error;
+      }
+    },
     recordTurnCapabilityInactive() {
       record({
         outcome: "denied",

@@ -25,6 +25,7 @@ import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import {
   captureAgentHarnessCompletionCustodyOwner,
   isAgentHarnessCompletionCustodyCurrent,
@@ -35,7 +36,10 @@ import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
 } from "../tasks/agent-harness-task-runtime-scope.js";
-import { DetachedTaskAssignmentUnsupportedError } from "../tasks/detached-task-runtime-contract.js";
+import {
+  DetachedTaskAssignmentUnsupportedError,
+  SUBAGENT_KILL_TASK_ERROR,
+} from "../tasks/detached-task-runtime-contract.js";
 import { captureDetachedTaskRuntimeOwner } from "../tasks/detached-task-runtime-state.js";
 import {
   createRunningTaskRun,
@@ -69,6 +73,38 @@ type AssignmentOwnership = {
   expectedTask?: TaskPersistenceReceipt;
   completionCustody?: AgentHarnessCompletionCustody;
 };
+
+type HarnessTaskContent = {
+  task?: string;
+  label?: string;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  eventSummary?: string | null;
+  error?: string;
+};
+
+/** Keep native task lifecycle receipts durable, not their temporary conversation content. */
+function projectHarnessTaskContentForPersistence<T extends HarnessTaskContent>(
+  requesterSessionKey: string,
+  params: T,
+): T {
+  if (!isIncognitoSessionKey(requesterSessionKey)) {
+    return params;
+  }
+  return {
+    ...params,
+    ...(params.task !== undefined ? { task: "Incognito task" } : {}),
+    ...(params.label !== undefined ? { label: "Incognito task" } : {}),
+    ...(params.progressSummary !== undefined ? { progressSummary: null } : {}),
+    ...(params.terminalSummary !== undefined ? { terminalSummary: null } : {}),
+    ...(params.eventSummary !== undefined ? { eventSummary: null } : {}),
+    ...(params.error !== undefined
+      ? {
+          error: params.error === SUBAGENT_KILL_TASK_ERROR ? params.error : "Incognito task error.",
+        }
+      : {}),
+  };
+}
 
 /** Retains admitted completion work for this exact physical requester lifecycle. */
 export function captureAgentHarnessCompletionCustody(
@@ -212,7 +248,7 @@ export function createAgentHarnessTaskRuntime(
   ): TaskRecord | null => {
     assertRunId(taskParams.runId);
     return createRunningTaskRun({
-      ...taskParams,
+      ...projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams),
       runtime,
       ...(taskKind ? { taskKind } : {}),
       requesterSessionKey,
@@ -238,7 +274,8 @@ export function createAgentHarnessTaskRuntime(
     tryCreateRunningTaskRun,
     recordTaskRunProgressByRunId(taskParams) {
       assertRunId(taskParams.runId);
-      const { expectedTask, completionCustody, ...progress } = taskParams;
+      const { expectedTask, completionCustody, ...progress } =
+        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
       if (expectedTask) {
         return transitionAssignment(
           { kind: "state", params: { ...progress, runtime, sessionKey: requesterSessionKey } },
@@ -253,7 +290,8 @@ export function createAgentHarnessTaskRuntime(
     },
     finalizeTaskRunByRunId(taskParams) {
       assertRunId(taskParams.runId);
-      const { expectedTask, completionCustody, ...terminal } = taskParams;
+      const { expectedTask, completionCustody, ...terminal } =
+        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
       if (expectedTask) {
         return transitionAssignment(
           { kind: "state", params: { ...terminal, runtime, sessionKey: requesterSessionKey } },
@@ -268,7 +306,8 @@ export function createAgentHarnessTaskRuntime(
     },
     setDetachedTaskDeliveryStatusByRunId(taskParams) {
       assertRunId(taskParams.runId);
-      const { expectedTask, completionCustody, ...delivery } = taskParams;
+      const { expectedTask, completionCustody, ...delivery } =
+        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
       if (expectedTask) {
         return transitionAssignment(
           { kind: "delivery", params: { ...delivery, runtime, sessionKey: requesterSessionKey } },

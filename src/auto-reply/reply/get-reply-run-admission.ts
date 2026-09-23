@@ -410,7 +410,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: context.runtimePolicySessionKey,
       });
   const resolveRuntimeAuthProfile = async () => {
-    if (useFastReplyRuntime && !params.configuredProfileId) {
+    if (useFastReplyRuntime && !params.configuredProfileId && !modelState.operatorModelOverride) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
         authProfileIdSource: resolveCollapsedSessionAuthPinSource(
@@ -419,7 +419,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       };
     }
     const shouldUseEphemeralSession =
-      params.autoFallbackPrimaryProbe !== undefined || params.configuredProfileId !== undefined;
+      params.autoFallbackPrimaryProbe !== undefined ||
+      params.configuredProfileId !== undefined ||
+      modelState.operatorModelOverride === true;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
     const authSessionEntry =
       shouldUseEphemeralSession && preparedSessionState.sessionEntry

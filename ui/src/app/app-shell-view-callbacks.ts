@@ -7,10 +7,9 @@ import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confi
 
 type ShellViewCallbackHost = {
   readonly context: ApplicationContext | undefined;
-  readonly storedOutboxes:
-    | ReturnType<OutboxStoreRuntime["summarizeStoredChatOutboxes"]>
-    | undefined;
+  readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   openNewSession(agentId: string, target?: NewSessionTarget): void;
+  toggleNavigationSurface(): void;
 };
 
 /** Stable child bindings resolve current owners when invoked, without invalidating every paint. */
@@ -21,6 +20,7 @@ export function createShellViewCallbacks(host: ShellViewCallbackHost) {
     hasSessionDraft: (sessionKey: string) =>
       host.storedOutboxes?.hasSessionDraft(sessionKey) ?? false,
     retryGateway: () => host.context?.gateway.connect(),
+    toggleSidebar: () => host.toggleNavigationSurface(),
     updateSidebarEntries: (entries: string[]) =>
       host.context?.navigation.update({ sidebarEntries: entries }),
     openDevicePairSetup: () => void host.context?.overlays.openDevicePairSetup(),

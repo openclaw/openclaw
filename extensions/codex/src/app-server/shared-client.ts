@@ -1,7 +1,4 @@
-/**
- * Owns shared and isolated Codex app-server client startup, auth application,
- * lease tracking, and teardown.
- */
+/** Owns shared and isolated Codex app-server startup, authentication, leases, and teardown. */
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
@@ -1140,7 +1137,7 @@ async function startInitializedCodexAppServerClient(
         !isManagedCodexDesktopCommand(startOptions.command) &&
         !isCodexAppServerProxyLaunch(startOptions.args)
       ) {
-        ownCodexInferenceClient(client);
+        ownCodexInferenceClient(client, startOptions);
       }
       recordCodexAppServerAuthHandoff(client, authHandoff);
       if (runtimeArtifactModule && runtimeArtifact) {

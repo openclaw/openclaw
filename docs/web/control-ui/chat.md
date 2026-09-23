@@ -398,7 +398,7 @@ Authored in-page HTML links such as `href="#section"` scroll within the preview,
 in `strict` mode. This leaves the original file and **Source** unchanged; authored
 base URLs, links targeting another window, and download links keep their behavior.
 
-Workspace file reads and edits retain their existing 256 KiB limit.
+Workspace file reads and edits retain their existing 256 KiB limit. After a successful save, Files refreshes its metadata and Review refreshes its diff without switching the active panel or clearing the current Files search.
 Code previews and editors are named by their filename and reachable with Tab,
 including read-only previews. In-file search announces its result count.
 For workspace HTML, **Edit**, in-file search, and explicit `file:line` navigation
