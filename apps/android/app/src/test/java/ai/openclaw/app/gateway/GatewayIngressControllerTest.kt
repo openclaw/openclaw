@@ -5,6 +5,7 @@ import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -27,12 +28,22 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Headers
+import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -48,6 +59,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLException
 import kotlin.coroutines.CoroutineContext
 
@@ -889,6 +901,330 @@ class GatewayIngressControllerTest {
           assertFalse(owner.blocksAutomaticReconnect(ordinary.stableId))
           assertNull(owner.authorization(ordinary))
         }
+      }
+    }
+
+  private class IngressTransport {
+    val ready = CompletableDeferred<Unit>()
+    val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+    lateinit var session: GatewaySession
+  }
+
+  private inner class PinnedIngressFixture {
+    private val address = InetAddress.getLoopbackAddress()
+    private val host = checkNotNull(address.hostAddress)
+    private val tlsIdentity = gatewayTestTls()
+    val server =
+      MockWebServer().apply {
+        useHttps(tlsIdentity.first, false)
+        start(address, 0)
+      }
+    val foreign =
+      MockWebServer().apply {
+        useHttps(tlsIdentity.first, false)
+        dispatcher =
+          object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = MockResponse().setBody("foreign")
+          }
+        start(address, 0)
+      }
+    val target = GatewayEndpoint.manual(host, server.port, true, "/gateway/socket")
+    val targetTls = GatewayTlsParams(true, tlsIdentity.second, false, target.stableId)
+    val url =
+      server
+        .url("/gateway/socket")
+        .newBuilder()
+        .host(host)
+        .build()
+    val foreignUrl =
+      foreign
+        .url("/gateway/socket")
+        .newBuilder()
+        .host(host)
+        .build()
+    val descriptor = application.copy(origin = CloudflareAccessOrigin.from(url.toString()))
+    val first = grant("first")
+    val firstHeader = checkNotNull(first.authorizationHeader(url.toString()))
+    val storage = Storage().also { it.values[descriptor.origin] = first.encode() }
+    val requests = ConcurrentLinkedQueue<RecordedRequest>()
+    val challengeFirst = AtomicBoolean(false)
+    val retryNextUpgrade = AtomicBoolean(false)
+    val upgradeEntered = CompletableDeferred<Unit>()
+    val upgradeReturned = CompletableDeferred<Unit>()
+    val releaseUpgrade = CountDownLatch(1)
+    val holdNextDiscovery = AtomicBoolean(false)
+    val discoveryEntered = CompletableDeferred<Unit>()
+    val discoverySettled = CompletableDeferred<Unit>()
+    val releaseDiscovery = CountDownLatch(1)
+    private val uncaught = ConcurrentLinkedQueue<Throwable>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, error -> uncaught += error })
+    private val transports = mutableListOf<IngressTransport>()
+    private val config = checkNotNull(buildGatewayTlsConfig(targetTls))
+    private val client =
+      OkHttpClient
+        .Builder()
+        .sslSocketFactory(config.sslSocketFactory, config.trustManager)
+        .hostnameVerifier(config.hostnameVerifier)
+        .addNetworkInterceptor { chain ->
+          if (chain.request().header("Cf-Access-Token") == null || !holdNextDiscovery.compareAndSet(true, false)) {
+            return@addNetworkInterceptor chain.proceed(chain.request())
+          }
+          discoveryEntered.complete(Unit)
+          try {
+            check(releaseDiscovery.await(5, TimeUnit.SECONDS))
+            chain.proceed(chain.request())
+          } finally {
+            discoverySettled.complete(Unit)
+          }
+        }.build()
+    var retirements = 0
+    val owner =
+      GatewayIngressController(
+        scope,
+        registry().also { add(it, target) },
+        storage.persistence,
+        { emptyMap() },
+        retireTransports = { origin ->
+          assertEquals(descriptor.origin, origin)
+          transports.toList().forEach { it.session.disconnectAndJoin() }
+          retirements++
+        },
+        clientForRoute = { _, _ ->
+          CloudflareAccessClient { request, maximumBytes, timeout ->
+            if (request.url.toString() == descriptor.issuer.resolve("/cdn-cgi/access/certs").toString()) {
+              check(request.method == "GET" && request.header("Cf-Access-Token") == null && request.header("Cookie") == null && request.header("Authorization") == null)
+              CloudflareAccessClient.Reply(request.url.toString(), 200, Headers.Builder().build(), CloudflareAccessTestTokens.jwks)
+            } else {
+              check(descriptor.origin.contains(request.url.toString()))
+              CloudflareAccessClient.send(request, maximumBytes, timeout, client)
+            }
+          }
+        },
+      )
+
+    init {
+      server.dispatcher =
+        object : Dispatcher() {
+          override fun dispatch(request: RecordedRequest): MockResponse {
+            requests += request
+            if (request.method == "HEAD") {
+              val metadata =
+                CloudflareAccessTestTokens.token(
+                  JsonObject(
+                    mapOf(
+                      "type" to JsonPrimitive("match"),
+                      "hostname" to JsonPrimitive(descriptor.origin.uri.host),
+                      "auth_domain" to JsonPrimitive(descriptor.issuer.host),
+                      "aud" to JsonPrimitive(descriptor.audience),
+                      "iat" to JsonPrimitive(System.currentTimeMillis() / 1000.0),
+                    ),
+                  ),
+                )
+              return MockResponse().setHeader("Cf-Access-Metadata", metadata)
+            }
+            val token = request.getHeader("Cf-Access-Token")
+            if (token == null || (token == firstHeader && challengeFirst.get())) {
+              return MockResponse().setResponseCode(302).setHeader("WWW-Authenticate", "Cloudflare-Access resource_metadata=\"${descriptor.origin.uri}/.well-known/cloudflare-access-protected-resource/gateway/socket\"")
+            }
+            if (request.getHeader("Upgrade")?.equals("websocket", ignoreCase = true) == true) {
+              if (retryNextUpgrade.compareAndSet(true, false)) {
+                upgradeEntered.complete(Unit)
+                check(releaseUpgrade.await(5, TimeUnit.SECONDS))
+                upgradeReturned.complete(Unit)
+                return MockResponse().setResponseCode(503).setHeader("Retry-After", "0")
+              }
+              return MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                  override fun onOpen(
+                    webSocket: WebSocket,
+                    response: Response,
+                  ) {
+                    webSocket.send("""{"type":"event","event":"connect.challenge","payload":{"nonce":"android-test-nonce","ts":1700000000123}}""")
+                  }
+
+                  override fun onMessage(
+                    webSocket: WebSocket,
+                    text: String,
+                  ) {
+                    val frame = Json.parseToJsonElement(text).jsonObject
+                    if (frame["type"]?.jsonPrimitive?.content != "req") return
+                    val id = frame["id"]?.jsonPrimitive?.content ?: return
+                    val payload =
+                      when (frame["method"]?.jsonPrimitive?.content) {
+                        "connect" -> """{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
+                        "artifacts.download" -> """{"artifact":{"type":"video","mimeType":"video/mp4"},"url":"/api/chat/media/outgoing/fixture?mediaTicket=fixture"}"""
+                        else -> error("Unexpected Gateway fixture method")
+                      }
+                    webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":$payload}""")
+                  }
+
+                  override fun onClosing(
+                    webSocket: WebSocket,
+                    code: Int,
+                    reason: String,
+                  ) {
+                    webSocket.close(code, reason)
+                  }
+                },
+              )
+            }
+            return MockResponse().setResponseCode(if (request.getHeader("Range") == null) 200 else 206).setBody("video")
+          }
+        }
+    }
+
+    private fun grant(subject: String): CloudflareAccessSession {
+      val expires = System.currentTimeMillis() / 1000.0 + 3600
+      val claims =
+        JsonObject(
+          CloudflareAccessTestTokens.claims(subject, expires) +
+            mapOf(
+              "iss" to JsonPrimitive(descriptor.issuer.toString()),
+              "aud" to JsonArray(listOf(JsonPrimitive(descriptor.audience))),
+            ),
+        )
+      return CloudflareAccessSession(descriptor, subject, expires, CloudflareAccessTestTokens.token(claims))
+    }
+
+    suspend fun prepare(): GatewayIngressAuthorization = checkNotNull(withTimeout(5_000) { owner.prepare(target, targetTls, owner.admissionCheckpoint()) { true } })
+
+    fun connect(
+      authorization: GatewayIngressAuthorization? = null,
+      foreignAuthority: Boolean = false,
+    ): IngressTransport {
+      val context = RuntimeEnvironment.getApplication()
+      val connection = IngressTransport()
+      val selected = if (foreignAuthority) target.copy(stableId = "foreign", port = foreign.port) else target
+      connection.session =
+        GatewaySession(
+          scope = scope,
+          identityStore = testDeviceIdentityStore(context),
+          deviceAuthStore = DeviceAuthStore(SecurePrefs(context, securePrefsOverride = context.getSharedPreferences("ingress-device-${UUID.randomUUID()}", Context.MODE_PRIVATE))),
+          onConnected = { connection.ready.complete(Unit) },
+          onDisconnected = {},
+          onEvent = { _, _ -> },
+          onConnectFailure = { error, pause -> connection.failure.complete(error to pause) },
+          ingressAuthorizationProvider = { authorization ?: owner.authorization(it) },
+        )
+      transports += connection
+      connection.session.connect(
+        selected,
+        "gateway-token",
+        null,
+        null,
+        GatewayConnectOptions(
+          role = "node",
+          scopes = emptyList(),
+          caps = emptyList(),
+          commands = emptyList(),
+          permissions = emptyMap(),
+          client = GatewayClientInfo("openclaw-android-test", "Android Test", "test", "android", "node", "test", "android", "test"),
+        ),
+        targetTls.copy(stableId = selected.stableId),
+      )
+      return connection
+    }
+
+    suspend fun media(connection: IngressTransport): GatewayLoadedMedia.Streaming {
+      withTimeout(5_000) { connection.ready.await() }
+      return withTimeout(5_000) {
+        checkNotNull(connection.session.loadMediaArtifact(target.stableId, "main", null, "fixture", GatewayMediaKind.Video)) as GatewayLoadedMedia.Streaming
+      }
+    }
+
+    suspend fun assertForeignTlsIsHealthy() {
+      assertEquals(0, foreign.requestCount)
+      val response = CloudflareAccessClient.send(Request.Builder().url(foreignUrl).build(), 64, 5, client)
+      assertEquals(200, response.code)
+      val request = checkNotNull(foreign.takeRequest(5, TimeUnit.SECONDS))
+      assertNull(request.getHeader("Cf-Access-Token"))
+      assertNull(request.getHeader("Cookie"))
+      assertNull(request.getHeader("Authorization"))
+      assertEquals(1, foreign.requestCount)
+    }
+
+    fun upgrades() = requests.filter { it.getHeader("Upgrade")?.equals("websocket", ignoreCase = true) == true }
+
+    fun mediaRequests() = requests.filter { it.path?.contains("/api/chat/media/outgoing/") == true }
+
+    suspend fun close() =
+      withContext(NonCancellable) {
+        releaseUpgrade.countDown()
+        releaseDiscovery.countDown()
+        transports.forEach { it.session.disconnectAndJoin() }
+        scope.cancel()
+        scope.coroutineContext[Job]?.join()
+        if (discoveryEntered.isCompleted) withTimeout(5_000) { discoverySettled.await() }
+        client.dispatcher.executorService.shutdown()
+        client.connectionPool.evictAll()
+        // MockWebServer owns accepted sockets; its server-side peers have no client Call.
+        server.shutdown()
+        foreign.shutdown()
+        assertTrue(uncaught.isEmpty())
+      }
+  }
+
+  @Test fun currentOwnerLeaseGuardsRealUpgradeAuthorityAndReplacementFollowUp() =
+    runBlocking {
+      val fixture = PinnedIngressFixture()
+      try {
+        val first = fixture.prepare()
+        // A current lease succeeds through the real 503 follow-up on its original HTTPS authority.
+        fixture.retryNextUpgrade.set(true)
+        fixture.releaseUpgrade.countDown()
+        val healthy = fixture.connect()
+        withTimeout(5_000) { healthy.ready.await() }
+        assertEquals(listOf(fixture.firstHeader, fixture.firstHeader), fixture.upgrades().map { it.getHeader("Cf-Access-Token") })
+        val foreign = fixture.connect(first, foreignAuthority = true)
+        val denied = withTimeout(5_000) { foreign.failure.await() }
+        assertEquals("EXTERNAL_AUTH_REQUIRED", denied.first.code)
+        assertTrue(denied.second)
+        assertEquals(0, fixture.foreign.requestCount)
+        first.requireCurrent(Request.Builder().url(fixture.url).build())
+        fixture.assertForeignTlsIsHealthy()
+      } finally {
+        fixture.close()
+      }
+    }
+
+  @Test fun currentOwnerLeaseGuardsRealStreamingAuthorityAndReplacedRangeRequests() =
+    runBlocking {
+      val fixture = PinnedIngressFixture()
+      try {
+        val first = fixture.prepare()
+        val stream = fixture.media(fixture.connect())
+
+        fun request(
+          media: GatewayLoadedMedia.Streaming,
+          range: String? = null,
+        ): Request =
+          Request
+            .Builder()
+            .url(media.url)
+            .also { builder ->
+              media.headers.forEach { (name, value) -> builder.header(name, value) }
+              range?.let { builder.header("Range", it) }
+            }.build()
+        stream.client
+          .newCall(request(stream))
+          .execute()
+          .use { assertEquals(200, it.code) }
+        assertEquals(fixture.firstHeader, fixture.mediaRequests().single().getHeader("Cf-Access-Token"))
+        val wrong = request(stream).newBuilder().url(fixture.foreignUrl).build()
+        assertTrue(
+          runCatching {
+            stream.client
+              .newCall(wrong)
+              .execute()
+              .close()
+          }.exceptionOrNull() is GatewayExternalAuthorizationException,
+        )
+        assertEquals(0, fixture.foreign.requestCount)
+        first.requireCurrent(Request.Builder().url(fixture.url).build())
+        assertEquals(0, fixture.foreign.requestCount)
+        fixture.assertForeignTlsIsHealthy()
+      } finally {
+        fixture.close()
       }
     }
 
