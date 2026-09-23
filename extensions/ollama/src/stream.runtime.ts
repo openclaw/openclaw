@@ -722,6 +722,36 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
   return result;
 }
 
+/**
+ * Tags unphased visible text as pre-tool commentary (v1 signature) before it can
+ * be classified as a final answer. Native Ollama returns narration and tool calls
+ * in the same assistant message, and that narration is not the reply. Mirrors the
+ * Chat Completions and Anthropic transports (packages/ai/src/utils/assistant-text-phase.ts)
+ * so the default channel keeps it out of the reply lane.
+ */
+function tagPendingCommentaryText(
+  content: ReadonlyArray<TextContent | ThinkingContent | ToolCall>,
+): void {
+  let commentaryIndex = content.filter(
+    (block): block is TextContent => block.type === "text" && block.textSignature !== undefined,
+  ).length;
+  for (const block of content) {
+    if (
+      block.type !== "text" ||
+      block.text.trim().length === 0 ||
+      block.textSignature !== undefined
+    ) {
+      continue;
+    }
+    block.textSignature = JSON.stringify({
+      v: 1,
+      id: `commentary-${commentaryIndex}`,
+      phase: "commentary",
+    });
+    commentaryIndex += 1;
+  }
+}
+
 export function buildAssistantMessage(
   response: OllamaChatResponse,
   modelInfo: StreamModelDescriptor,
@@ -729,6 +759,7 @@ export function buildAssistantMessage(
   options: OllamaAssistantMessageBuildOptions = {},
 ): AssistantMessage {
   const content: (TextContent | ThinkingContent | ToolCall)[] = [];
+  const stopReason = resolveOllamaStopReason(response);
   const thinking =
     modelInfo.reasoning === false
       ? ""
@@ -760,6 +791,13 @@ export function buildAssistantMessage(
     }
   }
 
+  // Text that accompanies a tool call in the same assistant message is pre-tool
+  // narration. A token-limit stop is not a tool use, so it stays an ordinary
+  // (untagged) partial answer and still reaches the channel.
+  if (stopReason === "toolUse") {
+    tagPendingCommentaryText(content);
+  }
+
   const reportedPromptTokens = resolveOptionalUsageCount(response.prompt_eval_count);
   const reportedOutputTokens = resolveOptionalUsageCount(response.eval_count);
   // Provider counters, including zero, avoid scanning and serializing history for estimates.
@@ -778,7 +816,7 @@ export function buildAssistantMessage(
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
-    stopReason: resolveOllamaStopReason(response),
+    stopReason,
     usage: buildUsageWithNoCost({
       input: promptTokens - (cacheRead ?? 0),
       output: outputTokens,
