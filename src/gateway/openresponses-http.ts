@@ -30,7 +30,6 @@ import {
   resolveInputFileLimits,
   type InputFileLimits,
   type InputImageLimits,
-  type InputImageSource,
 } from "../media/input-files.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
@@ -45,6 +44,7 @@ import {
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   parseGatewayJsonRequest,
+  retainGatewayHttpResponseWork,
   sendInvalidRequest,
   sendJson,
   sendMissingScopeForbidden,
@@ -223,7 +223,6 @@ export const testing = {
   resetResponseSessionState() {
     responseSessionMap.clear();
   },
-  wrapUntrustedFileContent,
   storeResponseSessionAt(
     responseId: string,
     sessionKey: string,
@@ -292,8 +291,6 @@ function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
     },
   }));
 }
-
-export { buildAgentPrompt } from "./openresponses-prompt.js";
 
 function createEmptyUsage(): Usage {
   return toOpenAiResponsesUsage(undefined);
@@ -435,18 +432,19 @@ export async function handleOpenResponsesHttpRequest(
             if (item !== prompt.activeUserMessage) {
               continue;
             }
+            const source = part.source;
+            const inputSource =
+              source.type === "url"
+                ? source
+                : {
+                    type: source.type,
+                    data: source.data,
+                    mediaType: source.media_type,
+                    filename: "filename" in source ? source.filename : undefined,
+                  };
             if (part.type === "input_image") {
-              const source = part.source;
-              const imageSource: InputImageSource =
-                source.type === "url"
-                  ? { type: "url", url: source.url }
-                  : {
-                      type: "base64",
-                      data: source.data,
-                      mediaType: source.media_type,
-                    };
               const image = await extractImageContentFromSource(
-                imageSource,
+                inputSource,
                 limits.images,
                 abortController.signal,
               );
@@ -454,17 +452,8 @@ export async function handleOpenResponsesHttpRequest(
               continue;
             }
 
-            const source = part.source;
             const file = await extractFileContentFromSource({
-              source:
-                source.type === "url"
-                  ? { type: "url", url: source.url }
-                  : {
-                      type: "base64",
-                      data: source.data,
-                      mediaType: source.media_type,
-                      filename: source.filename,
-                    },
+              source: inputSource,
               limits: limits.files,
               signal: abortController.signal,
             });
@@ -476,19 +465,13 @@ export async function handleOpenResponsesHttpRequest(
                   content: wrapUntrustedFileContent(rawText),
                 }),
               );
-            } else if (file.images && file.images.length > 0) {
-              fileContexts.push(
-                renderFileContextBlock({
-                  filename: file.filename,
-                  content: "[PDF content rendered to images]",
-                  surroundContentWithNewlines: false,
-                }),
-              );
             } else {
               fileContexts.push(
                 renderFileContextBlock({
                   filename: file.filename,
-                  content: "[No extractable text]",
+                  content: file.images?.length
+                    ? "[PDF content rendered to images]"
+                    : "[No extractable text]",
                   surroundContentWithNewlines: false,
                 }),
               );
@@ -612,11 +595,9 @@ export async function handleOpenResponsesHttpRequest(
   const rememberResponseSession = () =>
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
-  const streamMaxTokens =
-    typeof payload.max_output_tokens === "number" ? payload.max_output_tokens : undefined;
-  const streamTemperature =
-    typeof payload.temperature === "number" ? payload.temperature : undefined;
-  const streamTopP = typeof payload.top_p === "number" ? payload.top_p : undefined;
+  const streamMaxTokens = payload.max_output_tokens;
+  const streamTemperature = payload.temperature;
+  const streamTopP = payload.top_p;
   const streamParams =
     streamMaxTokens !== undefined || streamTemperature !== undefined || streamTopP !== undefined
       ? {
@@ -683,54 +664,35 @@ export async function handleOpenResponsesHttpRequest(
       // model produced before the tool calls. Pre-#52288 only the first
       // pending call was emitted, so multi-tool turns lost every call but
       // the leading one.
-      if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        const output: OutputItem[] = [];
-        if (assistantText) {
-          output.push(
-            createAssistantOutputItem({
-              id: outputItemId,
-              text: assistantText,
-              phase: "commentary",
-              status: "completed",
-            }),
-          );
-        }
-        for (const functionCall of pendingToolCalls) {
-          output.push(
-            createFunctionCallOutputItem({
-              id: `call_${randomUUID()}`,
-              callId: functionCall.id,
-              name: functionCall.name,
-              arguments: functionCall.arguments,
-            }),
-          );
-        }
-
-        const response = createResponseResource({
-          ...responseIdentity,
-          model,
-          status: "completed",
-          output,
-          usage,
-        });
-        rememberResponseSession();
-        sendJson(res, 200, response);
-        return true;
-      }
-
+      const toolCalls =
+        stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       const status = stopReason === "length" ? "incomplete" : "completed";
+      const output: OutputItem[] = [];
+      if (assistantText || !toolCalls) {
+        output.push(
+          createAssistantOutputItem({
+            id: outputItemId,
+            text: assistantText || "No response from OpenClaw.",
+            phase: toolCalls ? "commentary" : "final_answer",
+            status,
+          }),
+        );
+      }
+      for (const functionCall of toolCalls ?? []) {
+        output.push(
+          createFunctionCallOutputItem({
+            id: `call_${randomUUID()}`,
+            callId: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+          }),
+        );
+      }
       const response = createResponseResource({
         ...responseIdentity,
         model,
         status,
-        output: [
-          createAssistantOutputItem({
-            id: outputItemId,
-            text: assistantText || "No response from OpenClaw.",
-            phase: "final_answer",
-            status,
-          }),
-        ],
+        output,
         usage,
       });
 
@@ -983,9 +945,6 @@ export async function handleOpenResponsesHttpRequest(
   });
 
   unsubscribe = onAgentEventForRun(responseId, (evt) => {
-    if (evt.runId !== responseId) {
-      return;
-    }
     if (closed) {
       return;
     }
@@ -1059,14 +1018,7 @@ export async function handleOpenResponsesHttpRequest(
   // Agent cleanup and deferred SSE delivery have independent lifetimes;
   // shutdown must wait until both have settled, whichever finishes last.
   const releaseAgentRootWork = retainGatewayRootWorkAdmissionContinuation();
-  const releaseResponseRootWork = retainGatewayRootWorkAdmissionContinuation();
-  const releaseStreamRootWork = () => {
-    res.off("finish", releaseStreamRootWork);
-    res.off("close", releaseStreamRootWork);
-    releaseResponseRootWork?.();
-  };
-  res.once("finish", releaseStreamRootWork);
-  res.once("close", releaseStreamRootWork);
+  const releaseStreamRootWork = retainGatewayHttpResponseWork(res);
 
   onDisconnect = () => {
     closed = true;
@@ -1105,7 +1057,6 @@ export async function handleOpenResponsesHttpRequest(
       // buffered prose is flushed, mirroring the non-streaming path and
       // /v1/chat/completions. Closes the stream with a `response.failed` event.
       if (
-        !closed &&
         toolChoiceConstraint &&
         !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
       ) {
@@ -1114,7 +1065,7 @@ export async function handleOpenResponsesHttpRequest(
             code: "api_error",
             message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
           },
-          finalUsage ?? createEmptyUsage(),
+          finalUsage,
         );
         rememberResponseSession();
         finalizeFailedResponse(failed);

@@ -177,23 +177,29 @@ function trackSchemaChanges(
     const rollback = /\bROLLBACK\b/i.test(sql);
     const boundary = /\b(?:BEGIN|SAVEPOINT|COMMIT|END|RELEASE|ROLLBACK)\b/i.test(sql);
     if (schemaChange || boundary) {
+      const run = Object.hasOwn(statement, "run") ? statement.run.bind(statement) : undefined;
+      const get = Object.hasOwn(statement, "get") ? statement.get.bind(statement) : undefined;
+      const all = Object.hasOwn(statement, "all") ? statement.all.bind(statement) : undefined;
+      const iterate = Object.hasOwn(statement, "iterate")
+        ? statement.iterate.bind(statement)
+        : undefined;
       statement.run = (...bindings) =>
         execute(
-          () => callStatement(native.StatementSync.prototype.run.bind(statement), bindings),
+          () => callStatement(run ?? native.StatementSync.prototype.run.bind(statement), bindings),
           schemaChange,
           rollback,
           boundary,
         );
       statement.get = (...bindings) =>
         execute(
-          () => callStatement(native.StatementSync.prototype.get.bind(statement), bindings),
+          () => callStatement(get ?? native.StatementSync.prototype.get.bind(statement), bindings),
           schemaChange,
           rollback,
           boundary,
         );
       statement.all = (...bindings) =>
         execute(
-          () => callStatement(native.StatementSync.prototype.all.bind(statement), bindings),
+          () => callStatement(all ?? native.StatementSync.prototype.all.bind(statement), bindings),
           schemaChange,
           rollback,
           boundary,
@@ -208,7 +214,10 @@ function trackSchemaChanges(
           invalidateSqliteSchemaFacts(database);
         }
         try {
-          yield* callStatement(native.StatementSync.prototype.iterate.bind(statement), bindings);
+          yield* callStatement(
+            iterate ?? native.StatementSync.prototype.iterate.bind(statement),
+            bindings,
+          );
         } finally {
           if (invalidates) {
             invalidateSqliteSchemaFacts(database);

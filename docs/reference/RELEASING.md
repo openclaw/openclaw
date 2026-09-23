@@ -403,6 +403,8 @@ This checklist is the public shape of the release flow. Private credentials and 
 
 ### Fast path (default)
 
+Flaky tests never block a release: rerun once, record, waive as advisory; only install smoke, upgrade-survivor proofs, pack budget and artifact children stay required.
+
 The default regular stable release is one cut, one validation parent, and one
 publish, with stable on npm `latest` within 6 hours of the cut. The full
 checklist below explains each step; this section decides what the default is.

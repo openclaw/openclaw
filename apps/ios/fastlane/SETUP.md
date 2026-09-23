@@ -206,7 +206,7 @@ the uploader's concurrency group and revalidates the live actor, original run
 attempt, trusted workflow lineage, and unchanged candidate before credential
 access and again before retaining observations.
 
-Only the trusted workflow-SHA checkout executes Node, Fastlane 2.239.0, and
+Only the trusted workflow-SHA checkout executes Node, Fastlane 2.240.1, and
 locked dependencies. The candidate checkout supplies version/changelog data;
 none of its scripts, Fastfile, Gemfile, or actions execute. The canonical planner
 runs against this data without a forced revision/build override. Its `plan.json`
