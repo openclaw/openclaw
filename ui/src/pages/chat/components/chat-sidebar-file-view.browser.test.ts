@@ -3,6 +3,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
+import { readFileDraft } from "./chat-file-drafts.ts";
 import "./chat-sidebar.ts";
 
 // The root jsdom ui shard also collects *.browser.test.ts files; CodeMirror
@@ -178,6 +179,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[1]]);
     await userEvent.click(button(panel, "Previous match"));
     await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
+    expect(readFileDraft(panel.content)).toBeUndefined();
   });
 
   it("closes file search from every search control and preserves keyboard navigation", async () => {

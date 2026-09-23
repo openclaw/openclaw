@@ -45,6 +45,7 @@ import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenanc
 import {
   agentRuntimeClientForTests as agentRuntimeClient,
   createMessageActionClientForTests,
+  createTelegramSourceSendRequest,
   directCliClientForTests as directCliClient,
   firstRespondCall,
   messageActionContextFromSessionKeyForTests,
@@ -274,21 +275,6 @@ async function runPollWithClient(
     isWebchatConnect: () => false,
   });
   return { respond };
-}
-
-function createTelegramSourceSendRequest(to: string, message: string, idempotencyKey: string) {
-  return {
-    channel: "telegram",
-    action: "send",
-    params: { to, message },
-    sessionKey: "agent:main:telegram:direct:chat-123",
-    agentId: "main",
-    toolContext: {
-      currentChannelProvider: "telegram",
-      currentChannelId: "chat-123",
-    },
-    idempotencyKey,
-  };
 }
 
 async function runMessageActionRequest(
@@ -663,7 +649,7 @@ describe("gateway send mirroring", () => {
         runMessageActionRequest({
           channel: "slack",
           action: "send",
-          params: { target: "channel:current", message: "hi" },
+          params: { target: "channel:current", message: "hi", accountId: "default" },
           accountId: "missing",
           idempotencyKey: "account-message-action",
         }),
@@ -735,12 +721,16 @@ describe("gateway send mirroring", () => {
       providerCall: mocks.sendPoll,
     },
   ])("rejects $name before provider code", async (testCase) => {
+    const resolveAccountAsync = vi.fn(async (_cfg: unknown, accountId: string) => ({
+      enabled: accountId !== "disabled",
+    }));
     mocks.getChannelPlugin.mockReturnValue({
       id: "slack",
       actions: { handleAction: true },
       outbound: { sendPoll: mocks.sendPoll },
       config: {
         listAccountIds: () => ["default", "sut", "disabled"],
+        resolveAccountAsync,
         resolveAccount: (_cfg: unknown, accountId: string) => ({
           enabled: accountId !== "disabled",
         }),
@@ -754,6 +744,9 @@ describe("gateway send mirroring", () => {
     expect(response[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(JSON.stringify(response[2])).toContain(testCase.expectedError);
     expect(testCase.providerCall).not.toHaveBeenCalled();
+    if (testCase.accountId === "missing") {
+      expect(resolveAccountAsync).not.toHaveBeenCalled();
+    }
   });
 
   it("uses the resolved runtime config for message.action when the source snapshot matches", async () => {

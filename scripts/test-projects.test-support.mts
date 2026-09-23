@@ -2400,6 +2400,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/release-verify-beta.ts", ["release-wrapper-scripts"]],
   ["scripts/lib/bundled-plugin-build-entries.mjs", ["bundled-plugin-build-entries", releaseCheck]],
   ["scripts/lib/docker-e2e-package.sh", [dockerBuild]],
+  ["scripts/relay-build-limit-warnings.mts", [dockerBuild]],
   [
     "scripts/lib/release-version.mjs",
     [

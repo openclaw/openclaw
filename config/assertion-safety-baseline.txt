@@ -1962,7 +1962,6 @@ src/agents/workspace-legacy-state.ts	2
 src/agents/workspace-state-store.ts	1
 src/agents/workspace.ts	5
 src/agents/worktrees/git.ts	2
-src/agents/worktrees/registry.ts	8
 src/agents/worktrees/run-lease.ts	1
 src/audit/execution-identity-admission.ts	3
 src/audit/execution-identity-context-build.ts	3
@@ -2544,7 +2543,7 @@ src/fleet/backup.runtime.ts	3
 src/fleet/service-support.runtime.ts	1
 src/flows/channel-setup.prompts.ts	2
 src/flows/channel-setup.status.ts	2
-src/flows/channel-setup.ts	7
+src/flows/channel-setup.ts	3
 src/flows/doctor-core-checks.runtime.ts	2
 src/flows/doctor-core-checks.ts	3
 src/flows/doctor-health-contributions-final.ts	1
@@ -2933,8 +2932,7 @@ src/infra/state-migrations.runtime-state.ts	7
 src/infra/state-migrations.session-store.ts	9
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
-src/infra/state-migrations.storage.ts	14
-src/infra/state-migrations.task-sidecar-rows.ts	8
+src/infra/state-migrations.storage.ts	9
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
@@ -2984,7 +2982,7 @@ src/logging/state.ts	6
 src/logging/subsystem.ts	4
 src/logging/timestamps.ts	1
 src/mcp/channel-bridge.ts	6
-src/mcp/channel-shared.ts	3
+src/mcp/channel-shared.ts	2
 src/mcp/codex-supervision-tools-serve.ts	6
 src/mcp/openclaw-tools-serve-config.ts	1
 src/mcp/plugin-tools-handlers.ts	2
@@ -3119,7 +3117,7 @@ src/plugins/capability-provider-runtime.ts	13
 src/plugins/captured-registration.ts	2
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
-src/plugins/clawhub.ts	10
+src/plugins/clawhub.ts	7
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/computer-use-contract.ts	3

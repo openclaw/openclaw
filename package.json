@@ -439,7 +439,8 @@
     "!dist/plugin-sdk/realtime-voice-playback.d.ts",
     "!dist/plugin-sdk/text-grapheme.d.ts",
     "!dist/plugin-sdk/agent-harness-session-runtime.d.ts",
-    "!dist/plugin-sdk/agent-harness-attempt-runtime.d.ts"
+    "!dist/plugin-sdk/agent-harness-attempt-runtime.d.ts",
+    "!dist/plugin-sdk/secret-egress-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -846,6 +847,9 @@
     "./plugin-sdk/secret-ref-runtime": {
       "types": "./dist/plugin-sdk/secret-ref-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-runtime.js"
+    },
+    "./plugin-sdk/secret-egress-runtime": {
+      "default": "./dist/plugin-sdk/secret-egress-runtime.js"
     },
     "./plugin-sdk/secret-file-runtime": {
       "default": "./dist/plugin-sdk/secret-file-runtime.js"
@@ -2081,7 +2085,6 @@
     "test:docker:update-first-hop-compat": "bash scripts/e2e/update-first-hop-compat-docker.sh",
     "test:docker:update-migration": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-restart-auth": "env OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
-    "test:docker:update-run-package-self-upgrade": "bash scripts/e2e/update-run-package-self-upgrade-docker.sh",
     "test:docker:upgrade-survivor": "bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:env-mutations:report": "node --import ./scripts/tsx.mjs scripts/test-env-mutation-report.ts",
     "test:skip-inventory:report": "node --import ./scripts/tsx.mjs scripts/test-skip-inventory.ts",
@@ -2256,7 +2259,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.18.1",
+    "@openclaw/fs-safe": "0.18.2",
     "@openclaw/proxyline": "0.3.12",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.28.2",

@@ -1492,19 +1492,17 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
-  it("maps Ultra to the strongest generic CLI backend level", async () => {
+  it("passes the prepared native effort for Ultra to the CLI backend", async () => {
     mockSuccessfulCliRun(CLAUDE_OK_JSONL);
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
 
-    await executePreparedCliRun(
-      buildPreparedCliRunContext({
-        thinkLevel: "ultra",
-        resolveExecutionArgs,
-      }),
-    );
+    await executePreparedCliRun({
+      ...buildPreparedCliRunContext({ thinkLevel: "ultra", resolveExecutionArgs }),
+      providerThinkingLevel: "high",
+    });
 
     const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
-    expect(resolveArgsInput.thinkingLevel).toBe("max");
+    expect(resolveArgsInput.thinkingLevel).toBe("high");
   });
 
   it("passes prepared backend env to the spawned CLI process", async () => {

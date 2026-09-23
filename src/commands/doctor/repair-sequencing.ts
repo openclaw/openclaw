@@ -334,7 +334,7 @@ export async function runDoctorRepairSequence(params: {
     maybeRepairStaleSubagentAllowlists,
   ]);
 
-  const emptyAllowlistWarnings = runWithCurrentPluginMetadata(() =>
+  const emptyAllowlistWarnings = await runWithCurrentPluginMetadata(() =>
     scanEmptyAllowlistPolicyWarnings(state.candidate, {
       doctorFixCommand: params.doctorFixCommand,
       ...createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: state.candidate, env }),

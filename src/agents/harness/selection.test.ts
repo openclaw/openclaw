@@ -94,6 +94,7 @@ import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
 } from "./selection.js";
+import { createHarnessAttemptParams } from "./selection.test-support.js";
 import {
   buildAgentHarnessSupportContext,
   resolveAgentHarnessPreparedAuthSupport,
@@ -295,23 +296,7 @@ afterEach(async () => {
 });
 
 function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams {
-  return {
-    admittedRunContext: selectionAdmittedRunContext,
-    prompt: "hello",
-    sessionId: "session-1",
-    runId: "run-1",
-    sessionFile: "/tmp/session.jsonl",
-    workspaceDir: "/tmp/workspace",
-    timeoutMs: 5_000,
-    provider: "codex",
-    modelId: "gpt-5.4",
-    model: { id: "gpt-5.4", provider: "codex" } as Model,
-    authStorage: {} as never,
-    authProfileStore: { version: 1, profiles: {} },
-    modelRegistry: {} as never,
-    thinkLevel: "low",
-    config,
-  } as EmbeddedRunAttemptParams;
+  return createHarnessAttemptParams(selectionAdmittedRunContext, config);
 }
 
 function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {

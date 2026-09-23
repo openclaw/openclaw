@@ -77,6 +77,11 @@ export function normalizePreparedDeliveryPayload(turn: Turn, payload: ReplyPaylo
   });
 }
 
+export const usesNativeTelegramQuote = (turn: Turn, payload: ReplyPayload): boolean =>
+  (turn.replyToMode !== "off" || payload.replyToTag === true || payload.replyToCurrent === true) &&
+  (turn.replyQuoteText != null ||
+    (payload.replyToId != null && turn.replyQuoteByMessageId[payload.replyToId] != null));
+
 export function applyQuoteReplyTarget(turn: Turn, payload: ReplyPayload): ReplyPayload {
   if (
     !turn.implicitQuoteReplyTargetId ||

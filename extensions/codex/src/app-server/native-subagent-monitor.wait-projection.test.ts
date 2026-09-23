@@ -138,6 +138,7 @@ describe("native wait assignment projection", () => {
         dependencies: [{ runId: "codex-thread:receiver" }],
       });
       runtime.listTaskRecords.mockReturnValue([
+        ...runtime.listTaskRecords(),
         taskRecord({ childThreadId: "receiver:turn:turn-b", status, historyOwner }),
       ]);
       await notifyChildStarted(client, "parent-thread", "receiver");
