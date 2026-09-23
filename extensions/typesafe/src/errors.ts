@@ -11,7 +11,7 @@ export class EvaluationError extends Error {
   }
 }
 
-/** Only fixed plugin diagnostics cross the tool/provider boundary; raw causes stay discarded. */
+/** Only fixed plugin diagnostics cross the provider boundary; raw causes stay discarded. */
 export function evaluationError(error: unknown, aborted: boolean): EvaluationError {
   if (aborted) {
     return new EvaluationError("TypeSafe evaluation cancelled.", "transport");

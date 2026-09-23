@@ -50,6 +50,14 @@ mixed group retains its product tests and uses separate subset timing identities
 The five `test/scripts/*.e2e.test.ts` product integration gates remain outside
 this maintainer tier.
 
+The shipped-updater composition in
+`src/cli/update-cli/update-command-legacy-finalize.test.ts` uses the existing
+`tooling-isolated` project in this tier. Its real finalizer, native restart,
+lease-authority and cancellation-cleanup cases stay intact. Ordinary product
+PRs and main pushes omit it; tooling-owner PRs and manual/full-release validation
+retain it. Direct file runs and broad `pnpm test src/cli` runs still select its
+isolated owner.
+
 Every CI manual dispatch includes the full tooling family. Full Release
 Validation's `normal_ci` child dispatches CI on the frozen candidate, where
 `Run Node test shard` executes those unchanged tests before the regular release

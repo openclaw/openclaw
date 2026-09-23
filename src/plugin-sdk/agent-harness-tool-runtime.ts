@@ -9,6 +9,11 @@ export {
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
 export {
+  createAgentHarnessToolExecutionRegistry,
+  createAgentHarnessToolExecutionBoundaryRegistry,
+  type AgentHarnessToolExecutionSnapshot,
+} from "../agents/harness/tool-execution.js";
+export {
   acknowledgeInternalToolResult,
   copyInternalToolResultState,
 } from "../agents/runtime/internal-hooks.js";

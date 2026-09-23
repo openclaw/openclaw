@@ -118,21 +118,26 @@ describe("committed session mutation authorization", () => {
             expect(() => authorization.assertCurrent()).not.toThrow();
           }
           setCanonicalSqliteSessionMainKey(owner, "work");
+          owner.db
+            .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+            .run("agent:main:unrecorded-parent", "agent:main:main");
           expect(() => authorization.assertCurrent()).not.toThrow();
           expect(() => authorization.assertCurrent()).not.toThrow();
           owner.db.exec("COMMIT");
         });
 
-        // The target remains valid, but the newly committed contract invalidates another row.
+        // The target remains valid; changed policy requires admission of the now-invalid sibling.
         inWriterTransaction(owner.db, () => {
           expect(() => authorization.assertCurrent()).toThrow(
             expect.objectContaining({
               code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
-              message: expect.stringContaining("non-canonical persisted row"),
+              message: expect.stringContaining("invalid persisted session row"),
             }),
           );
         });
-        setCanonicalSqliteSessionMainKey(owner, "main");
+        owner.db
+          .prepare("UPDATE session_nodes SET parent_session_key = NULL WHERE session_key = ?")
+          .run("agent:main:main");
         inWriterTransaction(owner.db, () => {
           expect(() => authorization.assertCurrent()).not.toThrow();
         });

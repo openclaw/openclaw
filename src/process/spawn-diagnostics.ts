@@ -13,7 +13,7 @@ const spawnCounts = resolveGlobalSingleton(Symbol.for("openclaw.childProcessSpaw
 }));
 let spawnLog: ReturnType<typeof createSubsystemLogger> | undefined;
 const COMMAND_FAMILIES =
-  /^(node|git|ps|pgrep|lsof|sh|bash|zsh|cmd|powershell|pwsh|npm|pnpm|python|python3|uv|ssh|openclaw)$/;
+  /^(node|bun|git|ps|pgrep|lsof|sh|bash|zsh|cmd|powershell|pwsh|npm|pnpm|python|python3|uv|ssh|openclaw)$/;
 
 /** Count admitted local and broker launches, without recording paths or arguments. */
 export function recordChildProcessSpawn(command: string, child: ChildProcess): void {

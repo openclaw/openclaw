@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -13,6 +13,7 @@ import {
   assignSessionOwner,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
+  persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -89,7 +90,7 @@ describe("canonical SQLite metadata reads", () => {
     },
   );
 
-  it("validates a folded sibling before selecting the exact opaque target", () => {
+  it("validates a folded sibling before selecting or preparing the exact opaque target", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("canonical-metadata-sibling-") };
     const sessionKey = "agent:main:matrix:channel:!Mixed:example.org";
     const scope = { agentId: "main", env, sessionKey };
@@ -117,6 +118,18 @@ describe("canonical SQLite metadata reads", () => {
         "non-canonical persisted row",
       );
     }
+    const shouldAppend = vi.fn(() => true);
+    await expect(
+      persistSessionTranscriptTurn(
+        { ...scope, sessionId: sessionKey },
+        {
+          expectedSessionId: sessionKey,
+          messages: [{ message: { role: "user", content: "must not prepare" }, shouldAppend }],
+          updateMode: "none",
+        },
+      ),
+    ).rejects.toThrow("non-canonical persisted row");
+    expect(shouldAppend).not.toHaveBeenCalled();
   });
 
   it.each([

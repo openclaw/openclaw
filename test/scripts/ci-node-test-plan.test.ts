@@ -57,6 +57,7 @@ import { createAgentsToolsVitestConfig } from "../vitest/vitest.agents-tools.con
 import { createAgentsVitestConfig } from "../vitest/vitest.agents.config.ts";
 import { cliProcessTestFiles } from "../vitest/vitest.cli-process-paths.mjs";
 import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
+import { createCliVitestConfig } from "../vitest/vitest.cli.config.ts";
 import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 import { diagnosticForksPool } from "../vitest/vitest.forks-pool.ts";
@@ -84,6 +85,7 @@ import { sharedVitestConfig } from "../vitest/vitest.shared.config.ts";
 import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mjs";
 import { createTasksVitestConfig } from "../vitest/vitest.tasks.config.ts";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
+import { createToolingIsolatedVitestConfig } from "../vitest/vitest.tooling-isolated.config.ts";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "../vitest/vitest.tui.config.ts";
 import { createUiIsolatedVitestConfig } from "../vitest/vitest.ui-isolated.config.ts";
@@ -6004,6 +6006,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   );
 
   it("keeps the complete tooling family in manual plans and omits it from product plans", () => {
+    const legacyFinalize = "src/cli/update-cli/update-command-legacy-finalize.test.ts";
+    expect(listMatchedTestFiles(createCliVitestConfig({}))).not.toContain(legacyFinalize);
+    expect(listMatchedTestFiles(createToolingIsolatedVitestConfig({}))).toContain(legacyFinalize);
     const automatic = createNodeTestShards({
       includeReleaseOnlyToolingShards: false,
       changedPaths: ["src/plugin-sdk/core.ts", "src/infra/home-dir.test.ts"],

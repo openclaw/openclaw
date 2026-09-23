@@ -482,7 +482,6 @@ export function readSessionEntryCache(
   const projection = options.retainFullEntry ? "full" : options.projection;
   const prepared = assertCanonicalSqliteSessionKeysCurrent(
     database,
-    undefined,
     projection !== "full" && !options.fullEntryKeys,
   );
   if (

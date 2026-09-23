@@ -347,7 +347,7 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("accepts experimental.localModelLean", () => {
+  it("accepts experimental agent flags", () => {
     const result = AgentDefaultsSchema.parse({
       experimental: {
         localModelLean: true,
