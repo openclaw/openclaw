@@ -7,6 +7,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   readPersistedAuthProfileStoreRaw,
@@ -21,6 +22,7 @@ import {
   detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "../infra/state-migrations.doctor.js";
+import { writeLegacySessionsFixture } from "../infra/state-migrations.session-store.test-support.js";
 import {
   autoMigrateLegacyStateDir,
   resetAutoMigrateLegacyStateDirForTest,
@@ -294,20 +296,6 @@ function readPrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
     .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
     .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
     .map((row) => row.name as string);
-}
-
-function writeLegacySessionsFixture(params: {
-  root: string;
-  sessions: Record<string, Record<string, unknown> & { sessionId: string; updatedAt: number }>;
-  transcripts?: Record<string, string>;
-}) {
-  const legacySessionsDir = path.join(params.root, "sessions");
-  fs.mkdirSync(legacySessionsDir, { recursive: true });
-  writeJson5(path.join(legacySessionsDir, "sessions.json"), params.sessions);
-  for (const [fileName, content] of Object.entries(params.transcripts ?? {})) {
-    fs.writeFileSync(path.join(legacySessionsDir, fileName), content, "utf-8");
-  }
-  return legacySessionsDir;
 }
 
 function writeLegacyDebugProxyCaptureSidecar(
@@ -1055,7 +1043,7 @@ describe("doctor legacy state migrations", () => {
         .prepare(
           "SELECT backend, agent, runtime_session_name, mode, state, last_activity_at FROM acp_sessions WHERE session_key = ?",
         )
-        .get(sessionKey) as
+        .get(buildAcpDatabaseSessionKey(sessionKey, "main")) as
         | {
             backend: string;
             agent: string;
@@ -1130,7 +1118,7 @@ describe("doctor legacy state migrations", () => {
         .prepare(
           "SELECT backend, agent, runtime_session_name, mode, state, last_activity_at FROM acp_sessions WHERE session_key = ?",
         )
-        .get(sessionKey) as
+        .get(buildAcpDatabaseSessionKey(sessionKey, "ops")) as
         | {
             backend: string;
             agent: string;

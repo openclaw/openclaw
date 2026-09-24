@@ -17,6 +17,7 @@ import {
   GITHUB_RESPONSE_BODY_MAX_BYTES,
   GitHubDiffDataError,
   GitHubRateLimitError,
+  GitHubReadTimeoutError,
   createGitHubApi,
   createIssueMutationHelpers,
   normalizeGuardLoginSet,
@@ -709,6 +710,7 @@ export async function reviewDependencyChanges(
       } catch (error) {
         if (
           error instanceof GitHubRateLimitError ||
+          error instanceof GitHubReadTimeoutError ||
           error instanceof GitHubDiffDataError ||
           error instanceof SupersededReviewError
         ) {

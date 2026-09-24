@@ -778,7 +778,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         ? editingJob
           ? undefined
           : sourceJob.schedule
-        : buildCronSchedule(form);
+        : buildCronSchedule(form, editingJob?.schedule);
     const preserveLockedPayload = Boolean(
       editingJob &&
       form.payloadLocked &&
