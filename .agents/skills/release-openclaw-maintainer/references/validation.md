@@ -45,8 +45,13 @@ non-root-skip mode, not permission to skip install proof. Published correction
 versions must prove upgrade from their base stable package. Postpublish use:
 
 ```bash
+OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
+OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
 node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 ```
+
+Run it from a checkout of the Release SHA once the registry lists the version
+(see [regular release](regular-release.md#publish-and-verify)).
 
 `pnpm qa:otel:smoke` supplies local OTLP/redaction coverage without hosted
 telemetry credentials. Video-provider checks are conditional on release scope:
