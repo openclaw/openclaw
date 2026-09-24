@@ -99,7 +99,7 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
     root,
     auditScript,
     expectedUUIDs,
-    run: (options: { resume?: boolean; notarize?: boolean } = {}) =>
+    run: (options: { resume?: boolean; notarize?: boolean; dmg?: boolean } = {}) =>
       spawnSync(
         "bash",
         [
@@ -118,7 +118,7 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
             BUILD_ARCHS: "all",
             SKIP_NOTARIZE: options.notarize ? "0" : "1",
             NOTARYTOOL_PROFILE: "test-profile",
-            SKIP_DMG: "1",
+            SKIP_DMG: options.dmg ? "0" : "1",
             SKIP_DSYM: "0",
           },
         },
@@ -499,9 +499,9 @@ describe("package-mac-dist plist validation", () => {
     expect(result.stderr).not.toContain("node reran after failed install");
   });
 
-  it.runIf(process.platform === "darwin")(
-    "resumes without build products and allows the next fresh package after success",
-    () => {
+  it.runIf(process.platform === "darwin").each(["app", "dmg"] as const)(
+    "re-audits the retained %s before resuming without build products",
+    (artifact) => {
       const fixture = makeDistributionFixture("native");
       const app = path.join(fixture.root, "dist/OpenClaw.app");
       const signed = spawnSync("/usr/bin/codesign", ["--force", "--sign", "-", app], {
@@ -540,7 +540,7 @@ if [[ "$2" == submit ]]; then
   echo submit >> "$root/submissions"
   if [[ "$*" == *" --wait "* ]]; then echo 'network disconnected' >&2; exit 7; fi
   echo '{"id":"11111111-2222-3333-4444-555555555555"}'
-elif [[ ! -f "$root/wait-failed" ]]; then
+elif [[ ! -f "$root/wait-failed" && $(wc -l < "$root/submissions") -eq ${artifact === "app" ? 1 : 2} ]]; then
   touch "$root/wait-failed"
   echo 'network disconnected' >&2
   exit 7
@@ -550,31 +550,79 @@ fi
 `,
         { mode: 0o755 },
       );
-      const failed = fixture.run({ notarize: true });
+      writeFileSync(
+        path.join(fixture.root, "scripts/create-dmg.sh"),
+        `#!/bin/bash
+set -eu
+stage="$(mktemp -d)"
+trap 'rm -rf "$stage"' EXIT
+ditto "$1" "$stage/OpenClaw.app"
+rm -f "$2"
+hdiutil create -fs HFS+ -format UDZO -srcfolder "$stage" "$2" >/dev/null
+/usr/bin/codesign --force --sign - "$2"
+`,
+        { mode: 0o755 },
+      );
+      const options = { notarize: true, dmg: artifact === "dmg" };
+      const failed = fixture.run(options);
       expect(failed.status).not.toBe(0);
       expect(failed.stderr).toContain("network disconnected");
       const checkpoint = path.join(fixture.root, "dist/macos-notarization-recovery");
       expect(existsSync(path.join(checkpoint, "app.zip"))).toBe(true);
       expect(existsSync(path.join(checkpoint, "symbols.zip"))).toBe(true);
-      renameSync(path.join(fixture.root, "apps"), path.join(fixture.root, "saved-build-products"));
+      renameSync(
+        path.join(fixture.root, "apps/macos/.build"),
+        path.join(fixture.root, "saved-build-products"),
+      );
       writeFileSync(
         path.join(fixture.root, "scripts/package-mac-app.sh"),
         "#!/bin/bash\necho 'unexpected rebuild' >&2\nexit 97\n",
       );
-      const resumed = fixture.run({ resume: true, notarize: true });
+      const submissions = readFileSync(path.join(fixture.root, "submissions"), "utf8");
+      const auditor = readFileSync(fixture.auditScript, "utf8");
+      writeFileSync(
+        fixture.auditScript,
+        `${auditor}\nif ".notary-${artifact === "app" ? "resume" : "dmg"}." in str(binary):\n    sys.exit("async frame allocation is undersized")\n`,
+      );
+      const rejected = fixture.run({ ...options, resume: true });
+      expect(rejected.status, rejected.stdout).not.toBe(0);
+      expect(rejected.stderr).toContain("async frame allocation is undersized");
+      expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe(submissions);
+      expect(
+        JSON.parse(readFileSync(path.join(checkpoint, "manifest.json"), "utf8")),
+      ).toMatchObject({
+        completed: false,
+      });
+      if (artifact === "app") {
+        rmSync(fixture.auditScript);
+        const missing = fixture.run({ ...options, resume: true });
+        expect(missing.status).not.toBe(0);
+        expect(missing.stderr).toContain("audit-async-sleep-frames.py");
+        expect(existsSync(path.join(fixture.root, "dist/OpenClaw-2026.8.2.zip"))).toBe(false);
+      }
+      writeFileSync(fixture.auditScript, auditor);
+      const resumed = fixture.run({ ...options, resume: true });
       expect(resumed.status, resumed.stderr).toBe(0);
-      expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe("submit\n");
+      expect(readFileSync(path.join(fixture.root, "async-frame-audit.log"), "utf8")).toContain(
+        `.notary-${artifact === "app" ? "resume" : "dmg"}.`,
+      );
+      expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe(submissions);
       expect(existsSync(path.join(fixture.root, "dist/OpenClaw-2026.8.2.zip"))).toBe(true);
       expect(existsSync(path.join(fixture.root, "dist/OpenClaw-2026.8.2.dSYM.zip"))).toBe(true);
-      renameSync(path.join(fixture.root, "saved-build-products"), path.join(fixture.root, "apps"));
+      renameSync(
+        path.join(fixture.root, "saved-build-products"),
+        path.join(fixture.root, "apps/macos/.build"),
+      );
       writeFileSync(
         path.join(fixture.root, "scripts/package-mac-app.sh"),
         "#!/bin/bash\ntouch fresh-build-started\n",
       );
-      const fresh = fixture.run({ notarize: true });
+      const fresh = fixture.run(options);
       expect(fresh.status, fresh.stderr).toBe(0);
       expect(existsSync(path.join(fixture.root, "fresh-build-started"))).toBe(true);
-      expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe("submit\nsubmit\n");
+      expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe(
+        submissions.repeat(2),
+      );
     },
   );
 

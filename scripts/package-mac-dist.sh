@@ -198,15 +198,40 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
-if [[ "$BUILD_CONFIG" == "release" && "$RESUME_NOTARIZATION" == "0" ]]; then
-  # Check the ARM64 async-frame contract before archiving or notarizing a release.
-  APP_ARCHS="$(/usr/bin/lipo -archs "$APP/Contents/MacOS/$PRODUCT")"
-  case " $APP_ARCHS " in
+audit_app_async_frames() {
+  local executable="$1/Contents/MacOS/$PRODUCT" app_archs
+  app_archs="$(/usr/bin/lipo -archs "$executable")"
+  case " $app_archs " in
     *" arm64 "*)
-      python3 "$ROOT_DIR/apps/macos/scripts/audit-async-sleep-frames.py" "$APP/Contents/MacOS/$PRODUCT"
+      python3 "$ROOT_DIR/apps/macos/scripts/audit-async-sleep-frames.py" "$executable"
       ;;
     *) echo "ARM64 async sleep frame audit: not applicable to this architecture." ;;
   esac
+}
+
+audit_retained_dmg_async_frames() (
+  set -euo pipefail
+  mount_dir="$(mktemp -d "$ROOT_DIR/dist/.notary-dmg.XXXXXX")"
+  mounted=0
+  cleanup_audit_mount() {
+    local result=$?
+    if [[ "$mounted" == "1" ]]; then
+      hdiutil detach "$mount_dir" >/dev/null || result=1
+    fi
+    rmdir "$mount_dir" || result=1
+    exit "$result"
+  }
+  trap cleanup_audit_mount EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
+  hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$1" >/dev/null
+  mounted=1
+  audit_app_async_frames "$mount_dir/OpenClaw.app"
+)
+
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  # Recovery must recheck the retained bytes, including checkpoints made before this gate existed.
+  audit_app_async_frames "$APP"
 fi
 
 VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleShortVersionString)"
@@ -369,6 +394,7 @@ if [[ "$SKIP_DMG" != "1" ]]; then
       if [[ -n "${EXPECTED_DEVELOPER_TEAM_ID:-}" ]]; then
         /usr/bin/codesign --verify --strict -R="anchor apple generic and certificate leaf[subject.OU] = \"${EXPECTED_DEVELOPER_TEAM_ID}\"" "$RETAINED_DMG"
       fi
+      audit_retained_dmg_async_frames "$RETAINED_DMG"
     fi
     "$ROOT_DIR/scripts/notarize-mac-artifact.sh" --submission-file "$RECOVERY_DIR/dmg-submission.json" "$RETAINED_DMG"
     cp "$RETAINED_DMG" "$DMG"
