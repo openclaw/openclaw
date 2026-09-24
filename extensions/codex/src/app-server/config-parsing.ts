@@ -213,6 +213,11 @@ export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
   }
   const parsed = codexPluginConfigSchema.safeParse(value);
   if (!parsed.success) {
+    if (asNullableRecord(appServer?.networkProxy)?.enabled === true) {
+      throw new Error(
+        "Invalid plugins.entries.codex.config with appServer.networkProxy.enabled=true; fix the plugin configuration before starting Codex with network restrictions.",
+      );
+    }
     return {};
   }
   const { codexPlugins: rawCodexPlugins, ...config } = parsed.data;

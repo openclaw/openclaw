@@ -61,6 +61,7 @@ is required.
       codex: {
         config: {
           appServer: {
+            approvalPolicy: "never",
             sandbox: "workspace-write",
             networkProxy: {
               enabled: true,
@@ -82,6 +83,21 @@ is required.
   },
 }
 ```
+
+With `enabled: true`, `domains` uses Codex's native host matching. Hosts absent
+from the effective native allowlist are denied unless the configured approval
+policy permits an explicit exception. Set `approvalPolicy: "never"`, as above,
+to prevent approval-based exceptions. Native system requirements can contribute
+allowed domains or select a managed allowlist, so this map does not replace the
+system's network policy. Explicit denies in the effective policy take precedence
+over overlapping allows and cannot be approved.
+
+Use `*.example.com` for subdomains or `**.example.com` for both the apex domain
+and subdomains. These restrictions apply to commands run through the Codex
+sandbox. They do not restrict Gateway traffic, model-provider requests, or
+unrelated MCP processes. An invalid plugin configuration with
+`networkProxy.enabled: true` fails instead of silently falling back to default
+networking. Fix the configuration before retrying.
 
 If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated
