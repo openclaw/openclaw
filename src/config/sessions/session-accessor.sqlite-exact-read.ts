@@ -30,6 +30,7 @@ import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.s
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readExactSessionEntryRowValidated,
+  readExactSessionEntryRow,
   readSessionEntryRow,
   readQualifiedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
@@ -351,14 +352,13 @@ export function loadExactSessionEntryCandidates(
           ...(scope.env ? { env: scope.env } : {}),
         }
       : toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }));
-  // Alias candidates share a store; fresh handles must not rescan canonical state per key.
   const read = (database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">) => {
     const physical = readOpenClawAgentDatabaseIdentity(database);
     if (scope.expectedSource) {
       assertCapturedSessionEntryReadSource(scope.expectedSource, database);
     }
     const entries = sessionKeys.flatMap((key) => {
-      const entry = readExactSessionEntryRowValidated(database, key, scope.projection)?.entry;
+      const entry = readExactSessionEntryRow(database, key, scope.projection, "canonical")?.entry;
       return entry ? [{ sessionKey: key, entry }] : [];
     });
     scope.onReadSource?.(
@@ -370,10 +370,7 @@ export function loadExactSessionEntryCandidates(
   if (!scope.readOnly) {
     return read(openOpenClawAgentDatabase(options));
   }
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readWithCanonicalSessionAdmission(database, () => read(database)),
-    options,
-  );
+  const result = withOpenClawAgentDatabaseReadOnly(read, options);
   return result.found ? result.value : [];
 }
 

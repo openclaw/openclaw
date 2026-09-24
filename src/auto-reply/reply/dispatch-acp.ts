@@ -91,7 +91,7 @@ const loadDispatchAcpManagerRuntime = createLazyPromise(
   () => import("./dispatch-acp-manager.runtime.js"),
 );
 const loadDispatchAcpAuditRuntime = createLazyPromise(
-  () => import("../../agents/command/attempt-execution.runtime.js"),
+  () => import("../../agents/command/acp-lifecycle.js"),
 );
 
 type OrderedAcpAttachment = {

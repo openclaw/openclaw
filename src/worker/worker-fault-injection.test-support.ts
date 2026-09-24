@@ -188,7 +188,10 @@ export class ComposedGatewayHarness {
   private placementGateValue: WorkerSessionPlacementGate | undefined;
   private useReplacementExecutor = false;
   private unsubscribeLive: (() => void) | undefined;
-  private readonly turnSources = new Map<string, ReturnType<typeof bindWorkerFixtureTurnSource>>();
+  private readonly turnSources = new Map<
+    string,
+    Awaited<ReturnType<typeof bindWorkerFixtureTurnSource>>
+  >();
 
   static async create(root: string): Promise<ComposedGatewayHarness> {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -312,12 +315,7 @@ export class ComposedGatewayHarness {
     }
     let source = this.turnSources.get(claim.claimId);
     if (!source) {
-      source = bindWorkerFixtureTurnSource(
-        this.placementStore,
-        this.database.path,
-        claim,
-        this.sessionTarget,
-      );
+      source = await bindWorkerFixtureTurnSource(this.placementStore, claim, this.sessionTarget);
       this.turnSources.set(claim.claimId, source);
     }
     return {

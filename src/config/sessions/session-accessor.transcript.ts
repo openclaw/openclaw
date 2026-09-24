@@ -35,7 +35,6 @@ export {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
   readTranscriptExportSnapshotReadOnlySync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,

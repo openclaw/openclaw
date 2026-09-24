@@ -220,10 +220,44 @@ describe("plugin npm extended-stable workflow", () => {
     ["qualified full publication", "full", "latest", "full-release-validation", true],
     ["beta publication", "beta", "beta", "full-release-validation", false],
     ["focused beta evidence", "beta", "latest", "authorized-beta-focused-v1", false],
-    ["beta profile for stable publication", "beta", "latest", "full-release-validation", false],
+    [
+      "waived stable publication",
+      "beta",
+      "latest",
+      "full-release-validation",
+      true,
+      "Operator approved soak waiver",
+    ],
+    ["unwaived stable publication", "beta", "latest", "full-release-validation", false],
+    [
+      "waived beta tag",
+      "beta",
+      "latest",
+      "full-release-validation",
+      false,
+      "Operator approved soak waiver",
+      "v2026.9.3-beta.1",
+    ],
+    [
+      "waived alpha tag",
+      "beta",
+      "latest",
+      "full-release-validation",
+      false,
+      "Operator approved soak waiver",
+      "v2026.9.3-alpha.1",
+    ],
+    [
+      "waived focused evidence",
+      "beta",
+      "latest",
+      "authorized-beta-focused-v1",
+      false,
+      "Operator approved soak waiver",
+    ],
   ])(
     "creates bootstrap approval only with qualified evidence: %s",
-    (_name, profile, distTag, evidenceMode, expected) => {
+    (_name, profile, distTag, evidenceMode, expected, waiver = "", tag = "v2026.9.3") => {
       const parent = parse(
         readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
       ) as Workflow;
@@ -235,8 +269,10 @@ describe("plugin npm extended-stable workflow", () => {
         const condition = step(parent.jobs?.publish, name).if!;
         expect(
           runInNewContext(condition.slice(3, -2), {
+            contains: (value: string, search: string) => value.includes(search),
+            fromJSON: JSON.parse,
             inputs: {
-              tag: "v2026.9.3",
+              tag,
               npm_dist_tag: distTag,
               release_evidence_mode: evidenceMode,
               publish_openclaw_npm: false,
@@ -244,7 +280,7 @@ describe("plugin npm extended-stable workflow", () => {
             },
             needs: {
               resolve_release_target: {
-                outputs: { release_profile: profile },
+                outputs: { release_profile: profile, stable_soak_waiver: JSON.stringify(waiver) },
               },
             },
           }),
@@ -255,9 +291,17 @@ describe("plugin npm extended-stable workflow", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "round-trips attested stable/full bootstrap approvals and retains beta",
+    "round-trips attested stable/full and waived beta bootstrap approvals and retains beta",
     () => {
-      for (const input of [{ releaseProfile: "stable" }, { releaseProfile: "full" }]) {
+      for (const input of [
+        { releaseProfile: "stable" },
+        { releaseProfile: "full" },
+        {
+          releaseProfile: "beta",
+          stableSoakWaiver: 'Operator approved "stable" publication.\nSoak waived.',
+          stableSoakWaiverSource: "explicit",
+        },
+      ]) {
         const result = runStableBootstrapAdmission({ input });
         expect(result.status, result.stderr).toBe(0);
       }
@@ -279,7 +323,28 @@ describe("plugin npm extended-stable workflow", () => {
       { approval: { releaseTag: "v2026.9.33" }, env: { PACKAGE_VERSION: "2026.9.33" } },
     ],
     ["profile", { approval: { releaseProfile: "beta" } }],
-    ["unknown profile", { approval: { releaseProfile: "unknown" } }],
+    ["empty waiver", { approval: { releaseProfile: "beta", stableSoakWaiver: "" } }],
+    [
+      "blank waiver",
+      {
+        approval: {
+          releaseProfile: "beta",
+          stableSoakWaiver: " \n\t ",
+          stableSoakWaiverSource: "explicit",
+        },
+      },
+    ],
+    ["non-string waiver", { approval: { releaseProfile: "beta", stableSoakWaiver: true } }],
+    [
+      "unknown waived profile",
+      {
+        approval: {
+          releaseProfile: "unknown",
+          stableSoakWaiver: "Approved",
+          stableSoakWaiverSource: "explicit",
+        },
+      },
+    ],
     ["attestation", { attestationExit: 1 }],
     ["tag moved", { tagSha: "c".repeat(40) }],
     ["target", { approval: { targetSha: "c".repeat(40) } }],

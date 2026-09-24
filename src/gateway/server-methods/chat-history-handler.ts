@@ -25,6 +25,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { resolveInFlightRunSnapshot } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
+import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
@@ -209,7 +210,12 @@ export async function handleChatHistoryRequest({
               sessionId,
               storePath,
             },
-            { before: pendingBefore, limit: max, maxChars: effectiveMaxChars },
+            {
+              before: pendingBefore,
+              limit: max,
+              maxChars: effectiveMaxChars,
+              queuedTurns: context.chatQueuedTurns,
+            },
           )
         : { items: [], total: 0 };
     // Receipts belong to the currently selected physical session, never archived history.
@@ -218,6 +224,15 @@ export async function handleChatHistoryRequest({
         ? listSessionPendingInputReceipts(
             { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
             { runIds: inputRunIds },
+          ).map((receipt) =>
+            receipt.state === "pending" &&
+            isQueuedChatTurnForSession(context.chatQueuedTurns, receipt.runId, {
+              agentId: sessionAgentId,
+              sessionKey: canonicalKey,
+              sessionId,
+            })
+              ? { runId: receipt.runId, state: receipt.state, queued: true as const }
+              : receipt,
           )
         : []
       : undefined;

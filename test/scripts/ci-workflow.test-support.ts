@@ -74,12 +74,16 @@ export function evaluateWorkflowExpression(
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
     additionalNeeds?: Record<string, { outputs: Record<string, string> }>;
+    jobResults?: Record<string, string>;
     pullRequestNumber?: number;
     ref?: string;
     resolveTargetOutputs?: Record<string, string>;
     releaseGate?: boolean;
+    releaseRunnerGroup?: string;
+    runnerGroup?: string;
     releasePriorityRun?: string;
     releaseScope?: string;
+    validationTier?: "full" | "main";
     repository: string;
     runCheck?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
@@ -138,7 +142,9 @@ export function evaluateWorkflowExpression(
       String(value).toLowerCase().endsWith(String(suffix).toLowerCase()),
     fromJSON: (value: string) => JSON.parse(value) as unknown,
     format: (value: string, ...args: unknown[]) =>
-      value.replace(/\{(\d+)\}/gu, (_match, index: string) => String(args[Number(index)])),
+      value.replace(/\{\{|\}\}|\{(\d+)\}/gu, (token, index: string | undefined) =>
+        index === undefined ? token[0]! : String(args[Number(index)]),
+      ),
     hashFiles: (file: string) => context.fileHashes?.[file] ?? "",
     startsWith: (value: unknown, prefix: unknown) => String(value).startsWith(String(prefix)),
     toJson: (value: unknown) => JSON.stringify(value),
@@ -175,11 +181,13 @@ export function evaluateWorkflowExpression(
     },
     inputs: {
       dispatch_id: context.dispatchId ?? "",
+      runner_group: context.runnerGroup ?? "",
       runner_backend: context.requestedRunnerBackend ?? "default",
       ci_shape: context.ciShape ?? "default",
       include_android: context.includeAndroid ?? false,
       release_gate: context.releaseGate ?? false,
       release_scope: context.releaseScope ?? "full",
+      validation_tier: context.validationTier ?? "full",
       target_context_ref: context.targetContextRef ?? "",
       target_ref: context.targetRef ?? "",
       use_github_hosted_runners: context.useGithubHostedRunners ?? false,
@@ -195,7 +203,11 @@ export function evaluateWorkflowExpression(
     needs: {
       ...context.additionalNeeds,
       resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
+      "checks-baseline-ratchets": {
+        result: context.jobResults?.["checks-baseline-ratchets"] ?? "success",
+      },
       preflight: {
+        result: context.jobResults?.preflight ?? "success",
         outputs: {
           frozen_target: String(context.frozenTarget ?? false),
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
@@ -208,10 +220,25 @@ export function evaluateWorkflowExpression(
     vars: {
       MAINTAINER_COMMAND_REACTIONS: context.maintainerCommands ?? "",
       OPENCLAW_CI_RUNNER_BACKEND: context.runnerBackend ?? "",
+      OPENCLAW_RELEASE_RUNNER_GROUP: context.releaseRunnerGroup ?? "",
       OPENCLAW_CI_ON_PUSH: context.ciOnPush ?? "",
       OPENCLAW_RELEASE_PRIORITY_RUN: context.releasePriorityRun ?? "",
     },
   });
+}
+
+export function evaluateWorkflowRunner(
+  selector: unknown,
+  context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+) {
+  return typeof selector === "string" && selector.startsWith("${{")
+    ? evaluateWorkflowExpression(selector, {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        ...context,
+      })
+    : selector;
 }
 
 export function quoteShell(value: string): string {

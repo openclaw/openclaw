@@ -4,8 +4,10 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -13,7 +15,10 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { validateFullReleaseCandidateRequest } from "./full-release-candidate-contract.mjs";
+import {
+  validateFullReleaseCandidateRequest,
+  validateRecordedFullReleaseCandidateRequest,
+} from "./full-release-candidate-contract.mjs";
 import {
   createPublicationAdmission,
   publicationObservationJson,
@@ -30,8 +35,13 @@ import {
   buildReleaseValidationManifest,
   classifyReleaseGhTransportError,
   classifyReleaseSnapshot,
+  normalizeReleaseLaneWaiver,
+  releaseWaivedJobs,
+  validateReleaseLaneWaiverBinding,
   composeReleaseChildAttemptEvidence,
+  formatAdvisoryJobFailure,
   formatReleaseStateOutcome,
+  releaseAdvisoryJobFailures,
   releasePlanGateFailures,
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact,
@@ -43,6 +53,9 @@ import {
   verifyReleaseStateArtifacts,
 } from "./full-release-validation-policy.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
+import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
+import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
+import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 
 export * from "./full-release-validation-policy.mjs";
 
@@ -215,6 +228,9 @@ export async function readChild(child, previous, signal, options = {}) {
       ? await options.readRun(child.runId, signal)
       : await githubJson(`actions/runs/${child.runId}`, signal);
     const currentAttempt = positiveInteger(run.run_attempt, `${child.key} run attempt`);
+    if (options.reuseSelection && currentAttempt !== options.reuseSelection.runAttempt) {
+      throw new Error(`release child provenance changed: ${child.key} reused attempt is stale`);
+    }
     const plannedAttempt = positiveInteger(child.runAttempt, `${child.key} planned run attempt`);
     if (currentAttempt < plannedAttempt) {
       return validateChildBinding(child, run, {
@@ -341,6 +357,25 @@ export function parsePlanInputs(value) {
 }
 
 export function hydrateReusedPlan(plan, evidence) {
+  if (evidence.childReuse) {
+    return plan.map((child) => {
+      const selection = evidence.childReuse[child.key];
+      return child.selected && selection
+        ? {
+            ...child,
+            displayTitle: selection.displayTitle,
+            result: "success",
+            runAttempt: 1,
+            runId: selection.runId,
+            source: "reused",
+            sourceParentAttempt: selection.sourceParentAttempt,
+            url: selection.url,
+            workflowRef: selection.workflowRef,
+            workflowSha: selection.workflowSha,
+          }
+        : child;
+    });
+  }
   const byRole = new Map((evidence.children ?? []).map((child) => [child.role, child]));
   return plan.map((child) => {
     if (!child.selected) {
@@ -382,6 +417,37 @@ function changedPathsValue(value) {
 
 async function validateReuse(executionPlan, signal) {
   const { children: plan, evidenceReuse, trustedWorkflow } = executionPlan;
+  if (executionPlan.childReuse) {
+    const results = await Promise.allSettled(
+      Object.entries(executionPlan.childReuse).map(([role, selection]) =>
+        validateReusableReleaseChild(selection, {
+          repository: executionPlan.repository,
+          targetSha: executionPlan.targetSha,
+          role,
+          inputs: selection.inputs,
+        }),
+      ),
+    );
+    const issues = results.flatMap((result) => {
+      if (result.status === "fulfilled") {
+        return [];
+      }
+      const message =
+        result.reason instanceof Error ? result.reason.message : String(result.reason);
+      return [
+        {
+          child: "<evidence>",
+          kind: API_ERROR_PATTERN.test(message) ? "api_error" : "reused_evidence_invalid",
+          message,
+        },
+      ];
+    });
+    return {
+      blockers: issues.filter((entry) => entry.kind !== "api_error"),
+      children: plan,
+      errors: issues.filter((entry) => entry.kind === "api_error"),
+    };
+  }
   if (!evidenceReuse.requested) {
     return { blockers: [], children: plan, errors: [] };
   }
@@ -503,6 +569,30 @@ function appendSummary(mode, payload) {
   );
 }
 
+function reportLaneWaiver(children, policy) {
+  if (!policy.laneWaiver) {
+    return;
+  }
+  const waived = releaseWaivedJobs(children, policy);
+  for (const entry of waived) {
+    console.log(`::warning title=Lane waived::${entry.child} ${entry.job} (${entry.conclusion})`);
+  }
+  if (!process.env.GITHUB_STEP_SUMMARY) {
+    return;
+  }
+  appendFileSync(
+    process.env.GITHUB_STEP_SUMMARY,
+    [
+      "## Operator lane waiver",
+      "",
+      `- Reason: ${policy.laneWaiver}`,
+      ...waived.map((entry) => `- Waived: ${entry.child} ${entry.job} (${entry.conclusion})`),
+      ...(waived.length === 0 ? ["- Waived: none"] : []),
+      "",
+    ].join("\n"),
+  );
+}
+
 export function formatReleaseStateHeartbeat(mode, decision) {
   return `${mode} heartbeat: state=${decision.state} active=${decision.activeRunIds.length} blockers=${decision.blockers.length} errors=${decision.errors.length}`;
 }
@@ -556,6 +646,7 @@ function verifyMode() {
     targetSha: requiredString(process.env.TARGET_SHA, "target SHA"),
     workflowRef: requiredString(process.env.GITHUB_REF_NAME, "workflow ref"),
     workflowSha: requiredString(process.env.GITHUB_SHA, "workflow SHA"),
+    laneWaiver: normalizeReleaseLaneWaiver(process.env.LANE_WAIVER),
   };
   const verified = verifyReleaseStateArtifacts(
     readArtifact(
@@ -578,6 +669,7 @@ function planExpected() {
     targetContextRef: process.env.TARGET_CONTEXT_REF || undefined,
     coveragePolicy: process.env.COVERAGE_POLICY || undefined,
     telegramWaiver: process.env.TELEGRAM_WAIVER ?? "",
+    laneWaiver: normalizeReleaseLaneWaiver(process.env.LANE_WAIVER),
     ...(process.env.TARGET_VERSION ? { targetVersion: process.env.TARGET_VERSION } : {}),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
     repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
@@ -628,6 +720,10 @@ function manifestContextFromEnvironment(source) {
   const waiver = env.TELEGRAM_WAIVER ?? coverage.telegram_waiver ?? "";
   if (waiver) {
     inputs.telegramWaiver = waiver;
+  }
+  const laneWaiver = normalizeReleaseLaneWaiver(env.LANE_WAIVER);
+  if (laneWaiver) {
+    inputs.laneWaiver = laneWaiver;
   }
   return {
     runId: env.GITHUB_RUN_ID,
@@ -891,7 +987,7 @@ async function publicationMode(mode) {
   writeArtifact(admissionPath, record);
 }
 
-function writeManifestMode() {
+async function writeManifestMode() {
   const plan = readArtifact(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan");
   const drain = readArtifact(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain");
   const manifest = buildReleaseValidationManifest({
@@ -899,6 +995,33 @@ function writeManifestMode() {
     drain,
     context: manifestContextFromEnvironment(plan.sourceAdmission),
   });
+  if (manifest.sourceAdmission?.validationPurpose === "publish" && manifest.rerunGroup === "all") {
+    const outputDir = mkdtempSync(
+      join(
+        requiredString(process.env.RUNNER_TEMP, "runner temporary directory"),
+        "sealed-npm-preflight-",
+      ),
+    );
+    try {
+      await downloadFullReleaseNpmPreflight({
+        manifest,
+        repository: manifest.sourceAdmission.repository,
+        runId: manifest.runId,
+        runAttempt: manifest.runAttempt,
+        sourceSha: manifest.targetSha,
+        toolingSha: manifest.workflowSha,
+        outputDir,
+        token: requiredString(process.env.GH_TOKEN, "GitHub token"),
+      });
+      manifest.publishInputs = await createReleasePublishInputs({
+        manifest,
+        npmManifest: JSON.parse(readFileSync(join(outputDir, "preflight-manifest.json"), "utf8")),
+        stableSoakWaiver: process.env.STABLE_SOAK_WAIVER ?? "",
+      });
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  }
   writeArtifact(
     join(
       requiredString(process.env.RUNNER_TEMP, "runner temporary directory"),
@@ -976,7 +1099,13 @@ async function planMode() {
     const restored = validateReleaseExecutionPlanArtifact(restoredPayload, {
       ...expected,
       ...(restoredPayload.attemptEvidenceVersion !== undefined
-        ? { candidateRequest: candidateRequestFromEnvironment() }
+        ? {
+            candidateRequest: validateRecordedFullReleaseCandidateRequest(
+              JSON.parse(
+                requiredString(process.env.CANDIDATE_REQUEST_JSON, "candidate request JSON"),
+              ),
+            ),
+          }
         : {}),
       sourceParentRunAttempt: 1,
     });
@@ -1028,10 +1157,13 @@ async function planMode() {
     publicationAdmission: planInputs.publicationAdmission,
     candidate,
     coveragePolicy: planInputs.coveragePolicy,
-    children: built.children,
+    knownFlakyJobs: planInputs.knownFlakyJobs,
+    children: hydrateReusedPlan(built.children, { childReuse: planInputs.childReuse ?? {} }),
+    childReuse: planInputs.childReuse,
     evidenceReuse: evidenceReuseFromInputs(planInputs),
     expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
     gates: built.gates,
+    laneWaiver: expected.laneWaiver,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
     telegramWaiver: planInputs.telegramWaiver,
@@ -1053,6 +1185,7 @@ async function planMode() {
       candidate: plan.candidate,
       coveragePolicy: plan.coveragePolicy,
       children: plan.children,
+      childReuse: plan.childReuse,
       errors: [
         ...plan.errors,
         {
@@ -1068,6 +1201,7 @@ async function planMode() {
         parentRunAttempt: currentAttempt,
       },
       gates: plan.gates,
+      laneWaiver: plan.laneWaiver,
       releaseProfile: expected.releaseProfile,
       rerunGroup: expected.rerunGroup,
       telegramWaiver: plan.telegramWaiver,
@@ -1095,10 +1229,12 @@ async function planMode() {
     candidate,
     coveragePolicy: planInputs.coveragePolicy,
     children: reuse.children,
+    childReuse: planInputs.childReuse,
     errors: reuse.errors,
     evidenceReuse: evidenceReuseFromInputs(planInputs, reuse.sourceManifest),
     expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
     gates: built.gates,
+    laneWaiver: expected.laneWaiver,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
     telegramWaiver: planInputs.telegramWaiver,
@@ -1142,6 +1278,11 @@ async function collectMode(mode) {
     },
   );
   const plan = executionPlan.children;
+  const policy = {
+    laneWaiver: normalizeReleaseLaneWaiver(executionPlan.laneWaiver),
+    releaseProfile,
+    workflowRef: expected.workflowRef,
+  };
   const gateFailures = releasePlanGateFailures(executionPlan.gates);
   const failFast = mode === "decision" && process.env.FAIL_FAST === "true";
   const pollIntervalMs =
@@ -1174,6 +1315,7 @@ async function collectMode(mode) {
     });
     writeResult(outputPath, payload);
     appendSummary(mode, payload);
+    reportLaneWaiver(snapshots, policy);
     return payload;
   };
   const stop = () => {
@@ -1195,8 +1337,7 @@ async function collectMode(mode) {
         },
       ],
       localFailures: gateFailures,
-      releaseProfile,
-      workflowRef: expected.workflowRef,
+      ...policy,
     });
     writePayload(decision, { cancelledRunIds, requested: true });
     finished = true;
@@ -1205,7 +1346,7 @@ async function collectMode(mode) {
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 
-  if (mode === "decision" && executionPlan.evidenceReuse.requested) {
+  if (executionPlan.childReuse || (mode === "decision" && executionPlan.evidenceReuse.requested)) {
     decisionReuse = await validateReuse(executionPlan, abortController.signal);
     const exactPlan = JSON.stringify(
       plan.map(({ key, runAttempt, runId }) => ({ key, runAttempt, runId })),
@@ -1252,7 +1393,11 @@ async function collectMode(mode) {
   while (!finished) {
     ghRetryDeadline = transport.deadlineMonotonicMs;
     snapshots = await Promise.all(
-      plan.map((child, index) => readChild(child, snapshots[index], abortController.signal)),
+      plan.map((child, index) =>
+        readChild(child, snapshots[index], abortController.signal, {
+          reuseSelection: executionPlan.childReuse?.[child.key],
+        }),
+      ),
     );
     transport = updateReleaseTransportEpisode(transport, snapshots);
     const transportReadErrors = transport.error ? [transport.error] : [];
@@ -1261,8 +1406,7 @@ async function collectMode(mode) {
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
       extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
       localFailures: gateFailures,
-      releaseProfile,
-      workflowRef: expected.workflowRef,
+      ...policy,
     });
     if (Date.now() >= nextHeartbeat) {
       console.log(formatReleaseStateHeartbeat(mode, decision));
@@ -1290,8 +1434,7 @@ async function collectMode(mode) {
             ...cancellationErrors,
           ],
           localFailures: gateFailures,
-          releaseProfile,
-          workflowRef: expected.workflowRef,
+          ...policy,
         });
       }
     }
@@ -1304,6 +1447,9 @@ async function collectMode(mode) {
             (decision.state !== "qualifying" && decision.activeRunIds.length === 0));
     if (done) {
       const payload = writePayload(decision, { cancelledRunIds, requested: false });
+      for (const failure of releaseAdvisoryJobFailures(payload)) {
+        console.log(`::warning title=Advisory lane failed::${formatAdvisoryJobFailure(failure)}`);
+      }
       finished = true;
       process.exitCode =
         payload.state === "passed" ? 0 : payload.state === "orchestration_error" ? 2 : 1;
@@ -1411,6 +1557,7 @@ async function validateManifestMode() {
     throw new Error("release manifest publication admission differs from its immutable plan");
   }
   validateReleaseTelegramWaiverBinding(executionPlan, manifest.validationInputs);
+  validateReleaseLaneWaiverBinding(executionPlan, manifest.validationInputs);
   validateReleaseCoveragePolicyBinding(executionPlan, manifest.validationInputs);
   const expectedChildRunIds = Object.fromEntries(
     executionPlan.children.map((child) => [
@@ -1542,7 +1689,7 @@ async function main() {
     return;
   }
   if (mode === "write-manifest") {
-    writeManifestMode();
+    await writeManifestMode();
     return;
   }
   if (mode === "plan") {

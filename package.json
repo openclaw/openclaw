@@ -2,6 +2,7 @@
   "name": "openclaw",
   "version": "2026.9.6",
   "openclaw": {
+    "updateAdmissionProtocol": 1,
     "schemaVersions": {
       "state": 18,
       "agent": 23

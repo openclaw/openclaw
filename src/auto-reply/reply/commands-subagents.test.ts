@@ -472,11 +472,11 @@ describe("subagents info", () => {
     expect(result.reply?.text).toContain("/subagents info <id|#>");
   });
 
-  it("returns info for a subagent", () => {
+  it.each([false, true])("returns info for a subagent with task missing=%s", (taskMissing) => {
     const now = Date.now();
     const runId = "commands-subagents-info-run";
     const childSessionKey = "agent:main:subagent:commands-info";
-    const run = {
+    const run: SubagentRunRecord = {
       runId,
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -492,27 +492,42 @@ describe("subagents info", () => {
       },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
-    createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey,
-      runId,
-      task: "do thing",
-      status: "succeeded",
-      terminalSummary: "Completed the requested task",
-      deliveryStatus: "delivered",
-    });
+    if (taskMissing) {
+      run.delivery = {
+        status: "discarded",
+        disposition: "permanent_failure",
+        discardReason: "task-missing",
+        discardedAt: now,
+      };
+    } else {
+      createTaskRecord({
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey,
+        runId,
+        task: "do thing",
+        status: "succeeded",
+        terminalSummary: "Completed the requested task",
+        deliveryStatus: "delivered",
+      });
+    }
     const cfg = buildCommandTestConfig();
     const result = handleSubagentsInfoAction(
-      buildInfoContext({ cfg, runs: [run], restTokens: ["1"] }),
+      buildInfoContext({ cfg, runs: [run], restTokens: [runId] }),
     );
     const text = requireReplyText(result.reply);
     expect(result.shouldContinue).toBe(false);
     expect(text).toContain("Subagent info");
     expect(text).toContain(`Run: ${runId}`);
     expect(text).toContain("Status: done");
-    expect(text).toContain("TaskStatus: succeeded");
-    expect(text).toContain("Task summary: Completed the requested task");
+    if (taskMissing) {
+      expect(text).toContain("Delivery: discarded");
+      expect(text).toContain("Delivery disposition: task-missing");
+      expect(text).toContain(`Delivery retired: ${new Date(now).toISOString()}`);
+    } else {
+      expect(text).toContain("TaskStatus: succeeded");
+      expect(text).toContain("Task summary: Completed the requested task");
+    }
   });
 
   it("uses displayed indices for info and log when stale unended runs exist", async () => {

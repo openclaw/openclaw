@@ -48,7 +48,7 @@ import {
 import { resolveActionContent, resolveActionUploadFilePath } from "./action-params.js";
 import {
   actionError,
-  jsonActionResultWithDetails,
+  jsonActionResult,
   jsonMSTeamsActionResult,
   jsonMSTeamsConversationResult,
   jsonMSTeamsOkActionResult,
@@ -573,15 +573,12 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
                   onPlatformSendDispatch: ctx.onPlatformSendDispatch,
                 });
-                return jsonActionResultWithDetails(
-                  {
-                    ok: true,
-                    channel: "msteams",
-                    messageId: result.messageId,
-                    conversationId: result.conversationId,
-                  },
-                  { ok: true, channel: "msteams", messageId: result.messageId },
-                );
+                return jsonActionResult({
+                  ok: true,
+                  channel: "msteams",
+                  messageId: result.messageId,
+                  conversationId: result.conversationId,
+                });
               },
             });
           }
@@ -610,22 +607,14 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
                   onPlatformSendDispatch: ctx.onPlatformSendDispatch,
                 });
-                return jsonActionResultWithDetails(
-                  {
-                    ok: true,
-                    channel: "msteams",
-                    action: "upload-file",
-                    messageId: result.messageId,
-                    conversationId: result.conversationId,
-                    ...(result.pendingUploadId ? { pendingUploadId: result.pendingUploadId } : {}),
-                  },
-                  {
-                    ok: true,
-                    channel: "msteams",
-                    messageId: result.messageId,
-                    ...(result.pendingUploadId ? { pendingUploadId: result.pendingUploadId } : {}),
-                  },
-                );
+                return jsonActionResult({
+                  ok: true,
+                  channel: "msteams",
+                  action: "upload-file",
+                  messageId: result.messageId,
+                  conversationId: result.conversationId,
+                  ...(result.pendingUploadId ? { pendingUploadId: result.pendingUploadId } : {}),
+                });
               },
             });
           }
