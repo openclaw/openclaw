@@ -5116,17 +5116,17 @@ describe("ci workflow guards", () => {
   });
 
   it.each([
-    ["hybrid", "pull_request", false, true, true, true],
-    ["github", "workflow_dispatch", false, true, true, true],
-    ["blacksmith", "push", false, true, true, false],
+    ["hybrid", "pull_request", false, true, true, true, false],
+    ["github", "workflow_dispatch", false, true, true, true, false],
+    ["blacksmith", "push", false, true, true, false, false],
     ["blacksmith", "pull_request", false, true, true, false, true],
     ["hybrid", "pull_request", false, true, false, false, true],
-    ["hybrid", "workflow_dispatch", true, false, true, false],
-    ["hybrid", "workflow_dispatch", true, true, false, false],
-    ["hybrid", "workflow_dispatch", true, true, true, true],
+    ["hybrid", "workflow_dispatch", true, false, true, false, false],
+    ["hybrid", "workflow_dispatch", true, true, false, false, false],
+    ["hybrid", "workflow_dispatch", true, true, true, true, false],
   ] as const)(
     "preserves type workload for %s %s frozen=%s hosted-contract=%s stripe-support=%s",
-    (profile, eventName, frozenTarget, hostedContract, stripeSupport, striped, changed = false) => {
+    (profile, eventName, frozenTarget, hostedContract, stripeSupport, striped, changed) => {
       const changedPathsJson = changed ? '["src/agents/example.test.ts"]' : "";
       const result = runCheckShardFixture({
         task: "test-types",
