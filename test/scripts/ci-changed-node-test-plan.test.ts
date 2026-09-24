@@ -2094,6 +2094,53 @@ describe("CI changed Node test plan", () => {
     }
   });
 
+  it("routes the native source inventory to both readers in a mixed Android PR", () => {
+    const changedPaths = [
+      "apps/.i18n/native-source.json",
+      "apps/android/README.md",
+      "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
+      "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatRealtimeTalk.kt",
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
+      "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
+      "apps/android/app/src/test/java/ai/openclaw/app/ui/chat/ChatComposerLayoutTest.kt",
+      "apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeManagerTest.kt",
+    ];
+    const onFallback = vi.fn();
+    const dedicatedNativeChecks = { macos: false, ios: false, android: true };
+    const shards = createChangedNodeTestShards(changedPaths, {
+      dedicatedNativeChecks,
+      includeReleaseOnlyToolingShards: false,
+      onFallback,
+    });
+    expect(onFallback).not.toHaveBeenCalled();
+    expect(shards).not.toBeNull();
+    const files = selectedFiles(shards);
+    expect(files.filter((file) => file === "test/scripts/android-app-i18n.test.ts")).toHaveLength(
+      1,
+    );
+    expect(files.filter((file) => file === "test/scripts/apple-app-i18n.test.ts")).toHaveLength(1);
+    expect(files).toHaveLength(2);
+    expect(
+      createChangedNodeTestShards([...changedPaths, "apps/.i18n/unowned.json"], {
+        dedicatedNativeChecks,
+      }),
+    ).toBeNull();
+    expect(
+      createChangedNodeTestShards(changedPaths, {
+        dedicatedNativeChecks: { ...dedicatedNativeChecks, android: false },
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps product-only policy watches out of deferred tooling", () => {
+    const shards = createChangedNodeTestShards(["src/auto-reply/reply/abort.test.ts"], {
+      includeReleaseOnlyToolingShards: false,
+    });
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards)).not.toContain("test/scripts/tsgo-core-test-shards.test.ts");
+  });
+
   it.each([
     {
       source: "packages/example/src/value.ts",

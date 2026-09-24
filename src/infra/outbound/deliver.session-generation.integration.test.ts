@@ -4,11 +4,15 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
-import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
+import {
+  drainMatrixReconnect,
+  matrixOutboundForQueueTest,
+} from "./deliver.queue-integration.test-support.js";
 import { SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce, loadPendingDelivery } from "./delivery-queue-storage.js";
@@ -116,6 +120,89 @@ describe("generation-bound result delivery", () => {
       });
     },
   );
+
+  it("retains a completed result through temporary lifecycle unavailability", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      const { generation, update } = fixture();
+      const entered = createDeferred();
+      const released = createDeferred();
+      const mutation = runExclusiveSessionLifecycleMutation({
+        scope: generation.storePath,
+        identities: [generation.sessionKey, generation.sessionId],
+        prepare: async () => {
+          entered.resolve();
+          await released.promise;
+        },
+        run: () => Promise.resolve(update("original")),
+      });
+      const send = vi.fn(async (_to: string, text: string) => ({ messageId: text }));
+      const deliveryIntentId = "sessions-send:transient-result";
+      try {
+        await Promise.race([
+          entered.promise,
+          mutation.then(() => {
+            throw new Error("Lifecycle mutation settled before its preparation barrier");
+          }),
+        ]);
+        await expect(
+          deliver({
+            cfg: {},
+            channel: "matrix",
+            to: "!original:example",
+            accountId: "original",
+            payloads: [{ text: "completed result" }],
+            queuePolicy: "required",
+            deliveryIntentId,
+            reusePendingDeliveryIntent: true,
+            sessionGeneration: generation,
+            deps: { matrix: send },
+          }),
+        ).rejects.toThrow("Session delivery generation is unavailable");
+        expect(send).not.toHaveBeenCalled();
+        expect(await loadPendingDelivery(deliveryIntentId)).toMatchObject({
+          id: deliveryIntentId,
+          to: "!original:example",
+          accountId: "original",
+          sessionGeneration: generation,
+          preparedBatch: {
+            sourcePayloadCount: 1,
+            entries: [{ status: "accepted", payload: { text: "completed result" } }],
+          },
+        });
+        await expect(
+          deliver({
+            cfg: {},
+            channel: "matrix",
+            to: "!ordinary:example",
+            payloads: [{ text: "ordinary while held" }],
+            deps: { matrix: send },
+          }),
+        ).resolves.toMatchObject([{ messageId: "ordinary while held" }]);
+      } finally {
+        released.resolve();
+        await mutation;
+      }
+      const recover = () =>
+        drainMatrixReconnect({
+          stateDir,
+          deliver: (params) => deliver({ ...params, deps: { matrix: send } }),
+        });
+      await recover();
+      expect(send.mock.calls.map(([to, text]) => [to, text])).toEqual([
+        ["!ordinary:example", "ordinary while held"],
+        ["!original:example", "completed result"],
+      ]);
+      expect(send).toHaveBeenNthCalledWith(
+        2,
+        "!original:example",
+        "completed result",
+        expect.objectContaining({ accountId: "original" }),
+      );
+      expect(await loadPendingDelivery(deliveryIntentId)).toBeNull();
+      await recover();
+      expect(send).toHaveBeenCalledTimes(2);
+    });
+  });
 
   it("replays every same-generation result and terminalizes only revoked unsent results", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

@@ -269,23 +269,13 @@ export async function persistQueuedPreSendState(
   owner.signal?.throwIfAborted();
   try {
     const route = { replyToId: params.route.replyToId ?? null };
-    if (owner.claimId) {
-      await markDeliveryPlatformSendAttemptStarted(
-        owner.queueId,
-        owner.stateDir,
-        route,
-        owner.claimId,
-        context,
-      );
-    } else {
-      await markDeliveryPlatformSendAttemptStarted(
-        owner.queueId,
-        owner.stateDir,
-        route,
-        undefined,
-        context,
-      );
-    }
+    await markDeliveryPlatformSendAttemptStarted(
+      owner.queueId,
+      owner.stateDir,
+      route,
+      owner.claimId || undefined,
+      context,
+    );
     return "marked";
   } catch (markErr: unknown) {
     if (params.queuePolicy === "required") {

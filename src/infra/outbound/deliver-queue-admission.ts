@@ -11,7 +11,6 @@ import {
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
 import { resolveConversationDeliveryScope } from "./delivery-completion.js";
-import { prepareOutboundDeliveryGeneration } from "./delivery-generation.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
 import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
@@ -139,11 +138,9 @@ export async function stageAndEnqueueOutboundDelivery(
     }
     return null;
   }
-  let generation: Awaited<ReturnType<typeof prepareOutboundDeliveryGeneration>> | undefined;
+  // Take custody before checking generation: temporary lifecycle mutations must
+  // leave a completed result available for recovery.
   try {
-    if (params.sessionGeneration !== undefined) {
-      generation = await prepareOutboundDeliveryGeneration(params.sessionGeneration);
-    }
     const initialProducerClaim = options?.claimForLiveDelivery
       ? createInitialDeliveryProducerClaim()
       : undefined;
@@ -177,7 +174,6 @@ export async function stageAndEnqueueOutboundDelivery(
     };
     if (params.deliveryIntentId) {
       const preparation = await options?.getStablePreparation?.();
-      generation?.assertCurrent();
       const queued = preparation
         ? await enqueuePreparedDeliveryOnce(
             delivery,
@@ -209,7 +205,6 @@ export async function stageAndEnqueueOutboundDelivery(
           : {}),
       };
     }
-    generation?.assertCurrent();
     const id = await enqueueDelivery(
       delivery,
       stateDir,
@@ -242,7 +237,5 @@ export async function stageAndEnqueueOutboundDelivery(
     }
     throwSqliteLifecycleErrors(errors, "Delivery queue admission and media cleanup failed");
     throw err;
-  } finally {
-    generation?.release();
   }
 }

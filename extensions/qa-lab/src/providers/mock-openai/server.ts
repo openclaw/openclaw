@@ -71,8 +71,6 @@ import {
   QA_SLACK_CHART_PRESENTATION_PROMPT_RE,
   QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE,
   QA_MESSAGE_DECISION_SEND_PROMPT_RE,
-  QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE,
-  QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
   QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER,
@@ -206,6 +204,7 @@ import {
   extractScenarioPlannedTool,
 } from "./mock-openai-tool-routing.js";
 import {
+  buildWhatsAppAgentActionArgs,
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
   buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
@@ -1145,7 +1144,7 @@ async function buildResponsesPayload(
   if (whatsAppGroupDispatchReply) {
     return buildAssistantEvents(whatsAppGroupDispatchReply);
   }
-  const whatsAppBatchedReply = buildWhatsAppBatchedReply(allInputText);
+  const whatsAppBatchedReply = buildWhatsAppBatchedReply(prompt);
   if (whatsAppBatchedReply) {
     return buildAssistantEvents(whatsAppBatchedReply);
   }
@@ -1199,30 +1198,13 @@ async function buildResponsesPayload(
       return buildAssistantEvents("NO_REPLY");
     }
   }
-  if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
-    if (!hasCompletedToolOutput && canCallMessage) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "react",
-        emoji: "👍",
-      });
-    }
+  const whatsAppActionArgs = buildWhatsAppAgentActionArgs(allInputText);
+  if (whatsAppActionArgs) {
     if (hasCompletedToolOutput) {
-      return buildAssistantEvents("");
+      return buildAssistantEvents("NO_REPLY");
     }
-  }
-  const whatsAppUploadMatch = QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE.exec(allInputText);
-  if (whatsAppUploadMatch?.[1]) {
-    if (!hasCompletedToolOutput && canCallMessage) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "upload-file",
-        buffer: TINY_PNG_BASE64,
-        caption: whatsAppUploadMatch[1],
-        contentType: "image/png",
-        filename: "whatsapp-qa-agent-upload.png",
-      });
-    }
-    if (hasCompletedToolOutput) {
-      return buildAssistantEvents("");
+    if (canCallMessage) {
+      return buildToolCallEventsWithArgs("message", whatsAppActionArgs);
     }
   }
   if (

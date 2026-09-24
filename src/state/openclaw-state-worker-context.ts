@@ -16,7 +16,11 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 
 /** Capture host facts before asynchronous work, without opening SQLite. */
 export function captureOpenClawStateWorkerContext(
-  options: { path?: string; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    path?: string;
+    env?: NodeJS.ProcessEnv;
+    initializationAgentPaths?: readonly string[];
+  } = {},
 ): OpenClawStateWorkerContext {
   const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
   const environment: OpenClawStateWorkerContext["environment"] = {
@@ -51,6 +55,13 @@ export function captureOpenClawStateWorkerContext(
       { OPENCLAW_STATE_DIR: undefined, OPENCLAW_SUPERVISOR_MODE: undefined },
       environment,
     ]),
+    ...(options.initializationAgentPaths
+      ? {
+          initializationAgentPaths: options.initializationAgentPaths.map((agentPath) =>
+            path.resolve(agentPath),
+          ),
+        }
+      : {}),
     coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
     existingSchemaPath,
     runInCapturedSchemaScope,

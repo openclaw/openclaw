@@ -147,6 +147,8 @@ export function createSessionHistoryWorkerReaders(
             value.kind !== "http" &&
             value.kind !== "delta" &&
             value.kind !== "recent" &&
+            value.kind !== "message-by-id" &&
+            value.kind !== "message-count" &&
             value.kind !== "message-lookup")
         ) {
           throw new Error("Session history worker returned metadata instead of history");

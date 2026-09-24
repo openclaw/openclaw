@@ -63,10 +63,8 @@ import {
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import {
-  createAgentRuntimeApprovalAuthorityValidator,
-  type AgentRuntimeIdentity,
-} from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
 import {
   captureGatewayDeviceRevocation,

@@ -70,6 +70,7 @@ export class BrowserPanelNativeController {
   private unsubscribeState?: () => void;
   private revision = -1;
   private pendingActivation: string | null = null;
+  private pendingCommand: NativeBrowserMessage | null = null;
   /** New-tab request whose address field should be cleared and focused once it is selected. */
   private pendingAddressFocus: string | null = null;
   private captureGeneration = 0;
@@ -119,7 +120,7 @@ export class BrowserPanelNativeController {
     this.unsubscribeState();
     this.unsubscribeState = undefined;
     presenters.delete(this);
-    this.pendingActivation = null;
+    this.cancelPendingActivation();
     this.cancelCapture();
     this.presentation.disconnect();
   }
@@ -203,7 +204,24 @@ export class BrowserPanelNativeController {
   }
 
   async send(request: NativeBrowserMessage): Promise<boolean> {
+    const sessionKey = this.controller.host.sessionKey;
+    const activeTargetId = this.controller.activeTargetId;
+    const generation = this.captureGeneration;
+    this.pendingCommand = request;
     const reply = await postNativeBrowserMessage(request);
+    if (this.pendingCommand !== request) {
+      return false;
+    }
+    this.pendingCommand = null;
+    if (
+      this.captureGeneration !== generation ||
+      !this.controller.host.isConnected ||
+      !this.controller.host.browserPanelIsOpen() ||
+      this.controller.host.sessionKey !== sessionKey ||
+      this.controller.activeTargetId !== activeTargetId
+    ) {
+      return false;
+    }
     if (reply && !reply.ok) {
       this.controller.reportError(reply.error);
     }
@@ -216,6 +234,7 @@ export class BrowserPanelNativeController {
    */
   cancelPendingActivation(selectedTabId?: string): void {
     this.pendingActivation = null;
+    this.pendingCommand = null;
     if (this.pendingAddressFocus !== selectedTabId) {
       this.pendingAddressFocus = null;
     }
@@ -234,6 +253,7 @@ export class BrowserPanelNativeController {
       this.controller.exitCaptureModes();
       return (await this.send({ type: "navigate", tabId, url })) ? tabId : null;
     }
+    this.cancelPendingActivation();
     const tabId = `mac-${generateUUID()}`;
     this.pendingActivation = tabId;
     this.pendingAddressFocus = focusAddress ? tabId : null;

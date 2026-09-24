@@ -133,7 +133,9 @@ export async function createSpawnBoundaryParent(params: {
   };
 }
 
-export function createBoundWorker(bound: Awaited<ReturnType<typeof createSpawnBoundaryParent>>) {
+export async function createBoundWorker(
+  bound: Awaited<ReturnType<typeof createSpawnBoundaryParent>>,
+) {
   const { parentSessionKey, parentRunId } = bound;
   const database = openOpenClawStateDatabase();
   const store = createWorkerSessionPlacementStore({ database });
@@ -184,7 +186,7 @@ export function createBoundWorker(bound: Awaited<ReturnType<typeof createSpawnBo
     claimId: "queued-worker-claim",
     runId: parentRunId,
   });
-  bindWorkerTurnOwner(
+  await bindWorkerTurnOwner(
     store,
     claim,
     bound.admitted.executionIdentityToken,

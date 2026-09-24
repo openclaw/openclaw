@@ -110,7 +110,7 @@ describe("AppSidebar session attention", () => {
     expect(row.querySelector('[data-session-attention="question"]')).toBeNull();
     expect(row.querySelector(".session-glyph__ring")).not.toBeNull();
   });
-  it("redacts local paths from failed-run previews", async () => {
+  it("preserves diagnostic paths in failed-run previews", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
     setRows(sessionsHarness, [
       failedRow(sessionKey, {
@@ -125,9 +125,8 @@ describe("AppSidebar session attention", () => {
     const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
 
     expect(row?.textContent).toContain(
-      "Cannot find module '[redacted path]' imported from [redacted path]",
+      "Cannot find module '/Users/example/.local/share/openclaw/dist/status-text-old.mjs' imported from /Users/example/.local/share/openclaw/dist/openclaw-tools-old.mjs",
     );
-    expect(row?.textContent).not.toContain("/Users/example");
   });
 
   it("projects canonical attention onto Home across row refresh ordering", async () => {

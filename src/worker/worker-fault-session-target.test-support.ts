@@ -3,10 +3,7 @@ import type { BoundAgentRunSessionTarget } from "../agents/run-session-target.ty
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { WorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
-import {
-  bindWorkerTurnOwner,
-  signalWorkerTurnClaimClosed,
-} from "../gateway/worker-environments/placement-turn-claim-events.js";
+import { bindWorkerTurnOwner } from "../gateway/worker-environments/placement-turn-claim-events.js";
 import { resolveWorkerTurnTranscriptTarget } from "../gateway/worker-environments/worker-turn-transcript-target.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -14,9 +11,8 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 
-export function bindWorkerFixtureTurnSource(
+export async function bindWorkerFixtureTurnSource(
   store: WorkerSessionPlacementStore,
-  databasePath: string,
   claim: WorkerSessionTurnClaim,
   target: BoundAgentRunSessionTarget,
 ) {
@@ -34,13 +30,18 @@ export function bindWorkerFixtureTurnSource(
   };
   const operationalRunInstance = createOperationalRunInstanceRef(claim.runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance, assertSourceCurrent);
+  let disposed = false;
   const dispose = () => {
-    signalWorkerTurnClaimClosed(databasePath, claim);
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    // Placement settlement or fixture database close owns the durable claim.
     releaseAgentRunDelegatedAuthority(authority);
   };
   try {
     registerAgentRunContext(claim.runId, target, authority.claimId);
-    bindWorkerTurnOwner(
+    await bindWorkerTurnOwner(
       store,
       claim,
       undefined,

@@ -894,6 +894,12 @@ export function createChangedNodeTestShards(
           policyTargets.length > 0,
       ),
   );
+  const policyTargets = [...new Set([...policyTargetsByPath.values()].flat())];
+  const completeOwnerTargets = new Set(
+    [...policyTargetsByPath.keys()].flatMap((changedPath) =>
+      resolvePolicyTestTargets([changedPath], { completeOwnersOnly: true }),
+    ),
+  );
   const regularPaths = resolutionPaths.filter(
     (changedPath) =>
       !documentationPaths.has(changedPath) &&
@@ -1073,7 +1079,7 @@ export function createChangedNodeTestShards(
     cwd,
     documentationPaths,
     [
-      ...[...policyTargetsByPath.values()].flat(),
+      ...policyTargets,
       ...dependencyConsumers.tests,
       ...resolveAffectedTestsFromImportGraph([...pluginMetadataPaths], cwd, {
         tooling: true,
@@ -1111,6 +1117,7 @@ export function createChangedNodeTestShards(
         changedPaths.includes(target) ||
         options.includeReleaseOnlyToolingShards !== false ||
         changedPaths.some(isToolingTestOwnerPath) ||
+        completeOwnerTargets.has(target) ||
         (!isReleaseOnlyToolingTestFile(target) &&
           !plans.every((plan) => RELEASE_ONLY_TOOLING_CONFIGS.has(plan.config)))) &&
       !plans.every(({ config }) =>

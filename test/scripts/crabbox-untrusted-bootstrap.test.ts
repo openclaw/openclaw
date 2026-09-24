@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildCrabboxGateTransport } from "../../scripts/pr-lib/crabbox-gate-transport.mts";
 
 const source = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
 const previousPnpmSpec =
@@ -69,6 +70,7 @@ case "$1" in
     ;;
   install)
     [[ "$2" == "--frozen-lockfile" ]]
+    printf '%s' "$HOME" > ${JSON.stringify(join(root, "install-home"))}
     read -r prepared_pin < ${JSON.stringify(join(root, "prepared-pin"))}
     candidate_pin="$(${JSON.stringify(process.execPath)} -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager')"
     [[ "$prepared_pin" == "$candidate_pin" ]]
@@ -165,6 +167,20 @@ fi
         { cwd: root, encoding: "utf8", env: { ...process.env, ...extraEnv } },
       );
     },
+    runGate(command: string) {
+      const transport = buildCrabboxGateTransport({
+        bootstrap: script,
+        command,
+        headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      });
+      const launcher = join(root, "launcher.sh");
+      writeFileSync(launcher, transport.input);
+      return spawnSync("/bin/bash", [launcher, ...transport.args], {
+        cwd: root,
+        encoding: "utf8",
+        env: process.env,
+      });
+    },
     downloads() {
       return existsSync(join(root, "downloads"))
         ? readFileSync(join(root, "downloads"), "utf8")
@@ -174,6 +190,17 @@ fi
 }
 
 describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
+  it.skipIf(process.platform !== "linux").each([0, 37])(
+    "streams the full bootstrap with child exit %i and removes its isolated home",
+    (exitCode) => {
+      const f = fixture();
+      const result = f.runGate(`set -euo pipefail; /bin/bash -c 'exit ${exitCode}'`);
+      expect(result.status, result.stderr).toBe(exitCode);
+      expect(readFileSync(join(f.root, "install-log"), "utf8")).toBe("frozen\n");
+      expect(existsSync(readFileSync(join(f.root, "install-home"), "utf8"))).toBe(false);
+    },
+  );
+
   it("pins the package manager required by the trusted checkout", () => {
     const script = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {

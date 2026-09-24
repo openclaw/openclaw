@@ -1742,6 +1742,10 @@ export const en: TranslationMap & {
     recoveryReload: "Discard draft and reload",
     discardUnconfirmed:
       "The last save could not be confirmed. Your draft is kept. Reload configuration before discarding this setting.",
+    writeGatewayChanged:
+      "This unsettled change belongs to a different Gateway. Reconnect to that Gateway to retry, or discard the draft.",
+    writeUnconfirmed:
+      "The last configuration change could not be confirmed. Your draft is kept. Retry before changing other settings.",
     autoSaveConflict: "Settings changed elsewhere",
     retry: "Retry",
     applyChanges: "Apply changes",
@@ -3454,6 +3458,7 @@ export const en: TranslationMap & {
       typing: "{name} is typing…",
       typingMany: "{names} are typing…",
       typingDraftState: "Typing · not sent",
+      pausedDraftState: "Paused · not sent",
       state: {
         pending: "Pending",
         accepted: "Accepted",
@@ -4074,8 +4079,6 @@ export const en: TranslationMap & {
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
       placeholderWithAttachments: "Add a message or paste more images...",
-      offlineHint:
-        "You can keep writing. Send when you’re ready to add a message to this conversation’s outbox.",
       offlineQueuedHint: "{count} in this conversation’s outbox.",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",

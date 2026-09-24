@@ -97,8 +97,8 @@ beforeEach(() => {
   vi.mocked(saveRemoteMedia).mockImplementation((...args) => saveRemoteMediaMock(...args));
 });
 
-afterEach(() => {
-  defaultThreadBindings.stop();
+afterEach(async () => {
+  await defaultThreadBindings.stop();
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
 });
 
@@ -935,7 +935,7 @@ describe("preflightDiscordMessage", () => {
 
   it("looks up thread bindings once for an accepted ordinary guild message", async () => {
     const channelId = "channel-binding-lookup-once";
-    const manager = createThreadBindingManager({
+    const manager = await createThreadBindingManager({
       cfg: DEFAULT_PREFLIGHT_CFG,
       accountId: "default",
       persist: false,
@@ -3199,7 +3199,7 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
   it("leaves a sent webhook identity suppressible after the Discord thread is unbound", async () => {
     let nowMs = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    const manager = createThreadBindingManager({
+    const manager = await createThreadBindingManager({
       cfg: DEFAULT_PREFLIGHT_CFG,
       accountId: "default",
       persist: false,
@@ -3224,7 +3224,7 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     });
 
     nowMs += 30_000;
-    manager.unbindThread({ threadId: "thread-1", sendFarewell: false });
+    await manager.unbindThread({ threadId: "thread-1", sendFarewell: false });
 
     expect(
       isRecentOutboundMessageIdentity({

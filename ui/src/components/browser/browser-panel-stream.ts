@@ -35,7 +35,6 @@ interface BrowserPanelStreamHost extends StreamState {
   readonly observedViewportSize: { width: number; height: number } | null;
   setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
   clearUnavailableView(): boolean;
-  scheduleViewportSync(): void;
   refreshView(targetId: string): Promise<void>;
   refreshAll(): Promise<void>;
 }
@@ -69,7 +68,6 @@ export class BrowserPanelStream {
   private resizeTimer?: ReturnType<typeof setTimeout>;
   private recoveryTimer?: ReturnType<typeof setTimeout>;
   private recovery?: Recovery;
-  private viewportSyncPending = false;
   private readonly retiringUrls = new Set<string>();
 
   constructor(private readonly host: BrowserPanelStreamHost) {}
@@ -344,16 +342,6 @@ export class BrowserPanelStream {
         if (!this.host.urlDraftEditing) {
           this.host.setState("urlDraft", frame.url);
         }
-        if (
-          this.host.observedViewportSize &&
-          (Math.abs(frame.cssWidth - this.host.observedViewportSize.width) > 1 ||
-            Math.abs(frame.cssHeight - this.host.observedViewportSize.height) > 1) &&
-          !this.viewportSyncPending
-        ) {
-          // The sync is debounced; a repainting page must not keep postponing it.
-          this.viewportSyncPending = true;
-          this.host.scheduleViewportSync();
-        }
         if (!attempt.presented) {
           attempt.presented = true;
           this.host.setState("loading", false);
@@ -371,8 +359,6 @@ export class BrowserPanelStream {
   }
 
   resize(): void {
-    // The debounced viewport sync just ran; later mismatched frames may schedule again.
-    this.viewportSyncPending = false;
     this.restartAfterResize();
   }
 
@@ -427,8 +413,6 @@ export class BrowserPanelStream {
     this.recovery = undefined;
     clearTimeout(this.resizeTimer);
     this.resizeTimer = undefined;
-    // Invalidation cancels the pending sync timer; the next stream must be able to schedule one.
-    this.viewportSyncPending = false;
     const attempt = this.attempt;
     this.attempt = undefined;
     attempt?.settle(false);

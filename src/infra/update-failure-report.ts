@@ -89,9 +89,11 @@ export type UpdateFailureReportSubmitResult =
 
 function resultFromExistingReceipt(
   receipt: UpdateFailureReportReceipt | null,
-  savedReportPath: string,
-  expectedPreviewDigest: string,
-  expectedFallbackUrl: string | undefined,
+  prepared: PreparedUpdateFailureReport,
+  savedReportPath = receipt
+    ? bindSavedReportArtifact(prepared, receipt.reservationId, receipt.previewDigest)
+        .savedReportPath
+    : prepared.savedReportPath,
 ): UpdateFailureReportSubmitResult {
   if (receipt?.status === "pending") {
     return {
@@ -121,9 +123,9 @@ function resultFromExistingReceipt(
       status: "retryable",
     };
   }
-  const previewMatches = receipt?.previewDigest === expectedPreviewDigest;
+  const previewMatches = receipt?.previewDigest === prepared.previewDigest;
   const matchingFallbackUrl =
-    previewMatches && receipt?.status === "fallback" && receipt.fallbackUrl === expectedFallbackUrl
+    previewMatches && receipt?.status === "fallback" && receipt.fallbackUrl === prepared.url
       ? receipt.fallbackUrl
       : undefined;
   return {
@@ -142,26 +144,20 @@ function resultFromExistingReceipt(
   };
 }
 
-function receiptMatches(
-  receipt: UpdateFailureReportReceipt | null,
-  expected: UpdateFailureReportReceipt,
-): boolean {
-  return (
-    receipt?.reservationId === expected.reservationId &&
-    receipt.status === expected.status &&
-    receipt.previewDigest === expected.previewDigest &&
-    receipt.cleanup === expected.cleanup &&
-    receipt.url === expected.url &&
-    receipt.fallbackUrl === expected.fallbackUrl
-  );
-}
-
 function receiptMatchesBestEffort(
   readReceipt: () => UpdateFailureReportReceipt | null,
   expected: UpdateFailureReportReceipt,
 ): boolean {
   try {
-    return receiptMatches(readReceipt(), expected);
+    const receipt = readReceipt();
+    return (
+      receipt?.reservationId === expected.reservationId &&
+      receipt.status === expected.status &&
+      receipt.previewDigest === expected.previewDigest &&
+      receipt.cleanup === expected.cleanup &&
+      receipt.url === expected.url &&
+      receipt.fallbackUrl === expected.fallbackUrl
+    );
   } catch {
     return false;
   }
@@ -241,6 +237,26 @@ export async function submitUpdateFailureReport(
   }
   const finalizeReceipt = options.finalizeReceipt ?? finalizeUpdateFailureReportReceipt;
   const readReceipt = options.readReceipt ?? readUpdateFailureReportReceipt;
+  const recordCreatedIssue = async (url: string, reservationId: string) => {
+    const receipt: UpdateFailureReportReceipt = {
+      cleanup: "pending",
+      previewDigest: prepared.previewDigest,
+      reservationId,
+      status: "created",
+      url,
+    };
+    const finalized = retryUpdateReportStateWrite(() =>
+      finalizeReceipt(prepared.attemptId, receipt, stateEnv),
+    );
+    if (
+      !finalized &&
+      !receiptMatchesBestEffort(() => readReceipt(prepared.attemptId, stateEnv), receipt)
+    ) {
+      return undefined;
+    }
+    await cleanOwnedReportArtifact(prepared, receipt, stateEnv, options.artifactSweepHooks);
+    return receipt;
+  };
   const persistKnownNoStartReceipt = async (
     receipt: UpdateFailureReportReceipt,
   ): Promise<boolean> =>
@@ -283,23 +299,9 @@ export async function submitUpdateFailureReport(
       reconciled = { status: "unavailable" };
     }
     if (reconciled.status === "created") {
-      const receipt: UpdateFailureReportReceipt = {
-        cleanup: "pending",
-        previewDigest: prepared.previewDigest,
-        reservationId: existingReceipt.reservationId,
-        status: "created",
-        url: reconciled.url,
-      };
-      const finalized = retryUpdateReportStateWrite(() =>
-        finalizeReceipt(prepared.attemptId, receipt, stateEnv),
-      );
-      const terminalRecorded =
-        finalized ||
-        receiptMatchesBestEffort(() => readReceipt(prepared.attemptId, stateEnv), receipt);
-      if (terminalRecorded) {
-        await cleanOwnedReportArtifact(prepared, receipt, stateEnv, options.artifactSweepHooks);
-        existingReceipt = receipt;
-      }
+      existingReceipt =
+        (await recordCreatedIssue(reconciled.url, existingReceipt.reservationId)) ??
+        existingReceipt;
     }
   }
   if (
@@ -334,16 +336,7 @@ export async function submitUpdateFailureReport(
         true,
       );
     }
-    return resultFromExistingReceipt(
-      existingReceipt,
-      bindSavedReportArtifact(
-        prepared,
-        existingReceipt.reservationId,
-        existingReceipt.previewDigest,
-      ).savedReportPath,
-      prepared.previewDigest,
-      prepared.url,
-    );
+    return resultFromExistingReceipt(existingReceipt, prepared);
   }
   if (options.validateCurrentAttempt && !(await options.validateCurrentAttempt())) {
     return {
@@ -400,18 +393,7 @@ export async function submitUpdateFailureReport(
       ))
     ) {
       const currentReceipt = readReceipt(prepared.attemptId, stateEnv);
-      return resultFromExistingReceipt(
-        currentReceipt,
-        currentReceipt
-          ? bindSavedReportArtifact(
-              prepared,
-              currentReceipt.reservationId,
-              currentReceipt.previewDigest,
-            ).savedReportPath
-          : prepared.savedReportPath,
-        prepared.previewDigest,
-        prepared.url,
-      );
+      return resultFromExistingReceipt(currentReceipt, prepared);
     }
   }
 
@@ -434,18 +416,7 @@ export async function submitUpdateFailureReport(
         true,
       );
     }
-    return resultFromExistingReceipt(
-      reservation.receipt,
-      reservation.receipt
-        ? bindSavedReportArtifact(
-            prepared,
-            reservation.receipt.reservationId,
-            reservation.receipt.previewDigest,
-          ).savedReportPath
-        : prepared.savedReportPath,
-      prepared.previewDigest,
-      prepared.url,
-    );
+    return resultFromExistingReceipt(reservation.receipt, prepared);
   }
 
   const ownedPrepared = bindSavedReportArtifact(prepared, reservationId);
@@ -473,9 +444,8 @@ export async function submitUpdateFailureReport(
       if (!(await cleanupOwnedPreparation())) {
         return resultFromExistingReceipt(
           readReceipt(prepared.attemptId, stateEnv),
+          prepared,
           ownedPrepared.savedReportPath,
-          prepared.previewDigest,
-          prepared.url,
         );
       }
       return {
@@ -499,9 +469,8 @@ export async function submitUpdateFailureReport(
       await discardSavedUpdateFailureReportBestEffort(ownedPrepared, saved, true);
       return resultFromExistingReceipt(
         readReceipt(prepared.attemptId, stateEnv),
+        prepared,
         ownedPrepared.savedReportPath,
-        prepared.previewDigest,
-        prepared.url,
       );
     }
     await publishPreparedUpdateFailureReport(ownedPrepared, saved);
@@ -572,17 +541,15 @@ export async function submitUpdateFailureReport(
       await discardSavedUpdateFailureReportBestEffort(ownedPrepared, saved, true);
       return resultFromExistingReceipt(
         readReceipt(prepared.attemptId, stateEnv),
+        prepared,
         ownedPrepared.savedReportPath,
-        prepared.previewDigest,
-        prepared.url,
       );
     }
     if (!(await cleanupOwnedPreparation())) {
       return resultFromExistingReceipt(
         readReceipt(prepared.attemptId, stateEnv),
+        prepared,
         ownedPrepared.savedReportPath,
-        prepared.previewDigest,
-        prepared.url,
       );
     }
     if (error.reason === "stale") {
@@ -595,22 +562,7 @@ export async function submitUpdateFailureReport(
     throw error;
   }
   if (created.status === "created") {
-    const receipt: UpdateFailureReportReceipt = {
-      cleanup: "pending",
-      previewDigest: prepared.previewDigest,
-      reservationId,
-      status: "created",
-      url: created.url,
-    };
-    const finalized = retryUpdateReportStateWrite(() =>
-      finalizeReceipt(prepared.attemptId, receipt, stateEnv),
-    );
-    const terminalRecorded =
-      finalized ||
-      receiptMatchesBestEffort(() => readReceipt(prepared.attemptId, stateEnv), receipt);
-    if (terminalRecorded) {
-      await cleanOwnedReportArtifact(prepared, receipt, stateEnv, options.artifactSweepHooks);
-    }
+    const terminalRecorded = await recordCreatedIssue(created.url, reservationId);
     return {
       ...(!terminalRecorded
         ? {
@@ -673,12 +625,8 @@ export async function submitUpdateFailureReport(
     }
     return resultFromExistingReceipt(
       replacement,
-      replacement
-        ? bindSavedReportArtifact(prepared, replacement.reservationId, replacement.previewDigest)
-            .savedReportPath
-        : ownedPrepared.savedReportPath,
-      prepared.previewDigest,
-      prepared.url,
+      prepared,
+      replacement ? undefined : ownedPrepared.savedReportPath,
     );
   }
   const receipt: UpdateFailureReportReceipt = {

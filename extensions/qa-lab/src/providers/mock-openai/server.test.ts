@@ -1799,6 +1799,7 @@ describe("qa mock openai server", () => {
     expect(outputToolArgsFromItem(groupToolCall)).toEqual({
       action: "react",
       emoji: "👍",
+      final: true,
     });
 
     const toolCall = outputToolCall(declaredPayload, "message");
@@ -1809,30 +1810,8 @@ describe("qa mock openai server", () => {
     expect(outputToolArgsFromItem(toolCall)).toEqual({
       action: "react",
       emoji: "👍",
+      final: true,
     });
-
-    const afterToolPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      input: [
-        makeUserInput(WHATSAPP_AGENT_REACT_PROMPT),
-        makeToolOutputWithCallId(
-          outputToolCallId(toolCall, "call_mock_message_react"),
-          "reaction sent",
-        ),
-      ],
-    });
-
-    expect(
-      outputItems(afterToolPayload).some(
-        (item) => item.type === "function_call" && item.name === "message",
-      ),
-    ).toBe(false);
-    expect(
-      outputItems(afterToolPayload)
-        .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
-        .map((content) => requireRecord(content, "assistant content").text)
-        .filter((text): text is string => typeof text === "string" && text.trim().length > 0),
-    ).toEqual([]);
   });
 
   it("emits WhatsApp agent upload-file message tool calls only when the tool is declared", async () => {
@@ -1871,24 +1850,6 @@ describe("qa mock openai server", () => {
       filename: "whatsapp-qa-agent-upload.png",
     });
     expect(outputToolArgsFromItem(toolCall).buffer).toEqual(expect.any(String));
-
-    const afterToolPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      input: [
-        makeUserInput(WHATSAPP_AGENT_UPLOAD_PROMPT),
-        makeToolOutputWithCallId(
-          outputToolCallId(toolCall, "call_mock_message_upload"),
-          "media sent",
-        ),
-      ],
-    });
-
-    expect(
-      outputItems(afterToolPayload).some(
-        (item) => item.type === "function_call" && item.name === "message",
-      ),
-    ).toBe(false);
-    expect(outputText(afterToolPayload)).toBe("");
   });
 
   it("answers WhatsApp pending-history prompts only with injected prior group context", async () => {
@@ -4750,36 +4711,6 @@ Update and merge these partial structured summaries.`,
     });
 
     expect(outputText(await response.json())).toBe("NEW_TOKEN");
-  });
-
-  it("requires both WhatsApp batched markers before returning the final batched marker", async () => {
-    const server = await startMockServer();
-
-    const standalone = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "Second batched WhatsApp QA message. Reply with only this exact marker: " +
-            "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
-            "in this same run context.",
-        ),
-      ],
-    });
-    expect(outputText(await standalone.json())).toBe("WHATSAPP_QA_BATCHED_MISSING_CONTEXT_TEST");
-
-    const batched = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "First batched WhatsApp QA message WHATSAPP_QA_BATCHED_FIRST_TEST. " +
-            "Wait for the next message before replying.",
-        ),
-        makeUserInput(
-          "Second batched WhatsApp QA message. Reply with only this exact marker: " +
-            "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
-            "in this same run context.",
-        ),
-      ],
-    });
-    expect(outputText(await batched.json())).toBe("WHATSAPP_QA_BATCHED_FINAL_TEST");
   });
 
   it("lets the latest exact marker prompt beat stale Telegram session_status history", async () => {

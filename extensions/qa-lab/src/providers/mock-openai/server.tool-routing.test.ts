@@ -3,6 +3,7 @@ import { convertAnthropicMessagesToResponsesInput } from "./mock-anthropic-wire.
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
 import { unwrapScenarioCatalogOutput } from "./mock-openai-tool-routing.js";
 import {
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
   createMockServerTestHarness,
   expectOpenAiNonStreamingResponsesJson,
   getJson,
@@ -61,14 +62,19 @@ function catalogResult(name: string, details: Record<string, unknown>) {
 }
 
 describe("mock scenario tool routing", () => {
-  it.each([
-    { group: false, action: "react" },
-    { group: true, action: "react" },
-    { group: false, action: "upload-file" },
-    { group: true, action: "upload-file" },
-  ])(
-    "routes WhatsApp $action (group=$group) through the catalog once",
-    async ({ group, action }) => {
+  it.each(
+    [
+      { group: false, action: "react" },
+      { group: true, action: "react" },
+      { group: false, action: "upload-file" },
+      { group: true, action: "upload-file" },
+    ].flatMap((scenario) => [
+      { ...scenario, surface: "catalog" },
+      { ...scenario, surface: "direct" },
+    ]),
+  )(
+    "completes WhatsApp $action (group=$group, $surface) with intentional silence",
+    async ({ group, action, surface }) => {
       const server = await startMockServer();
       const token = `WHATSAPP_QA_${group ? "GROUP_" : ""}AGENT_${action === "react" ? "REACT" : "UPLOAD"}_TEST`;
       const prompt =
@@ -81,31 +87,41 @@ describe("mock scenario tool routing", () => {
         makeUserInput(prompt),
       ];
       // Custom Responses endpoints carry guidance in input, not body.instructions.
-      const request = () =>
-        expectOpenAiNonStreamingResponsesJson(server, { tools: catalogTools, input });
+      const tools = surface === "catalog" ? catalogTools : [{ type: "function", name: "message" }];
+      const request = () => expectOpenAiNonStreamingResponsesJson(server, { tools, input });
       const payload = await request();
       const call = outputItem(payload);
       expect(outputItems(payload)).toHaveLength(1);
-      expect(call).toMatchObject({ type: "function_call", name: "tool_call" });
-      const planned = outputToolArgs(payload);
-      expect(planned).toMatchObject({
-        id: "message",
-        args:
-          action === "react"
-            ? { action, emoji: "👍" }
-            : { action, caption: token, contentType: "image/png" },
-      });
+      const wireName = surface === "catalog" ? "tool_call" : "message";
+      expect(call).toMatchObject({ type: "function_call", name: wireName });
+      const args =
+        action === "react"
+          ? { action, emoji: "👍", final: true }
+          : { action, caption: token, contentType: "image/png" };
+      expect(outputToolArgs(payload)).toMatchObject(
+        surface === "catalog" ? { id: "message", args } : args,
+      );
       expect(await getJson(server, "/debug/last-request")).toMatchObject({
         plannedToolName: "message",
-        plannedWireToolName: "tool_call",
+        ...(surface === "catalog" ? { plannedWireToolName: wireName } : {}),
       });
       input.push(
         call,
-        makeToolOutputWithCallId(String(call.call_id), catalogResult("message", { ok: true })),
+        makeToolOutputWithCallId(
+          String(call.call_id),
+          surface === "catalog" ? catalogResult("message", { ok: true }) : '{"ok":true}',
+        ),
       );
       const completed = await request();
       expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
-      expect(outputText(completed)).toBe("");
+      expect(outputText(completed)).toBe("NO_REPLY");
+
+      const continuation = await expectOpenAiNonStreamingResponsesJson(server, {
+        tools: [],
+        input: [...input, makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)],
+      });
+      expect(outputItems(continuation).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(continuation)).toBe("NO_REPLY");
     },
   );
 

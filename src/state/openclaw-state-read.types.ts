@@ -168,7 +168,7 @@ export type OpenClawStateReadCommand =
   | { type: "updateRuns.interruptedCandidate" }
   | { type: "worktrees.cleanupState" }
   | { type: "fleet.list" }
-  | { type: "workerPlacements.changeSnapshot" }
+  | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "fleet.get"; tenantId: string }
   | { type: "nodeHost.config" }
   | {

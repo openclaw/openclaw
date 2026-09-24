@@ -11,3 +11,4 @@ export {
   listChannelIngressQueueAccountIds as listChannelIngressQueueAccountIdsForTests,
 } from "../channels/message/ingress-queue.js";
 export { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+export { withRegisteredChannelIngress } from "./test-helpers/registered-channel-ingress.js";

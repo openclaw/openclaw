@@ -189,6 +189,7 @@ export type MessageActionResult =
       kind: "action";
       channel: ChannelId;
       action: Exclude<ChannelMessageActionName, "send" | "poll">;
+      to?: string;
       handledBy: "plugin" | "dry-run";
       payload: unknown;
       toolResult?: AgentToolResult<unknown>;
