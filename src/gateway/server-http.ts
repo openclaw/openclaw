@@ -54,6 +54,7 @@ import {
   setDefaultSecurityHeaders,
   isWebSocketUpgradeRequest,
 } from "./http-common.js";
+import { finishGatewayHttpAuthorityError } from "./http-request-authority.js";
 import {
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
@@ -719,6 +720,9 @@ export function createGatewayHttpServer(opts: {
 
       respondNotFound(res);
     } catch (err) {
+      if (finishGatewayHttpAuthorityError(res, err)) {
+        return;
+      }
       console.error("[gateway-http] unhandled error in request handler:", err);
       finishFailedGatewayHttpResponse(res);
     }
