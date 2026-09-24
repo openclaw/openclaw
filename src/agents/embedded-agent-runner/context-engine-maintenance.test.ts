@@ -714,9 +714,11 @@ describe("runContextEngineMaintenance", () => {
 
         let releaseFirstMaintenance: (() => void) | undefined;
         let observedSignal: AbortSignal | undefined;
+        const firstStarted = createDeferred();
         const firstMaintain = vi.fn(async (rawParams?: unknown) => {
           const signal = (rawParams as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
           observedSignal = signal;
+          firstStarted.resolve();
           await new Promise<void>((resolve, reject) => {
             releaseFirstMaintenance = resolve;
             if (!signal) {
@@ -785,7 +787,12 @@ describe("runContextEngineMaintenance", () => {
               deferred = promise;
             },
           });
-          await vi.waitFor(() => expect(firstMaintain).toHaveBeenCalledTimes(1));
+          const firstOutcome = await Promise.race([
+            firstStarted.promise.then(() => "started"),
+            waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => "settled"),
+          ]);
+          expect(firstOutcome).toBe("started");
+          expect(firstMaintain).toHaveBeenCalledTimes(1);
 
           await runContextEngineMaintenance({
             contextEngine: firstRerunResolution.configured.engine,

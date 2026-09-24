@@ -2133,6 +2133,14 @@ describe("CI changed Node test plan", () => {
     ).toBeNull();
   });
 
+  it("keeps product-only policy watches out of deferred tooling", () => {
+    const shards = createChangedNodeTestShards(["src/auto-reply/reply/abort.test.ts"], {
+      includeReleaseOnlyToolingShards: false,
+    });
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards)).not.toContain("test/scripts/tsgo-core-test-shards.test.ts");
+  });
+
   it.each([
     {
       source: "packages/example/src/value.ts",

@@ -895,6 +895,11 @@ export function createChangedNodeTestShards(
       ),
   );
   const policyTargets = [...new Set([...policyTargetsByPath.values()].flat())];
+  const completeOwnerTargets = new Set(
+    [...policyTargetsByPath.keys()].flatMap((changedPath) =>
+      resolvePolicyTestTargets([changedPath], { completeOwnersOnly: true }),
+    ),
+  );
   const regularPaths = resolutionPaths.filter(
     (changedPath) =>
       !documentationPaths.has(changedPath) &&
@@ -1112,7 +1117,7 @@ export function createChangedNodeTestShards(
         changedPaths.includes(target) ||
         options.includeReleaseOnlyToolingShards !== false ||
         changedPaths.some(isToolingTestOwnerPath) ||
-        policyTargets.includes(target) ||
+        completeOwnerTargets.has(target) ||
         (!isReleaseOnlyToolingTestFile(target) &&
           !plans.every((plan) => RELEASE_ONLY_TOOLING_CONFIGS.has(plan.config)))) &&
       !plans.every(({ config }) =>
