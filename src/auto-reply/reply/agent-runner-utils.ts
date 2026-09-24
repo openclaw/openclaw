@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -23,12 +24,14 @@ import {
   selectApplicableRuntimeConfig,
   type OpenClawConfig,
 } from "../../config/config.js";
+import { resolvePublishedRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   isTrustedMessageActionTurnIngress,
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapabilityLifetime,
 } from "../../gateway/message-action-turn-capability.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -58,12 +61,18 @@ export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenCla
     typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null;
   const runtimeSourceConfig =
     typeof getRuntimeConfigSourceSnapshot === "function" ? getRuntimeConfigSourceSnapshot() : null;
+  // An already-admitted turn keeps its retained config paired with its plugin
+  // generation lease; rebinding to a newer publication would split them and fail
+  // the nested borrow. Queue drains run outside the generation scope and rebind.
+  const admittedGeneration = getPreparedModelRuntimePluginGeneration();
   return (
+    (admittedGeneration ? null : resolvePublishedRuntimeConfig(config)) ??
     selectApplicableRuntimeConfig({
       inputConfig: config,
       runtimeConfig,
       runtimeSourceConfig,
-    }) ?? config
+    }) ??
+    config
   );
 }
 
@@ -78,13 +87,25 @@ export async function resolveQueuedReplyExecutionConfig(
   },
 ): Promise<OpenClawConfig> {
   const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
-  const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
-    config: runtimeConfig,
-    commandName: "reply",
-    targetIds: getAgentRuntimeCommandSecretTargetIds({ config: runtimeConfig }),
-    optionalActivePaths: getAgentRuntimeOptionalCommandSecretPaths(runtimeConfig),
-  });
-  const baseResolvedConfig = resolvedConfig ?? runtimeConfig;
+  // Gateway activation already resolved these bytes for the model catalog owner.
+  // Command-scoped resolution can materialize other refs and split that generation,
+  // so the activated snapshot skips only that stage — the channel/account-scoped
+  // resolution below still runs, keeping cold-account rejection intact. Healthy
+  // accounts leave no scoped targets in activated bytes, so identity is preserved.
+  // Auth-only and unrecorded snapshots carry config bytes without config-ref
+  // preparation authority; only a snapshot that classified its SecretRef owners
+  // may skip strict command resolution.
+  const activeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
+  let baseResolvedConfig = runtimeConfig;
+  if (!(activeSnapshot?.configRefsPrepared === true && runtimeConfig === activeSnapshot.config)) {
+    const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
+      config: runtimeConfig,
+      commandName: "reply",
+      targetIds: getAgentRuntimeCommandSecretTargetIds({ config: runtimeConfig }),
+      optionalActivePaths: getAgentRuntimeOptionalCommandSecretPaths(runtimeConfig),
+    });
+    baseResolvedConfig = resolvedConfig ?? runtimeConfig;
+  }
 
   const scope = resolveMessageSecretScope({
     channel: params?.originatingChannel,
