@@ -1,5 +1,5 @@
 // TTS config helpers read and normalize text-to-speech provider settings.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   asOptionalRecord as asObjectRecord,
@@ -17,6 +17,7 @@ import { normalizeAccountId } from "../routing/session-key.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
+import { readBoundedTtsPrefsTextSync } from "./tts-prefs-read.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 
 /** Routing context used to layer global, agent, channel, and account TTS config. */
@@ -149,7 +150,11 @@ function readTtsPrefsAutoMode(prefsPath: string): TtsAutoMode | undefined {
     if (!existsSync(prefsPath)) {
       return undefined;
     }
-    const prefs = JSON.parse(readFileSync(prefsPath, "utf8")) as {
+    const raw = readBoundedTtsPrefsTextSync(prefsPath);
+    if (raw === undefined) {
+      return undefined;
+    }
+    const prefs = JSON.parse(raw) as {
       tts?: { auto?: unknown; enabled?: unknown };
     };
     const auto = normalizeTtsAutoMode(prefs.tts?.auto);

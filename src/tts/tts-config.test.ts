@@ -1,5 +1,5 @@
 // TTS config tests cover text-to-speech config loading and overrides.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,7 +10,9 @@ import {
   resolveEffectiveTtsConfig,
   shouldAttemptTtsPayload,
 } from "./tts-config.js";
-import { resolveTtsSettingsSnapshot } from "./tts-settings.js";
+import { readBoundedTtsPrefsTextSync } from "./tts-prefs-read.js";
+import { setTtsMaxLength, setTtsPersona } from "./tts-settings-writes.js";
+import { readTtsPrefs, resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
 describe("shouldAttemptTtsPayload", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -228,5 +230,145 @@ describe("shouldAttemptTtsPayload", () => {
       voices: ["override"],
     });
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+});
+
+describe("TTS prefs reads are bounded", () => {
+  let root = "";
+  let prefsPath = "";
+
+  beforeAll(() => {
+    root = mkdtempSync(path.join(tmpdir(), "openclaw-tts-prefs-bound-"));
+  });
+
+  afterAll(() => {
+    if (root) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  beforeEach(() => {
+    prefsPath = path.join(root, `prefs-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  });
+
+  it("readBoundedTtsPrefsTextSync returns the text for a normal-sized file", () => {
+    writeFileSync(prefsPath, '{"tts":{"auto":"always"}}', "utf8");
+
+    expect(readBoundedTtsPrefsTextSync(prefsPath)).toBe('{"tts":{"auto":"always"}}');
+  });
+
+  it("readBoundedTtsPrefsTextSync accepts a file of exactly the bound", () => {
+    // A file that fills the window exactly is not oversized; the one-byte probe
+    // past the window must not reject it.
+    const exactly = "x".repeat(64);
+    writeFileSync(prefsPath, exactly, "utf8");
+
+    expect(readBoundedTtsPrefsTextSync(prefsPath, 64)).toBe(exactly);
+  });
+
+  it("readBoundedTtsPrefsTextSync rejects a file larger than the bound", () => {
+    // One byte past the limit is enough to reject; the old readFileSync path read
+    // the whole document into memory first.
+    writeFileSync(prefsPath, "x".repeat(65), "utf8");
+
+    expect(readBoundedTtsPrefsTextSync(prefsPath, 64)).toBeUndefined();
+  });
+
+  it("readTtsPrefs falls back to defaults for an oversized prefs file", () => {
+    // Far past the production bound, so the default invocation is the one under test.
+    const pad = "x".repeat(2 * 1024 * 1024);
+    writeFileSync(prefsPath, `{"tts":{"auto":"always","summarize":false},"pad":"${pad}"}`, "utf8");
+
+    expect(readTtsPrefs(prefsPath)).toEqual({});
+  });
+
+  it("readTtsPrefs still reads a normal prefs file", () => {
+    writeFileSync(prefsPath, '{"tts":{"auto":"always","summarize":false}}', "utf8");
+
+    expect(readTtsPrefs(prefsPath)).toEqual({ tts: { auto: "always", summarize: false } });
+  });
+
+  it("shouldAttemptTtsPayload uses the prefs auto mode for a normal file", () => {
+    writeFileSync(prefsPath, '{"tts":{"auto":"always"}}', "utf8");
+    const envSnapshot = captureEnv(["OPENCLAW_TTS_PREFS"]);
+    process.env.OPENCLAW_TTS_PREFS = prefsPath;
+    try {
+      expect(shouldAttemptTtsPayload({ cfg: {} as OpenClawConfig })).toBe(true);
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("shouldAttemptTtsPayload ignores an oversized prefs file named by OPENCLAW_TTS_PREFS", () => {
+    const pad = "x".repeat(2 * 1024 * 1024);
+    writeFileSync(prefsPath, `{"tts":{"auto":"always"},"pad":"${pad}"}`, "utf8");
+    const envSnapshot = captureEnv(["OPENCLAW_TTS_PREFS"]);
+    process.env.OPENCLAW_TTS_PREFS = prefsPath;
+    try {
+      // Pre-fix the unbounded read parsed the oversized document and honored
+      // `auto: "always"`; now the oversized file is ignored.
+      expect(shouldAttemptTtsPayload({ cfg: {} as OpenClawConfig })).toBe(false);
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+});
+
+// The write path must never replace a file it refused to read: doing so would erase
+// every setting the oversized file still holds.
+describe("TTS prefs updates preserve an unreadable file", () => {
+  let root = "";
+  let prefsPath = "";
+
+  beforeAll(() => {
+    root = mkdtempSync(path.join(tmpdir(), "openclaw-tts-prefs-write-"));
+  });
+
+  afterAll(() => {
+    if (root) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  beforeEach(() => {
+    prefsPath = path.join(root, `wprefs-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  });
+
+  it("refuses a setting update when the file is oversized, leaving it byte-identical", () => {
+    const pad = "x".repeat(2 * 1024 * 1024);
+    const oversized = `{"tts":{"provider":"openai","auto":"always"},"pad":"${pad}"}`;
+    writeFileSync(prefsPath, oversized, "utf8");
+    const before = readFileSync(prefsPath);
+
+    expect(() => setTtsMaxLength(prefsPath, 2000)).toThrow(/could not be read/);
+
+    // The operator's file is untouched: same bytes, so no silent settings loss.
+    expect(readFileSync(prefsPath)).toEqual(before);
+    expect(readFileSync(prefsPath).toString("utf8")).toBe(oversized);
+  });
+
+  it("refuses a persona update when the file is oversized", () => {
+    const pad = "x".repeat(2 * 1024 * 1024);
+    writeFileSync(prefsPath, `{"tts":{"persona":"alfred"},"pad":"${pad}"}`, "utf8");
+    const before = readFileSync(prefsPath);
+
+    expect(() => setTtsPersona(prefsPath, "nova")).toThrow(/could not be read/);
+    expect(readFileSync(prefsPath)).toEqual(before);
+  });
+
+  it("still updates a normal prefs file", () => {
+    writeFileSync(prefsPath, '{"tts":{"provider":"openai"}}', "utf8");
+
+    setTtsMaxLength(prefsPath, 2000);
+
+    expect(JSON.parse(readFileSync(prefsPath, "utf8"))).toEqual({
+      tts: { provider: "openai", maxLength: 2000 },
+    });
+  });
+
+  it("creates the file when it does not exist yet", () => {
+    expect(() => setTtsMaxLength(prefsPath, 1234)).not.toThrow();
+
+    expect(JSON.parse(readFileSync(prefsPath, "utf8"))).toEqual({ tts: { maxLength: 1234 } });
   });
 });
