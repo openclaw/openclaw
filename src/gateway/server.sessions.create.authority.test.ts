@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
