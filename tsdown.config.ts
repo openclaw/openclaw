@@ -44,6 +44,7 @@ import {
   createWorkerDeployBuildPlugin,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "./scripts/lib/worker-deploy-build-plugin.mts";
+import { buildPackageDistEntriesFromExports } from "./scripts/lib/workspace-package-entries.mts";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
@@ -553,33 +554,6 @@ function buildAgentCoreDistEntries(): Record<string, string> {
       "packages/agent-core/src/harness/prompt-template-arguments.ts",
     "harness/utils/truncate": "packages/agent-core/src/harness/utils/truncate.ts",
   };
-}
-
-function buildPackageDistEntriesFromExports(packageDir: string): Record<string, string> {
-  const packageJsonPath = path.join("packages", packageDir, "package.json");
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-    exports?: Record<string, unknown>;
-  };
-  const entries: Record<string, string> = {};
-  for (const [exportKey, value] of Object.entries(packageJson.exports ?? {})) {
-    const entry =
-      exportKey === "." ? "index" : exportKey.startsWith("./") ? exportKey.slice(2) : "";
-    if (!entry || entry.includes("..")) {
-      continue;
-    }
-    const importPath =
-      typeof value === "object" && value !== null && !Array.isArray(value)
-        ? (value as Record<string, unknown>).import
-        : value;
-    if (typeof importPath !== "string" || !importPath.startsWith("./dist/")) {
-      continue;
-    }
-    const sourcePath = importPath
-      .replace(/^\.\/dist\//u, `packages/${packageDir}/src/`)
-      .replace(/\.mjs$/u, ".ts");
-    entries[entry] = sourcePath;
-  }
-  return Object.fromEntries(Object.entries(entries).toSorted(([a], [b]) => a.localeCompare(b)));
 }
 
 function buildLlmCoreDistEntries(): Record<string, string> {
