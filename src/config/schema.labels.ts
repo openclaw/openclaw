@@ -101,6 +101,7 @@ export const FIELD_LABELS: Record<string, string> = {
   agents: "Agents",
   "agents.ownership": "Agent Ownership Generation",
   "agents.defaults": "Agent Defaults",
+  "agents.defaults.imageMaxInputPixels": "Agent Image Max Input Pixels",
   "agents.defaults.contextLimits": "Default Context Limits",
   "agents.defaults.contextLimits.memoryGetMaxChars": "Default memory_get Max Chars",
   "agents.defaults.contextLimits.postCompactionMaxChars": "Default Post-compaction Max Chars",

@@ -38,6 +38,7 @@ import { chunkItems } from "../utils/chunk-items.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
 import { ImageOptimizationLimitError } from "./image-optimization-error.js";
+import { assertImageInputPixelLimit } from "./image-pixel-limits.js";
 import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 import { createImageProcessorWithPixelLimits } from "./image-processor.js";
 import type { OutboundMediaReadFile } from "./load-options.js";
@@ -927,6 +928,7 @@ export async function optimizeImageBufferForWebMedia(params: {
   imageCompression?: ImageCompressionPolicy;
   maxInputPixels?: number;
 }): Promise<WebMediaResult> {
+  const inputPixels = assertImageInputPixelLimit(params.maxInputPixels);
   const baseCap = params.maxBytes ?? maxBytesForKind("image");
   const cap = effectiveImageBytesCap(baseCap, params.imageCompression) ?? baseCap;
   const isAnimatedWebp = isAnimatedWebpBuffer(params.buffer);
@@ -957,7 +959,7 @@ export async function optimizeImageBufferForWebMedia(params: {
     buffer: params.buffer,
     cap,
     imageCompression: params.imageCompression,
-    ...(params.maxInputPixels === undefined ? {} : { maxInputPixels: params.maxInputPixels }),
+    maxInputPixels: inputPixels,
   });
   logOptimizedImage({ originalSize: params.buffer.length, optimized });
   if (optimized.buffer.length > cap) {
@@ -997,6 +999,7 @@ async function loadWebMediaInternal(
     readFile: readFileOverride,
     hostReadCapability = false,
   } = options;
+  const effectiveMaxInputPixels = assertImageInputPixelLimit(maxInputPixels);
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
@@ -1031,7 +1034,7 @@ async function loadWebMediaInternal(
           fileName: params.fileName,
           maxBytes: cap,
           imageCompression,
-          maxInputPixels,
+          maxInputPixels: effectiveMaxInputPixels,
         });
       }
       const imageCap = effectiveImageBytesCap(cap, imageCompression) ?? cap;

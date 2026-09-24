@@ -58,6 +58,24 @@ describe("web media configured input pixel limit", () => {
     expect(result.contentType).toBe("image/png");
   });
 
+  it("rejects media-loader pixel limits above the hard maximum before invoking the decoder", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-media-pixel-limit-"));
+    const imagePath = path.join(root, "screenshot.png");
+    await fs.writeFile(imagePath, source);
+    try {
+      await expect(
+        loadWebMedia(imagePath, {
+          localRoots: [root],
+          maxBytes: 1024 * 1024,
+          maxInputPixels: 50_000_001,
+        }),
+      ).rejects.toThrow(/maxInputPixels.*50,000,000/i);
+      expect(mocks.createImageProcessorWithPixelLimits).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("threads the configured input limit through local media loading", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-media-pixel-limit-"));
     const imagePath = path.join(root, "screenshot.png");
