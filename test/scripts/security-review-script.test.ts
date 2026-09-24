@@ -336,9 +336,9 @@ describe("combined security review entry point", () => {
       expect(enforcement.status, enforcement.stderr).toBe(0);
       expect(enforcement.combined.at(-1)).toBe("failure");
       expect(
-        enforcement.reviews
-          .filter((entry) => entry.body?.context === "openclaw/dependency-review")
-          .at(-1)?.body?.state,
+        enforcement.reviews.findLast(
+          (entry) => entry.body?.context === "openclaw/dependency-review",
+        )?.body?.state,
       ).toBe("failure");
       expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
     } else {
