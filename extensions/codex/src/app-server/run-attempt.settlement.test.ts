@@ -121,6 +121,8 @@ describe("Codex app-server terminal settlement", () => {
         });
         expect(settled).not.toHaveBeenCalled();
         expect(onAttemptTimeout).not.toHaveBeenCalled();
+        // Storage released after the deadline simulation must keep its native coordinator timers.
+        vi.useRealTimers();
         held.resolve();
         await writer;
         const result = await run;

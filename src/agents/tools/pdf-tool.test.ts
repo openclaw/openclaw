@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -113,7 +114,12 @@ function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): u
   return call;
 }
 
-function firstCompletionContext(): { systemPrompt?: string } | undefined {
+function firstCompletionContext():
+  | {
+      systemPrompt?: string;
+      messages?: Array<{ content?: Array<{ type: string; text?: string }> }>;
+    }
+  | undefined {
   const [, context] = firstMockCall(completeMock, "complete") as [
     unknown,
     { systemPrompt?: string } | undefined,
@@ -667,24 +673,80 @@ describe("createPdfTool", () => {
         content: [{ type: "text", text: "fallback summary" }],
       } as never);
 
-      const cfg = withPdfModel(OPENAI_PDF_MODEL);
+      const cfg = {
+        agents: { defaults: { pdfModel: { primary: OPENAI_PDF_MODEL }, pdfMaxPages: 2 } },
+      } as OpenClawConfig;
       const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
 
       const result = await tool.execute("t1", {
         prompt: "summarize",
         pdf: "/tmp/doc.pdf",
+        pages: "21-23",
       });
 
       expect(extractSpy).toHaveBeenCalledTimes(1);
-      expect(result.content).toEqual([{ type: "text", text: "fallback summary" }]);
+      expect(extractSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ pageNumbers: [21, 22], maxPages: 2 }),
+      );
+      const notice = "[Partial document: requested page selection limited to 2 pages.]";
+      const completionText = firstCompletionContext()
+        ?.messages?.[0]?.content?.map((item) => item.text ?? "")
+        .join("\n");
+      expect(completionText).toContain(notice);
+      expect(completionText).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+      expect(result.content).toEqual([{ type: "text", text: `${notice}\nfallback summary` }]);
       expectFields(result.details, {
         native: false,
         model: OPENAI_PDF_MODEL,
-        text: "fallback summary",
+        text: `${notice}\nfallback summary`,
       });
       expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
     });
   });
+
+  it.each([true, false])(
+    "reuses only successful extraction across fallbacks (overloaded=%s)",
+    async (overloaded) => {
+      await withTempPdfAgentDir(async (agentDir) => {
+        await stubPdfToolInfra(agentDir, {
+          provider: "openai",
+          api: "openai-responses",
+          input: ["text"],
+        });
+        const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+          text: "Recovered document content",
+          images: [],
+        });
+        if (overloaded) {
+          extractSpy.mockRejectedValueOnce(
+            new WorkerTaskError("worker task capacity reached", "overloaded"),
+          );
+        } else {
+          completeMock.mockRejectedValueOnce(new Error("temporary provider failure"));
+        }
+        completeMock.mockResolvedValue({
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Recovered PDF summary" }],
+        });
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: { pdfModel: { primary: OPENAI_PDF_MODEL, fallbacks: [CODEX_PDF_MODEL] } },
+          },
+        };
+        const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+        const result = await tool.execute("recovery", { prompt: "summarize", pdf: "/tmp/doc.pdf" });
+
+        expect(result.content).toEqual([{ type: "text", text: "Recovered PDF summary" }]);
+        expectFields(result.details, { model: CODEX_PDF_MODEL, native: false });
+        expect(firstCompletionContext()?.messages?.[0]?.content?.[0]?.text).toContain(
+          "Recovered document content",
+        );
+        expect(extractSpy).toHaveBeenCalledTimes(overloaded ? 2 : 1);
+        expect(completeMock).toHaveBeenCalledTimes(overloaded ? 1 : 2);
+      });
+    },
+  );
 
   it("uses the prepared provider stream for extraction fallback", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
@@ -879,7 +941,7 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("adds Codex instructions when extraction has images but the model only accepts text", async () => {
+  it("reports omitted PDF images when the model only accepts text", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
         provider: "openai",
@@ -890,6 +952,7 @@ describe("createPdfTool", () => {
       vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
         images: [{ type: "image", data: "base64img", mimeType: "image/png" }],
+        metadata: { textTruncated: false, imagesTruncated: false },
       });
 
       completeMock.mockResolvedValue({
@@ -906,7 +969,13 @@ describe("createPdfTool", () => {
         pdf: "/tmp/doc.pdf",
       });
 
-      expect(result.content).toEqual([{ type: "text", text: "codex summary" }]);
+      const notice = "[Partial document: image rendering truncated.]";
+      expect(result.content).toEqual([{ type: "text", text: `${notice}\ncodex summary` }]);
+      const context = firstCompletionContext();
+      expect(context?.messages?.[0]?.content?.some((item) => item.type === "image")).toBe(false);
+      expect(context?.messages?.[0]?.content?.map((item) => item.text ?? "").join("\n")).toContain(
+        notice,
+      );
       expectFields(result.details, {
         native: false,
         model: CODEX_PDF_MODEL,

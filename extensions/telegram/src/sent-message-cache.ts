@@ -1,3 +1,4 @@
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getTelegramRuntime } from "./runtime.js";
@@ -27,20 +28,9 @@ type SentMessageState = {
 };
 
 function getSentMessageState(): SentMessageState {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[TELEGRAM_SENT_MESSAGES_STATE_KEY] as SentMessageState | undefined;
-  if (existing) {
-    return existing;
-  }
-  const state: SentMessageState = {
+  return resolveGlobalSingleton(TELEGRAM_SENT_MESSAGES_STATE_KEY, () => ({
     bucketsByScope: new Map(),
-  };
-  globalStore[TELEGRAM_SENT_MESSAGES_STATE_KEY] = state;
-  return state;
-}
-
-function createSentMessageStore(): SentMessageStore {
-  return new Map<string, Map<string, number>>();
+  }));
 }
 
 function openSentMessageStore(): SentMessagePersistentStore {
@@ -74,7 +64,7 @@ function cleanupExpiredSentMessages(store: SentMessageStore, now: number): void 
 
 async function readPersistedSentMessages(scopeKey: string): Promise<SentMessageStore> {
   const now = Date.now();
-  const store = createSentMessageStore();
+  const store: SentMessageStore = new Map();
   try {
     for (const entry of await openSentMessageStore().entries()) {
       if (entry.value.scopeKey !== scopeKey || now - entry.value.timestamp > TTL_MS) {

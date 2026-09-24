@@ -41,6 +41,71 @@ function composerGeometry(composer: Locator) {
 }
 
 suite.define(() => {
+  it("keeps a dropped image in Side chat and sends its bytes only to the companion", async () => {
+    await suite.withPage({ viewport }, async ({ page }) => {
+      const gateway = await openSideChat(page);
+      const composer = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
+      const image = await page.evaluate(() => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 160;
+        canvas.height = 100;
+        const context = canvas.getContext("2d")!;
+        context.fillStyle = "#79bcde";
+        context.fillRect(0, 0, 160, 100);
+        context.fillStyle = "#f8d64e";
+        context.beginPath();
+        context.arc(115, 30, 18, 0, Math.PI * 2);
+        context.fill();
+        context.fillStyle = "#47855d";
+        context.fillRect(0, 70, 160, 30);
+        return canvas.toDataURL("image/png").split(",")[1]!;
+      });
+      await composer.fill("What does this image show?");
+      await composer.evaluate((element, content) => {
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(
+          new File([Uint8Array.from(atob(content), (c) => c.charCodeAt(0))], "side-chat.png", {
+            type: "image/png",
+          }),
+        );
+        for (const type of ["dragenter", "dragover", "drop"]) {
+          element.dispatchEvent(
+            new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer }),
+          );
+        }
+      }, image);
+      const preview = page.locator(
+        'openclaw-chat-session-rail .chat-attachment-thumb[aria-busy="false"] img',
+      );
+      await preview.waitFor();
+      await preview.evaluate((element) => (element as HTMLImageElement).decode());
+      await expect
+        .poll(() => page.locator(".chat-session-rail__composer button[type=submit]").isEnabled())
+        .toBe(true);
+      if (captureUiProofEnabled) {
+        const dir = createControlUiE2eArtifactDir("side-chat-image-drop");
+        await page.screenshot({ path: path.join(dir, "dropped.png"), animations: "disabled" });
+      }
+      expect(
+        await page.locator("openclaw-chat-session-rail .chat-attachment-thumb img").count(),
+      ).toBe(1);
+      expect(await page.locator(".agent-chat__composer-shell .chat-attachment-thumb").count()).toBe(
+        0,
+      );
+      await composer.press("Enter");
+      const request = await gateway.waitForRequest("sessions.companion.ask");
+      expect(request.params).toMatchObject({
+        question: "What does this image show?",
+        attachments: [{ mimeType: "image/png", fileName: "side-chat.png", content: image }],
+      });
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
+      await page.locator(".chat-session-rail__answer").waitFor();
+      expect(
+        await page.locator(".chat-session-rail__composer .chat-attachment-thumb").count(),
+      ).toBe(0);
+    });
+  });
+
   it("wraps and grows a question, keeps Shift+Enter, then sends and shrinks", async () => {
     await suite.withPage({ viewport }, async ({ page }) => {
       const gateway = await openSideChat(page);

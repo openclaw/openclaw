@@ -2,9 +2,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -502,7 +502,11 @@ describe("SQLite session entry cache", () => {
     });
     const primary = openOpenClawAgentDatabase(scope);
     const first = listSessionEntriesCore({ ...scope, clone: false });
-    const alternate = new DatabaseSync(primary.path, { readOnly: true });
+    const opened = openOpenClawAgentDatabaseReadOnly(scope);
+    if (!opened.found) {
+      throw new Error("Expected the existing agent database");
+    }
+    const alternate = opened.database.db;
     const parse = vi.spyOn(JSON, "parse");
 
     try {
@@ -536,8 +540,7 @@ describe("SQLite session entry cache", () => {
       ).toHaveLength(1);
     } finally {
       parse.mockRestore();
-      clearNodeSqliteKyselyCacheForDatabase(alternate);
-      alternate.close();
+      opened.database.close();
     }
   });
 

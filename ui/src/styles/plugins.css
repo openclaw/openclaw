@@ -239,6 +239,13 @@
   gap: var(--space-2);
 }
 
+.plugin-catalog-chip--skeleton {
+  flex: 0 0 104px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
 .plugin-catalog-chip {
   display: inline-flex;
   min-height: 32px;
