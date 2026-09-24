@@ -6,10 +6,12 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withChannelReadAuthority } from "../shared/channel-read-authority.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { saveRemoteMedia } from "./fetch.js";
 import { readLocalMediaFile } from "./local-media-access.js";
+import { mediaNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { saveMediaBuffer, saveMediaSource, saveMediaStream } from "./store.js";
 import { unlinkIfExists } from "./temp-files.js";
 
@@ -300,11 +302,15 @@ describe("read-owned media publication", () => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
         const mediaDir = state.statePath("media", "inbound");
         const displaced = state.statePath("user-owned.pdf");
+        const storeUrl = resolveRuntimeWorkerUrl(mediaNativeProcessEntrypoints.store);
+        const authorityUrl = resolveRuntimeWorkerUrl(
+          mediaNativeProcessEntrypoints.channelReadAuthority,
+        );
         const script = `
           import fs from 'node:fs';
           import path from 'node:path';
-          import { withChannelReadAuthority } from './src/shared/channel-read-authority.ts';
-          import { saveMediaStream } from './src/media/store.ts';
+          import { withChannelReadAuthority } from ${JSON.stringify(authorityUrl.href)};
+          import { saveMediaStream } from ${JSON.stringify(storeUrl.href)};
           const mediaDir = ${JSON.stringify(mediaDir)};
           const stream = (async function* () {
             yield Buffer.from(${JSON.stringify(bytes.toString())});
@@ -323,7 +329,7 @@ describe("read-owned media publication", () => {
         `;
         const { stdout } = await execFileAsync(
           process.execPath,
-          ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", script],
+          [...resolveRuntimeWorkerArgv(storeUrl).slice(0, -1), "--input-type=module", "-e", script],
           { cwd: process.cwd(), env: { ...process.env, ...state.envVars }, timeout: 20_000 },
         );
         const { stage } = JSON.parse(stdout) as { stage: string };

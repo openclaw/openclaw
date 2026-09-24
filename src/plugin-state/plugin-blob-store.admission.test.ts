@@ -42,6 +42,9 @@ it.each(["register", "registerIfAbsent"] as const)(
   "%s bounds copied payloads before awaiting worker preparation",
   async (method) => {
     const { store } = fixture();
+    const concurrentInputs = Array.from({ length: 3 }, () =>
+      reserveSqliteWorkerInputPreparation(64 * MIB),
+    );
     const bytes = new Uint8Array(16 * MIB).fill(7);
     const pending = Array.from({ length: 3 }, () =>
       store[method]("same-key", bytes, { version: 1 }),
@@ -67,6 +70,9 @@ it.each(["register", "registerIfAbsent"] as const)(
       const recovered = reserveSqliteWorkerInputPreparation(64 * MIB);
       recovered.release();
     } finally {
+      for (const preparation of concurrentInputs) {
+        preparation.release();
+      }
       await Promise.allSettled([...pending, refused]);
     }
   },
@@ -76,6 +82,9 @@ it.each(["copy", "admission"] as const)(
   "releases captured capacity after %s fails",
   async (failure) => {
     const { env, store } = fixture();
+    const concurrentInputs = Array.from({ length: 3 }, () =>
+      reserveSqliteWorkerInputPreparation(64 * MIB),
+    );
     const pathname = resolveOpenClawStateSqlitePath(env);
     const cause = new Error(`${failure} failed`);
     const bytes = new Uint8Array(16 * MIB);
@@ -91,6 +100,9 @@ it.each(["copy", "admission"] as const)(
       const recovered = reserveSqliteWorkerInputPreparation(64 * MIB);
       recovered.release();
     } finally {
+      for (const preparation of concurrentInputs) {
+        preparation.release();
+      }
       clearOpenClawStateDatabaseOpenFailure(pathname);
     }
   },

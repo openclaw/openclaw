@@ -1139,12 +1139,6 @@
   color: inherit;
 }
 
-.chat-activity-group__duration {
-  flex: none;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-
 .chat-group--activity .chat-activity-group__label {
   color: inherit;
 }

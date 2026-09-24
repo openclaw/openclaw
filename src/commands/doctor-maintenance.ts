@@ -10,6 +10,7 @@ import {
 } from "../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-legacy.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
@@ -20,10 +21,10 @@ import {
 } from "../infra/state-database-coordinator.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
-import { UpdateDoctorError } from "../infra/update-doctor-result.js";
+import { DoctorMaintenanceRefusalError, UpdateDoctorError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -36,8 +37,13 @@ import {
   preflightExternalDoctorAgentLease,
 } from "./doctor-agent-lease-refusal.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
+import { holdDoctorMaintenanceExit } from "./doctor-maintenance-exit.js";
 import { acquireDoctorGatewayMaintenanceCoordinator } from "./doctor-maintenance-foreground.js";
-import { assertDoctorMaintenanceInspection } from "./doctor-maintenance-inspection.js";
+import {
+  assertDoctorMaintenanceInspection,
+  classifyDoctorMaintenanceRefusal,
+  readDoctorMaintenanceRecoveryConfig,
+} from "./doctor-maintenance-inspection.js";
 import {
   assertStaleDoctorGatewayStopped,
   doctorGatewayMaintenanceError,
@@ -69,9 +75,14 @@ export async function beginDoctorMaintenance(params: {
 }): Promise<
   | {
       run<T>(operation: () => T): T;
+      signal: AbortSignal;
       releaseState(): Promise<void>;
       release(): Promise<void>;
-      finish(cfg: OpenClawConfig, writeConfig?: DoctorConfigWriter): Promise<void>;
+      finish(
+        cfg: OpenClawConfig | undefined,
+        writeConfig?: DoctorConfigWriter,
+        failure?: unknown,
+      ): Promise<void>;
       warnings?: string[];
       failureFacts?: UpdateFailureFact[];
     }
@@ -101,9 +112,21 @@ export async function beginDoctorMaintenance(params: {
   let retainStoppedInstallation = false;
   let resources: OpenClawDatabaseMaintenanceScope | undefined;
   let inspectingActivation = false;
-  let parentMustStopGateway = false;
   let staleReplacement: DoctorStaleGateway | undefined;
   let assertUpdateAdmissionCurrent: (() => void) | undefined;
+  let authorityRefused = false;
+  const assertAuthority = (assertion: () => void) => {
+    try {
+      assertion();
+    } catch (error) {
+      authorityRefused = true;
+      throw error;
+    }
+  };
+  const callerAssertCurrent = params.assertCurrent;
+  const assertCallerCurrent = callerAssertCurrent
+    ? () => assertAuthority(callerAssertCurrent)
+    : undefined;
   let cleanupFailure: { error: unknown } | undefined;
   const settle = async <T>(operation: () => Promise<T>): Promise<T> => {
     if (cleanupFailure) {
@@ -124,15 +147,16 @@ export async function beginDoctorMaintenance(params: {
     if (resources) {
       return;
     }
-    params.assertCurrent?.();
+    assertCallerCurrent?.();
     const owner = await acquireDoctorGatewayMaintenanceCoordinator(databasePath, env, {
       ...params,
+      assertCurrent: assertCallerCurrent,
       // The inner foreground/ownerless wait cannot renew a stopped service's budget.
       deadlineMs: stopDeadline,
     });
     let stateOwner;
     try {
-      params.assertCurrent?.();
+      assertCallerCurrent?.();
       stateOwner = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 250 });
     } catch (error) {
       owner.release();
@@ -141,7 +165,7 @@ export async function beginDoctorMaintenance(params: {
     coordinators.push(owner, stateOwner);
     resources = createOpenClawDatabaseMaintenanceScope(
       owner.createSchemaFenceDelegate,
-      params.assertCurrent,
+      assertCallerCurrent,
     );
   };
   const acquireStoppedMaintenanceResources = () =>
@@ -227,7 +251,17 @@ export async function beginDoctorMaintenance(params: {
           );
           warnings.push(message);
           params.runtime.log(message);
+          return;
         }
+      }
+      if (
+        parentActivation === undefined &&
+        before.offline === true &&
+        before.serviceUpdateVerdict?.kind === "owned"
+      ) {
+        const warning = `Gateway was already stopped before repair; repair did not start it. Run ${formatCliCommand("openclaw gateway start", env)} to bring it online.`;
+        warnings.push(warning);
+        params.runtime.log(warning);
       }
       return;
     }
@@ -255,6 +289,7 @@ export async function beginDoctorMaintenance(params: {
         writeConfig,
         options: params.options,
         runtime: params.runtime,
+        signal: exit.signal,
         warnings,
         settle,
         assertCustody,
@@ -385,7 +420,7 @@ export async function beginDoctorMaintenance(params: {
         }
         const { readConfigFileSnapshot } = await import("../config/config.js");
         await finish(
-          (await readConfigFileSnapshot({ skipPluginValidation: true })).config,
+          (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
           assertStopCustody,
           undefined,
           assertStopCustody ?? assertUpdateAdmissionCurrent,
@@ -398,16 +433,22 @@ export async function beginDoctorMaintenance(params: {
         cause: restoreError,
       });
     }
-    if (error instanceof DoctorUnreadableStateDatabaseError) {
+    resolveCommandProcessSignal()?.throwIfAborted();
+    if (authorityRefused || error instanceof DoctorUnreadableStateDatabaseError) {
       throw error;
     }
-    if (error instanceof UpdateDoctorError) {
-      throw error;
-    }
-    const refusal = new Error(
-      `Doctor could not enter maintenance. ${String(error)}${parentMustStopGateway || hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
-      { cause: error },
-    );
+    // Released Git drivers consume the original refusal prefix and recovery tail.
+    const refusal =
+      error instanceof DoctorMaintenanceRefusalError
+        ? error
+        : new DoctorMaintenanceRefusalError(
+            `Doctor could not enter maintenance. ${String(error)}${hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
+            classifyDoctorMaintenanceRefusal(error),
+            {
+              cause: error,
+              ...(error instanceof UpdateDoctorError ? { failureFacts: error.failureFacts } : {}),
+            },
+          );
     const recovery = inspectingActivation
       ? await resolveUpdateDoctorGitRecovery({ root: params.root })
       : undefined;
@@ -417,6 +458,8 @@ export async function beginDoctorMaintenance(params: {
     }
     throw refusal;
   };
+  // Admission can stop the service before returning a maintenance handle.
+  const exit = holdDoctorMaintenanceExit();
   try {
     await settle(async () => {
       const externallyManaged = isServiceRepairExternallyManaged();
@@ -442,7 +485,10 @@ export async function beginDoctorMaintenance(params: {
         });
         assertDoctorMaintenanceInspection(inspection, env);
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
-          assertUpdateAdmissionCurrent = resolveDoctorUpdateAdmission(env);
+          assertAuthority(() => {
+            const admitted = resolveDoctorUpdateAdmission(env);
+            assertUpdateAdmissionCurrent = () => assertAuthority(admitted);
+          });
         }
         if (inspection.serviceUpdateVerdict?.kind === "owned" && inspection.serviceEnv) {
           assertDoctorServiceSelection(env, inspection.serviceEnv);
@@ -459,8 +505,10 @@ export async function beginDoctorMaintenance(params: {
           inspection.serviceUpdateVerdict?.kind === "owned" &&
           inspection.offline !== true
         ) {
-          parentMustStopGateway = true;
-          throw new Error(await formatUpdateDoctorServiceStopRefusal(inspection.serviceEnv ?? env));
+          throw new DoctorMaintenanceRefusalError(
+            `Doctor could not enter maintenance. Error: ${await formatUpdateDoctorServiceStopRefusal(inspection.serviceEnv ?? env)}`,
+            { kind: "data-at-risk", reason: "gateway-state-unverified" },
+          );
         }
         try {
           await acquireMaintenanceResources();
@@ -583,13 +631,18 @@ export async function beginDoctorMaintenance(params: {
         stopped.serviceUpdateVerdict.requiresInstallRootRefresh === true;
     });
   } catch (error) {
-    if (admissionFailureHandled) {
-      throw error;
+    try {
+      if (admissionFailureHandled) {
+        throw error;
+      }
+      await failAdmission(error);
+    } finally {
+      exit.release(true);
     }
-    await failAdmission(error);
   }
   let custody: "held" | "restoring" | "released" = "held";
   const maintenance = {
+    signal: exit.signal,
     warnings,
     failureFacts,
     run: <T>(operation: () => T) => resources!.run(operation),
@@ -599,9 +652,21 @@ export async function beginDoctorMaintenance(params: {
         throw new Error("Gateway restoration requires its original live maintenance owner.");
       }
       custody = "released";
-      await release();
+      try {
+        await release();
+      } catch (error) {
+        exit.release(true);
+        throw error;
+      } finally {
+        exit.release();
+      }
     },
-    async finish(cfg: OpenClawConfig, writeConfig?: DoctorConfigWriter) {
+    async finish(
+      initialConfig: OpenClawConfig | undefined,
+      writeConfig?: DoctorConfigWriter,
+      failure?: unknown,
+    ) {
+      let cfg = initialConfig;
       if (cleanupFailure) {
         throw cleanupFailure.error;
       }
@@ -612,10 +677,43 @@ export async function beginDoctorMaintenance(params: {
       };
       assertCustody("held");
       custody = "restoring";
+      let failed = failure !== undefined;
       try {
+        if (!cfg && !stopped?.stopped) {
+          await release(assertCustody);
+          return;
+        }
+        if (classifyDoctorMaintenanceRefusal(failure).kind === "data-at-risk") {
+          retainStoppedInstallation = true;
+          await release(assertCustody);
+          return;
+        }
+        if (!cfg) {
+          try {
+            cfg = await readDoctorMaintenanceRecoveryConfig(resources!, env, params.runtime.log);
+          } catch (error) {
+            retainStoppedInstallation = true;
+            throw new DoctorMaintenanceRefusalError(
+              `Doctor left the Gateway stopped because persisted repair state is not ready: ${formatErrorMessage(error)}`,
+              { kind: "data-at-risk", reason: "incomplete-migration" },
+              { cause: error },
+            );
+          }
+        }
         await finish(cfg, assertCustody, writeConfig);
+      } catch (restoreError) {
+        failed = true;
+        if (failure !== undefined) {
+          throw new AggregateError(
+            [failure, restoreError],
+            `${formatErrorMessage(failure)} ${formatErrorMessage(restoreError)}`,
+            { cause: restoreError },
+          );
+        }
+        throw restoreError;
       } finally {
         custody = "released";
+        exit.release(failed);
       }
     },
   };

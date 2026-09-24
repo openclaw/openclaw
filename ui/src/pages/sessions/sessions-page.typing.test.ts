@@ -482,11 +482,11 @@ describe("Sessions page typing ownership", () => {
     vi.useFakeTimers();
     const { page, requests, pending, input, type, cleanup } = await mountTypingPage();
     try {
-      page.selectedKeys = new Set(["agent:main:initial"]);
+      page.selectedSessions = new Map([["agent:main:initial", { key: "agent:main:initial" }]]);
       await type("older");
       expect.soft(requests).toHaveLength(1);
       expect(page.result).toBeNull();
-      expect(page.selectedKeys.size).toBe(0);
+      expect(page.selectedSessions.size).toBe(0);
       expect(page.loading).toBe(true);
       expect(input().value).toBe("older");
       expect(page.textContent).not.toContain("No sessions match your filters.");

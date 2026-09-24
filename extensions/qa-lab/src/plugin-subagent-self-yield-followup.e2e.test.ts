@@ -135,6 +135,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
     const gateway = await owner.start({
       repoRoot: REPO_ROOT,
       providerBaseUrl: `${providerBaseUrl}/v1`,
+      mockSessionObserverUrl: mock.sessionObserverUrl,
       providerMode: "mock-openai",
       transport,
       transportBaseUrl: bus.baseUrl,
@@ -204,7 +205,15 @@ describe("plugin subagent sessions_yield follow-up", () => {
               }
               const upstream = await fetch(`${baseUrl}${request.url}`, {
                 method: request.method,
-                headers: { "Content-Type": "application/json" },
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(typeof request.headers.session_id === "string"
+                    ? { session_id: request.headers.session_id }
+                    : {}),
+                  ...(typeof request.headers["x-session-affinity"] === "string"
+                    ? { "x-session-affinity": request.headers["x-session-affinity"] }
+                    : {}),
+                },
                 body: payload,
               });
               response.writeHead(upstream.status, {

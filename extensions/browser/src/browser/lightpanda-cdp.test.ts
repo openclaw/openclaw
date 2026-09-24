@@ -1,6 +1,6 @@
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLightpandaCdpNormalizer } from "./lightpanda-cdp.js";
+import { createLightpandaCdpNormalizer } from "./engines/lightpanda-cdp.js";
 import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
 
 const { connectMock } = vi.hoisted(() => ({ connectMock: vi.fn() }));

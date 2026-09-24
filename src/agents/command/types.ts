@@ -226,6 +226,8 @@ export type AgentCommandOpts = {
   onPostAdmittedRunContext?: (
     context: import("../admitted-run-context.js").AdmittedRunContext,
   ) => void | Promise<void>;
+  /** Gateway joins terminal transcript writes before delivery or failed-command cleanup. */
+  beforeTerminalDelivery?: () => Promise<void>;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when every candidate in the run's model fallback chain failed. */
@@ -259,7 +261,8 @@ type AgentCommandGatewayOnlyKey =
   | "skillLibraryAuthoring"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
-  | "onPostAdmittedRunContext";
+  | "onPostAdmittedRunContext"
+  | "beforeTerminalDelivery";
 
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<

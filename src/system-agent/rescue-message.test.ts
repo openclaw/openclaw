@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 // OpenClaw rescue message tests cover generated rescue message content.
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -283,20 +284,14 @@ describe("OpenClaw rescue message", () => {
   it("refuses doctor repairs without creating a pending approval", async () => {
     await withRescueStateDir("doctor-fix-refused-", async () => {
       const cfg: OpenClawConfig = {};
-      const deps = {
-        runDoctor: vi.fn(async () => {
-          throw new Error("remote rescue must not run doctor repair");
-        }),
-      };
 
-      const reply = await runRescue("/openclaw doctor fix", cfg, commandContext(), deps);
+      const reply = await runRescue("/openclaw doctor fix", cfg, commandContext());
       expect(reply).toContain("machine running OpenClaw");
       expect(reply).toContain("with OpenClaw stopped");
       expect(reply).toContain("run `openclaw doctor --fix`");
-      await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toBe(
+      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toBe(
         "No pending OpenClaw rescue change is waiting for approval.",
       );
-      expect(deps.runDoctor).not.toHaveBeenCalled();
     });
   });
 
@@ -631,9 +626,7 @@ describe("OpenClaw rescue message", () => {
       await runRescue("/openclaw restart gateway", cfg, commandContext(), deps);
       const store = openRescuePendingTestStore();
       const [entry] = store.entries();
-      if (!entry) {
-        throw new Error("expected pending rescue row");
-      }
+      assert(entry, "expected pending rescue row");
       store.register(
         entry.key,
         { version: 1, operation: { kind: "gateway-restart", unexpected: true } },

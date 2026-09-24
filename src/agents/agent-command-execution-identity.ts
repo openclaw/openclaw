@@ -241,6 +241,7 @@ export function sanitizePublicAgentCommandIngressOpts(
     cronCreatorAuthorityCapability: undefined,
     onAdmittedRunContext: undefined,
     onPostAdmittedRunContext: undefined,
+    beforeTerminalDelivery: undefined,
   });
 }
 

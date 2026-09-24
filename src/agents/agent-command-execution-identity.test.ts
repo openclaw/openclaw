@@ -45,6 +45,7 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       cronCreatorAuthorityCapability: forgedCapability,
       pinnedWidgetAuthoring: true,
       assertSourceCurrent: () => {},
+      beforeTerminalDelivery: async () => {},
       operatorAuthority: {
         profileId: "forged",
         scopes: ["operator.admin"],
@@ -58,6 +59,7 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       cronCreatorAuthorityCapability: undefined,
       pinnedWidgetAuthoring: undefined,
       assertSourceCurrent: undefined,
+      beforeTerminalDelivery: undefined,
       operatorAuthority: undefined,
     });
   });

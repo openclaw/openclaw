@@ -127,17 +127,13 @@ function normalizeApprovalRef(value: string): string | null {
   return normalized ? normalized : null;
 }
 
-function manualApprovalFollowupSuppressionKey(approvalId: string): string | null {
-  return normalizeApprovalRef(approvalId);
-}
-
 export function registerGoogleChatManualApprovalFollowupSuppression(
   suppression: GoogleChatManualApprovalFollowupSuppression,
 ): boolean {
   if (suppression.expiresAtMs <= Date.now()) {
     return false;
   }
-  const key = manualApprovalFollowupSuppressionKey(suppression.approvalId);
+  const key = normalizeApprovalRef(suppression.approvalId);
   if (!key) {
     return false;
   }
@@ -153,7 +149,7 @@ export function registerGoogleChatManualApprovalFollowupSuppression(
 }
 
 export function unregisterGoogleChatManualApprovalFollowupSuppression(approvalId: string): void {
-  const key = manualApprovalFollowupSuppressionKey(approvalId);
+  const key = normalizeApprovalRef(approvalId);
   if (key) {
     manualApprovalFollowupSuppressions.delete(key);
   }
@@ -186,22 +182,18 @@ function hasActiveGoogleChatExecApprovalCardForManualCommand(params: {
   nowMs: number;
 }): boolean {
   pruneExpiredGoogleChatApprovalCardBindings(params.nowMs);
-  for (const binding of googleChatApprovalControls.values()) {
-    if (
-      binding.approvalKind === "exec" &&
-      binding.allowedDecisions.includes(params.decision) &&
-      approvalRefMatches(binding.approvalId, params.approvalRef)
-    ) {
-      return true;
-    }
-  }
-  for (const suppression of manualApprovalFollowupSuppressions.values()) {
-    if (
-      suppression.approvalKind === "exec" &&
-      suppression.allowedDecisions.includes(params.decision) &&
-      approvalRefMatches(suppression.approvalId, params.approvalRef)
-    ) {
-      return true;
+  for (const entries of [
+    googleChatApprovalControls.values(),
+    manualApprovalFollowupSuppressions.values(),
+  ]) {
+    for (const binding of entries) {
+      if (
+        binding.approvalKind === "exec" &&
+        binding.allowedDecisions.includes(params.decision) &&
+        approvalRefMatches(binding.approvalId, params.approvalRef)
+      ) {
+        return true;
+      }
     }
   }
   return false;
@@ -225,13 +217,10 @@ export function shouldSuppressGoogleChatManualExecApprovalFollowupText(
   return false;
 }
 
-function hasSendableMedia(payload: GoogleChatManualApprovalSuppressionPayload): boolean {
-  return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
-}
-
 function hasStructuredPayloadPart(payload: GoogleChatManualApprovalSuppressionPayload): boolean {
   return Boolean(
-    hasSendableMedia(payload) ||
+    payload.mediaUrl?.trim() ||
+    payload.mediaUrls?.some((url) => url.trim()) ||
     payload.presentation ||
     payload.interactive ||
     payload.btw ||

@@ -35,7 +35,6 @@ import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-state.js";
 import { boundedWorkerError } from "../worker-environments/worker-error.js";
-import { resolveChatSendActiveScopeKey } from "./chat-origin-routing.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export { hasRestartRecoveryTerminalRun };
@@ -55,6 +54,7 @@ type RestartSafeChatAdmission = {
 
 export type RestartSafeChatTerminalState = {
   error?: string;
+  errorKind?: "state_contention";
   retryable: boolean;
   // completed settles an ingress handoff, not the delegated task's goal.
   status: "failed" | "killed" | "completed";
@@ -265,6 +265,7 @@ function isRestartSafeChatSession(params: {
 }
 
 function hasRestartUnsafeChatWork(params: {
+  activeRunScopeKey: string;
   context: Pick<GatewayRequestContext, "chatAbortControllers"> &
     Partial<Pick<GatewayRequestContext, "chatQueuedTurns">>;
   sessionId: string;
@@ -277,12 +278,7 @@ function hasRestartUnsafeChatWork(params: {
       resolveSessionDispatchKind(params.sessionKey, params.entry),
     ) !== undefined ||
     listActiveEmbeddedRunSessionIds().includes(params.sessionId) ||
-    replyRunRegistry.isActive(
-      resolveChatSendActiveScopeKey({
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-      }),
-    )
+    replyRunRegistry.isActive(params.activeRunScopeKey)
   ) {
     return true;
   }
@@ -314,6 +310,7 @@ function hasRestartUnsafeChatWork(params: {
 }
 
 export function resolveRestartSafeChatAdmission(params: {
+  activeRunScopeKey: string;
   agentId: string;
   cfg: OpenClawConfig;
   clientRunId: string;
@@ -450,6 +447,7 @@ export async function terminalizeRestartSafeChatAdmission(
               endedAt,
               aborted: params.status === "killed",
               error: params.error,
+              errorKind: params.errorKind,
             },
           },
         }),
@@ -477,6 +475,7 @@ export async function terminalizeRestartSafeChatAdmission(
       },
       runId: params.clientRunId,
       error: params.error,
+      errorKind: params.errorKind,
     }).catch((error: unknown) => {
       // The claim is already settled; report failure must not trigger a competing terminal write.
       log.warn(`Failed to record restart-safe chat failure notice: ${boundedWorkerError(error)}`);

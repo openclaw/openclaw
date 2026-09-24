@@ -297,7 +297,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/channels/channel-routing",
     tests: ["src/config/dead-config-keys.test.ts"],
   }),
-  removalPendingCompatRecord("doctor-agent-llm-timeout", {
+  removedCompatRecord("doctor-agent-llm-timeout", {
     owner: "agent-runtime",
     introduced: "2026-04-27",
     previousRemoveAfter: "2026-07-26",
@@ -306,9 +306,9 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "models.providers.<id>.timeoutSeconds",
     docsPath: "/gateway/config-agents",
     notes:
-      "The old agent-level idle timeout knob was collapsed into provider request timeout handling, bounded by the agent/run timeout ceiling.",
+      "Pre-June configs must pass through OpenClaw 2026.9.5 Doctor before upgrading; current Doctor no longer migrates this key.",
   }),
-  removalPendingCompatRecord("doctor-agent-runtime-embedded-harness", {
+  removedCompatRecord("doctor-agent-runtime-embedded-harness", {
     owner: "agent-runtime",
     introduced: "2026-04-25",
     deprecated: "2026-04-26",
@@ -319,9 +319,9 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "models.providers.<provider>.agentRuntime or model-scoped agentRuntime",
     docsPath: "/plugins/sdk-agent-harness",
     notes:
-      "Whole-agent runtime pins are retired; doctor preserves intent only when it can move the value to provider/model runtime policy.",
+      "Pre-June embeddedHarness configs must pass through OpenClaw 2026.9.5 Doctor before upgrading. Separate agentRuntime pins retain the Codex installation opt-out shipped in 2026.8.1.",
   }),
-  removalPendingCompatRecord("doctor-agent-embedded-pi-config", {
+  removedCompatRecord("doctor-agent-embedded-pi-config", {
     owner: "agent-runtime",
     introduced: "2026-05-21",
     previousRemoveAfter: "2026-07-26",
@@ -330,9 +330,9 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "agents.defaults.embeddedAgent; agents.list[].embeddedAgent",
     docsPath: "/gateway/config-agents",
     notes:
-      "Runtime code no longer reads the legacy key; doctor keeps this migration only to preserve shipped configs during upgrade.",
+      "Pre-June configs must pass through OpenClaw 2026.9.5 Doctor before upgrading; current Doctor no longer migrates this key.",
   }),
-  removalPendingCompatRecord("doctor-agent-sandbox-persession", {
+  removedCompatRecord("doctor-agent-sandbox-persession", {
     owner: "agent-runtime",
     introduced: "2026-04-26",
     previousRemoveAfter: "2026-07-26",
@@ -340,6 +340,8 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
     replacement: "agents.*.sandbox.scope",
     docsPath: "/cli/doctor",
+    notes:
+      "Pre-June configs must pass through OpenClaw 2026.9.5 Doctor before upgrading; current Doctor no longer migrates this key.",
   }),
   deprecatedCompatRecord("doctor-memory-search-owner-consolidation", {
     previousRemoveAfter: "2026-09-18",
@@ -359,7 +361,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "agents.defaults.typingMode or agents.list[].typingMode",
     docsPath: "/concepts/typing-indicators",
   }),
-  removalPendingCompatRecord("doctor-top-level-heartbeat", {
+  removedCompatRecord("doctor-top-level-heartbeat", {
     owner: "config",
     introduced: "2026-04-26",
     previousRemoveAfter: "2026-07-26",
@@ -367,6 +369,8 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
     replacement: "agents.defaults.heartbeat and channels.defaults.heartbeat",
     docsPath: "/automation",
+    notes:
+      "Pre-June configs must pass through OpenClaw 2026.9.5 Doctor before upgrading; current Doctor no longer migrates this key.",
   }),
   removalPendingCompatRecord("doctor-mcp-server-type-alias", {
     owner: "config",

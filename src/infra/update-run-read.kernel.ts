@@ -22,7 +22,7 @@ export function decodeRun(row: UpdateRuns) {
   const metadata = Object.fromEntries(
     JSON_FIELDS.map((field) => [field, JSON.parse(row[`${field}_json`])]),
   );
-  return UpdateRunRecordSchema.parse({
+  const record = UpdateRunRecordSchema.parse({
     ...metadata,
     runId: row.run_id,
     createdAtMs: row.created_at_ms,
@@ -35,6 +35,10 @@ export function decodeRun(row: UpdateRuns) {
     finishedAtMs: row.finished_at_ms,
     downtimeMs: row.downtime_ms,
   });
+  if (record.origin.admission) {
+    record.admission = record.origin.admission;
+  }
+  return record;
 }
 
 export function readUpdateRunRecord(db: DatabaseSync, runId: string) {

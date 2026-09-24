@@ -1,5 +1,6 @@
 // Covers the CI node test shard runner: plan resolution from job env and
 // bounded-concurrency execution with per-child Vitest cache isolation.
+import * as childProcess from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -12,6 +13,7 @@ import {
 } from "node:fs";
 import os, { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -34,6 +36,10 @@ import * as groupOwner from "../../scripts/vitest-process-group.mts";
 import { createDeferred } from "../helpers/promise.js";
 import { getUnitFastIsolatedTestFiles } from "../vitest/vitest.unit-fast-paths.mjs";
 
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+}));
+
 const scratchDirs: string[] = [];
 const bunConfig = "test/vitest/vitest.unit-fast.config.ts";
 const bunTarget = "packages/markdown-core/src/chunk-text.test.ts";
@@ -53,6 +59,59 @@ afterEach(() => {
 });
 
 describe("scripts/ci-run-node-test-shard.mts", () => {
+  it.each(["stdout", "stderr"] as const)(
+    "preserves workflow commands at column zero while labeling child %s",
+    async (channel) => {
+      vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
+      const child = new childProcess.ChildProcess();
+      const streams = { stdout: new PassThrough(), stderr: new PassThrough() };
+      child.stdout = streams.stdout;
+      child.stderr = streams.stderr;
+      const started = createDeferred();
+      vi.spyOn(childProcess, "spawn").mockImplementation(() => {
+        started.resolve();
+        return child;
+      });
+      const output: string[] = [];
+      vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        output.push(String(chunk));
+        return true;
+      });
+      const pending = runShardPlans(
+        [{ kind: "group", name: "compact", plan: { configs: ["one.config.ts"] } }],
+        { env: {}, scratchDir: makeScratchDir() },
+      );
+      await started.promise;
+      const lines = [
+        "ordinary output",
+        "::error file=test/example.test.ts,line=12,title=failed::expected %25 to equal 2%0Atrace",
+        "::warning file=test/example.test.ts::warning",
+        "::notice::notice",
+        "::group::failure details",
+        "text containing ::error::is still ordinary output",
+        "::errorish::is still ordinary output",
+        "::endgroup::",
+      ];
+      const bytes = Buffer.from(lines.join("\n"));
+      streams[channel].emit("data", bytes.subarray(0, 20));
+      streams[channel].emit("data", bytes.subarray(20));
+      child.emit("close", 1);
+      await expect(pending).resolves.toBe(1);
+      expect(output.join("")).toBe(
+        [
+          "[shard:compact] begin",
+          `[shard:compact] ${lines[0]}`,
+          ...lines.slice(1, 5),
+          `[shard:compact] ${lines[5]}`,
+          `[shard:compact] ${lines[6]}`,
+          lines[7],
+          "[shard:compact] end (exit 1)",
+          "",
+        ].join("\n"),
+      );
+    },
+  );
+
   it("launches the current TypeScript child runner directly with Node", () => {
     expect(resolveShardChildCommand(["one.config.ts"], "/runtime/node")).toEqual({
       command: "/runtime/node",
@@ -309,13 +368,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const skippedOnBun = "src/process/spawn-broker/cleanup.test.ts";
       const v8HeapTest = "src/infra/worker-task-pool.memory.test.ts";
       const nodeHistoryBenchmark = "test/scripts/bench-session-history.test.ts";
-      const includePatterns = [
-        bunTarget,
-        nodeTarget,
+      const nativeCompilerTest = "test/scripts/native-typescript.test.ts";
+      const compilerGraphTest = "test/scripts/ts-topology.test.ts";
+      const mixedCompilerTest = "src/plugin-sdk/provider-tools.test.ts";
+      const nodeFiles = [
         skippedOnBun,
         v8HeapTest,
         nodeHistoryBenchmark,
+        nativeCompilerTest,
+        compilerGraphTest,
+        mixedCompilerTest,
       ];
+      const includePatterns = [bunTarget, ...nodeFiles];
       const shard = {
         configs: [bunConfig],
         includePatterns,
@@ -358,10 +422,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       expect(seen).toEqual([
         {
           runtime: "node",
-          includes:
-            policy === "dual"
-              ? includePatterns
-              : [nodeTarget, skippedOnBun, v8HeapTest, nodeHistoryBenchmark].toSorted(),
+          includes: policy === "dual" ? includePatterns : nodeFiles.toSorted(),
           label: `${nodePrefix}partition`,
           timing: `${nodePrefix}partition`,
         },
@@ -398,27 +459,38 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   });
 
   it.each(["bun-compatible", "dual"] as const)(
-    "keeps isolated backpressure coverage on Node without losing other files under %s",
+    "keeps isolated Node-dependent coverage without losing other files under %s",
     (policy) => {
       const config = "test/vitest/vitest.unit-fast-isolated.config.ts";
-      const nodeFile = "src/proxy-capture/proxy-server.test.ts";
+      const nodeFiles = [
+        "src/agents/code-mode.action-output.test.ts",
+        "src/proxy-capture/proxy-server.test.ts",
+      ];
       const files = getUnitFastIsolatedTestFiles();
       const selection = { configs: [config] };
       const selected = resolveCiTestRuntimeSelections(selection, policy);
       expect(selected).toEqual([
-        policy === "dual" ? { runtime: "node" } : { runtime: "node", includePatterns: [nodeFile] },
-        { runtime: "bun", includePatterns: files.filter((file) => file !== nodeFile) },
+        policy === "dual" ? { runtime: "node" } : { runtime: "node", includePatterns: nodeFiles },
+        { runtime: "bun", includePatterns: files.filter((file) => !nodeFiles.includes(file)) },
       ]);
+      expect(new Set(selected.flatMap(({ includePatterns }) => includePatterns ?? files))).toEqual(
+        new Set(files),
+      );
       expect(ciTestShardRequiresBun(selection, policy)).toBe(true);
-      expect(resolveCiTestRuntimeSelections({ targets: [nodeFile] }, policy)).toEqual([
-        { runtime: "node" },
-      ]);
+      for (const nodeFile of nodeFiles) {
+        expect(resolveCiTestRuntimeSelections({ targets: [nodeFile] }, policy)).toEqual([
+          { runtime: "node" },
+        ]);
+        expect(
+          resolveCiTestRuntimeSelections(
+            { configs: [config], includePatterns: [nodeFile] },
+            policy,
+          ),
+        ).toEqual([{ runtime: "node" }]);
+      }
       expect(resolveCiTestRuntimeSelections({ targets: ["src/version.test.ts"] }, policy)).toEqual(
         policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
       );
-      expect(
-        resolveCiTestRuntimeSelections({ configs: [config], includePatterns: [nodeFile] }, policy),
-      ).toEqual([{ runtime: "node" }]);
     },
   );
 

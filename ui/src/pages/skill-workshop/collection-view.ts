@@ -61,7 +61,9 @@ export function renderSkillWorkshopCollection(props: SkillWorkshopProps) {
               props.onQueryChange((event.currentTarget as HTMLInputElement).value ?? "")}
           />
         </label>
-        <p class="sw-collection__count">${collectionCountLabel(props, matches.length)}</p>
+        <p class="sw-collection__count" role="status">
+          ${collectionCountLabel(props, matches.length)}
+        </p>
         <button
           type="button"
           class="btn btn--sm"
@@ -189,7 +191,7 @@ function renderReader(props: SkillWorkshopProps) {
   if (selection.status === "loading") {
     return html`<div class="sw-collection__reader-body">
       ${selection.content === undefined ? nothing : renderSkillDocument(selection.content)}
-      <p class="sw-collection__state sw-muted" aria-busy="true">
+      <p class="sw-collection__state sw-muted" role="status">
         ${
           selection.content === undefined
             ? t("skillWorkshop.collection.loadingSkill", { name: selection.name })

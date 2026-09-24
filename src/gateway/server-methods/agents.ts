@@ -893,45 +893,44 @@ export const agentsHandlers: GatewayRequestHandlers = {
                 );
               }
             }
-            await context.cron.removeAgentJobsTransactional(
-              agentId,
-              async () =>
-                await withAgentExecApprovalsRemoved(agentId, async () => {
-                  deletion.assertCurrent();
-                  if (!rosterCommitted) {
+            await context.cron.removeAgentJobsTransactional(agentId, () =>
+              withAgentExecApprovalsRemoved(agentId, async () => {
+                deletion.assertCurrent();
+                if (!rosterCommitted) {
+                  try {
+                    committed = await deleteAgentConfigEntry({
+                      agentId,
+                      allowConfigSizeDrop: true,
+                      assertCurrent: deletion.assertCurrent,
+                    });
+                  } catch (error) {
                     try {
-                      committed = await deleteAgentConfigEntry({
-                        agentId,
-                        assertCurrent: deletion.assertCurrent,
-                      });
-                    } catch (error) {
-                      try {
-                        const persisted = await readConfigFileSnapshotForWrite();
-                        if (!isConfiguredAgent(persisted.snapshot.sourceConfig, agentId)) {
-                          rosterCommitted = true;
-                          throw new AgentDeletionCommitUncertainError(error);
-                        }
-                      } catch (readError) {
-                        if (readError instanceof AgentDeletionCommitUncertainError) {
-                          throw readError;
-                        }
+                      const persisted = await readConfigFileSnapshotForWrite();
+                      if (!isConfiguredAgent(persisted.snapshot.sourceConfig, agentId)) {
+                        rosterCommitted = true;
                         throw new AgentDeletionCommitUncertainError(error);
                       }
-                      throw error;
-                    }
-                    if (!committed.result) {
-                      rosterCommitted = !isConfiguredAgent(committed.nextConfig, agentId);
-                      const missingResultError = new Error(
-                        "agent delete config mutation did not return its target",
-                      );
-                      if (rosterCommitted) {
-                        throw new AgentDeletionCommitUncertainError(missingResultError);
+                    } catch (readError) {
+                      if (readError instanceof AgentDeletionCommitUncertainError) {
+                        throw readError;
                       }
-                      throw missingResultError;
+                      throw new AgentDeletionCommitUncertainError(error);
                     }
-                    rosterCommitted = true;
+                    throw error;
                   }
-                }),
+                  if (!committed.result) {
+                    rosterCommitted = !isConfiguredAgent(committed.nextConfig, agentId);
+                    const missingResultError = new Error(
+                      "agent delete config mutation did not return its target",
+                    );
+                    if (rosterCommitted) {
+                      throw new AgentDeletionCommitUncertainError(missingResultError);
+                    }
+                    throw missingResultError;
+                  }
+                  rosterCommitted = true;
+                }
+              }),
             );
             deletion.assertCurrent();
           } catch (error) {

@@ -420,6 +420,19 @@ function createGlobalButtonSelection(params: {
   if (capacity === undefined) {
     return undefined;
   }
+  // Adaptation can only remove buttons, so authored occurrences bound the selection size.
+  let rawButtonCount = 0;
+  for (const block of params.presentation.blocks) {
+    if (block.type === "buttons") {
+      rawButtonCount += block.buttons.length;
+      if (rawButtonCount > capacity) {
+        break;
+      }
+    }
+  }
+  if (rawButtonCount <= capacity) {
+    return undefined;
+  }
   const candidates = params.presentation.blocks.flatMap((block) => {
     if (block.type !== "buttons") {
       return [];

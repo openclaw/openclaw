@@ -6,7 +6,7 @@ import { z } from "zod";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { hasErrnoCode } from "./errno.js";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "./kysely-sync.js";
+import { executeSqliteQuerySync, prepareSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import type { SqliteTransactionOptions } from "./sqlite-transaction.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
@@ -87,6 +87,7 @@ export function createManagedHandoffLeaseStore(
     readProcessStartIdentity,
     processIdentity,
     processState,
+    inspectProcessIdentity,
     isProcessIdentityCurrent,
     acceptSelfIdentity,
   } = createManagedHandoffProcessIdentityReader({
@@ -98,14 +99,23 @@ export function createManagedHandoffLeaseStore(
   const { control, properties, nativeScope, isInNativeScope, nativeClosed } =
     createManagedHandoffScopeReader(serviceManagerEnv);
   const withDatabase = createManagedHandoffLeaseDatabase(databasePath, options.existingIdentity);
+  const rowReaders = new WeakMap<HandoffDatabase, (root: string) => LeaseRow | undefined>();
   function row(db: HandoffDatabase, root: string) {
-    return executeSqliteQueryTakeFirstSync(
-      db,
-      leaseQueries(db)
-        .selectFrom("managed_update_handoffs")
-        .select(["owner", "payload_json", "updated_at"])
-        .where("install_root", "=", root),
-    );
+    let readRow = rowReaders.get(db);
+    if (!readRow) {
+      readRow = prepareSqliteQueryTakeFirstSync<string, LeaseRow>(db, (parameter) =>
+        leaseQueries(db)
+          .selectFrom("managed_update_handoffs")
+          .select(["owner", "payload_json", "updated_at"])
+          .where(
+            "install_root",
+            "=",
+            parameter((key) => key),
+          ),
+      );
+      rowReaders.set(db, readRow);
+    }
+    return readRow(root);
   }
   function handle(root: string, value: LeaseRow): ManagedHandoffLease {
     const payload = parseManagedHandoffLeasePayload(value.payload_json);
@@ -675,6 +685,7 @@ export function createManagedHandoffLeaseStore(
     return !result.error && result.status === 0 && (ownPlacement || nativeClosed(life));
   }
   return {
+    retainReadConnection: withDatabase.retainReadConnection,
     transact,
     read,
     readLegacyParent,
@@ -693,6 +704,7 @@ export function createManagedHandoffLeaseStore(
     stopNative,
     isInNativeScope,
     processIdentity,
+    inspectProcessIdentity,
     isProcessIdentityCurrent,
     readProcessStartIdentity,
     isPidAlive,

@@ -246,7 +246,7 @@ describe("TasksPage concurrent refresh events", () => {
     const refresh = await createDeferredTaskRefresh(initialTasks);
     const pending = refresh.startRefresh();
 
-    await refresh.page.cancelTask("task-cancelled");
+    await refresh.page.mutateTask("task-cancelled", "cancel");
     expect(refresh.page.tasks.map((task) => [task.id, task.status])).toEqual([
       ["task-cancelled", "cancelled"],
     ]);
@@ -657,7 +657,7 @@ describe("TasksPage cancellation lifecycle", () => {
 
     const copying = page.copyTaskResult(blocked.taskId);
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("Retained result"));
-    await page.recoverTask(blocked.taskId, "retry");
+    await page.mutateTask(blocked.taskId, "retry");
     expect(page.error).toBe("Independent recovery failed");
 
     clipboardWrite.resolve(undefined);
@@ -790,7 +790,7 @@ describe("TasksPage cancellation lifecycle", () => {
       }),
     );
 
-    const cancelling = page.cancelTask("task-1");
+    const cancelling = page.mutateTask("task-1", "cancel");
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("tasks.cancel", { taskId: "task-1" }),
     );
@@ -836,7 +836,7 @@ describe("TasksPage cancellation lifecycle", () => {
     document.body.append(page);
     await waitForFast(() => expect(page.tasks).toHaveLength(1));
 
-    await page.recoverTask(blocked.taskId, "retry");
+    await page.mutateTask(blocked.taskId, "retry");
 
     expect(request).toHaveBeenCalledWith("tasks.retry", { taskIds: [blocked.taskId] });
     expect(page.tasks[0]).toMatchObject({
@@ -865,7 +865,7 @@ describe("TasksPage cancellation lifecycle", () => {
     document.body.append(page);
     await waitForFast(() => expect(page.tasks).toHaveLength(1));
 
-    const recovery = page.recoverTask(blocked.taskId, "retry");
+    const recovery = page.mutateTask(blocked.taskId, "retry");
     await vi.waitFor(() => expect(page.cancellingTaskIds.has(blocked.taskId)).toBe(true));
     source.emitConnected(false);
     source.emitConnected(true);

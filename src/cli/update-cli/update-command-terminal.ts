@@ -408,12 +408,13 @@ async function publishPreMutationUpdateOutcome(
 ): Promise<UpdateRunResult> {
   const run = params.opts.run;
   const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
-  if (run && active && params.message) {
+  const nextAction = params.nextAction ?? params.message;
+  if (run && active && nextAction) {
     recordUpdateRunPhase(
       run.runId,
       active.phase,
       {
-        origin: { nextAction: params.message },
+        origin: { nextAction },
         ...(params.installKind !== "unknown" ? { target: { kind: params.installKind } } : {}),
       },
       { env: run.env },
@@ -470,7 +471,7 @@ async function publishPreMutationUpdateOutcome(
   if (params.opts.json && params.message) {
     defaultRuntime.error(params.message);
   }
-  await printResult(result, params.opts, { nextAction: params.message });
+  await printResult(result, params.opts, { nextAction });
   return result;
 }
 

@@ -279,9 +279,8 @@ describe("AgentSession loop correctness", () => {
     const assistant = createAssistant(testModel, [{ type: "text", text: "same answer" }]);
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    sessionManager.appendMessage({ ...assistant });
+    const priorAssistantEntryId = sessionManager.appendMessage({ ...assistant });
     streamMocks.streamSimple.mockImplementation(() => createAssistantResultStream(assistant));
-    const appendMessage = vi.spyOn(sessionManager, "appendMessage");
     const { session } = await createTestSession({ sessionManager });
     const order: string[] = [];
     let releaseFirst: (() => void) | undefined;
@@ -321,10 +320,12 @@ describe("AgentSession loop correctness", () => {
     releaseFirst?.();
     await prompt;
 
-    const persistedAssistantCall = appendMessage.mock.results.findLast(
-      (result) => result.type === "return",
-    );
-    expect(terminalEntryId).toBe(persistedAssistantCall?.value);
+    const persistedAssistant = sessionManager
+      .getEntries()
+      .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+    expect(persistedAssistant).toMatchObject({ type: "message", message: assistant });
+    expect(persistedAssistant?.id).not.toBe(priorAssistantEntryId);
+    expect(terminalEntryId).toBe(persistedAssistant?.id);
     expect(order).toEqual(["first:start", "first:end", "second"]);
   });
 

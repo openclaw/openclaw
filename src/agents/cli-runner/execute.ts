@@ -503,7 +503,8 @@ export async function executePreparedCliRun(
           provider: params.provider,
           modelId: context.modelId,
           authProfileId: context.effectiveAuthProfileId,
-          thinkingLevel: params.thinkLevel === "ultra" ? "max" : params.thinkLevel,
+          thinkingLevel:
+            params.thinkLevel === "ultra" ? context.providerThinkingLevel : params.thinkLevel,
           fastMode:
             params.fastMode === undefined
               ? undefined

@@ -63,41 +63,142 @@ const run = LedgerRecordSchema.parse({
 });
 
 describe("update run wire contract", () => {
-  it("carries a bounded failing check through history responses", () => {
-    const fact = {
-      check: "readyz",
-      code: "readyz-unhealthy",
-      message: "Readiness returned HTTP 503.",
-      errorName: "Error",
-      location: "src/infra/update-runner-git.ts:42:7",
-    };
-    const step = { step: "gateway verification", status: "failed", failureFacts: [fact] };
-    const failed = {
+  it.each(["candidate", "installed"] as const)(
+    "carries %s admission through lookup, history, and status responses",
+    (owner) => {
+      const checks = [{ name: "config", status: "warn", detail: "Missing custom path." }];
+      const admission =
+        owner === "candidate"
+          ? { owner, protocol: 1, candidateVersion: "2026.9.5", checks }
+          : { owner, fallbackReason: "update-admission-unsupported-target" };
+      const candidateAdmission =
+        owner === "candidate"
+          ? {
+              protocol: 1,
+              verdict: "admit",
+              reasons: [],
+              warnings: [{ code: "missing-load-path", message: "Missing custom path." }],
+              facts: {
+                candidateVersion: "2026.9.5",
+                installedVersion: "2026.9.4",
+                nodeEngines: ">=24.16.0",
+                checks,
+              },
+            }
+          : undefined;
+      const record = LedgerRecordSchema.parse({
+        ...run,
+        admission,
+        origin: { ...run.origin, admission, candidateAdmission },
+      });
+      expect(record.admission).toEqual(admission);
+      expect(record.origin.candidateAdmission).toEqual(candidateAdmission);
+      expect(validateUpdateRunRecord(record)).toBe(true);
+      expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
+      expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);
+      expect(
+        validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects non-string candidate Node engine facts", () => {
+    const record = {
       ...run,
-      target: { ...run.target, installationMethod: "git-checkout" },
-      verification: {
-        ...run.verification,
-        rollbackOutcome: { status: "succeeded", reason: "Previous package restored" },
-        recovery: { serviceRestartSafe: true, packageRollbackVerified: true, version: "2026.8.1" },
-      },
-      steps: [step],
-    };
-    expect(LedgerRecordSchema.parse(failed)).toEqual(failed);
-    expect(validateUpdateRunsGetResult({ run: failed })).toBe(true);
-    expect(
-      validateUpdateRunsGetResult({
-        run: {
-          ...failed,
-          steps: [
-            {
-              ...step,
-              failureFacts: Array.from({ length: 6 }, () => fact),
-            },
-          ],
+      origin: {
+        ...run.origin,
+        candidateAdmission: {
+          protocol: 1,
+          verdict: "admit",
+          reasons: [],
+          warnings: [],
+          facts: {
+            candidateVersion: "2026.9.5",
+            installedVersion: "2026.9.4",
+            nodeEngines: 24,
+            checks: [],
+          },
         },
-      }),
+      },
+    };
+    expect(validateUpdateRunRecord(record)).toBe(false);
+    expect(
+      validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
     ).toBe(false);
   });
+
+  it.each([
+    undefined,
+    {
+      ownership: "foreign",
+      cause: "package-mismatch",
+      destinationKind: "npm-global",
+      prefix: "/other-prefix",
+      packageRoot: "/other-prefix/lib/node_modules/openclaw",
+      runningRoot: "~/.npm-global/lib/node_modules/openclaw",
+      runningPrefix: "~/.npm-global",
+      launcher: "/other-prefix/bin/openclaw",
+      launcherTarget: null,
+    },
+  ])(
+    "carries a bounded failing check through history responses (destination=%j)",
+    (destination) => {
+      const fact = {
+        check: destination ? "package-install" : "readyz",
+        code: destination ? "global-install-foreign-destination" : "readyz-unhealthy",
+        message: "Readiness returned HTTP 503.",
+        errorName: "Error",
+        location: "src/infra/update-runner-git.ts:42:7",
+        ...(destination ? { destination } : {}),
+      };
+      const step = { step: "gateway verification", status: "failed", failureFacts: [fact] };
+      const failed = {
+        ...run,
+        target: { ...run.target, installationMethod: "git-checkout" },
+        verification: {
+          ...run.verification,
+          rollbackOutcome: { status: "succeeded", reason: "Previous package restored" },
+          recovery: {
+            serviceRestartSafe: true,
+            packageRollbackVerified: true,
+            version: "2026.8.1",
+          },
+        },
+        steps: [step],
+      };
+      expect(LedgerRecordSchema.parse(failed)).toEqual(failed);
+      expect(validateUpdateRunsGetResult({ run: failed })).toBe(true);
+      if (destination) {
+        for (const invalid of [
+          { ownership: "private-owner" },
+          { prefix: "x".repeat(241) },
+          { extra: "private-text" },
+        ]) {
+          const malformed = {
+            ...failed,
+            steps: [
+              { ...step, failureFacts: [{ ...fact, destination: { ...destination, ...invalid } }] },
+            ],
+          };
+          expect(LedgerRecordSchema.safeParse(malformed).success).toBe(false);
+          expect(validateUpdateRunsGetResult({ run: malformed })).toBe(false);
+        }
+      }
+      expect(
+        validateUpdateRunsGetResult({
+          run: {
+            ...failed,
+            steps: [
+              {
+                ...step,
+                failureFacts: Array.from({ length: 6 }, () => fact),
+              },
+            ],
+          },
+        }),
+      ).toBe(false);
+    },
+  );
 
   it.each([null, { serviceRestartSafe: false, reason: "source-rollback-failed" }])(
     "carries nullable failure evidence and recovery through history (%j)",
@@ -205,6 +306,24 @@ describe("update run wire contract", () => {
     ["unknown phase", { phase: "complete" }],
     ["unknown status", { status: "ok" }],
     ["unknown trigger", { trigger: "web" }],
+    ["unknown admission owner", { admission: { owner: "other" } }],
+    [
+      "unsupported admission protocol",
+      { origin: { admission: { owner: "candidate", protocol: 2 } } },
+    ],
+    [
+      "unknown admission check status",
+      { admission: { owner: "candidate", checks: [{ name: "config", status: "passed" }] } },
+    ],
+    [
+      "oversized admission checks",
+      {
+        admission: {
+          owner: "candidate",
+          checks: Array.from({ length: 33 }, () => ({ name: "config", status: "ok" })),
+        },
+      },
+    ],
     ["negative timestamp", { updatedAtMs: -1 }],
     ["unsafe timestamp", { updatedAtMs: Number.MAX_SAFE_INTEGER + 1 }],
     ["oversized text", { reason: "x".repeat(1025) }],

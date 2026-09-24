@@ -1,16 +1,19 @@
+import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import {
+  useSqliteWorkerStoreFixture,
+  appendWorkerRow as append,
+  readWorkerRows as read,
+} from "./sqlite-worker-fixture.test-support.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
   openAgentDatabaseSqliteWorkerStore,
-  openSqliteWorkerStore,
-  type SqliteWorkerStore,
 } from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 import * as coordinatorOwner from "./state-database-coordinator.js";
@@ -20,39 +23,9 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 32,
 }));
 
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
-    }
-  }),
+const { stores, databasePath, open } = useSqliteWorkerStoreFixture(
+  "openclaw-sqlite-worker-open-refusal-",
 );
-
-function databasePath(): string {
-  return path.join(tempDirs.make("openclaw-sqlite-worker-open-refusal-"), "store.sqlite");
-}
-
-async function open(file: string) {
-  const store = await openSqliteWorkerStore<FixtureOperations>({
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath: file,
-    input: undefined,
-  });
-  stores.add(store);
-  return store;
-}
-
-function append(store: SqliteWorkerStore<FixtureOperations>, value: string) {
-  return store.execute({ type: "append", input: { value } });
-}
-
-function read(store: SqliteWorkerStore<FixtureOperations>) {
-  return store.execute({ type: "read", input: undefined });
-}
 
 it.skipIf(Boolean(process.versions.bun))(
   "retains pending Gateway cleanup after a pre-factory refusal without retiring pooled siblings",
@@ -84,9 +57,7 @@ it.skipIf(Boolean(process.versions.bun))(
       .spyOn(coordinatorOwner, "tryCreateGatewaySchemaFenceDelegate")
       .mockImplementationOnce((params) => {
         retained = createDelegate(params);
-        if (!retained) {
-          throw new Error("Fixture Gateway delegate was not acquired");
-        }
+        assert(retained, "Fixture Gateway delegate was not acquired");
         const original = retained;
         return {
           port: original.port,
@@ -132,9 +103,7 @@ it.skipIf(Boolean(process.versions.bun))(
         ([request]) => request.type === "open" && request.databasePath === file,
       );
       const targetWorker = requests.mock.contexts[opening];
-      if (!(targetWorker instanceof Worker)) {
-        throw new Error("Expected the refused request's native Worker");
-      }
+      assert(targetWorker instanceof Worker, "Expected the refused request's native Worker");
       expect(siblings.map(({ receipt }) => receipt.threadId)).toContain(targetWorker.threadId);
       await expect(readFile(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(retained?.closed).toBe(false);

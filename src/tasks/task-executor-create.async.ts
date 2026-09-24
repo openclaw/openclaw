@@ -7,6 +7,7 @@ import type {
   DetachedTaskCreateParams,
   CreatedDetachedTaskRun,
 } from "./detached-task-runtime-contract.js";
+import { captureTaskExecutionOwner } from "./task-execution-owner.js";
 import {
   captureTaskMutationContext,
   finishTaskMutation,
@@ -23,11 +24,14 @@ import {
 } from "./task-flow-runtime-internal.js";
 import type { InitialTaskFlowLinkResult } from "./task-initial-flow.kernel.js";
 import { isOneTaskFlowEligible } from "./task-initial-flow.rules.js";
+import { retainTaskAgentEventLineage } from "./task-registry-agent-event-lineage.js";
 import { readTaskCreationEventTarget } from "./task-registry-agent-event-target.js";
 import type { TaskCreateResult } from "./task-registry-create.kernel.js";
+import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
 import {
   cloneTaskRecord,
   captureTaskPersistenceReceipt,
+  matchesTaskPersistenceReceipt,
   type CreateTaskRecordParams,
 } from "./task-registry-records.js";
 import {
@@ -35,10 +39,19 @@ import {
   runTaskRegistryWorkerMutation,
 } from "./task-registry-state.js";
 import type { TaskRegistryStore } from "./task-registry.store.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import {
+  isTerminalTaskStatus,
+  type TaskPersistenceReceipt,
+  type TaskRecord,
+} from "./task-registry.types.js";
+import { captureTaskRunOwnerBinding } from "./task-run-owner.js";
 
 const log = createSubsystemLogger("tasks/executor");
 type FlowStore = ReturnType<typeof getTaskFlowRegistryStore>;
+type RunningTaskReceiptLineage = {
+  current?: TaskPersistenceReceipt;
+  close: () => void;
+};
 
 type CreatedTaskRunReceipt = {
   task: TaskRecord;
@@ -55,36 +68,122 @@ export async function createRunningTaskRunCoreWithReceiptAsync(
   params: DetachedRunningTaskCreateParams,
   assertCurrent?: () => void,
 ): Promise<CreatedDetachedTaskRun | null> {
-  const creation = await createTaskRun({ ...params, status: "running" }, assertCurrent);
-  const receipt = createTaskRunReceipt(creation);
-  let settlement: Promise<boolean> | undefined;
-  return {
-    task: receipt.task,
-    finalizeActive(terminal, canSettle) {
-      return finalizeActiveTaskRun(creation, creation.task, terminal, canSettle);
-    },
-    settleUnstarted(terminal, canSettle) {
-      return (settlement ??= receipt
-        .settleUnstarted(terminal, canSettle)
-        .then((task) => task !== null));
-    },
-  };
+  const lineage: RunningTaskReceiptLineage = { close() {} };
+  try {
+    const creation = await createTaskRun({ ...params, status: "running" }, assertCurrent, lineage);
+    if (isTerminalTaskStatus(creation.task.status)) {
+      lineage.close();
+    }
+    const receipt = createTaskRunReceipt(creation, lineage);
+    let settlement: Promise<boolean> | undefined;
+    return {
+      task: receipt.task,
+      bindRunOwner: receipt.bindRunOwner,
+      finalizeActive: receipt.finalizeActive,
+      settleUnstarted(terminal, canSettle) {
+        return (settlement ??= receipt
+          .settleUnstarted(terminal, canSettle)
+          .then((task) => task !== null));
+      },
+    };
+  } catch (error) {
+    lineage.close();
+    throw error;
+  }
 }
 
 export async function createQueuedTaskRunCoreWithReceiptAsync(
   params: DetachedTaskCreateParams,
   assertCurrent?: () => void,
 ): Promise<CreatedTaskRunReceipt> {
-  return createTaskRunReceipt(await createTaskRun({ ...params, status: "queued" }, assertCurrent));
+  const receipt = createTaskRunReceipt(
+    await createTaskRun({ ...params, status: "queued" }, assertCurrent),
+  );
+  return { task: receipt.task, settleUnstarted: receipt.settleUnstarted };
 }
 
-function createTaskRunReceipt(creation: CoreTaskCreation): CreatedTaskRunReceipt {
+function createTaskRunReceipt(
+  creation: CoreTaskCreation,
+  lineage?: RunningTaskReceiptLineage,
+): CreatedTaskRunReceipt & Pick<CreatedDetachedTaskRun, "bindRunOwner" | "finalizeActive"> {
   const acknowledged = cloneTaskRecord(creation.task);
+  const readAcknowledged = () => {
+    if (lineage?.current) {
+      acknowledged.createdAt = lineage.current.createdAt;
+    }
+    return acknowledged;
+  };
   let settlement: Promise<TaskRecord | null> | undefined;
   return {
     task: cloneTaskRecord(acknowledged),
+    async bindRunOwner(cancel, assertCurrent) {
+      const binding = captureTaskRunOwnerBinding(
+        captureTaskPersistenceReceipt(readAcknowledged()),
+        cancel,
+      );
+      const assertBindingCurrent = () => {
+        creation.assertStores();
+        assertCurrent();
+        binding.assertCurrent();
+      };
+      assertBindingCurrent();
+      const executionOwner = captureTaskExecutionOwner();
+      while (true) {
+        await captureTaskRegistryReadFence(creation.context.admission);
+        assertBindingCurrent();
+        const expectedTask = captureTaskPersistenceReceipt(readAcknowledged());
+        const { receipt, publicationSettled } = await settleTaskRecordTransitionAsync(
+          creation,
+          {
+            type: "tasks.bindRunOwner",
+            input: {
+              taskId: expectedTask.taskId,
+              expectedTask,
+              params: { runId: expectedTask.runId, executionOwner },
+              now: Date.now(),
+            },
+          },
+          assertBindingCurrent,
+        );
+        assertBindingCurrent();
+        if (!publicationSettled) {
+          throw new Error("Task run owner publication did not settle.");
+        }
+        if (receipt) {
+          break;
+        }
+        // A null transition wrote nothing. Only this receipt's confirmed event
+        // lineage permits reselection; errors and unknown writes never replay.
+        await captureTaskRegistryReadFence(creation.context.admission);
+        assertBindingCurrent();
+        if (matchesTaskPersistenceReceipt(readAcknowledged(), expectedTask)) {
+          throw new Error("Task no longer belongs to this live run.");
+        }
+      }
+      await captureTaskRegistryReadFence(creation.context.admission);
+      assertBindingCurrent();
+      const bound = binding.bind(captureTaskPersistenceReceipt(readAcknowledged()));
+      return {
+        owner: bound.owner,
+        release() {
+          bound.release();
+          lineage?.close();
+        },
+      };
+    },
+    finalizeActive(terminal, canSettle) {
+      return finalizeActiveTaskRun(creation, readAcknowledged(), terminal, canSettle).finally(() =>
+        lineage?.close(),
+      );
+    },
     settleUnstarted(terminal, canSettle) {
-      return (settlement ??= settleUnstartedTask(creation, acknowledged, terminal, canSettle));
+      return (settlement ??= (async () => {
+        // Cleanup still owes its terminal write after a committed event reports failure.
+        if (lineage) {
+          await Promise.allSettled([captureTaskRegistryReadFence(creation.context.admission)]);
+        }
+        return settleUnstartedTask(creation, readAcknowledged(), terminal, canSettle);
+      })().finally(() => lineage?.close()));
     },
   };
 }
@@ -92,6 +191,7 @@ function createTaskRunReceipt(creation: CoreTaskCreation): CreatedTaskRunReceipt
 async function createTaskRun(
   params: CreateTaskRecordParams,
   assertCurrent?: () => void,
+  lineage?: RunningTaskReceiptLineage,
 ): Promise<CoreTaskCreation> {
   const { context, store, flowStore, assertStores } = captureTaskMutationContext();
   const input = { params: structuredClone(params), taskId: crypto.randomUUID(), now: Date.now() };
@@ -115,10 +215,31 @@ async function createTaskRun(
   let committed: TaskCreateResult | undefined;
   let creationOwner: SqliteWorkerNativeSettlementOwner | undefined;
   let flowHookEntered = false;
+  if (lineage) {
+    lineage.close = retainTaskAgentEventLineage(
+      context.admission,
+      input.params.runId?.trim() ?? "",
+      (previous, next) => {
+        const original =
+          lineage.current ??
+          readTaskCreationEventTarget(
+            creationOwner?.committed?.facts,
+            "tasks.createRecord",
+            input.taskId,
+          ) ??
+          committed?.task;
+        if (original && matchesTaskPersistenceReceipt(original, previous)) {
+          lineage.current = captureTaskPersistenceReceipt(next);
+        }
+      },
+    );
+  }
   const created = await runTaskRegistryWorkerMutation(
     {
       scope,
       admission: context.admission,
+      // Creation only inserts this ID or rewrites an exact run match, never other session runs.
+      readIdentity: { kind: "creation", taskId: scope.taskId, runId: scope.runId },
       readEventTarget: () =>
         readTaskCreationEventTarget(
           creationOwner?.committed?.facts,

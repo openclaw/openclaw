@@ -1,11 +1,13 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { readDeferredPluginSessionImport } from "../../infra/deferred-plugin-session-sources.js";
 import { formatDoctorStateRepairFailure } from "../../infra/state-repair-message.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
-import { createAgentDatabaseDeletionClassifier } from "../../state/agent-deletion-discovery.js";
+import {
+  createAgentDatabaseDeletionClassifier,
+  createRetainedAgentDatabaseMatcher,
+} from "../../state/agent-deletion-discovery.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import { readAgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.read.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
@@ -83,7 +85,10 @@ export function assertSessionStoreMigrationComplete(params: {
   if (legacySources.length === 0) {
     return;
   }
-  const deletionSnapshot = readAgentDatabaseDeletionSnapshot(env);
+  const deletionSnapshot = readAgentDatabaseDeletionSnapshot(
+    env,
+    params.operation === "doctor" ? "maintenance" : "runtime",
+  );
   const classifyDeletion =
     deletionSnapshot &&
     createAgentDatabaseDeletionClassifier({
@@ -100,6 +105,7 @@ export function assertSessionStoreMigrationComplete(params: {
       target: { agentId: string; storePath: string; sqlitePath?: string };
       destination: string;
       retained: boolean;
+      imported: boolean;
     };
     const owners = new Map<string, SourceOwner>();
     for (const target of candidates) {
@@ -115,16 +121,27 @@ export function assertSessionStoreMigrationComplete(params: {
       const deletion =
         classifyDeletion?.(storePath, target.agentId) ??
         classifyDeletion?.(destination, target.agentId);
+      const retained = deletion !== undefined && deletion !== "unavailable";
       owners.set(`${target.agentId}\0${destination}`, {
         target: { ...target, agentId: target.agentId },
         destination,
-        retained: deletion !== undefined && deletion !== "unavailable",
+        retained,
+        imported:
+          !retained &&
+          readDeferredPluginSessionImport({
+            cfg: params.cfg,
+            target: { ...target, agentId: target.agentId },
+            sqlitePath: destination,
+            env,
+            purpose: "readiness",
+          }) !== undefined,
       });
     }
     // A shared path still needs record-level ownership even when every candidate is held.
     if (
       [...owners.values()].every(
-        ({ target, retained }) => retained && !shouldFilterLegacySessionRecordsByTarget(target),
+        ({ target, retained, imported }) =>
+          (imported || retained) && !shouldFilterLegacySessionRecordsByTarget(target),
       )
     ) {
       return false;
@@ -134,9 +151,8 @@ export function assertSessionStoreMigrationComplete(params: {
     const issues: Array<{ code: string; message: string; sessionKey?: string }> = [];
     const source = readLegacySessionStoreEntries({ storePath }, issues);
     if (issues.some((issue) => issue.code !== "entry_invalid") || !source.bytes) {
-      return true;
+      return [...owners.values()].some(({ imported, retained }) => !imported && !retained);
     }
-    const sourceSha256 = createHash("sha256").update(source.bytes).digest("hex");
     // Empty indexes may have unindexed history: retain the existing requirement
     // for every named owner's verified receipt rather than infer ownership here.
     const required = new Set<SourceOwner>(source.entries.length === 0 ? owners.values() : []);
@@ -155,35 +171,25 @@ export function assertSessionStoreMigrationComplete(params: {
       required.add(matches[0]!);
     }
     let hasUnindexedHistory: boolean | undefined;
-    return [...required].some(({ target, destination, retained }) => {
+    return [...required].some(({ target, destination, retained, imported }) => {
       if (
-        retained &&
-        (source.entries.length > 0 || !shouldFilterLegacySessionRecordsByTarget(target))
+        imported ||
+        (retained &&
+          (source.entries.length > 0 || !shouldFilterLegacySessionRecordsByTarget(target)))
       ) {
         return false;
       }
-      const receipt = readDeferredPluginSessionImport({
-        cfg: params.cfg,
-        target,
-        sqlitePath: destination,
-        env,
-        purpose: "readiness",
-      });
       // Owners without a database cannot have completed a core session import.
       // Without a receipt or unindexed history, demanding one deadlocks startup:
       // Doctor refuses to create a database just for the receipt.
-      if (!receipt && source.entries.length === 0 && !fs.existsSync(destination)) {
+      if (source.entries.length === 0 && !fs.existsSync(destination)) {
         hasUnindexedHistory ??=
           listLegacySessionTranscriptFiles(path.dirname(storePath)).length > 0;
         if (!hasUnindexedHistory) {
           return false;
         }
       }
-      return (
-        !receipt ||
-        receipt.sources.find((entry) => path.resolve(entry.path) === storePath)?.identity.sha256 !==
-          sourceSha256
-      );
+      return true;
     });
   })?.[0];
   if (legacyStore) {
@@ -249,7 +255,26 @@ export async function runSessionStartupMigration(params: {
     databases.add(databasePath);
     // Retained stores remain discoverable, but only deletion cleanup may write them.
     // Check the physical owner so surviving shared stores still reach their runtime.
-    const deletion = readAgentDeletionJournal(options.agentId, { env });
+    const skipDeletedDatabase = () => {
+      // Each admission follows awaited work; never reuse an earlier journal snapshot.
+      const retained = createRetainedAgentDatabaseMatcher(
+        env,
+        () => resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
+        "database",
+        "runtime",
+      )(databasePath, options.agentId);
+      if (typeof retained !== "object") {
+        return false;
+      }
+      params.log.info(
+        `session: skipping deleted agent database for ${options.agentId} at ${databasePath} (cleanup complete); run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
+      );
+      return true;
+    };
+    if (skipDeletedDatabase()) {
+      return;
+    }
+    const deletion = readAgentDeletionJournal(options.agentId, { env }, "runtime");
     if (deletion) {
       params.log.info(
         `session: skipping deleted agent database for ${options.agentId} (${deletion.cleanupCompleted ? "cleanup complete" : "cleanup pending; retry agent deletion"})`,
@@ -284,6 +309,9 @@ export async function runSessionStartupMigration(params: {
       const { withSqliteCanonicalValidationWorker } =
         await import("./session-accessor.sqlite-reclamation-worker.js");
       params.assertCurrent?.();
+      if (skipDeletedDatabase()) {
+        return;
+      }
       await withSqliteCanonicalValidationWorker((withWorker) =>
         certifySessionCanonicalValidationPending(options, withWorker, params.assertCurrent),
       );
@@ -292,6 +320,9 @@ export async function runSessionStartupMigration(params: {
         // Runtime readiness failures must propagate; only successful handoff
         // transfers the cold connection beyond this maintenance operation.
         params.assertCurrent?.();
+        if (skipDeletedDatabase()) {
+          return;
+        }
         await params.handoffDatabase(options);
         params.assertCurrent?.();
         handedOff = true;

@@ -9,9 +9,8 @@ export type TasksPageTestElement = HTMLElement & {
   error: string | null;
   copyResultError: string | null;
   cancellingTaskIds: Set<string>;
-  cancelTask: (taskId: string) => Promise<void>;
   copyTaskResult: (taskId: string) => Promise<void>;
-  recoverTask: (taskId: string, action: "retry" | "dismiss") => Promise<void>;
+  mutateTask: (taskId: string, action: "cancel" | "retry" | "dismiss") => Promise<void>;
   refreshTasks: () => Promise<void>;
 };
 

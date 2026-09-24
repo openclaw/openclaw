@@ -79,6 +79,7 @@ const defaults: Record<string, string> = {
   FROZEN_TARGET: "false",
   HISTORICAL_TARGET: "false",
   FORMAT_CHECK: "false",
+  SKIP_NPM_LOCK: "false",
   CHANGED_CORE_TEST_PATHS_JSON: "",
   RUN_CONTROL_UI_I18N: "false",
   RUN_UI_TESTS: "false",
@@ -347,6 +348,21 @@ def main():`,
             `def backoff(seconds):
     subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
                     "observe", os.environ["TMPDIR"], "linux:configured", "backoff"], check=True)`,
+          );
+        }
+        if (action === "git-owner" && options.cancelDuringBackoff && !options.performance) {
+          if (!options.realClock || options.virtualBackoff) {
+            throw new Error("Backoff cancellation requires the real owner clock");
+          }
+          const boundary = "    while time.monotonic() < retry_at:\n        check_cancelled()";
+          if (source.split(boundary).length !== 2) {
+            throw new Error("Missing unique Git owner backoff cancellation boundary");
+          }
+          source = source.replace(
+            boundary,
+            `${boundary}
+        subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
+                        "observe", os.environ["TMPDIR"], "linux:configured", "backoff-ready"], check=True)`,
           );
         }
         writeFileSync(path.join(actions, action, name), source);

@@ -196,19 +196,26 @@ describe("plugin lifecycle resource sampler", () => {
     expect(script).toContain("process.exit(124)");
   });
 
-  it.runIf(process.platform === "linux")(
-    "fails successful phases that exceed wall ceilings",
-    () => {
+  it.runIf(process.platform === "linux").each([
+    { actions: false, exitCode: 0 },
+    { actions: true, exitCode: 0 },
+    { actions: true, exitCode: 9 },
+  ])(
+    "reports wall ceilings without concealing phase errors (Actions $actions, exit $exitCode)",
+    ({ actions, exitCode }) => {
       const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
+      const jobSummary = path.join(dir, "job-summary.md");
       const result = spawnSync(
         "node",
-        [scriptPath, summary, "slow-success", "--", "node", "-e", "setTimeout(() => {}, 40)"],
+        [scriptPath, summary, "slow-success", "--", "node", "-e", `process.exit(${exitCode})`],
         {
           cwd: process.cwd(),
           encoding: "utf8",
           env: {
             ...process.env,
+            GITHUB_ACTIONS: actions ? "true" : "",
+            GITHUB_STEP_SUMMARY: jobSummary,
             OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
             OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS: "1",
           },
@@ -216,8 +223,14 @@ describe("plugin lifecycle resource sampler", () => {
         },
       );
 
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("plugin lifecycle resource ceiling exceeded");
+      expect(result.status).toBe(actions ? exitCode : 1);
+      if (actions) {
+        expect(result.stderr).toContain(`::warning file=${scriptPath},line=1,col=0`);
+        expect(result.stderr).not.toContain("plugin lifecycle resource ceiling exceeded:");
+        expect(readFileSync(jobSummary, "utf8")).toContain("Plugin lifecycle resource budget");
+      } else {
+        expect(result.stderr).toContain("plugin lifecycle resource ceiling exceeded");
+      }
       expect(result.stderr).toContain("wall_ms=");
       expect(readFileSync(summary, "utf8")).toMatch(/^slow-success\t\d+\t[\d.]+\t\d+\t[\d.]+\t$/mu);
     },
@@ -236,6 +249,8 @@ describe("plugin lifecycle resource sampler", () => {
           encoding: "utf8",
           env: {
             ...process.env,
+            GITHUB_ACTIONS: "true",
+            GITHUB_STEP_SUMMARY: "",
             OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "150",
             OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "50",
           },
