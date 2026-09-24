@@ -51,8 +51,9 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: |
-            /scripts/github/
-            /scripts/lib/
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-event.mjs
+            /scripts/lib/bounded-response.mjs
           sparse-checkout-cone-mode: false
 
       - name: Retry trusted workflow checkout
@@ -63,8 +64,9 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: |
-            /scripts/github/
-            /scripts/lib/
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-event.mjs
+            /scripts/lib/bounded-response.mjs
           sparse-checkout-cone-mode: false
 
       - name: Setup supported Node runtime
@@ -109,10 +111,18 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: |
-            /scripts/github/
-            /scripts/lib/
+            /scripts/github/dependency-guard.mjs
+            /scripts/github/guard-review.mjs
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-policy.mjs
+            /scripts/github/security-review-rollout.mjs
+            /scripts/github/security-review.mjs
+            /scripts/github/security-sensitive-guard.mjs
+            /scripts/lib/bounded-response.mjs
             /.github/security-review-policy.yml
-            /.github/actions/setup-security-review/
+            /.github/actions/setup-security-review/action.yml
+            /.github/actions/setup-security-review/package.json
+            /.github/actions/setup-security-review/package-lock.json
           sparse-checkout-cone-mode: false
 
       - name: Retry trusted workflow checkout
@@ -123,10 +133,18 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: |
-            /scripts/github/
-            /scripts/lib/
+            /scripts/github/dependency-guard.mjs
+            /scripts/github/guard-review.mjs
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-policy.mjs
+            /scripts/github/security-review-rollout.mjs
+            /scripts/github/security-review.mjs
+            /scripts/github/security-sensitive-guard.mjs
+            /scripts/lib/bounded-response.mjs
             /.github/security-review-policy.yml
-            /.github/actions/setup-security-review/
+            /.github/actions/setup-security-review/action.yml
+            /.github/actions/setup-security-review/package.json
+            /.github/actions/setup-security-review/package-lock.json
           sparse-checkout-cone-mode: false
 
       - name: Setup trusted policy runtime

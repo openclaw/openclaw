@@ -1,5 +1,8 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-tool-search-prompt.test.ts",
+  "src/config/sessions/session-entry-readonly.worker.test.ts",
   "src/cli/daemon-cli/restart-health-client.test.ts",
   "src/acp/control-plane/manager.test.ts",
   "src/config/sessions/disk-budget.physical-usage.test.ts",
@@ -173,6 +176,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/flows/doctor-health.legacy-update.test.ts",
   "src/hooks/hooks-install.test.ts",
   "src/infra/state-migrations.audit-logs.windows.test.ts",
+  "src/infra/state-migrations.workspace-setup.windows.test.ts",
   "src/infra/state-migrations.media-persistence.lifecycle-recovery.test.ts",
   "src/skills/library/resource-read.test.ts",
   "src/skills/library/service.test.ts",

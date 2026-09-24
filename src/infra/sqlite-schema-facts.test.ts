@@ -39,6 +39,42 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
+  it.each(["transaction", "implicit snapshot"])(
+    "observes foreign commits on the next read while preserving an active %s",
+    (pin) => {
+      const filename = path.join(tempDirs.make("openclaw-schema-foreign-"), "state.sqlite");
+      const reader = openDatabase(undefined, true, filename);
+      reader.exec("PRAGMA journal_mode=WAL");
+      // Bypass local schema publications, as a worker or another process does.
+      const writer = new DatabaseSync(filename);
+      databases.push(writer);
+      expect(tableExists(reader, "committed")).toBe(false);
+      writer.exec("BEGIN; CREATE TABLE committed (id); PRAGMA user_version = 2; COMMIT;");
+      expect(tableExists(reader, "committed")).toBe(true);
+      expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
+
+      const readSnapshot = () => {
+        expect(tableExists(reader, "later")).toBe(false);
+        writer.exec("BEGIN; CREATE TABLE later (id); PRAGMA user_version = 3; COMMIT;");
+        expect(tableExists(reader, "later")).toBe(false);
+        expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
+      };
+      if (pin === "transaction") {
+        reader.exec("BEGIN");
+        try {
+          reader.prepare("SELECT id FROM original").all();
+          readSnapshot();
+        } finally {
+          reader.exec("COMMIT");
+        }
+      } else {
+        runSqlitePinnedReadSnapshotSync(reader, readSnapshot);
+      }
+      expect(tableExists(reader, "later")).toBe(true);
+      expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(3);
+    },
+  );
+
   it("publishes local DDL to sibling handles while preserving their active snapshots", () => {
     const filename = path.join(tempDirs.make("openclaw-schema-siblings-"), "state.sqlite");
     const writer = openDatabase(undefined, true, filename);

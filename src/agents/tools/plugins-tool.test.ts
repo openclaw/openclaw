@@ -318,6 +318,30 @@ describe("plugins tool", () => {
     },
   );
 
+  it.each([false, true])(
+    "keeps Gateway restart guidance when reload output is compacted (%s)",
+    async (oversized) => {
+      callGateway.mockResolvedValue({
+        ok: true,
+        runtime,
+        restartRequired: true,
+        warnings: oversized ? ["x".repeat(4_000)] : ["Compiled bundled code needs a restart."],
+      });
+      const result = await createPluginsTool().execute("reload", {
+        action: "reload",
+        pluginId: "local-tool",
+      });
+      expect(result).toMatchObject({
+        details: {
+          restartRequired: true,
+          runtime: { generation: runtime.generation },
+          next: expect.stringMatching(/restart the Gateway/i),
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("Start a new conversation");
+    },
+  );
+
   it.each([undefined, false, true])(
     "retains the publication outcome and continuation when mutation details exceed the budget (%s)",
     async (committed) => {

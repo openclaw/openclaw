@@ -13,9 +13,9 @@ import type { GatewayServiceInstallationDrift } from "../../daemon/service-layou
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
+import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
-import { parsePort } from "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
 export { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 
@@ -72,7 +72,7 @@ export function resolveDaemonInstallBlockMessage(
 }
 
 export function formatDaemonServiceInstallCommand(env: NodeJS.ProcessEnv, port?: number): string {
-  const servicePort = port ?? parsePort(env.OPENCLAW_GATEWAY_PORT);
+  const servicePort = port ?? parseTcpPort(env.OPENCLAW_GATEWAY_PORT);
   return formatCliCommand(
     `openclaw gateway install --force${servicePort ? ` --port ${servicePort}` : ""}`,
     env,
