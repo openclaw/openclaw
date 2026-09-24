@@ -184,20 +184,6 @@ function buildSlackArgMenuConfirm(params: { command: string; arg: string }) {
   };
 }
 
-function storeSlackExternalArgMenu(params: {
-  choices: EncodedMenuChoice[];
-  userId: string;
-}): string {
-  return slackExternalArgMenuStore.create({
-    choices: params.choices,
-    userId: params.userId,
-  });
-}
-
-function readSlackExternalArgMenuToken(raw: unknown): string | undefined {
-  return slackExternalArgMenuStore.readToken(raw);
-}
-
 function encodeSlackCommandArgValue(parts: {
   command: string;
   arg: string;
@@ -255,7 +241,7 @@ function parseSlackCommandArgValue(raw?: string | null): {
 function buildSlackArgMenuOptions(choices: EncodedMenuChoice[]) {
   return choices.map((choice) => ({
     text: {
-      type: "plain_text",
+      type: "plain_text" as const,
       text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX),
     },
     value: choice.value,
@@ -740,7 +726,7 @@ export function createSlackCommandHandler(params: {
             userId: command.user_id,
             supportsExternalSelect: params.supportsExternalArgMenus?.() ?? false,
             createExternalMenuToken: (choices) =>
-              storeSlackExternalArgMenu({ choices, userId: command.user_id }),
+              slackExternalArgMenuStore.create({ choices, userId: command.user_id }),
           });
           await respond({
             text: title,
@@ -1004,9 +990,8 @@ export async function registerSlackMonitorSlashCommands(params: {
       onDrop: (reason) => runtime.log?.(`slack: drop slash payload (${reason})`),
     });
 
-  const supportsInteractiveArgMenus =
-    typeof (ctx.app as { action?: unknown }).action === "function";
-  let supportsExternalArgMenus = typeof (ctx.app as { options?: unknown }).options === "function";
+  const supportsInteractiveArgMenus = typeof ctx.app.action === "function";
+  let supportsExternalArgMenus = typeof ctx.app.options === "function";
 
   const slashCommand = resolveSlackSlashCommandConfig(
     ctx.slashCommand ?? account.config.slashCommand,
@@ -1144,16 +1129,10 @@ export async function registerSlackMonitorSlashCommands(params: {
   }
 
   const registerArgOptions = () => {
-    const appWithOptions = ctx.app as unknown as {
-      options?: (
-        actionId: string,
-        handler: (args: SlackArgOptionsHandlerArgs) => Promise<void>,
-      ) => void;
-    };
-    if (typeof appWithOptions.options !== "function") {
+    if (typeof ctx.app.options !== "function") {
       return;
     }
-    appWithOptions.options(SLACK_COMMAND_ARG_ACTION_ID, async (args) => {
+    ctx.app.options(SLACK_COMMAND_ARG_ACTION_ID, async (args: SlackArgOptionsHandlerArgs) => {
       const { ack, body } = args;
       if (resolveEventScope(args) === null) {
         await ack({ options: [] });
@@ -1172,7 +1151,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         block_id?: string;
       };
       const blockId = typedBody.actions?.[0]?.block_id ?? typedBody.block_id;
-      const token = readSlackExternalArgMenuToken(blockId);
+      const token = slackExternalArgMenuStore.readToken(blockId);
       if (!token) {
         await ack({ options: [] });
         return;
@@ -1188,19 +1167,13 @@ export async function registerSlackMonitorSlashCommands(params: {
         return;
       }
       const query = normalizeLowercaseStringOrEmpty(typedBody.value);
-      const options = entry.choices
-        .filter((choice) => !query || normalizeLowercaseStringOrEmpty(choice.label).includes(query))
-        .slice(0, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX)
-        .map((choice) => ({
-          // Surrogate-safe cap (matches the static-select path above) so an emoji
-          // straddling the 75-char Slack plain_text limit is dropped whole rather
-          // than serialized as a lone `\uD83D` half that Slack rejects.
-          text: {
-            type: "plain_text" as const,
-            text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX),
-          },
-          value: choice.value,
-        }));
+      const options = buildSlackArgMenuOptions(
+        entry.choices
+          .filter(
+            (choice) => !query || normalizeLowercaseStringOrEmpty(choice.label).includes(query),
+          )
+          .slice(0, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX),
+      );
       await ack({ options });
     });
   };

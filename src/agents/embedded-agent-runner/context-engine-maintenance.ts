@@ -6,7 +6,6 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { publishTranscriptUpdate } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasSameContextEngineInstance,
   isContextEngineAbortRejection,
@@ -16,8 +15,6 @@ import type {
   ContextEngine,
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
-  ContextEngineRuntimeSettings,
-  ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -60,6 +57,7 @@ import {
   runContextEngineMaintenanceWork,
   type ContextEngineMaintenanceResources,
 } from "./context-engine-maintenance-work.js";
+import type { ContextEngineMaintenanceParams } from "./context-engine-maintenance.types.js";
 import { log } from "./logger.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 import { resolveRuntimeTranscriptReadTarget } from "./transcript-runtime-state.js";
@@ -69,30 +67,6 @@ const TURN_MAINTENANCE_LONG_WAIT_MS = 10_000;
 const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
   "openclaw.contextEngineTurnMaintenanceAbortState",
 );
-type SessionManagerRewriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
-
-type ContextEngineMaintenanceParams = {
-  contextEngine?: ContextEngine;
-  sessionId: string;
-  sessionKey?: string;
-  sessionTarget?: ContextEngineSessionTarget;
-  sessionFile: string;
-  reason: "bootstrap" | "compaction" | "turn";
-  sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
-  withSessionManagerRewriteLock?: SessionManagerRewriteLock;
-  assertActive?: () => void;
-  abortSignal?: AbortSignal;
-  runtimeContext?: ContextEngineRuntimeContext;
-  runtimeSettings?: ContextEngineRuntimeSettings;
-  agentId?: string;
-  contextEngineAgentId?: string;
-  executionMode?: "foreground" | "background";
-  onDeferredMaintenance?: (promise: Promise<void>) => void;
-  onDeferredMaintenanceFailure?: (error: unknown) => void;
-  config?: OpenClawConfig;
-  disposeDeferredContextEngineAfterMaintenance?: boolean;
-  factoryResources?: ContextEngineMaintenanceResources;
-};
 
 type DeferredTurnMaintenanceScheduleParams = ContextEngineMaintenanceParams & {
   contextEngine: ContextEngine;

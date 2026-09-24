@@ -23,6 +23,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
+import { listRecordedFirstHopSourceVersions } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
 import {
@@ -207,6 +208,8 @@ const frozenAdmissionClosure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
   "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
@@ -1085,7 +1088,9 @@ describe("frozen admission workflow barriers", () => {
         ],
       );
       const plan = f.selection();
-      expect(plan.docker).toHaveLength(71);
+      // One targeted group per recorded first-hop source joins the fixed lanes.
+      const firstHopLanes = listRecordedFirstHopSourceVersions().length;
+      expect(plan.docker).toHaveLength(70 + firstHopLanes);
       const planned = Date.now();
       const result = f.run("Admit frozen source contracts", {}, "", { timeout: 360_000 });
       console.info(
@@ -1102,9 +1107,9 @@ describe("frozen admission workflow barriers", () => {
       const bytes = readFileSync(join(f.root, "frozen-admission.json"));
       expect(bytes.length).toBeLessThanOrEqual(262_144);
       const record = JSON.parse(bytes.toString("utf8"));
-      expect(record.evaluations).toHaveLength(72);
+      expect(record.evaluations).toHaveLength(71 + firstHopLanes);
       const children = reconstructAdmissionEvaluations(record);
-      expect(children).toHaveLength(72);
+      expect(children).toHaveLength(71 + firstHopLanes);
       const { digest, provenance: _provenance, ...content } = record;
       expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
       expect(record.status).toBe("UNRESOLVED");
@@ -3002,6 +3007,7 @@ function runFullReleaseInputValidation(
       RELEASE_PROFILE: releaseProfile,
       SKIP_PACKAGE_TELEGRAM_E2E: skipTelegram,
       TELEGRAM_WAIVER: options.telegramWaiver ?? "",
+      LANE_WAIVER: "",
       RERUN_GROUP: options.rerunGroup ?? "all",
       LIVE_SUITE_FILTER: options.liveSuiteFilter ?? "",
       TARGET_CONTEXT_REF: "",
@@ -3113,6 +3119,7 @@ printf '%s\\n' "$value"
       GITHUB_OUTPUT: outputPath,
       PATH: `${fakeBin}:${process.env.PATH}`,
       RELEASE_PROFILE: params.releaseProfile ?? "beta",
+      LANE_WAIVER: "",
       RUN_RELEASE_SOAK: params.runReleaseSoak ?? "false",
       RERUN_GROUP: params.rerunGroup ?? "all",
       CROSS_OS_SUITE_FILTER: params.crossOsSuiteFilter ?? "",
@@ -3192,6 +3199,7 @@ function runReleaseChecksInputValidation(
       RELEASE_RUN_RELEASE_SOAK_INPUT: runReleaseSoak,
       RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: skipTelegram,
       TELEGRAM_WAIVER: options.telegramWaiver ?? "",
+      LANE_WAIVER: "",
     },
   });
   return { outputPath, result };
@@ -3303,6 +3311,7 @@ function runFullReleaseCandidateRequest(packagePublished: boolean) {
       UPGRADE_SURVIVOR_BASELINE: "openclaw@latest",
       UPGRADE_SURVIVOR_BASELINES: "",
       UPGRADE_SURVIVOR_SCENARIOS: "",
+      LANE_WAIVER: "",
     },
   });
   const output = Object.fromEntries(
@@ -3478,6 +3487,7 @@ function runFullReleaseChildDispatch(
     SCENARIO: "",
     SKIP_PACKAGE_TELEGRAM_E2E: "false",
     TELEGRAM_WAIVER: "",
+    LANE_WAIVER: "",
     TARGET_CONTEXT_REF: "",
     TARGET_REF: "main",
     TARGET_SHA: "b".repeat(40),
@@ -5726,6 +5736,7 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
     },
   ])("carries the $name artifact owner without replacing publication authority", async (mode) => {
     const stableSoakWaiver = mode.fullReleasePreflight ? "Soak infrastructure unavailable" : "";
+    const laneWaiver = mode.fullReleasePreflight ? "Telegram lane blocked: operator approved" : "";
     const producerRunId = mode.independentProducer ? "333" : "111";
     const fullReleaseRunId = mode.fullReleasePreflight ? "111" : "222";
     const qualifiedName = `openclaw-npm-preflight-${"a".repeat(40)}`;
@@ -5756,6 +5767,7 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
     const expressions: Record<string, string> = {
       "${{ inputs.preflight_run_id }}": "111",
       "${{ inputs.stable_soak_waiver }}": stableSoakWaiver,
+      "${{ inputs.lane_waiver }}": laneWaiver,
       "${{ inputs.full_release_validation_run_id }}": fullReleaseRunId,
     };
     for (const [name, value] of Object.entries(target.outputs ?? {})) {
@@ -5870,6 +5882,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     const dispatch = fixture.events().find((event) => event.startsWith("dispatch:"));
     expect(dispatch).toContain("-f preflight_run_id=111");
     expect(dispatch).toContain(`-f stable_soak_waiver=${stableSoakWaiver}`);
+    expect(dispatch).toContain(`-f lane_waiver=${laneWaiver}`);
     expect(dispatch).toContain(`-f full_release_validation_run_id=${fullReleaseRunId}`);
 
     const proof = fixture.run(
@@ -8476,6 +8489,7 @@ test "$package_manager" = "pnpm@12.1.0"
         RELEASE_TAG: "${{ inputs.tag }}",
         RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
         STABLE_SOAK_WAIVER: "${{ inputs.stable_soak_waiver }}",
+        LANE_WAIVER: "${{ inputs.lane_waiver }}",
       });
     }
     expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");

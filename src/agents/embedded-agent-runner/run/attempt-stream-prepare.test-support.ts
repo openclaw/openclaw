@@ -19,7 +19,7 @@ export function prepareCatalogExecutor(
   projections: NestedToolActivity[],
   options?: {
     activeSession?: AgentSession;
-    hookRunner?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["hookRunner"];
+    hookRunner?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["agentSession"]["hookRunner"];
     attempt?: Partial<Parameters<typeof prepareEmbeddedAttemptStream>[0]["attempt"]>;
     getRunState?: () => {
       aborted: boolean;
@@ -51,22 +51,32 @@ export function prepareCatalogExecutor(
       onAgentEvent: options?.onAgentEvent,
       ...options?.attempt,
     } as never,
-    activeSession:
-      options?.activeSession ??
-      ({
-        agent: {},
-        isStreaming: false,
-        sessionManager: SessionManager.inMemory(),
-        subscribe: () => () => {},
-      } as never),
-    hookRunner: options?.hookRunner ?? null,
+    agentSession: {
+      activeSession:
+        options?.activeSession ??
+        ({
+          agent: {},
+          isStreaming: false,
+          sessionManager: SessionManager.inMemory(),
+          subscribe: () => () => {},
+        } as never),
+      hookRunner: options?.hookRunner ?? null,
+      clientToolCallSlots: [],
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      builtinToolNames: new Set(),
+      coreBuiltinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+      codeModeExecToolNames: new Set(),
+      sideEffectToolOwners: new Map(),
+      trustedLocalMediaToolNames: new Set(options?.trustedLocalMediaToolNames),
+    },
     hookAgentId: "main",
     diagnosticTrace: {} as never,
     diagnosticOwner: createDiagnosticEmbeddedRunOwner({
       sessionId: "session-output-schema",
       runId: "run-output-schema",
     }),
-    clientToolCallSlots: [],
     nestedToolActivities: projections,
     isReplaySafeTool: () => false,
     runAbortController,
@@ -80,14 +90,8 @@ export function prepareCatalogExecutor(
         timedOut: false,
         yieldDetected: false,
       })),
-    hasDeliveredSourceReply: () => false,
-    markSourceReplyDelivered: vi.fn(),
     onBlockReply: vi.fn(),
     onBlockReplyFlush: vi.fn(),
-    sandboxSessionKey: options?.sandboxSessionKey ?? "agent:main:main",
-    builtinToolNames: new Set(),
-    replaySafeToolNames: new Set(),
-    trustedLocalMediaToolNames: options?.trustedLocalMediaToolNames ?? new Set(),
   });
 }
 

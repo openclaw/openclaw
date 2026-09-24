@@ -12,7 +12,7 @@ import {
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
-import { runBrowserAction, readFields, resolveBrowserActionContext } from "./shared.js";
+import { runBrowserAction, readFields } from "./shared.js";
 
 type BrowserWaitLoadState = "load" | "domcontentloaded" | "networkidle";
 
@@ -42,7 +42,7 @@ export function registerBrowserFormWaitEvalCommands(
     .option("--fields-file <path>", "Read JSON array from a file")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const parent = parentOpts(cmd);
       await runBrowserCliCommand(async () => {
         const fields = await readFields({
           fields: opts.fields,
@@ -50,7 +50,6 @@ export function registerBrowserFormWaitEvalCommands(
         });
         await runBrowserAction({
           parent,
-          profile,
           body: {
             kind: "fill",
             fields,
@@ -80,7 +79,7 @@ export function registerBrowserFormWaitEvalCommands(
     )
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (selector: string | undefined, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const parent = parentOpts(cmd);
       await runBrowserCliCommand(async () => {
         const sel = normalizeOptionalString(selector);
         const load = parseBrowserWaitLoadState(opts.load);
@@ -104,7 +103,6 @@ export function registerBrowserFormWaitEvalCommands(
         };
         await runBrowserAction({
           parent,
-          profile,
           body: request,
           successMessage: "wait complete",
         });
@@ -126,7 +124,7 @@ export function registerBrowserFormWaitEvalCommands(
     )
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const parent = parentOpts(cmd);
       if (!opts.fn) {
         defaultRuntime.error(danger("Missing --fn"));
         defaultRuntime.exit(1);
@@ -136,7 +134,6 @@ export function registerBrowserFormWaitEvalCommands(
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
         await runBrowserAction({
           parent,
-          profile,
           body: {
             kind: "evaluate",
             fn: opts.fn,
