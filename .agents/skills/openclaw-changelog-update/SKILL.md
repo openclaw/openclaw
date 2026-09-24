@@ -350,6 +350,28 @@ pnpm changelog:check
 Repeat `--source` in the approved reading order for a multipart release. The
 converter removes presentation wrappers, turns accordion titles into headings,
 expands docs links, and preserves source text, credits, code, tables, and images.
+The top navigation points only to the other format. For a docs release page,
+place this standalone paragraph immediately after its H1 (or first in the body
+when the title comes from frontmatter), substituting the release version:
+
+```markdown
+AI agents and tools can read these release notes as [plain Markdown](https://raw.githubusercontent.com/openclaw/openclaw/main/CHANGELOG/YYYY.M.PATCH.md).
+```
+
+The existing converter copies the reviewed reciprocal template into that same
+position in the flat changelog:
+
+```markdown
+For formatted release notes, [read this release on the docs site](https://docs.openclaw.ai/releases/YYYY.M.PATCH).
+```
+
+`releaseDocsNavigation` in `scripts/lib/release-docs-mirror.mjs` owns these two
+literal templates. The converter replaces only the exact standalone top
+paragraph; it does not infer navigation from prose or rewrite the release story.
+Review changes to either template as public copy and update affected docs and
+marked mirrors together. Do not add a self-link, a second format menu, or hidden
+navigation comments, and do not hand-edit the generated changelog.
+
 Unsupported markup fails instead of silently dropping content. Its first-line
 marker binds the ordered source paths and exact source digest. Checks compare
 only marked mirrors against their sources; untouched historical originals stay
