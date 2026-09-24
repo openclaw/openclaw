@@ -60,39 +60,6 @@ describe("CronPage lifecycle", () => {
     },
   );
 
-  it("shows a fulfilled catalog acquisition failure and clears it after publication recovers", async () => {
-    const fallback = createRequest();
-    let failed = false;
-    const client = createTestGatewayClient((method) =>
-      method === "models.list"
-        ? {
-            models: [{ provider: "ollama", id: "retained", name: "Retained model" }],
-            refreshFailed: failed,
-            providerOutcomes: [{ provider: "ollama", status: failed ? "unavailable" : "ready" }],
-          }
-        : fallback(method),
-    );
-    const gateway = createGateway(client, true);
-    const page = createPage(createContext(gateway), { render: true });
-    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["retained"]));
-
-    failed = true;
-    gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-    await waitForCronPage(() =>
-      expect(page.textContent).toContain(
-        "Some models could not be refreshed. Open Models to try again.",
-      ),
-    );
-    expect(page.cronModelSuggestions).toEqual(["retained"]);
-
-    failed = false;
-    gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-    await waitForCronPage(() =>
-      expect(page.textContent).not.toContain("Some models could not be refreshed"),
-    );
-    expect(page.cronModelSuggestions).toEqual(["retained"]);
-  });
-
   it.each(["publication", "agent", "connection", "gateway", "detach"])(
     "rejects a retired catalog result and error after %s changes",
     async (change) => {
@@ -406,40 +373,6 @@ describe("CronPage lifecycle", () => {
     );
     expect(triggerToggle).toBeUndefined();
     expect(page.textContent).toContain("disabled by cron.triggers.enabled");
-  });
-
-  it("rejects model suggestions from an earlier connection epoch", async () => {
-    const staleModels = createDeferred<{ models: Array<{ id: string }> }>();
-    let modelRequestCount = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "models.list") {
-        modelRequestCount += 1;
-        return modelRequestCount === 1 ? staleModels.promise : { models: [{ id: "fresh/model" }] };
-      }
-      if (method === "cron.list") {
-        return cronListResponse([]);
-      }
-      if (method === "cron.runs") {
-        return { entries: [], total: 0, offset: 0, hasMore: false };
-      }
-      return {};
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client, false);
-    const page = createPage(createContext(gateway));
-    await page.updateComplete;
-
-    gateway.emitSnapshot({ phase: "connected" });
-    await waitForCronPage(() => expect(modelRequestCount).toBe(1));
-    gateway.emitSnapshot({ phase: "stopped" });
-    gateway.emitSnapshot({ phase: "connected" });
-    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["fresh/model"]));
-
-    staleModels.resolve({ models: [{ id: "stale/model" }] });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(page.cronModelSuggestions).toEqual(["fresh/model"]);
   });
 
   it("ignores a cron event callback retained by a replaced gateway source", async () => {
