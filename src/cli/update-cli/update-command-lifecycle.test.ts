@@ -434,6 +434,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
       );
       const maintenance = {
+        signal: new AbortController().signal,
         run: <T>(operation: () => T): T => operation(),
         finish: vi.fn(async () => {}),
         release: vi.fn(async () => {}),
@@ -786,6 +787,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       mocks.maintenance.mockImplementationOnce(async () => {
         record("park-service");
         return {
+          signal: new AbortController().signal,
           run: <T>(operation: () => T): T => operation(),
           releaseState: async () => {
             record("release-state");
@@ -964,6 +966,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     const warnings: string[] = [];
     const warning = "Gateway was already stopped before repair; run openclaw gateway start.";
     mocks.maintenance.mockResolvedValue({
+      signal: new AbortController().signal,
       run: <T>(operation: () => T): T => operation(),
       release: async () => {},
       releaseState: async () => {},

@@ -555,7 +555,6 @@ extensions/line/src/send.ts	1
 extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2
 extensions/line/src/webhook-utils.ts	1
-extensions/line/src/webhook.ts	1
 extensions/litellm/onboard.ts	1
 extensions/llama-cpp/src/embedding-provider.ts	1
 extensions/llm-task/doctor-contract-api.ts	1
@@ -2246,7 +2245,7 @@ src/commands/doctor-session-transcript-headers.ts	5
 src/commands/doctor-session-transcript-labels.ts	4
 src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skills.ts	1
-src/commands/doctor-sqlite-compact.ts	3
+src/commands/doctor-sqlite-compact.ts	1
 src/commands/doctor-sqlite-maintenance-lock.ts	2
 src/commands/doctor-state-integrity.ts	1
 src/commands/doctor-state-sqlite-compact.ts	1

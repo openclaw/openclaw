@@ -2140,7 +2140,6 @@ describe("update-cli", () => {
   );
 
   it.each([
-    { kind: "git", restart: false, capability: "sealed" },
     { kind: "git", restart: true, capability: "sealed" },
     { kind: "package", restart: false, capability: "sealed" },
     { kind: "package", restart: true, capability: "sealed" },
@@ -12478,21 +12477,21 @@ describe("update-cli", () => {
       },
     },
     {
-      name: "skips service env refresh when --no-restart is set",
+      name: "refuses a running Git installation with --no-restart",
       run: async () => {
         mockGitUpdateAfterMutation();
         serviceLoaded.mockResolvedValue(true);
         mockOwnedGitService();
 
-        await updateCommand({ restart: false });
+        await expect(updateCommand({ restart: false })).rejects.toEqual(new ExitError(1));
       },
       assert: () => {
-        expectNoSideEffects(runDaemonInstall, runDaemonRestart);
+        expectNoSideEffects(runDaemonInstall, runDaemonRestart, serviceStop);
         expect(freshRestartCalls()).toHaveLength(0);
         expect(
           gatewayCommandCall(path.join(process.cwd(), "dist", "index.js"), "install"),
         ).toBeUndefined();
-        expect(getLogOutput()).toContain("Gateway: restart skipped (--no-restart).");
+        expect(getErrorOutput()).toContain("still running");
       },
     },
     {

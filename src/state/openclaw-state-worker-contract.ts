@@ -289,7 +289,7 @@ export type OpenClawStateWorkerBackend = SqliteWorkerPreparedBackend<
     OpenClawStateWorkerCleanupOperations
 >;
 
-/** Commands dispatched after the lightweight lease, cleanup, and metadata paths. */
+/** Commands dispatched after the independently prepared backend paths. */
 export type OpenClawStateWorkerRuntimeCommand = Exclude<
   Parameters<OpenClawStateWorkerBackend["execute"]>[0],
   {
@@ -297,6 +297,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | "plugins.metadata.read"
       | "database.inspectIdle"
       | "agentDatabases.releaseExitedLease"
+      | keyof PluginStateWorkerOperations
       | keyof OpenClawStateLeaseLifecycleOperations;
   }
 >;
