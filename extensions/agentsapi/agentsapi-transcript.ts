@@ -103,7 +103,7 @@ export async function recordAgentsApiNativeToolInvocation(
     params,
     {
       ...createAgentHarnessToolCallMessage(
-        { api: "openai-responses", provider: "openai", modelId: params.model.id },
+        { api: "openai-agents", provider: "openai", modelId: params.model.id },
         { id, name: tool.name, arguments: tool.args },
         nextTimestamp(),
       ),
@@ -124,7 +124,7 @@ export async function recordAgentsApiToolTranscript(
 ): Promise<void> {
   const identity = `agentsapi:tool:${call.turn_id}:${call.call_id}`;
   const attribution = {
-    api: "openai-responses" as const,
+    api: "openai-agents" as const,
     provider: "openai",
     modelId: params.model.id,
   };

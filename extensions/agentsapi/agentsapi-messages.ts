@@ -664,7 +664,7 @@ class AgentsApiMessageProjection {
   }
 
   private attribution() {
-    return { api: "openai-responses" as const, provider: "openai", modelId: this.params.model.id };
+    return { api: "openai-agents" as const, provider: "openai", modelId: this.params.model.id };
   }
 
   private nextTimestamp(): number {
