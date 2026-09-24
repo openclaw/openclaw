@@ -8,13 +8,31 @@ import {
   captureUpdateCandidatePluginCodeLink,
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
-import type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
-export type UpdateCandidatePluginTreeEntry = UpdateCandidatePluginTreePlan["entries"][number];
+export type UpdateCandidatePluginTreeEntry = {
+  path: string;
+  size: number;
+  mode: number;
+  dev: string;
+  ino: string;
+} & (
+  | { kind: "directory" }
+  | { kind: "file"; birthtimeNs: string; mtimeNs: string; ctimeNs: string }
+  | { kind: "symlink"; link: string; linkType: "file" | "junction" }
+);
 
-type MaterializablePlan = Omit<UpdateCandidatePluginTreePlan, "bytes" | "entries">;
+type MaterializablePlan = {
+  privateRoot: string;
+  candidateRoot: string;
+  copies: Array<[string, string]>;
+  hostLinks: string[];
+  relocations: Array<{ sourceRoot: string; destinationRoot: string }>;
+  aliases: Array<[string, string]>;
+  moduleBindings: Array<[string, string]>;
+  edges: Array<{ source: string; target: string; real: string }>;
+};
 
 export const isUpdateCandidateHostLauncher = (file: string) =>
   path.basename(path.dirname(file)) === ".bin" &&
