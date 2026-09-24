@@ -72,6 +72,8 @@ export async function linkUpdateCandidatePluginTrees(
     // its private stage is published.
     await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
       overwrite: false,
+      // Retained workers are live-only scratch state, not crash recovery data.
+      durable: false,
       maxBytes: entry.size,
       mode: entry.mode | 0o600,
       sourceHardlinks: "allow",
