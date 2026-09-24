@@ -537,6 +537,14 @@ serveOwnedWorkerTasks(
               },
             );
           }
+          if (request.kind === "session-reset-recall") {
+            const { readSessionResetRecallCutoffInProcess } =
+              await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.js");
+            return {
+              ok: true,
+              value: { cutoff: readSessionResetRecallCutoffInProcess(request.scope) },
+            };
+          }
           const { buildSessionEntryInProcess, readSessionEntryResetRecallCutoff } =
             await import("../../../packages/memory-host-sdk/src/host/session-files.js");
           const { createSensitiveTextRedactor } = await import("../../logging/redact.js");
