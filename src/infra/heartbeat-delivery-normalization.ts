@@ -11,7 +11,7 @@ import {
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
+import { SILENT_REPLY_TOKEN, isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { escapeRegExp } from "../utils.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
@@ -62,16 +62,28 @@ function stripTrailingHeartbeatNotifyFalse(text: string): {
     : { text, silent: false };
 }
 
+const TRAILING_SILENT_LINE_RE = new RegExp(`(?:^|\\r?\\n)[ \t]*${SILENT_REPLY_TOKEN}$`);
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
   ackMaxChars: number,
-  mode: "heartbeat" | "message" = "heartbeat",
+  mode: "heartbeat" | "message",
+  allowSilentLine: boolean,
 ): NormalizedHeartbeatDelivery {
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
   const isSilentReply = isSilentReplyPayloadText(textForStrip);
-  const stripped = stripHeartbeatToken(isSilentReply ? "" : textForStrip, {
+  // This tolerance belongs to delivery, not the context-free transcript filter:
+  // completion relays and explicit failures must retain their substantive text.
+  const silentLine =
+    mode === "heartbeat" && allowSilentLine
+      ? TRAILING_SILENT_LINE_RE.exec(textForStrip.trim())
+      : null;
+  const isBoundedSilentLine =
+    silentLine !== null &&
+    textForStrip.trim().slice(0, silentLine.index).trim().length <= ackMaxChars;
+  const stripped = stripHeartbeatToken(isSilentReply || isBoundedSilentLine ? "" : textForStrip, {
     mode,
     maxAckChars: ackMaxChars,
   });
@@ -171,6 +183,7 @@ export function classifyHeartbeatAgentOutcome(params: {
           params.responsePrefix,
           params.ackMaxChars,
           mode,
+          !hasExplicitFailure && replyPayload?.isError !== true,
         );
   if (agentRunFailed) {
     const replacement = replaceGenericExternalRunFailureText(normalized.text);
