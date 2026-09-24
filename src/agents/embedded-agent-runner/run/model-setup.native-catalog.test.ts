@@ -70,6 +70,7 @@ describe("first-turn native catalog model setup", () => {
         },
       };
       const pluginRegistry = createEmptyPluginRegistry();
+      const assertSelectionCurrent = vi.fn();
       const harness: AgentHarness = {
         id: "codex",
         label: "Codex",
@@ -77,7 +78,10 @@ describe("first-turn native catalog model setup", () => {
         supports: ({ provider }) => ({ supported: provider === "openai" }),
         loadModelCatalog: async () => [luna],
         ...(readinessCallback
-          ? { readModelCatalogReadiness: () => ({ accountType: "chatgpt", authMode: "oauth" }) }
+          ? {
+              readModelCatalogReadiness: () => ({ accountType: "chatgpt", authMode: "oauth" }),
+              captureModelCatalogSelectionAuthority: () => assertSelectionCurrent,
+            }
           : {}),
         runAttempt: vi.fn(),
       };
@@ -169,6 +173,9 @@ describe("first-turn native catalog model setup", () => {
         expect(setup.modelId).toBe("gpt-6-luna");
         expect(setup.nativeModelOwned).toBe(true);
         expect(setup.nativeSessionRuntime).toBeUndefined();
+        expect(setup.assertNativeModelSelectionCurrent).toBe(
+          readinessCallback ? assertSelectionCurrent : undefined,
+        );
         expect(setup.model).toMatchObject({
           id: "gpt-6-luna",
           name: "GPT-6-Luna",

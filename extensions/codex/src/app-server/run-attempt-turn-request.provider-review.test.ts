@@ -119,7 +119,9 @@ async function prepare(
   acknowledgment?: Acknowledgment,
   native = createNativeThread(),
   usesSupervisionConnection = true,
+  assertNativeModelSelectionCurrent?: () => void,
 ) {
+  const writtenMethods: string[] = [];
   const request = vi.fn(
     async (
       method: string,
@@ -127,6 +129,7 @@ async function prepare(
       options: { assertCurrent?: () => void },
     ) => {
       options.assertCurrent?.();
+      writtenMethods.push(method);
       if (method === "thread/turns/list") {
         return { data: [native.latest] };
       }
@@ -180,6 +183,7 @@ async function prepare(
               modelId: "test-model",
               model: { api: "openai-chatgpt-responses" },
               ...(acknowledgment ? { providerReviewAcknowledgment: acknowledgment } : {}),
+              ...(assertNativeModelSelectionCurrent ? { assertNativeModelSelectionCurrent } : {}),
             },
             mutable: { pluginAppServer: {} },
             appServer: { start: { transport: "stdio" } },
@@ -202,6 +206,7 @@ async function prepare(
   return {
     prepared,
     request,
+    writtenMethods,
     client,
     releaseCurrentRoute,
     resources,
@@ -276,6 +281,25 @@ describe("native acknowledged turn requests", () => {
     expect(native.latest.status).toBe("failed");
     expect(attempt.route.cancelTurn).toHaveBeenCalledOnce();
     expect(host.acceptNativeTurn).not.toHaveBeenCalled();
+    expect(cleanup.interrupt).not.toHaveBeenCalled();
+  });
+
+  it("rejects a revoked native catalog selection before writing turn/start", async () => {
+    let revision = 1;
+    const selectedRevision = revision;
+    const assertSelectionCurrent = vi.fn(() => {
+      if (revision !== selectedRevision) {
+        throw new Error("Codex native model catalog selection is no longer current");
+      }
+    });
+    const attempt = await prepare(undefined, createNativeThread(), true, assertSelectionCurrent);
+
+    revision += 1;
+    await expect(attempt.prepared.startCodexTurn()).rejects.toThrow(
+      "Codex native model catalog selection is no longer current",
+    );
+    expect(assertSelectionCurrent).toHaveBeenCalledOnce();
+    expect(attempt.writtenMethods).not.toContain("turn/start");
     expect(cleanup.interrupt).not.toHaveBeenCalled();
   });
 

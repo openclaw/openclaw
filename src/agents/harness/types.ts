@@ -597,6 +597,14 @@ type AgentHarnessModelCatalogCapability = {
   readModelCatalogReadiness?(
     params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
   ): { accountType: string; authMode?: string } | undefined;
+  /**
+   * Captures a secret-free revocation assertion for this exact native model selection.
+   * The host calls it immediately before first-turn model I/O; it must throw if the
+   * account/catalog observation or its owning runtime has changed since discovery.
+   */
+  captureModelCatalogSelectionAuthority?(
+    params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
+  ): (() => void) | undefined;
 };
 
 type AgentHarnessTaskHistoryCapability = {

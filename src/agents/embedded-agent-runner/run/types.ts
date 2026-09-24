@@ -169,6 +169,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Audited exact denies that the plugin harness must enforce against native equivalents. */
   pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  /** Revalidates a selected native catalog account immediately before first-turn model I/O. */
+  assertNativeModelSelectionCurrent?: () => void;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
   initialReplayState?: EmbeddedRunReplayState;

@@ -322,6 +322,7 @@ export async function prepareCodexAttemptTurnRequest(
           signal: runAbortController.signal,
           assertCurrent: () => {
             assertTurnCurrent();
+            params.assertNativeModelSelectionCurrent?.();
             continuation?.dispatch();
           },
         }),

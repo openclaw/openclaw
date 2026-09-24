@@ -286,8 +286,17 @@ describe("Codex app-server model catalog", () => {
       });
       await owner.load(catalogParams, nativePluginConfig);
       expect(read({}, nativePluginConfig)).toEqual({ accountType: "chatgpt", authMode: mode });
+      const assertSelectionCurrent = owner.captureSelectionAuthority(
+        { ...catalogParams, provider: "openai", modelId: "synthetic-opaque" },
+        nativePluginConfig,
+      );
+      expect(assertSelectionCurrent).toBeTypeOf("function");
+      expect(() => assertSelectionCurrent?.()).not.toThrow();
       rpc.epoch += 1;
       expect(read({}, nativePluginConfig)).toBeUndefined();
+      expect(() => assertSelectionCurrent?.()).toThrow(
+        "Codex native model catalog selection is no longer current",
+      );
     },
   );
 

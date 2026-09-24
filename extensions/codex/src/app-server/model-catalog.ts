@@ -83,6 +83,29 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           }
         : undefined;
     },
+    captureSelectionAuthority(
+      params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
+      pluginConfig: unknown,
+    ) {
+      const observation = scopes.get(params.config)?.get(scopeKey(params));
+      const isCurrent = () =>
+        !disposed &&
+        params.provider === "openai" &&
+        observation !== undefined &&
+        scopes.get(params.config)?.get(scopeKey(params)) === observation &&
+        observation.pluginConfig === pluginConfig &&
+        observation.models?.has(params.modelId) === true &&
+        observation.accountType !== undefined &&
+        observation.isCurrent?.() === true;
+      if (!isCurrent()) {
+        return undefined;
+      }
+      return () => {
+        if (!isCurrent()) {
+          throw new Error("Codex native model catalog selection is no longer current");
+        }
+      };
+    },
     async load(
       params: AgentHarnessModelCatalogParams,
       pluginConfig: unknown,
