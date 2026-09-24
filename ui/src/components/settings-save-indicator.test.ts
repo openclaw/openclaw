@@ -116,7 +116,7 @@ describe("settings save indicator", () => {
     expect(indicator.querySelector('[role="status"]')?.textContent).toContain(
       "Settings not applied",
     );
-    expect(indicator.textContent).toContain("Current settings are unchanged. Edit and retry.");
+    expect(indicator.textContent).toContain("Current settings are unchanged.");
     expect(indicator.querySelector("details")?.textContent).toContain(
       "logging.level: Invalid option",
     );
