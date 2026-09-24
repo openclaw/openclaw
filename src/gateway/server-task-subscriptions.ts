@@ -55,6 +55,14 @@ export function startGatewayTaskSubscriptions(params: {
           (!event.previous || !isTerminalTaskStatus(event.previous.status))
             ? event.task.taskId
             : undefined;
+        // Offline Web Push mirrors the genuine-transition predicate above and
+        // additionally honors the spawner's silence policy. Re-projecting an
+        // unchanged terminal row on restore is not a transition.
+        const taskNotificationNotify =
+          terminalId !== undefined &&
+          event.kind === "upserted" &&
+          event.task.notifyPolicy !== "silent" &&
+          event.task.runtime !== "cron";
         const runOwner = taskId ? state.runOwners.get(taskId) : undefined;
         const backing = taskId
           ? JSON.stringify(readTaskBackingInstance(state.tasks.get(taskId)?.detail))
@@ -156,6 +164,9 @@ export function startGatewayTaskSubscriptions(params: {
           params.broadcast("task", payload, {
             dropIfSlow: true,
             ...(target ? { sessionKeys: [target.sessionKey], agentId: target.agentId } : {}),
+            ...(event.kind === "upserted"
+              ? { taskNotification: { notify: taskNotificationNotify } }
+              : {}),
           });
           broadcastCompleted = true;
           if (closing && !closing.deleted && isCurrent()) {

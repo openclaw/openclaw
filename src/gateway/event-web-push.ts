@@ -59,6 +59,7 @@ export type HumanMentionWebPush = {
 function resolveEventWebPushNotification(
   event: string,
   payload: unknown,
+  opts?: GatewayBroadcastOpts,
 ): EventNotification | null {
   const value = isRecord(payload) ? payload : null;
   if (!value) {
@@ -91,7 +92,14 @@ function resolveEventWebPushNotification(
   }
   if (event === "task" && value.action === "upserted") {
     const task = isRecord(value.task) ? value.task : null;
-    if ((task?.status !== "failed" && task?.status !== "timed_out") || task.runtime === "cron") {
+    // Only a genuine non-terminal -> terminal transition, from a spawner that did
+    // not request silence, may push offline. This suppresses restart re-projections
+    // of retained terminal rows and honors the notify_policy contract.
+    if (
+      opts?.taskNotification?.notify !== true ||
+      (task?.status !== "failed" && task?.status !== "timed_out") ||
+      task.runtime === "cron"
+    ) {
       return null;
     }
     const taskId = normalizeWebPushDisplayLabel(task.id) ?? "failed";
@@ -308,7 +316,7 @@ export function createEventWebPushDelivery(params: {
 
   return {
     handleEvent(event: string, payload: unknown, opts?: GatewayBroadcastOpts): void {
-      const notification = resolveEventWebPushNotification(event, payload);
+      const notification = resolveEventWebPushNotification(event, payload, opts);
       if (notification) {
         deliver(notification, event, payload, opts);
       }

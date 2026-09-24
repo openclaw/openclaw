@@ -228,6 +228,7 @@ describe("event Web Push classification", () => {
       delivery.handleEvent(event, payload, {
         sessionKeys: ["agent:research:thread.1"],
         agentId: "research",
+        ...(event === "task" ? { taskNotification: { notify: true } } : {}),
       });
 
       await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
@@ -347,10 +348,14 @@ describe("event Web Push classification", () => {
 
   it("sends only failed task and cron terminal events", async () => {
     const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
-    delivery.handleEvent("task", {
-      action: "upserted",
-      task: { id: "task-1", title: "Build\u202E", status: "failed" },
-    });
+    delivery.handleEvent(
+      "task",
+      {
+        action: "upserted",
+        task: { id: "task-1", title: "Build\u202E", status: "failed" },
+      },
+      { taskNotification: { notify: true } },
+    );
     await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
     expect(preparedWebPushSendMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -374,6 +379,23 @@ describe("event Web Push classification", () => {
         payload: expect.objectContaining({ body: "Nightly\\u{2028}run needs attention." }),
       }),
     );
+  });
+
+  it("suppresses a failed task push unless the broadcast marks a notified transition", async () => {
+    const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    const payload = {
+      action: "upserted",
+      task: { id: "task-1", title: "Build", status: "failed" },
+    };
+
+    // Restart re-projection of an unchanged terminal row carries no notify hint.
+    delivery.handleEvent("task", payload, { taskNotification: { notify: false } });
+    delivery.handleEvent("task", payload);
+    await Promise.resolve();
+    expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+
+    delivery.handleEvent("task", payload, { taskNotification: { notify: true } });
+    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
   });
 
   it.each([false, true])(
