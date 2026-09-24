@@ -9,6 +9,7 @@ import type { PreparedGatewayModelCatalog } from "../server-model-catalog.types.
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import {
   identifiedClient,
+  initializeSessionReadContext,
   requestContext,
   seedSessions,
 } from "./sessions-read-cache.test-support.js";
@@ -19,6 +20,7 @@ async function describeSession(
   key: string,
   client: GatewayClient = identifiedClient("owner@example.com"),
 ) {
+  await initializeSessionReadContext(context);
   const responses: Parameters<RespondFn>[] = [];
   await sessionByKeyReadHandlers["sessions.describe"]!({
     req: { type: "req", id: "describe-catalog", method: "sessions.describe", params: { key } },
@@ -103,7 +105,11 @@ describe("sessions.describe catalog projection", () => {
 
         expect(response?.[0]).toBe(true);
         expect(response?.[1]).toMatchObject({
-          session: { agentId, thinkingLevels: levels, thinkingDefault: defaultLevel },
+          session: {
+            agentId,
+            thinkingLevels: [...levels, { id: "ultra", label: "ultra" }],
+            thinkingDefault: defaultLevel,
+          },
         });
       });
     },

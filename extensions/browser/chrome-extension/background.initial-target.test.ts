@@ -338,6 +338,67 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
     expect(await harness.command({ type: "attach", tabId: 100 })).toMatchObject({ type: "error" });
   });
 
+  it.each(["matching", "different", "absent"])(
+    "checks a lagging initial-blank snapshot against the native commit with a %s pending URL",
+    async (pending) => {
+      const harness = await createHarness(mode);
+      await harness.command({ type: "createTab", url: "about:blank" });
+      const url = "https://example.com/destination";
+      const result = { frameId: "frame-101", loaderId: "destination" };
+      harness.debuggerSendCommand.mockImplementationOnce(async () => {
+        harness.updateTab(
+          101,
+          {
+            pendingUrl:
+              pending === "matching"
+                ? url
+                : pending === "different"
+                  ? "https://example.com/other"
+                  : undefined,
+          },
+          false,
+        );
+        const commit = () =>
+          harness.debuggerEventListener?.({ tabId: 101 }, "Page.frameNavigated", {
+            frame: { id: result.frameId, loaderId: result.loaderId, url },
+          });
+        if (mode === "selected") {
+          const getGroup = harness.tabGroupsGet.getMockImplementation()!;
+          // Commit between the two access reads, before Chrome's tab snapshot catches up.
+          harness.tabGroupsGet.mockImplementationOnce(async (groupId) => {
+            commit();
+            return await getGroup(groupId);
+          });
+        } else {
+          commit();
+        }
+        return result;
+      });
+      const response = await harness.command({
+        type: "cdp",
+        tabId: 101,
+        method: "Page.navigate",
+        params: { url },
+      });
+      if (pending !== "matching") {
+        expect(response).toMatchObject({ type: "error" });
+        return;
+      }
+      expect(response, JSON.stringify(response)).toMatchObject({ type: "result", result });
+      harness.updateTab(100, { title: "Trigger discovery" });
+      await vi.waitFor(() =>
+        expect(harness.frames().findLast((frame) => frame.type === "tabs")?.tabs).toContainEqual(
+          expect.objectContaining({ tabId: 101, url }),
+        ),
+      );
+      expect(harness.debuggerDetach).not.toHaveBeenCalled();
+      harness.updateTab(101, { url, pendingUrl: undefined });
+      expect(
+        await harness.command({ type: "cdp", tabId: 101, method: "Runtime.evaluate" }),
+      ).toMatchObject({ type: "result" });
+    },
+  );
+
   it("retires initial-document provenance on navigation and does not regain it on return to blank", async () => {
     const harness = await createHarness(mode);
     await harness.command({ type: "createTab", url: "about:blank" });

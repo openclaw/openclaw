@@ -44,7 +44,7 @@ describe("runMessageAction send validation", () => {
       toolContext: {
         currentChannelProvider: "webchat",
       },
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
@@ -200,7 +200,7 @@ describe("runMessageAction send validation", () => {
       toolContext: {
         currentChannelProvider: "webchat",
       },
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
@@ -226,7 +226,7 @@ describe("runMessageAction send validation", () => {
         toolContext: {
           currentChannelProvider: "webchat",
         },
-        sessionKey: "agent:main",
+        sessionKey: "agent:main:main",
         sourceReplyDeliveryMode: "automatic",
       }),
     ).rejects.toThrow(/requires a target/i);
@@ -247,7 +247,7 @@ describe("runMessageAction send validation", () => {
     ).rejects.toThrow(/requires a target/i);
   });
 
-  it.each([false, true])(
+  it.each([undefined, false, true])(
     "applies provider policy to explicit message-tool-only routes (allowed=%s)",
     async (allowAcrossProviders) => {
       const send = runMessageAction({
@@ -264,12 +264,12 @@ describe("runMessageAction send validation", () => {
         toolContext: {
           currentChannelProvider: "webchat",
         },
-        sessionKey: "agent:main",
+        sessionKey: "agent:main:main",
         sourceReplyDeliveryMode: "message_tool_only",
         dryRun: true,
       });
 
-      if (!allowAcrossProviders) {
+      if (allowAcrossProviders === false) {
         await expect(send).rejects.toMatchObject({
           reasonCode: "message_cross_context_denied",
           policyRef: "message-cross-context:provider",

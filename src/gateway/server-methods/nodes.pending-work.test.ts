@@ -356,6 +356,63 @@ describe("node.pending handlers", () => {
     expect(call?.[2]).toBeUndefined();
   });
 
+  it.each([
+    { available: true, wakeCount: 2, waitTimeouts: [3_000, 12_000] },
+    { available: false, wakeCount: 1, waitTimeouts: [] },
+  ])(
+    "retries a disconnected node only when its first wake is available=$available",
+    async ({ available, wakeCount, waitTimeouts }) => {
+      const wakeLifecycle = new AbortController().signal;
+      mocks.captureNodeWakeLifecycle.mockReturnValue(wakeLifecycle);
+      mocks.enqueueNodePendingWork.mockReturnValue({
+        revision: 4,
+        deduped: false,
+        item: { id: "pending-retry", type: "location.request" },
+      });
+      mocks.maybeWakeNodeWithApns.mockResolvedValue({
+        available,
+        throttled: false,
+        path: available ? "sent" : "no-registration",
+        durationMs: 0,
+      });
+      mocks.waitForNodeReconnect.mockResolvedValue(false);
+      mocks.maybeSendNodeWakeNudge.mockResolvedValue({
+        sent: false,
+        throttled: false,
+        reason: "no-registration",
+        durationMs: 0,
+      });
+      const respond = vi.fn();
+      await expectDefined(
+        nodePendingWorkHandlers["node.pending.enqueue"],
+        "pending enqueue handler",
+      )({
+        params: { nodeId: "node-retry", type: "location.request" },
+        respond: respond as never,
+        client: null,
+        context: makeContext() as never,
+        req: { type: "req", id: "req-node-retry", method: "node.pending.enqueue" },
+        isWebchatConnect: () => false,
+      });
+
+      expect(mocks.maybeWakeNodeWithApns).toHaveBeenCalledTimes(wakeCount);
+      expect(mocks.maybeWakeNodeWithApns.mock.calls.map(([, options]) => options.force)).toEqual(
+        available ? [undefined, true] : [undefined],
+      );
+      expect(mocks.waitForNodeReconnect.mock.calls.map(([options]) => options.timeoutMs)).toEqual(
+        waitTimeouts,
+      );
+      expect(mocks.maybeSendNodeWakeNudge).toHaveBeenCalledTimes(1);
+      expect(mocks.removeNodePendingWorkItem).not.toHaveBeenCalled();
+      expect(mocks.releaseNodeWakeLifecycle).toHaveBeenCalledWith("node-retry", wakeLifecycle);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ wakeTriggered: available }),
+        undefined,
+      );
+    },
+  );
+
   it("does not enqueue work when pairing invalidates during the generation check", async () => {
     const lifecycleController = new AbortController();
     mocks.captureNodeWakeLifecycle.mockReturnValue(lifecycleController.signal);

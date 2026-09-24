@@ -1,13 +1,25 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { html, render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { renderAssistantAttachments } from "./chat-message-attachments.ts";
-import { releaseChatMediaResourceSubscriber, type AttachmentItem } from "./chat-message-media.ts";
+import { renderAssistantAttachments as renderAttachmentCards } from "./chat-message-attachments.ts";
+import { renderMessageImages } from "./chat-message-images.ts";
+import {
+  projectMessageMedia,
+  releaseChatMediaResourceSubscriber,
+  type AttachmentItem,
+} from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 type AttachmentSidebarContent = Extract<SidebarContent, { kind: "attachment" }>;
+
+function renderAssistantAttachments(
+  ...[content, options, ...rest]: Parameters<typeof renderAttachmentCards>
+) {
+  const { images, attachments } = projectMessageMedia({}, content);
+  return html`${renderMessageImages(images, options)}${renderAttachmentCards(attachments, options, ...rest)}`;
+}
 
 function managedAttachment(url: string, artifactId?: string): AttachmentItem {
   return {
@@ -62,6 +74,38 @@ afterEach(() => {
 });
 
 describe("attachment sidebar source ownership", () => {
+  it("preserves an ordinary comment-named file when its source cannot be previewed", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenSidebar = vi.fn();
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "selection-comment.txt",
+              mimeType: "text/plain",
+              url: "https://files.example/notes.txt",
+            },
+          },
+        ],
+        {},
+        onOpenSidebar,
+        undefined,
+        false,
+      ),
+      container,
+    );
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__title")?.textContent,
+      ).toContain("selection-comment.txt"),
+    );
+    container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+    expect(onOpenSidebar).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["sample-image.png", "image/png", "https://example.com/sample-image.png"],
     ["photo.jpg", "image/jpeg", "https://example.com/photo.jpg"],

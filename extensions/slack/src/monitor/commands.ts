@@ -1,4 +1,3 @@
-// Slack plugin module implements commands behavior.
 import type { SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 

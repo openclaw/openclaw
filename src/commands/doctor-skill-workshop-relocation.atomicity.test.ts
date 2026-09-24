@@ -23,7 +23,7 @@ import {
   type SkillProposalRecord,
   type SkillProposalRollback,
 } from "../skills/workshop/types.js";
-import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
+import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -186,15 +186,15 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
       const supportPath = "references/verification.md";
       const liveContent =
         state === "unstarted" || state === "partial" ? previousContent : proposedContent;
+      const pendingDraft =
+        state === "unstarted" ? `${created.content}\nRecord the result.\n` : draft;
       const pending: SkillProposalRecord = {
         ...created.record,
         id: "atomic-update-20260901-1234567890",
         kind: "update",
         status: "pending",
         appliedAt: undefined,
-        draftHash: hashSkillProposalContent(
-          state === "unstarted" ? `${created.content}\nRecord the result.\n` : draft,
-        ),
+        draftHash: hashSkillProposalContent(pendingDraft),
         ...(state === "unstarted"
           ? {}
           : {
@@ -236,6 +236,9 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
       };
       await fs.mkdir(created.record.target.skillDir, { recursive: true });
       await fs.writeFile(created.record.target.skillFile, liveContent);
+      const proposalDir = path.join(testState.stateDir, "skill-workshop", "proposals", pending.id);
+      await fs.mkdir(proposalDir, { recursive: true });
+      await fs.writeFile(path.join(proposalDir, pending.draftFile), pendingDraft);
       if (state !== "unstarted") {
         await fs.mkdir(path.join(created.record.target.skillDir, "references"), {
           recursive: true,
@@ -244,21 +247,14 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
           path.join(created.record.target.skillDir, supportPath),
           state === "foreign-support" ? "External verification steps.\n" : proposedSupport,
         );
-        const proposalDir = path.join(
-          testState.stateDir,
-          "skill-workshop",
-          "proposals",
-          pending.id,
-        );
         await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
-        await fs.writeFile(path.join(proposalDir, pending.draftFile), draft);
         await fs.writeFile(path.join(proposalDir, supportPath), proposedSupport);
       }
       seedLegacyV15ProposalRows(testState.env, [
         { record: created.record, workspaceDir, claimReleasedTime: null },
         { record: pending, workspaceDir, claimReleasedTime: null },
       ]);
-      repairOpenClawStateDatabaseSchemaIfNeeded({ env: testState.env });
+      await prepareOpenClawStateDatabaseSchema({ env: testState.env });
       if (state !== "unstarted") {
         await writeSkillProposalRollback({ proposalId: pending.id, rollback, store: options });
       }
@@ -368,16 +364,12 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
         await expect(fs.readFile(relocatedTarget.skillFile, "utf8")).resolves.toBe(proposedContent);
         await expect(fs.readFile(destinationSupportFile, "utf8")).resolves.toBe(proposedSupport);
       }
-      if (state === "unstarted") {
-        await expectWorkshopMigrationConverged({ env: testState.env });
-      } else {
-        await expect(migrateLegacySkillWorkshopProposals(options)).resolves.toEqual({
-          changes: [],
-          warnings: [],
-          detected: 1,
-          migrated: 0,
-        });
-      }
+      await expect(migrateLegacySkillWorkshopProposals(options)).resolves.toEqual({
+        changes: [],
+        warnings: [],
+        detected: 1,
+        migrated: 0,
+      });
     },
   );
 
@@ -436,7 +428,7 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
       seedLegacyV15ProposalRows(testState.env, [
         { record: pending, workspaceDir, claimReleasedTime: null },
       ]);
-      repairOpenClawStateDatabaseSchemaIfNeeded({ env: testState.env });
+      await prepareOpenClawStateDatabaseSchema({ env: testState.env });
       await writeSkillProposalRollback({ proposalId: pending.id, rollback, store: options });
       expect(readStoredProposal(pending.id, options)?.record).toEqual(pending);
       const destinationDir = path.join(

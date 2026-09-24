@@ -1,32 +1,33 @@
 import { isDeepStrictEqual } from "node:util";
-import type { MsgContext } from "../../auto-reply/templating.js";
+import { isMainThread } from "node:worker_threads";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   resolveAccessStorePath,
   loadSessionEntry,
   patchSessionEntryCore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
-import { readSessionCreationSnapshot } from "./session-accessor.sqlite-creation-read.js";
+import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
+import { createSessionEntryWithTranscriptInWorker } from "./session-accessor.sqlite-creation-worker.js";
+import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
+import "./session-accessor.sqlite-entry.js";
+import { forkSessionTranscriptFromParent } from "./session-accessor.sqlite-parent-session.js";
 import {
-  recordInboundSessionMeta,
-  updateSessionLastRoute,
-} from "./session-accessor.sqlite-entry.js";
-import {
-  forkSessionEntryFromParentTarget,
-  forkSessionTranscriptFromParent,
-  resolveSessionParentForkDecision,
-} from "./session-accessor.sqlite-parent-session.js";
-import {
+  captureLifecycleDatabaseScope,
+  resolveSqliteScope,
+  prepareSqliteScope,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-store.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -42,20 +43,22 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export {
+  recordInboundSessionMeta,
+  updateSessionLastRoute,
+} from "./session-accessor.sqlite-entry.js";
+export {
+  forkSessionEntryFromParentTarget,
+  resolveSessionParentForkDecision,
+} from "./session-accessor.sqlite-parent-session.js";
 
 export async function forkSessionFromParentTranscript(
   params: ForkSessionFromParentTranscriptParams,
 ): Promise<ForkSessionFromParentTranscriptResult> {
   return await forkSessionTranscriptFromParent(params);
 }
-
-export {
-  forkSessionEntryFromParentTarget,
-  recordInboundSessionMeta,
-  resolveSessionParentForkDecision,
-  updateSessionLastRoute,
-};
 
 /**
  * Creates or updates one session entry and initializes its transcript header as
@@ -71,43 +74,73 @@ export async function createSessionEntryWithTranscript<TError = string>(
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
   options: SessionEntryCreateWithTranscriptOptions = {},
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
-  const storePath = resolveAccessStorePath(scope);
+  const captured = {
+    ...scope,
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
+  const storePath = resolveAccessStorePath(captured);
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  // The incognito sentinel is scoped to env; its path alone cannot identify the memory store.
-  const storeScope = { agentId, env: scope.env, storePath };
-  const { normalizedKey, legacyKeys, ...context } = readSessionCreationSnapshot({
-    ...storeScope,
-    sessionKey: scope.sessionKey,
-  });
-  const created = await createEntry(context);
+  const target = { ...captured, agentId, storePath };
+  const resolved = captureLifecycleDatabaseScope(
+    isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target),
+  );
+  if (
+    isMainThread &&
+    supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved)) &&
+    !hasPreparedNativeSessionDeletion()
+  ) {
+    return createSessionEntryWithTranscriptInWorker(resolved, createEntry, options);
+  }
+  // Process-held, already executing, maintenance, and native rollback scopes keep their kernels.
+  const storeScope = { agentId, env: resolved.env, storePath: resolved.path };
+  // The resolved path is a physical locator, not the original logical store selector.
+  // Re-resolving a missing custom-agent suffix as a shared store would assign it to main.
+  const creationDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const { normalizedKey, legacyKeys, labels, ...context } = readSessionCreationSnapshotInDatabase(
+    creationDatabase,
+    scope.sessionKey,
+  );
+  const created = await createEntry({ ...context, isLabelInUse: (label) => labels.has(label) });
   if (!created.ok) {
     return { ok: false, error: created.error, phase: "entry" };
   }
-  const { cwd, commitGuard } = options;
+  const ownerAssignment = options.resolveOwnerAssignment?.();
+  const { cwd, commitGuard, withCommit, onLifecycleCommitted } = options;
 
-  try {
-    const transcriptScope = resolveSqliteTranscriptScope({
-      ...storeScope,
-      sessionId: created.entry.sessionId,
-      sessionKey: normalizedKey,
-    });
-    await runExclusiveSqliteSessionWrite(
-      transcriptScope,
-      async () => {
-        runOpenClawAgentWriteTransaction((database) => {
-          commitGuard?.();
-          ensureTranscriptHeader(database, transcriptScope, cwd);
-        }, toDatabaseOptions(transcriptScope));
-      },
-      "session.entry.create-with-transcript",
-    );
-  } catch (err) {
-    // Preserve authority errors from the commit guard instead of projecting
-    // them as transcript failures at the Gateway boundary.
-    commitGuard?.();
+  const initializeTranscript = async (assertSourceCurrent?: () => void) => {
+    try {
+      const transcriptScope = resolveSqliteTranscriptScope({
+        ...storeScope,
+        sessionId: created.entry.sessionId,
+        sessionKey: normalizedKey,
+      });
+      await runExclusiveSqliteSessionWrite(
+        transcriptScope,
+        async () => {
+          runOpenClawAgentWriteTransaction((database) => {
+            commitGuard?.();
+            assertSourceCurrent?.();
+            ensureTranscriptHeader(database, transcriptScope, cwd);
+          }, toDatabaseOptions(transcriptScope));
+        },
+        "session.entry.create-with-transcript",
+      );
+      return undefined;
+    } catch (err) {
+      // Reassert while source custody is still held; acquisition and unwind errors
+      // must escape instead of becoming ordinary transcript failures.
+      commitGuard?.();
+      assertSourceCurrent?.();
+      return formatErrorMessage(err);
+    }
+  };
+  const transcriptError = withCommit
+    ? await withCommit(initializeTranscript)
+    : await initializeTranscript();
+  if (transcriptError !== undefined) {
     return {
       ok: false,
-      error: formatErrorMessage(err),
+      error: transcriptError,
       phase: "transcript",
     };
   }
@@ -119,6 +152,20 @@ export async function createSessionEntryWithTranscript<TError = string>(
     upserts: [{ sessionKey: normalizedKey, entry }],
     skipMaintenance: true,
     ...(commitGuard ? { beforeCommitInTransaction: commitGuard } : {}),
+    ...(withCommit ? { withCommit } : {}),
+    ...(ownerAssignment
+      ? {
+          afterFreshUpsertsInTransaction: (database) => {
+            if (!replaceSessionOwnerInTransaction(database, normalizedKey, ownerAssignment)) {
+              throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
+            }
+          },
+        }
+      : {}),
+    ...(onLifecycleCommitted ? { onLifecycleCommitted: () => onLifecycleCommitted(entry) } : {}),
+    ...(options.afterCommitted
+      ? { afterCommitted: (source) => options.afterCommitted!(entry, source) }
+      : {}),
   });
   return { ok: true, entry, sessionFile: normalizedKey };
 }
@@ -233,44 +280,6 @@ export async function updateSessionEntry(
 ): Promise<SessionEntry | null> {
   return await patchSessionEntryCore(scope, update, options);
 }
-
-export type RecordInboundSessionMetaParams = {
-  /** Set false to only patch existing entries; missing sessions stay absent. */
-  createIfMissing?: boolean;
-  /** Inbound message context whose stable metadata is derived and persisted. */
-  ctx: MsgContext;
-  /** Group routing resolution for group-owned session keys. */
-  groupResolution?: GroupKeyResolution | null;
-  /** Canonical or alias session key for the inbound conversation. */
-  sessionKey: string;
-  /** Explicit store target for file-backed stores and SQLite migration adapters. */
-  storePath: string;
-};
-
-export type UpdateSessionLastRouteParams = {
-  /** Account owning the delivery route when the channel is multi-account. */
-  accountId?: string;
-  /** Delivery channel id persisted as the last route channel. */
-  channel?: string;
-  /** Set false to only patch existing entries; missing sessions stay absent. */
-  createIfMissing?: boolean;
-  /** Optional inbound context whose session metadata is derived alongside the route. */
-  ctx?: MsgContext;
-  /** Explicit delivery context merged over the persisted session fallback. */
-  deliveryContext?: DeliveryContext;
-  /** Group routing resolution for group-owned session keys. */
-  groupResolution?: GroupKeyResolution | null;
-  /** Canonical channel route persisted as the session route slot. */
-  route?: ChannelRouteRef;
-  /** Canonical or alias session key for the routed conversation. */
-  sessionKey: string;
-  /** Explicit store target for file-backed stores and SQLite migration adapters. */
-  storePath: string;
-  /** Thread/topic id for the delivery route, when the transport has one. */
-  threadId?: string | number;
-  /** Delivery target persisted as the last route recipient. */
-  to?: string;
-};
 
 /** Resolves one abort target identity without exposing the mutable store. */
 export function resolveSessionAbortTarget(

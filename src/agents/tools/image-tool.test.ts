@@ -42,7 +42,13 @@ import {
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { createImageTool } from "./image-tool.js";
-import { testing, resolveImageModelConfigForTool } from "./image-tool.test-support.js";
+import {
+  createMinimaxImageConfig,
+  ONE_PIXEL_PNG_B64,
+  resolveConfiguredImageModelForTest,
+  resolveImageModelConfigForTool,
+  testing,
+} from "./image-tool.test-support.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 
 function jsonRoundTrip<T>(value: T): T {
@@ -152,26 +158,26 @@ function readMockAuthProfileStore(agentDir?: string): {
   }
 }
 
+function readMockRuntimeAuthProfileStore(agentDir?: string) {
+  const store = readMockAuthProfileStore(agentDir);
+  if (process.env.OPENCLAW_TEST_CODEX_CLI_OAUTH === "1") {
+    store.profiles["openai:default"] = {
+      provider: "openai",
+      type: "oauth",
+    };
+  }
+  return store;
+}
+
 vi.mock("../auth-profiles.js", () => ({
   externalCliDiscoveryForProviderAuth: (params: { provider: string }) => params,
-  ensureAuthProfileStore: (agentDir?: string) => {
-    const store = readMockAuthProfileStore(agentDir);
-    if (process.env.OPENCLAW_TEST_CODEX_CLI_OAUTH === "1") {
-      store.profiles["openai:default"] = {
-        provider: "openai",
-        type: "oauth",
-      };
-    }
-    return store;
-  },
-  ensureAuthProfileStoreWithoutExternalProfiles: (agentDir?: string) =>
-    readMockAuthProfileStore(agentDir),
-  hasAnyAuthProfileStoreSource: (agentDir?: string) => {
-    if (!agentDir) {
-      return false;
-    }
-    return fsSync.existsSync(path.join(agentDir, "auth-profiles.json"));
-  },
+  ensureAuthProfileStore: readMockRuntimeAuthProfileStore,
+  loadAuthProfileStoreForRuntime: readMockRuntimeAuthProfileStore,
+  loadAuthProfileStoreForRuntimeAsync: async (agentDir?: string) =>
+    readMockRuntimeAuthProfileStore(agentDir),
+  ensureAuthProfileStoreWithoutExternalProfiles: readMockAuthProfileStore,
+  hasAnyAuthProfileStoreSource: (agentDir?: string) =>
+    Boolean(agentDir && fsSync.existsSync(path.join(agentDir, "auth-profiles.json"))),
   listProfilesForProvider: (
     store: { profiles?: Record<string, { provider?: string }> },
     provider: string,
@@ -305,8 +311,6 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
   }
 }
 
-const ONE_PIXEL_PNG_B64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
 
 function createLargeColorBlockPng(size: number): Buffer {
@@ -474,22 +478,6 @@ function stubOpenAiCompletionsOkFetch(text = "ok") {
   return fetch;
 }
 
-function createMinimaxImageConfig(): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        model: { primary: "minimax/MiniMax-M2.7" },
-        imageModel: { primary: "minimax/MiniMax-VL-01" },
-      },
-    },
-    plugins: {
-      entries: {
-        minimax: { enabled: true },
-      },
-    },
-  };
-}
-
 function createDefaultImageFallbackExpectation(primary: string) {
   return {
     primary,
@@ -631,25 +619,6 @@ const codexMediaProvider = {
   capabilities: ["image"],
   defaultModels: { image: "gpt-5.5" },
 } satisfies MediaUnderstandingProvider;
-
-const resolveConfiguredImageModelForTest: NonNullable<
-  Parameters<typeof testing.setProviderDepsForTest>[0]
->["resolveModelAsync"] = async (provider, model, _agentDir, cfg) => {
-  const configuredModel = cfg?.models?.providers?.[provider]?.models?.find(
-    (candidate) => candidate.id === model || candidate.id === `${provider}/${model}`,
-  );
-  return {
-    logicalRef: { provider, model },
-    model: {
-      ...configuredModel,
-      id: model,
-      provider,
-      input: configuredModel?.input ?? ["text", "image"],
-    } as never,
-    authStorage: {} as never,
-    modelRegistry: {} as never,
-  };
-};
 
 function installImageUnderstandingProviderDeps(
   providers: MediaUnderstandingProvider[],
@@ -3654,161 +3623,4 @@ describe("image compression policy", () => {
   });
 });
 
-type MockImageLoadWebMedia = Awaited<
-  ReturnType<
-    NonNullable<
-      NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>["loadImageWebMediaRuntime"]
-    >
-  >
->["loadWebMedia"];
-
-describe("image tool run abort", () => {
-  afterEach(() => {
-    imageProviderHarness.reset();
-    testing.setProviderDepsForTest();
-  });
-
-  function makeDescribeSpies() {
-    const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-      text: "ok",
-      model: params.model,
-    }));
-    const describeImages = vi.fn(async (params: ImagesDescriptionRequest) => ({
-      text: "ok",
-      model: params.model,
-    }));
-    return { describeImage, describeImages };
-  }
-
-  function installAbortImageDeps(
-    loadWebMedia: MockImageLoadWebMedia,
-    spies: ReturnType<typeof makeDescribeSpies>,
-    providers: MediaUnderstandingProvider[] = [minimaxProvider, moonshotProvider],
-  ) {
-    installImageUnderstandingProviderDeps(providers, {
-      loadImageWebMediaRuntime: async () => ({
-        loadWebMedia,
-        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
-          buffer,
-          contentType: contentType ?? "image/png",
-          kind: "image",
-          fileName,
-        }),
-      }),
-      describeImageWithModel: spies.describeImage,
-      describeImagesWithModel: spies.describeImages,
-    });
-  }
-
-  it("forwards the run signal through the provider request contract", async () => {
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => ({
-      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-      contentType: "image/png",
-      kind: "image" as const,
-    }));
-    const spies = makeDescribeSpies();
-    installAbortImageDeps(loadWebMedia, spies, [{ id: "minimax", capabilities: ["image"] }]);
-    const controller = new AbortController();
-
-    await withTempAgentDir(async (agentDir) => {
-      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
-      await tool.execute(
-        "t1",
-        {
-          prompt: "Describe the images.",
-          paths: ["https://example.test/a.png", "https://example.test/b.png"],
-        },
-        controller.signal,
-      );
-    });
-
-    expect(spies.describeImages).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: controller.signal }),
-    );
-  });
-
-  it("throws before downloading or calling the provider when the run signal is already aborted", async () => {
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => ({
-      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-      contentType: "image/png",
-      kind: "image" as const,
-    }));
-    const spies = makeDescribeSpies();
-    installAbortImageDeps(loadWebMedia, spies);
-
-    await withTempAgentDir(async (agentDir) => {
-      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
-      const controller = new AbortController();
-      controller.abort();
-
-      await expect(
-        tool.execute(
-          "t1",
-          {
-            prompt: "Describe the images.",
-            paths: ["https://example.test/a.png", "https://example.test/b.png"],
-          },
-          controller.signal,
-        ),
-      ).rejects.toThrow();
-
-      // Aborted run must not spend bandwidth on downloads or a paid vision call.
-      expect(loadWebMedia).not.toHaveBeenCalled();
-      expect(spies.describeImage).not.toHaveBeenCalled();
-      expect(spies.describeImages).not.toHaveBeenCalled();
-    });
-  });
-
-  it("stops remaining downloads and skips the provider call when aborted mid-run", async () => {
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-    const controller = new AbortController();
-    let markDownloadStarted: (() => void) | undefined;
-    const downloadStarted = new Promise<void>((resolve) => {
-      markDownloadStarted = resolve;
-    });
-    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async (_url, options) => {
-      const downloadSignal = options?.requestInit?.signal;
-      expect(downloadSignal).toBe(controller.signal);
-      markDownloadStarted?.();
-      return await new Promise<never>((_, reject) => {
-        downloadSignal?.addEventListener(
-          "abort",
-          () => reject(new Error("aborted", { cause: downloadSignal.reason })),
-          { once: true },
-        );
-      });
-    });
-    const spies = makeDescribeSpies();
-    installAbortImageDeps(loadWebMedia, spies);
-
-    await withTempAgentDir(async (agentDir) => {
-      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
-
-      const execution = tool.execute(
-        "t1",
-        {
-          prompt: "Describe the images.",
-          paths: [
-            "https://example.test/a.png",
-            "https://example.test/b.png",
-            "https://example.test/c.png",
-          ],
-        },
-        controller.signal,
-      );
-      await downloadStarted;
-      controller.abort();
-
-      await expect(execution).rejects.toThrow();
-
-      // Only the first image is fetched; the loop exits before the rest and the
-      // paid vision provider is never called for the dead run.
-      expect(loadWebMedia).toHaveBeenCalledTimes(1);
-      expect(spies.describeImage).not.toHaveBeenCalled();
-      expect(spies.describeImages).not.toHaveBeenCalled();
-    });
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

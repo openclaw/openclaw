@@ -45,13 +45,7 @@ export function parseEnv(content: string | undefined): Record<string, string> {
 }
 
 export function parseHermesConfig(content: string | undefined): Record<string, unknown> {
-  if (!content) {
-    return {};
-  }
-  const parsed = parseYaml(content);
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : {};
+  return content ? asNonArrayRecord(parseYaml(content)) : {};
 }
 
 export function childRecord(

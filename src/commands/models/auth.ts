@@ -104,7 +104,7 @@ function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | und
   return expires;
 }
 
-function guardCancel<T>(value: T | symbol): T {
+function guardCancel<T>(value: T | typeof import("@clack/prompts").CANCEL_SYMBOL): T {
   if (typeof value === "symbol" || isCancel(value)) {
     cancel("Cancelled.");
     process.exit(0);
@@ -868,7 +868,7 @@ export async function modelsAuthPasteApiKeyCommand(
     },
   });
 
-  const profileId = await saveModelProviderApiKey({
+  const { profileId, warning } = await saveModelProviderApiKey({
     config,
     provider,
     apiKey: key,
@@ -877,6 +877,9 @@ export async function modelsAuthPasteApiKeyCommand(
   });
 
   await refreshRunningGatewayAuthState(agentId, "login", runtime);
+  if (warning) {
+    runtime.error(warning);
+  }
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);

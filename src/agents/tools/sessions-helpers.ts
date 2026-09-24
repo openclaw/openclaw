@@ -1,12 +1,15 @@
-import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
-import type {
-  SessionRow,
-  SessionRunStatus,
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { Type, type Static } from "typebox";
+import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import {
+  SessionCreatedActorSchema,
+  SessionRowSchema,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
-import type { FastModeSource } from "../../shared/fast-mode.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { stringEnum } from "../schema/typebox.js";
 /**
  * Shared session-tool data shapes and classification helpers.
  *
@@ -50,100 +53,81 @@ const SESSION_KIND_BY_CLASSIFICATION: Readonly<Record<string, SessionKind>> = {
   node: "node",
 };
 
-/** Delivery target metadata attached to session rows. */
-type SessionListDeliveryContext = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
+const SessionInventoryActorSchema = Type.Omit(SessionCreatedActorSchema, ["avatarUrl"]);
+
+/** Focused model-facing row contract derived from the Gateway protocol projection. */
+export const SessionListRowSchema = Type.Object(
+  {
+    ...Type.Pick(SessionRowSchema, [
+      "key",
+      "sessionId",
+      "label",
+      "worktree",
+      "repositoryWorkspaceId",
+      "repository",
+      "execCwd",
+      "spawnedCwd",
+      "spawnedWorkspaceDir",
+      "projectId",
+      "workspaceDir",
+      "displayName",
+      "derivedTitle",
+      "lastMessagePreview",
+      "parentSessionKey",
+      "model",
+      "contextTokens",
+      "totalTokens",
+      "status",
+      "childSessions",
+    ]).properties,
+    agentId: Type.String(),
+    kind: stringEnum(SESSION_LIST_KINDS),
+    channel: Type.String(),
+    archived: Type.Boolean(),
+    pinned: Type.Boolean(),
+    createdActor: Type.Optional(SessionInventoryActorSchema),
+    owner: Type.Optional(
+      Type.Object({ actor: SessionInventoryActorSchema }, { additionalProperties: false }),
+    ),
+    group: Type.Optional(
+      Type.String({
+        description: 'Custom sidebar group membership; unrelated to kind "group" (group chats).',
+      }),
+    ),
+    updatedAt: Type.Optional(Type.Number()),
+    stateVersion: Type.Optional(Type.Number()),
+    abortedLastRun: Type.Optional(Type.Boolean()),
+    messages: Type.Optional(Type.Array(Type.Unknown())),
+  },
+  { additionalProperties: false },
+);
 
 /** Full Gateway session row consumed by session orchestration internals. */
-export type GatewaySessionListRow = {
-  key: string;
-  agentId?: string;
+export type GatewaySessionListRow = Omit<
+  SessionRow,
+  "classification" | "contextTokens" | "totalTokens"
+> & {
   classification: NonNullable<SessionRow["classification"]>;
-  peerKind?: SessionRow["peerKind"];
-  kind: SessionRow["kind"];
-  channel?: string;
+  contextTokens?: number | null;
+  totalTokens?: number | null;
   origin?: {
     provider?: string;
     accountId?: string;
   };
-  spawnedBy?: string;
-  label?: string;
   category?: string;
-  displayName?: string;
-  derivedTitle?: string;
-  lastMessagePreview?: string;
-  parentSessionKey?: string;
-  deliveryContext?: SessionListDeliveryContext;
-  updatedAt?: number | null;
-  archived?: boolean;
-  archivedAt?: number;
-  pinned?: boolean;
-  pinnedAt?: number;
-  sessionId?: string;
-  stateVersion?: number;
-  model?: string;
-  contextTokens?: number | null;
-  totalTokens?: number | null;
-  estimatedCostUsd?: number;
-  status?: SessionRunStatus;
-  startedAt?: number;
-  endedAt?: number;
-  runtimeMs?: number;
-  childSessions?: string[];
-  thinkingLevel?: string;
-  fastMode?: FastMode;
-  effectiveFastMode?: FastMode;
-  effectiveFastModeSource?: FastModeSource;
-  fastAutoOnSeconds?: number;
-  verboseLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
-  responseUsage?: string;
-  systemSent?: boolean;
+  deliveryContext?: DeliveryContext;
   abortedLastRun?: boolean;
-  sendPolicy?: string;
   lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-  transcriptPath?: string;
-  messages?: unknown[];
 };
 
 /** Focused model-facing row returned by sessions_list. */
-export type SessionListRow = {
-  key: string;
-  sessionId?: string;
-  agentId: string;
-  kind: SessionKind;
-  channel: string;
-  label?: string;
-  group?: string;
-  displayName?: string;
-  derivedTitle?: string;
-  lastMessagePreview?: string;
-  parentSessionKey?: string;
-  updatedAt?: number;
-  archived: boolean;
-  pinned: boolean;
-  stateVersion?: number;
-  model?: string;
-  contextTokens?: number;
-  totalTokens?: number;
-  status?: SessionRunStatus;
-  abortedLastRun?: boolean;
-  childSessions?: string[];
-  messages?: unknown[];
-};
+export type SessionListRow = Static<typeof SessionListRowSchema>;
 
 /** Resolves config plus sandbox visibility context for a session tool call. */
 export function resolveSessionToolContext(opts?: {
   agentId?: string;
   agentSessionKey?: string;
+  sessionReadScopeKey?: string;
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -152,13 +136,14 @@ export function resolveSessionToolContext(opts?: {
   return {
     cfg,
     a2aPolicy: createAgentToAgentPolicy(cfg),
-    sessionVisibility: resolveEffectiveSessionToolsVisibility({
-      cfg,
-      sandboxed: opts?.sandboxed === true,
-    }),
+    // Only read-tool constructors accept this host-bound scope. The temporary
+    // auxiliary run keeps its execution identity but can read just the observed session.
+    sessionVisibility: opts?.sessionReadScopeKey
+      ? ("self" as const)
+      : resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: opts?.sandboxed === true }),
     ...resolveSandboxedSessionToolContext({
       cfg,
-      agentSessionKey: opts?.agentSessionKey,
+      agentSessionKey: opts?.sessionReadScopeKey ?? opts?.agentSessionKey,
       requesterAgentId: opts?.requesterAgentIdOverride ?? opts?.agentId,
       sandboxed: opts?.sandboxed,
     }),

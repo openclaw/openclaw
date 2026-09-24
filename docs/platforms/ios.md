@@ -25,6 +25,8 @@ Availability: The official iPhone app is available on the [App Store](https://ap
 - Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
 - Completed chat turns fold earlier work into a **Worked** disclosure above the reply on iPhone and iPad. Tap it to inspect the work. Final answers and media stay visible, and active or unanswered work stays expanded.
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
+- Assistant file attachments have a **Download file** action. Tap it to fetch the managed file and open the system share sheet, where you can choose **Save to Files** or another app. Downloads use the current Gateway connection and its scoped artifact access; an expired or removed file must be sent again. Documents are limited to 100 MB.
+- Dictation shows when it is starting and listening, a live microphone waveform, and the words recognized so far. Tap **Done** to add the transcript to your draft or **Cancel** to discard it. Attachments show **Preparing attachments…** while loading and **Sending attachments…** during delivery; failed photo loads show an error so you can select them again.
 - Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
 - Long-press a message or open its actions menu and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
 - **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
@@ -44,6 +46,16 @@ Selection identifies the focused Gateway, not whether it is connected.
 Finish recording or delivering attachments and send or clear the current draft
 before using the quick picker. It does not move drafts to another Gateway.
 **Approvals** opens the native approval inbox and shows the pending count.
+
+An icon beside a native sidebar session shows whether its oldest pending request
+is a question or an approval. It opens a compact preview and the number of
+additional requests of that kind. The agent and section headings summarize their sessions, including
+requests outside the visible recent-session list. Tap an icon, activate it with
+a keyboard, or use VoiceOver to read the details without switching chats.
+Questions stay available when navigating away from Chat. Completed, cancelled,
+and expired requests disappear from these previews; answer and credential drafts
+never appear. Gateway administration approvals open their existing Dashboard
+review page, while native exec and plugin approvals keep their existing actions.
 
 The Gateway must serve Dashboard pages that support the companion iOS app.
 If a loaded Settings page does not report that support, a native banner asks you
@@ -103,6 +115,19 @@ Long-press a session in the sidebar or Sessions screen to open its session actio
 
 A colored session has a narrow leading stripe in session lists and a small dot beside its title in Chat. Unset colors show neither marker. The Gateway stores color names, not hex values; the app adjusts their hues for light and dark appearances.
 
+## Sources in chat
+
+Completed answers show up to eight compact **Sources** cards for cited pages
+returned by web search or web fetch during that answer's run. Tap a card to read
+the recorded **Search snippet** or **Page excerpt**, then choose **Open source**
+to visit the page. A card says when no recorded excerpt is available. Opening
+the preview does not retrieve the page again.
+
+Source icons follow the Gateway's automatic favicon preference and use the
+Gateway's authenticated favicon service. A globe appears when icons are disabled
+or unavailable. Session links and GitHub issue or pull request links keep their
+existing link cards.
+
 ## Diagrams in chat
 
 Use a fenced `mermaid` block to display a diagram. A diagram renders when its
@@ -153,7 +178,9 @@ creation has a token or password auth path.
    administrative Gateway controls, then click **Create setup code**.
 
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
-   the setup code), and connect.
+   the setup code), and connect. Use a mobile setup code from Control UI or
+   [`openclaw qr`](/cli/qr) — not a gateway join URL from
+   [`openclaw devices join-code`](/cli/devices#openclaw-devices-join-code).
 
    Paired Gateways remain in the **Gateways** list. The checkmark identifies
    the focused Gateway; use the bolt control on another row to keep its

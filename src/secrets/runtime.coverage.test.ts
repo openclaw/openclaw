@@ -201,14 +201,6 @@ const COVERAGE_WEB_FETCH_PROVIDERS = new Map(
 );
 
 vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
-  loadBundledWebFetchProviderEntriesFromDir: (params: { pluginId: string }) => {
-    const provider = COVERAGE_WEB_FETCH_PROVIDERS.get(params.pluginId);
-    return provider ? [provider] : null;
-  },
-  loadBundledWebSearchProviderEntriesFromDir: (params: { pluginId: string }) => {
-    const provider = COVERAGE_WEB_SEARCH_PROVIDERS.get(params.pluginId);
-    return provider ? [provider] : null;
-  },
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: (params: {
     onlyPluginIds: readonly string[];
   }) => {

@@ -114,6 +114,8 @@ Administrators can still create shared profiles through the CLI (`openclaw model
 
 ### Pin and default rules
 
+Creating your own session with `operator.sessions.write` applies your saved new-chat default when available, or uses the Gateway's configured selection otherwise. Explicit personal account selection and changes to your new-chat default still require `operator.write`. Both creation paths retain the current connection, profile, and role checks.
+
 When a linked person creates a session, OpenClaw captures their default as that session's auth selection. The selection has the same strength as a `/model ...@profile` pin. This happens before an initial message is dispatched, including when creation and the first message are separate requests. Sessions first created by turn admission capture the default at that admission. The pin is **session-sticky**: other people steering into that session use its selected account, and forks inherit it. An explicit `/model ...@profile -s` pin outranks the link. A fresh personal selection must belong to the authenticated human making it. Knowing another person's account id is not permission to select it. Agent- and channel-originated turns do not create personal links. For runtimes using OpenClaw's auth fallback planner, the ordered shared profiles for the same provider remain failover candidates if the pinned account fails. This matches the behavior of an explicit pin. Claude CLI requires its selected account and does not substitute shared profiles or its native login when that account cannot be used.
 
 **Use Gateway defaults for new chats**, CLI `clear-default`, and API `users.unlinkAuthProfile` affect future sessions only. Changing a default does not repin existing chats, including unpinned chats using shared credentials. Adopting or forking an existing chat does not apply the current participant's default, and changing providers does not silently select their personal account. Expand the **Account** category in the model menu to make that explicit choice. Clearing a default neither deletes the saved credential nor revokes a provider token. Revoke it with the provider if existing sessions must stop using it. Links and existing session credentials follow verified profile merges, but an explicit unlink on the surviving profile is not reversed by a merge.
@@ -126,7 +128,9 @@ The sidebar's session filter menu gains an **Owners** section when ownership is 
 
 - **All owners** shows everything (the default).
 - A specific person or agent shows the sessions they currently own.
-- **Involving me** shows sessions you own plus sessions where you have prompted at least once. This filter is evaluated by the Gateway against the full participant history. It matches only your authenticated profile identity. Channel-native sender ids are display-only and never match, so a numeric channel id cannot collide with your profile.
+- **Involving me** shows sessions you own, have prompted, or have been explicitly mentioned in. A sent mention adds the session immediately, including when you are offline; Inbox dismissal and expiry do not remove it. This filter is evaluated by the Gateway against the full participant history. It matches only your authenticated profile identity. Channel-native sender ids are display-only and never match, so a numeric channel id cannot collide with your profile.
+
+Use **Hide from Involving me** in the session menu to hide a session only from your own filtered list. Ordinary activity does not bring it back, but a new explicit mention does. The session remains discoverable under **All owners**, where **Show in Involving me** restores it. These choices follow your signed-in profile across browsers and Gateway restarts; they do not archive the session or change anyone else’s list.
 
 **Involving me** requires a signed-in Gateway profile. When the loaded sessions have multiple owners, **Group by Person** creates a section for each current owner. The **Owners** sort mode orders those owner groups by name.
 
@@ -159,9 +163,28 @@ The Gateway also filters watched-session references for each recipient using `se
 
 ## Mentioning people
 
-In a normal Control UI chat, type `@` and select a person from the picker. The composer shows **Will notify** with your selected recipients. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. **Remove mention** clears the recipient selections while keeping the message text.
+In the transcript, selected mentions show a small inline avatar beside the original name. Missing photos use initials. The badge omits the visible `@`, while copied text keeps it.
 
-The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. A mention never adds session membership, changes visibility, or grants access. The Gateway rechecks the recipient's current access when creating and displaying it.
+In a normal Control UI chat, type `@` and search by a person's display name (including spaces) or any linked verified GitHub handle, then select the person from the picker. The composer shows **Will notify** with your selected recipients. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. **Remove mention** clears the recipient selections while keeping the message text.
+
+Use Up/Down to move through people, Home/End to jump to the first or last result,
+and Enter or Tab to insert the selected mention. Escape closes the picker. Typing a
+space immediately after `@` also closes it, so a standalone `@` and the prose after it
+stay ordinary text. Moving the cursor outside the active mention also closes the picker.
+Spaces within a typed name still search for that full name. Filtering
+keeps the selected person when they still match. The picker reuses recent results
+for the same search in the same composer, including after closing it or starting
+another mention. After five minutes, it refreshes cached results in the background
+without hiding the people you can already select. Switching sessions, profiles,
+or connections clears that cache. Results older than 30 minutes are discarded.
+The picker shows placeholders for uncached searches, an empty message when nobody
+matches, and **Retry** if a search without usable cached results fails.
+**Will notify** reuses the selected person's photo, with initials while it loads or
+when the photo is unavailable.
+
+Selected mentions render as distinct person references in the transcript. Hover, focus, or tap a reference to open the same information card used in the sidebar: current name and avatar, observed presence and connection details, visible watched and recent sessions, and the Activity link. The original message label and copied text stay unchanged. Cards follow explicit profile merges; ordinary unselected `@name` text does not become a person reference.
+
+The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. A mention adds personal discovery involvement, not authored participation or Git contributor credit. It never adds session membership, changes visibility, or grants access. The Gateway rechecks the recipient's current access when creating and displaying it.
 
 Mentions work for ordinary messages, queued or steered input, and the first message of a new session, including a remotely placed session. They are unavailable in incognito, Goal, catalog, suggestion-only, command-send, or terminal-launch modes. If selected mentions remain after switching to an unsupported mode, the composer blocks the send. It asks you to remove them, or to return to a normal chat. It does not silently discard selected recipients.
 
@@ -173,15 +196,17 @@ Open **Inbox → Mentions** to see messages addressed to your signed-in profile 
 
 Mentions and dismissals survive Gateway restarts and upgrades. Entries keep their original identifiers and expiry times: **up to seven days**, with at most **100 entries per profile** and **10,000 across the Gateway**. Older entries can be evicted earlier by capacity limits. Refreshing or reconnecting reloads the retained Inbox without resending old browser alerts. Old transcript messages are not scanned to rebuild missing entries.
 
+Personal involvement and hide/show choices live in private metadata on the logical session node, independently of Inbox retention. Reset and session relocation preserve them; deleting the session removes them, and forks do not inherit them. Existing transcript messages are not scanned to backfill involvement. The last committed mention position prevents replay of an old message from undoing a later hide choice, even after the Inbox entry expires.
+
 The Inbox and its replay bookkeeping use the shared database's existing machine-state records, with no SQLite schema change. Mention annotations stay in the existing message JSON, and notification preferences use existing preference records. See [Inbox storage and retention](/reference/database-schemas#mentions-inbox).
 
 The Inbox works without browser notification permission. For optional alerts while away from the Control UI, enable **Someone mentions me** in [Notifications](/web/notifications#receive-human-mention-alerts). See [WebChat](/web/webchat#human-mention-delivery) for the send and retry contract.
 
 ## Agent-spawned sessions
 
-Sessions an agent creates with `sessions_spawn` (`visible: true`) are attributed to the requesting agent. The creator and initial owner is the agent itself. The sidebar shows the agent's configured identity name and avatar, rather than an internal session key.
+Sessions an agent creates with `sessions_spawn` (`visible: true`) normally retain the requesting agent as their immutable creator. A required sandbox instead preserves the parent's creator provenance as an isolation policy. If the active human requester matches the requesting session's verified human owner, a new visible child assigns that person as its initial owner. A different owner, an unlinked requester, or a system-triggered spawn explicitly assigns the requesting agent as owner, even when sandbox policy retained human creator provenance. The sidebar shows the current owner's profile or configured agent identity rather than an internal session key. This assignment changes responsibility and display only; sharing and visibility authority remains anchored on the creator.
 
-The accepted spawn result doubles as a receipt. It includes the child session key, the run id, a direct Control UI `sessionUrl`, and an `owner` record naming the requesting agent. The `sessionUrl` is omitted when the Control UI is disabled. When an agent acknowledges the spawn in a chat channel, it puts the session URL on the first line and `Owner: <label>` on the second. You can then open the session and see who is responsible at a glance. Reassign the session to yourself with **Assign to me** if you take the work over. See [Sub-agents](/tools/subagents) for the spawn lifecycle.
+The accepted spawn result doubles as a receipt. It includes the child session key, the run id, a direct Control UI `sessionUrl`, and an `owner` record naming the stored owner. The `sessionUrl` is omitted when the Control UI is disabled. When an agent acknowledges the spawn in a chat channel, it puts the session URL on the first line and `Owner: <label>` on the second. You can then open the session and see who is responsible at a glance. Use **Assign to me** or the `sessions` tool only when responsibility should move again. See [Sub-agents](/tools/subagents) for the spawn lifecycle.
 
 ## Identity-scoped convenience state
 

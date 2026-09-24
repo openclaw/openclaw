@@ -38,6 +38,7 @@ import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
 import { loadChangelogCollection, loadReleaseChangelog } from "./lib/release-changelog.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
+import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import {
   downloadFullReleaseNpmPreflight,
@@ -46,6 +47,7 @@ import {
 } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPreflightDistTag } from "./openclaw-npm-extended-stable-release.mjs";
 import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
+import { runReleasePublishPreflight } from "./release-publish-preflight.mts";
 import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import {
   dedicatedSectionVersionForTag,
@@ -171,7 +173,9 @@ Options:
   --plugin-sdk-api-acknowledgement <digest>
                                       8-character digest from the Plugin SDK API diff report.
   --windows-node-tag <tag>            Optional exact Windows Node tag for postpublish asset promotion.
-  --skip-dispatch                     Require Full Release Validation run; separate npm run only for historical recovery.
+  --stable-soak-waiver <reason>       Operator-approved reason to publish stable from beta-profile validation without soak.
+  --lane-waiver <reason>              Operator acknowledgement for evidence sealed under a Full Release Validation lane waiver.
+  --skip-dispatch                    Require Full Release Validation run; separate npm run only for historical recovery.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
   --skip-parallels                   Force-skip candidate Parallels smoke; stable/full run by default.
@@ -226,6 +230,8 @@ export function parseArgs(argv: string[]) {
     pluginSdkApiAcknowledgement: "",
     windowsNodeTag: "",
     windowsNodeInstallerDigests: "",
+    stableSoakWaiver: "",
+    laneWaiver: "",
     outputDir: "",
   };
   const helpIndex = cliArgs.findIndex((arg) => arg === "-h" || arg === "--help");
@@ -245,6 +251,8 @@ export function parseArgs(argv: string[]) {
           ["--npm-preflight-run", "npmPreflightRunId"],
           ["--plugin-sdk-api-acknowledgement", "pluginSdkApiAcknowledgement"],
           ["--windows-node-tag", "windowsNodeTag"],
+          ["--stable-soak-waiver", "stableSoakWaiver"],
+          ["--lane-waiver", "laneWaiver"],
           ["--telegram-provider-mode", "telegramProviderMode"],
           ["--provider", "provider"],
           ["--mode", "mode"],
@@ -1638,6 +1646,12 @@ export function buildPublishCommand(
   if (options.plugins.trim()) {
     fields.push(["plugins", options.plugins]);
   }
+  if (options.stableSoakWaiver.trim()) {
+    fields.push(["stable_soak_waiver", options.stableSoakWaiver]);
+  }
+  if (options.laneWaiver.trim()) {
+    fields.push(["lane_waiver", options.laneWaiver]);
+  }
   if (
     mode === "prepare" &&
     (!/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(workflowRef) ||
@@ -2360,14 +2374,55 @@ async function main() {
     fullReleaseRunAttempt: fullRun.runAttempt,
     npmTelegramRunId: npmTelegram.runId,
   };
+  const publicationSelection = publicationSelectionForChecklist(options);
+  const publishPreflight = await runReleasePublishPreflight(
+    {
+      repo: options.repo,
+      tag: options.tag,
+      fullReleaseValidationRunId: options.fullReleaseRunId,
+      fullReleaseValidationRunAttempt: fullRun.runAttempt,
+      preflightRunId: options.npmPreflightRunId,
+      npmDistTag: options.npmDistTag,
+      pluginPublishScope: publicationSelection.pluginPublishScope,
+      plugins: options.plugins,
+      stableSoakWaiver: options.stableSoakWaiver,
+      laneWaiver: options.laneWaiver,
+      workflowRef:
+        options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef,
+      releaseProfile: "from-validation",
+      publicationRoute: publicationSelection.route === "prepared" ? "prepared" : "normal",
+      publishOpenclawNpm: true,
+      openclawNpmResumeRunId: "",
+      pluginSdkApiAcknowledgement: options.pluginSdkApiAcknowledgement,
+      windowsNodeTag: options.windowsNodeTag,
+      windowsNodeInstallerDigests: options.windowsNodeInstallerDigests,
+      npmTelegramRunId: npmTelegram.runId ?? "",
+    },
+    {
+      manifest: fullManifest,
+      manifestPath: join(fullDir, "full-release-validation-manifest.json"),
+      run: fullRun,
+      targetSha,
+      toolingSha,
+      allowPlannedTag: true,
+      npmManifest,
+      npmManifestPath: join(npmDir, "preflight-manifest.json"),
+      npmPreflightRun: npmRun,
+      fullValidationEvidence,
+    },
+  );
+  const publishPreflightTable = formatReleasePublishPreflight(publishPreflight, {
+    includeCommand: false,
+  });
   const publishCommand =
-    options.publicationRoute === "normal"
-      ? buildPublishCommand(publicationOptions, npmPreflightSource)
-      : undefined;
+    options.publicationRoute === "normal" ? publishPreflight.command : undefined;
   const prepareCommand =
     options.publicationRoute === "prepared"
       ? buildPublishCommand(publicationOptions, npmPreflightSource, "prepare")
       : undefined;
+  if (prepareCommand) {
+    publishPreflight.command = prepareCommand;
+  }
   const evidence = {
     version: 1,
     tag: options.tag,
@@ -2409,6 +2464,7 @@ async function main() {
     npmTelegram,
     pluginNpmPlan,
     pluginClawHubPlan,
+    publishPreflight,
     publishCommand,
     prepareCommand,
   };
@@ -2463,6 +2519,8 @@ async function main() {
         npmTelegram.runId ? ` ${npmTelegram.runId} ${npmTelegram.url}` : ""
       }`,
       "",
+      publishPreflightTable,
+      "",
       ...(prepareCommand
         ? [
             "Prepare once for the release button (after creating the frozen release tag):",
@@ -2480,10 +2538,13 @@ async function main() {
         : []),
     ].join("\n"),
   );
-  updateReleaseCandidateState(statePath, candidateState, "completed");
-
   console.log(`release candidate evidence: ${evidencePath}`);
   console.log(`release candidate summary: ${evidenceMarkdownPath}`);
+  console.log(publishPreflightTable);
+  if (publishPreflight.failed) {
+    throw new Error("Publish preflight failed; resolve the reported gates before publication.");
+  }
+  updateReleaseCandidateState(statePath, candidateState, "completed");
   if (androidVersionCheck) {
     console.log(androidVersionCheck.message);
   }

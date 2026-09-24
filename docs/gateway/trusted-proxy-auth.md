@@ -102,6 +102,8 @@ read_when:
 `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 
 Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
+
+Update and restart health checks can also reuse the local CLI's existing paired device credentials when no shared credential is configured. These checks read existing identity and token state without creating an identity or saving replacement credentials.
 </Warning>
 
 ### Configuration reference
@@ -144,6 +146,14 @@ Any local process that can connect to the Gateway can impersonate a loopback rev
 Run `openclaw configure --section gateway` and select **Trusted Proxy**. Entering an address or CIDR that matches a loopback source under the Gateway's runtime rules shows the security warning above and asks whether to allow loopback authentication. This includes ranges containing loopback, even when their base address is not loopback. The default is **No** for a new configuration. **Yes** saves `gateway.auth.trustedProxy.allowLoopback: true`; **No** leaves it unset and warns that loopback proxy requests will fail with `trusted_proxy_loopback_source`, with a link back to this page.
 
 When reconfiguring an existing trusted-proxy setup, the prompt defaults to the existing `allowLoopback` opt-in. Choosing **No** revokes it. If no entered address or range matches a loopback source, the wizard leaves the existing value unchanged. Same-mode reconfiguration also preserves `deviceAutoApprove` verbatim; device enrollment policy is not changed by this prompt. Switching from another auth mode does not restore dormant trusted-proxy opt-ins.
+
+With live configuration reload enabled, changes to `gateway.trustedProxies`,
+`gateway.allowRealIpFallback`, `gateway.auth.allowTailscale`,
+`gateway.auth.identityScopes`, and `gateway.auth.trustedProxy` apply without a
+Gateway restart. Gateway clients reconnect under the new policy. A configuration
+writer receives its accepted result before its connection closes. Pending
+handshakes and HTTP requests cannot retain old policy authority through an
+asynchronous wait; already-admitted work follows its existing completion lifecycle.
 
 ## Per-identity scope grants
 

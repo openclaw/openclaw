@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExecProcessOutcome } from "./bash-tools.exec-runtime.js";
+import type { ExecProcessOutcome } from "./bash-tools.exec-types.js";
 
 const taskRuntime = vi.hoisted(() => ({
   createRunningTaskRun: vi.fn(),
@@ -24,16 +24,24 @@ describe("background exec task tracking", () => {
       command: "pnpm test src/agents/example.test.ts",
       label: "pnpm test src/agents/example.test.ts",
     },
-    { command: "\u001b[32mpnpm\u001b[0m\n  run\tbuild ", label: "pnpm run build" },
+    {
+      command: "\u001b[32mpnpm\u001b[0m\n  run\tbuild ",
+      label: "pnpm run build",
+      task: "pnpm\n  run\tbuild",
+    },
     {
       command: `curl --token ${"x".repeat(140)} https://example.com`,
       label: "curl --token xxxxxx…xxxx https://example.com",
     },
-    { command: `echo ${"x".repeat(130)}`, label: `echo ${"x".repeat(114)}…` },
+    {
+      command: `echo ${"x".repeat(130)}`,
+      label: `echo ${"x".repeat(114)}…`,
+      task: `echo ${"x".repeat(130)}`,
+    },
     { command: " \n\t ", label: "CLI command" },
   ])(
     "creates a silent CLI ledger row with a bounded, redacted command: $label",
-    ({ command, label }) => {
+    ({ command, label, task = label }) => {
       taskRuntime.createRunningTaskRun.mockReturnValue({ taskId: "task-1" });
 
       const handle = createBackgroundExecTask({
@@ -60,7 +68,7 @@ describe("background exec task tracking", () => {
         requesterAgentId: "main",
         runId: "exec:amber-reef",
         label,
-        task: label,
+        task,
         notifyPolicy: "silent",
         deliveryStatus: "not_applicable",
         startedAt: 100,

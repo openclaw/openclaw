@@ -1,13 +1,9 @@
 /** Full-text search over visible session transcripts. */
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
-import {
-  agentSessionKeysMatchByRequestKey,
-  isIncognitoSessionKey,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
@@ -107,15 +103,7 @@ type GatewaySearchHit = {
   score?: unknown;
 };
 
-type SanitizedSearchHit = {
-  sessionKey: string;
-  timestamp: number;
-  role: "assistant" | "user";
-  snippet: string;
-  score: number;
-  sessionId?: string;
-  messageId?: string;
-};
+type SanitizedSearchHit = Static<typeof SessionsSearchHitSchema>;
 
 type SearchSessionCandidate = {
   key: string;
@@ -301,46 +289,34 @@ function compareSearchHits(left: SanitizedSearchHit, right: SanitizedSearchHit):
   );
 }
 
-function resolveHitVisibilityKey(params: {
-  candidateAgentId: string;
-  candidateKey: string;
-  hitKey: string;
-}): string {
-  const { candidateKey, hitKey } = params;
-  if (hitKey === candidateKey) {
-    return hitKey;
-  }
-  const hitAgentId = parseAgentSessionKey(hitKey)?.agentId;
-  // Gateway canonicalizes unscoped aliases (notably `main`) to agent store keys. Preserve the
-  // already-authorized request key so visibility and display use the caller's equivalent alias.
-  return !parseAgentSessionKey(candidateKey) &&
-    hitAgentId === params.candidateAgentId &&
-    agentSessionKeysMatchByRequestKey(hitKey, candidateKey)
-    ? candidateKey
-    : hitKey;
-}
-
-function matchSearchHitCandidate(params: {
-  agentId: string;
-  candidates: SearchSessionCandidate[];
-  hitKey: string;
-}): { candidate: SearchSessionCandidate; visibilityKey: string } | undefined {
-  for (const candidate of params.candidates) {
-    const visibilityKey = resolveHitVisibilityKey({
-      candidateAgentId: params.agentId,
-      candidateKey: candidate.key,
-      hitKey: params.hitKey,
-    });
-    if (visibilityKey === candidate.key) {
-      return { candidate, visibilityKey };
+function createSearchHitMatcher(agentId: string, candidates: SearchSessionCandidate[]) {
+  const exactKeys = new Map<string, number>();
+  const aliases = new Map<string, number>();
+  for (const [ordinal, candidate] of candidates.entries()) {
+    if (!exactKeys.has(candidate.key)) {
+      exactKeys.set(candidate.key, ordinal);
+    }
+    if (!parseAgentSessionKey(candidate.key)) {
+      const alias = candidate.key.trim();
+      if (alias && !aliases.has(alias)) {
+        aliases.set(alias, ordinal);
+      }
     }
   }
-  return undefined;
+  return (hitKey: string): SearchSessionCandidate | undefined => {
+    const exact = exactKeys.get(hitKey);
+    const parsed = parseAgentSessionKey(hitKey);
+    const alias = parsed?.agentId === agentId ? aliases.get(parsed.rest) : undefined;
+    // An authorized alias may precede an exact key in the original candidate order.
+    const ordinal = alias !== undefined && (exact === undefined || alias < exact) ? alias : exact;
+    return ordinal === undefined ? undefined : candidates[ordinal];
+  };
 }
 
 export function createSessionsSearchTool(opts?: {
   agentId?: string;
   agentSessionKey?: string;
+  sessionReadScopeKey?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
@@ -369,7 +345,10 @@ export function createSessionsSearchTool(opts?: {
         readPositiveIntegerParam(params, "limit", {
           max: SESSIONS_SEARCH_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
-      const requestedSessionKey = readToolStringParam(params, "sessionKey");
+      // The host-bound scope is already the complete search universe. Reuse the
+      // targeted authorization path instead of listing every session to filter it back down.
+      const requestedSessionKey =
+        readToolStringParam(params, "sessionKey") || opts?.sessionReadScopeKey;
       const {
         cfg,
         mainKey,
@@ -447,10 +426,9 @@ export function createSessionsSearchTool(opts?: {
         };
       }
 
-      const defaultAgentId = requesterAgentId;
       const rowGuard = createSessionVisibilityRowChecker({
         action: "history",
-        defaultAgentId,
+        defaultAgentId: requesterAgentId,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
@@ -468,6 +446,7 @@ export function createSessionsSearchTool(opts?: {
           displayAction: "search",
           requesterAgentId,
           requesterSessionKey: effectiveRequesterKey,
+          sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
           mainSessionKey,
           authorizationTargetSessionKey,
           targetAgentId: agentId,
@@ -569,19 +548,19 @@ export function createSessionsSearchTool(opts?: {
           indexing ||= result.indexing === true;
           archivedTranscriptsExcluded += result.archivedTranscriptsExcluded ?? 0;
           backendTruncated ||= result.truncated === true;
-          for (const hit of Array.isArray(result.results) ? result.results : []) {
+          const hits = Array.isArray(result.results) ? result.results : [];
+          if (hits.length === 0) {
+            continue;
+          }
+          const matchHit = createSearchHitMatcher(agentId, chunk);
+          for (const hit of hits) {
             if (typeof hit.sessionKey !== "string") {
               continue;
             }
-            const candidateMatch = matchSearchHitCandidate({
-              agentId,
-              candidates: chunk,
-              hitKey: hit.sessionKey,
-            });
-            if (!candidateMatch) {
+            const candidate = matchHit(hit.sessionKey);
+            if (!candidate) {
               continue;
             }
-            const { candidate, visibilityKey } = candidateMatch;
             const access =
               candidate.access === "authorized"
                 ? { allowed: true as const }
@@ -591,7 +570,7 @@ export function createSessionsSearchTool(opts?: {
             }
             const sanitized = sanitizeHit({
               alias,
-              hit: { ...hit, sessionKey: visibilityKey },
+              hit: { ...hit, sessionKey: candidate.key },
               mainKey,
             });
             if (sanitized) {

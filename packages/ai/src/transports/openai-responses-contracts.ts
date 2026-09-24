@@ -2,7 +2,7 @@ import {
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
   type Api,
   type ProviderReplayState,
-} from "@openclaw/llm-core";
+} from "@openclaw/llm-core/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   FunctionTool,
@@ -17,6 +17,7 @@ import type {
   OpenAIApiReasoningEffort,
   OpenAIReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import type { OpenAIRequestReasoningEffort } from "../providers/openai-request-reasoning.js";
 import type { OpenAIResponsesCompactedWindow } from "./openai-responses-compaction-window.js";
 
 export const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
@@ -151,7 +152,7 @@ export type OpenAIResponsesCompactionReplayState = ProviderReplayState & {
   );
 
 export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
-  reasoning?: OpenAIReasoningEffort;
+  reasoning?: OpenAIRequestReasoningEffort;
   reasoningEffort?: OpenAIReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   replayResponsesItemIds?: boolean;

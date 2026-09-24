@@ -2,11 +2,15 @@ import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { GetPublishedPreparedModelCatalogOwnerParams } from "../../agents/prepared-model-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ChatMetadataProjectionFacts } from "./chat-metadata-session-projection.js";
+import type {
+  ChatMetadataProjectionFacts,
+  prepareChatMetadataModelProjection,
+} from "./chat-metadata-session-projection.js";
+import type { GatewayModelCatalogContext } from "./models-list-context.js";
 
 export type PreparedAgentFacts = ChatMetadataProjectionFacts & {
   authStoreRevision: string;
-  catalogStatusKey: string;
+  catalogRefreshFailed: boolean;
   skillsVersion: number;
 };
 
@@ -17,8 +21,9 @@ export type PreparedGenerationFacts = {
   agents: PreparedAgentFacts[];
 };
 
-export type ChatMetadataFactsDeps = {
+export type ChatMetadataRuntimeDeps = {
   getConfig: () => OpenClawConfig;
+  getContext: () => GatewayModelCatalogContext;
   getPreparedOwner: (
     params: GetPublishedPreparedModelCatalogOwnerParams,
   ) => PreparedModelRuntimeSnapshot | undefined;
@@ -29,6 +34,11 @@ export type ChatMetadataFactsDeps = {
   getAuthStoreRevision: (agentDir?: string) => number;
   getSkillsVersion: (workspaceDir?: string) => number;
   getPluginRegistryVersion: () => number;
+  buildCommands: (params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+  }) => Promise<{ commands?: unknown[] }>;
+  buildProjection: typeof prepareChatMetadataModelProjection;
 };
 
 export function generationFactsMatch(
@@ -49,7 +59,7 @@ export function generationFactsMatch(
       candidate.owner === agent.owner &&
       candidate.authStoreRevision === agent.authStoreRevision &&
       candidate.modelCatalog === agent.modelCatalog &&
-      candidate.catalogStatusKey === agent.catalogStatusKey &&
+      candidate.catalogRefreshFailed === agent.catalogRefreshFailed &&
       candidate.skillsVersion === agent.skillsVersion
     );
   });

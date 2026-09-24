@@ -62,6 +62,61 @@ function params(access: "none" | "ro" | "rw") {
 }
 
 describe("managed mount plan", () => {
+  it("allocates managed skill mount targets as the workspace host owner before engine create", async () => {
+    const workspace = path.join(root, "agent");
+    fs.mkdirSync(path.join(workspace, ".openclaw"), { mode: 0o750 });
+    fs.writeFileSync(path.join(workspace, ".openclaw/project.json"), "preserved");
+    const plan = await prepareSandboxMountPlan({
+      ...params("rw"),
+      workspaceSource: "managed-worktree",
+    });
+    const target = path.join(workspace, ".openclaw/sandbox-skills/skills");
+    expect(fs.statSync(target).uid).toBe(fs.statSync(workspace).uid);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(path.join(workspace, ".openclaw")).mode & 0o777).toBe(0o750);
+    }
+    expect(fs.readFileSync(path.join(workspace, ".openclaw/project.json"), "utf8")).toBe(
+      "preserved",
+    );
+    expect(plan.binds).toContain(
+      "/host/materialized skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
+    );
+  });
+
+  it("rechecks the workspace owner after namespace lookup before creating scaffold directories", async () => {
+    let current = true;
+    vi.mocked(resolveDockerSourceNamespace).mockImplementationOnce(async () => {
+      current = false;
+      return undefined;
+    });
+    await expect(
+      prepareSandboxMountPlan({
+        ...params("rw"),
+        workspaceSource: "managed-worktree",
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("workspace retired");
+          }
+        },
+      }),
+    ).rejects.toThrow("workspace retired");
+    expect(fs.existsSync(path.join(root, "agent/.openclaw"))).toBe(false);
+  });
+
+  it("refuses an aliased managed mount target without creating outside the workspace", async () => {
+    const outside = path.join(root, "outside");
+    fs.mkdirSync(outside);
+    fs.symlinkSync(
+      outside,
+      path.join(root, "agent/.openclaw"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await expect(
+      prepareSandboxMountPlan({ ...params("rw"), workspaceSource: "managed-worktree" }),
+    ).rejects.toThrow();
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
   it.each(["none", "ro", "rw"] as const)(
     "maps all managed roots with %s permissions",
     async (access) => {
@@ -95,6 +150,57 @@ describe("managed mount plan", () => {
     expect(plan.binds).toContain("/custom/host:/data:ro");
     expect(plan.binds).toContain("/host/agent/skills:/workspace/skills:ro,z");
     expect(plan.skippedBinds).toEqual(["/custom/override:/workspace/skills:rw"]);
+  });
+
+  it("selects the last custom destination while preserving its raw daemon bind", async () => {
+    const plan = await prepareSandboxMountPlan({
+      ...params("rw"),
+      binds: ["/daemon/A:/data:ro", "/daemon/B:/data/:rw", "invalid-bind"],
+    });
+    expect(plan.binds).toContain("/daemon/B:/data/:rw");
+    expect(plan.binds).not.toContain("/daemon/A:/data:ro");
+    expect(plan.binds).toContain("invalid-bind");
+    expect(plan.skippedBinds).toEqual([]);
+  });
+
+  it("keeps meaningful source and target whitespace through create and retained comparison", async () => {
+    const plan = await prepareSandboxMountPlan({
+      ...params("rw"),
+      workspaceDir: path.join(root, "empty"),
+      agentWorkspaceDir: path.join(root, "empty"),
+      binds: ["/daemon/A:/data:ro", "/daemon/B :/data :rw"],
+    });
+    expect(plan.binds).toEqual([
+      "/host/state/empty:/workspace:z",
+      "/host/materialized skills/skills:/workspace/.openclaw/sandbox-skills/skills:ro,z",
+      "/daemon/A:/data:ro",
+      "/daemon/B :/data :rw",
+    ]);
+    vi.mocked(execContainer).mockResolvedValue({
+      stdout: JSON.stringify({
+        Mounts: [
+          { Type: "bind", Source: "/host/state/empty", Destination: "/workspace", RW: true },
+          {
+            Type: "bind",
+            Source: "/host/materialized skills/skills",
+            Destination: "/workspace/.openclaw/sandbox-skills/skills",
+            RW: false,
+          },
+          { Type: "bind", Source: "/daemon/A", Destination: "/data", RW: false },
+          { Type: "bind", Source: "/daemon/B ", Destination: "/data ", RW: true },
+        ],
+        Tmpfs: null,
+      }),
+      stderr: "",
+      code: 0,
+    });
+    await expect(
+      sandboxMountPlanMatchesContainer({
+        engine: DOCKER_SANDBOX_ENGINE,
+        containerName: "sandbox",
+        plan,
+      }),
+    ).resolves.toBe(true);
   });
 
   it.each(["/workspace", "/workspace/"])(
@@ -216,6 +322,108 @@ describe("managed mount plan", () => {
 });
 
 describe("retained mount identity", () => {
+  it.runIf(process.platform !== "win32").each(["/host/a\\b", "/host/a/b"])(
+    "compares literal POSIX source bytes for retained %s",
+    async (source) => {
+      const plan = await prepareSandboxMountPlan({
+        ...params("none"),
+        workspaceDir: path.join(root, "empty"),
+        binds: ["/host/a\\b:/data:ro"],
+      });
+      vi.mocked(execContainer).mockResolvedValue({
+        stdout: JSON.stringify({
+          Mounts: [
+            { Type: "bind", Source: "/host/state/empty", Destination: "/workspace", RW: true },
+            { Type: "bind", Source: source, Destination: "/data", RW: false },
+          ],
+          Tmpfs: null,
+        }),
+        stderr: "",
+        code: 0,
+      });
+      expect(
+        await sandboxMountPlanMatchesContainer({
+          engine: DOCKER_SANDBOX_ENGINE,
+          containerName: "retained",
+          plan,
+        }),
+      ).toBe(source === "/host/a\\b");
+    },
+  );
+
+  it.each(["tmpfs", "volume", "image"])(
+    "distinguishes configured tmpfs removal from implicit %s below a bind",
+    async (type) => {
+      const plan = await prepareSandboxMountPlan({
+        ...params("none"),
+        workspaceDir: path.join(root, "empty"),
+      });
+      vi.mocked(execContainer).mockResolvedValue({
+        stdout: JSON.stringify({
+          Mounts: [
+            { Type: "bind", Source: "/host/state/empty", Destination: "/workspace", RW: true },
+            ...(type === "tmpfs"
+              ? []
+              : [
+                  {
+                    Type: type,
+                    Source: "/engine/storage",
+                    Destination: "/workspace/cache",
+                    RW: true,
+                  },
+                ]),
+          ],
+          Tmpfs: type === "tmpfs" ? { "/workspace/cache": "rw" } : null,
+        }),
+        stderr: "",
+        code: 0,
+      });
+      expect(
+        await sandboxMountPlanMatchesContainer({
+          engine: DOCKER_SANDBOX_ENGINE,
+          containerName: "retained",
+          plan,
+        }),
+      ).toBe(type !== "tmpfs");
+    },
+  );
+
+  it.each([
+    { configured: "ro,size=64m", actual: "nosuid,nodev,ro,size=65536k", matches: true },
+    { configured: "rw", actual: "nosuid,nodev,rw", matches: true },
+    { configured: "", actual: "rw", matches: true },
+    { configured: "ro,rw", actual: "rw", matches: true },
+    { configured: "rw,ro", actual: "ro", matches: true },
+    { configured: "ro", actual: "rw", matches: false },
+    { configured: "rw", actual: "ro", matches: false },
+  ])(
+    "compares tmpfs visibility/access without reinterpreting engine options: $configured / $actual",
+    async ({ configured, actual, matches }) => {
+      const plan = await prepareSandboxMountPlan({
+        ...params("none"),
+        workspaceDir: path.join(root, "empty"),
+        tmpfs: [`/workspace/cache:${configured}`],
+      });
+      vi.mocked(execContainer).mockResolvedValue({
+        stdout: JSON.stringify({
+          Mounts: [
+            { Type: "bind", Source: "/host/state/empty", Destination: "/workspace", RW: true },
+          ],
+          Tmpfs: { "/workspace/cache": actual, "/run": "rw,nosuid,nodev" },
+        }),
+        stderr: "",
+        code: 0,
+      });
+      expect(
+        await sandboxMountPlanMatchesContainer({
+          engine: DOCKER_SANDBOX_ENGINE,
+          containerName: "retained",
+          plan,
+        }),
+      ).toBe(matches);
+    },
+  );
+
   it.each([
     "source",
     "writable",

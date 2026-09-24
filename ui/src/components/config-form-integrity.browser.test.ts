@@ -123,9 +123,11 @@ describe("config form integrity", () => {
     expect(endpoint.getAttribute("minlength")).toBeNull();
     expect(endpoint.getAttribute("maxlength")).toBeNull();
     expect(endpoint.pattern).toBe("");
-    expect(endpoint.getAttribute("aria-describedby")).toBe(
-      "config-field-s10-006c00610062006f007200610074006f00720079_s8-0065006e00640070006f0069006e0074-description",
-    );
+    const endpointErrorId = configFieldId(["laboratory", "endpoint"], "scalar-error");
+    expect(endpoint.getAttribute("aria-describedby")?.split(" ")).toEqual([
+      configFieldId(["laboratory", "endpoint"], "description"),
+      endpointErrorId,
+    ]);
     endpoint.value = "Xlocal-apiY";
     endpoint.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "endpoint"], "Xlocal-apiY");
@@ -141,11 +143,23 @@ describe("config form integrity", () => {
     endpoint.value = "123";
     endpoint.dispatchEvent(new Event("input", { bubbles: true }));
     expect(endpoint.getAttribute("aria-invalid")).toBe("true");
+    const endpointError = expectElement(
+      document.getElementById(endpointErrorId),
+      "associated endpoint validation message",
+    );
+    expect(endpointError.hidden).toBe(false);
+    expect(endpointError.getAttribute("role")).toBe("alert");
+    expect(endpointError.textContent).toBe(endpoint.validationMessage);
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "endpoint"], "123");
 
     endpoint.value = "";
     endpoint.dispatchEvent(new Event("input", { bubbles: true }));
     expect(endpoint.getAttribute("aria-invalid")).toBe("true");
+
+    endpoint.value = "valid-slug";
+    endpoint.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(endpointError.hidden).toBe(true);
+    expect(endpointError.textContent).toBe("");
 
     const relayUrl = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Relay Url']"),
@@ -283,6 +297,14 @@ describe("config form integrity", () => {
     retryBudget.dispatchEvent(new Event("input", { bubbles: true }));
     expect(retryBudget.getAttribute("aria-invalid")).toBe("true");
     expect(retryBudget.validationMessage).not.toBe("");
+    const retryErrorId = configFieldId(["laboratory", "retryBudget"], "scalar-error");
+    const retryError = expectElement(
+      document.getElementById(retryErrorId),
+      "associated retry budget validation message",
+    );
+    expect(retryBudget.getAttribute("aria-describedby")?.split(" ")).toContain(retryErrorId);
+    expect(retryError.hidden).toBe(false);
+    expect(retryError.textContent).toBe(retryBudget.validationMessage);
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "retryBudget"], undefined);
 
     retryBudget.value = "3";

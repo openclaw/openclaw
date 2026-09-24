@@ -1,6 +1,8 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Model runtime selection" });
@@ -17,6 +19,85 @@ const model = {
 } satisfies ModelCatalogEntry;
 
 suite.define(() => {
+  it.each([false, true])(
+    "keeps Default reset without offering denied models (manual choices: %s)",
+    async (hasAllowedModel) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const key = "agent:main:main";
+        const row = {
+          key,
+          sessionId: "manual-policy-reset",
+          kind: "direct",
+          model: "manual",
+          modelProvider: "fixture",
+          modelOverrideSource: "user",
+          updatedAt: 1,
+        };
+        const models: ModelCatalogEntry[] = [
+          {
+            id: "automatic",
+            name: "Automatic",
+            provider: "fixture",
+            available: true,
+            manualSelectionAllowed: false,
+            agentRuntime: { id: "openclaw", source: "model" },
+            runtimeChoices: [
+              { agentRuntime: { id: "other-runtime", source: "model" }, available: true },
+            ],
+          },
+        ];
+        if (hasAllowedModel) {
+          models.push(
+            { id: "allowed", name: "Allowed", provider: "fixture", available: true },
+            {
+              id: "manual",
+              name: "Forbidden pinned",
+              provider: "fixture",
+              available: true,
+              manualSelectionAllowed: false,
+            },
+          );
+        }
+        const gateway = await installMockGateway(page, {
+          agentModel: "fixture/automatic",
+          models,
+          sessions: [row],
+          sessionInfo: row,
+          methodResponses: {
+            "sessions.list": {
+              ts: 1,
+              path: "",
+              count: 1,
+              defaults: { model: "automatic", modelProvider: "fixture", contextTokens: 128_000 },
+              sessions: [row],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("models.list");
+        const picker = page
+          .locator(".agent-chat__input")
+          .first()
+          .locator(".chat-controls__model-picker");
+        await picker.locator("[data-chat-model-select]").click();
+        await picker.locator(".chat-controls__model-menu").screenshot({
+          path: path.join(suite.artifactDir, `manual-policy-${hasAllowedModel}.png`),
+        });
+        const reset = picker.locator('[data-chat-model-option="fixture/automatic"]');
+        expect(await reset.count()).toBe(1);
+        expect(await picker.locator('[data-chat-model-runtime="other-runtime"]').count()).toBe(0);
+        expect(await picker.locator('[data-chat-model-option="fixture/manual"]').count()).toBe(
+          hasAllowedModel ? 0 : 1,
+        );
+        await selectChatModelOption(reset);
+        expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+          key,
+          model: null,
+        });
+      });
+    },
+  );
+
   it.each(["chat", "new"])("selects a second same-name harness through /%s", async (route) => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const key = "agent:main:main";
@@ -62,7 +143,7 @@ suite.define(() => {
       const embedded = picker.locator('[data-chat-model-runtime="openclaw"]');
       expect(await codex.textContent()).toContain("200k · Codex");
       expect(await embedded.textContent()).toContain("1M · OpenClaw");
-      await codex.click();
+      await selectChatModelOption(codex);
       if (route === "new") {
         await expect.poll(() => codex.getAttribute("aria-selected")).toBe("true");
         await composer.locator("textarea").first().fill("Reply with the selected runtime.");
@@ -99,7 +180,7 @@ suite.define(() => {
         const after = (await gateway.getRequests("sessions.patch", reset)).length;
         await gateway.deferNext("sessions.patch", reset);
         await trigger.click();
-        await embedded.click();
+        await selectChatModelOption(embedded);
         expect(
           (await gateway.waitForRequest("sessions.patch", { after, match: reset })).params,
         ).toMatchObject(reset);

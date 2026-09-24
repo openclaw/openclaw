@@ -302,6 +302,23 @@ export class ComputerToolSession {
       throw new Error("computer target must be gateway or node");
     }
     const explicitNode = typeof params.input.node === "string" ? params.input.node : undefined;
+    const environmentId =
+      typeof params.input.environmentId === "string"
+        ? params.input.environmentId.trim()
+        : undefined;
+    if (
+      environmentId !== undefined &&
+      (!environmentId ||
+        explicitHost !== undefined ||
+        explicitNode !== undefined ||
+        params.gatewayOpts.gatewayUrl ||
+        params.gatewayOpts.gatewayToken ||
+        this.options.transport)
+    ) {
+      throw new Error(
+        "Computer environmentId must select an attached environment without another target or Gateway override",
+      );
+    }
     if (explicitHost === "gateway" && explicitNode !== undefined) {
       throw new Error("computer target=gateway does not accept a node selector");
     }
@@ -333,6 +350,8 @@ export class ComputerToolSession {
     const reuseTarget =
       explicitNode === undefined &&
       implicitTarget &&
+      (environmentId === undefined ||
+        (implicitTarget.host === "node" && implicitTarget.environmentId === environmentId)) &&
       (explicitHost === undefined || explicitHost === implicitTarget.host);
     const explicitGateway =
       params.gatewayOpts.gatewayUrl !== undefined || params.gatewayOpts.gatewayToken !== undefined;
@@ -354,6 +373,7 @@ export class ComputerToolSession {
           gatewayStatus: this.options.gatewayStatus,
           target: explicitHost,
           node: explicitNode,
+          environmentId,
           gatewayOpts: selectionGatewayOpts,
           signal: params.signal,
         });
@@ -636,15 +656,13 @@ export class ComputerToolSession {
         );
         // Ordinary paired nodes can disconnect during best-effort cleanup.
         // A bound session owner must observe cleanup failure before acknowledging its turn.
-        if (
+        const ownsCleanup = (binding: ComputerBinding | undefined) =>
           this.options.transport ||
-          targets.some(([, binding]) => binding.host.host === "gateway")
-        ) {
+          binding?.host.host === "gateway" ||
+          (binding?.host.host === "node" && binding.host.environmentId !== undefined);
+        if (targets.some(([, binding]) => ownsCleanup(binding))) {
           const failures = results.flatMap((result, index) =>
-            result.status === "rejected" &&
-            (this.options.transport || targets[index]?.[1].host.host === "gateway")
-              ? [result.reason]
-              : [],
+            result.status === "rejected" && ownsCleanup(targets[index]?.[1]) ? [result.reason] : [],
           );
           if (failures.length > 0) {
             throw new AggregateError(failures, "computer: session desktop cleanup failed");

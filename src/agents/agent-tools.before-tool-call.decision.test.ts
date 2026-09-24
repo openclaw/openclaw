@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
-import type { ExecutionDecisionWork } from "../audit/execution-decision-work.js";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
 import {
@@ -36,7 +36,7 @@ function assembledTool(
     codingRoot: process.cwd(),
     containmentRoot: process.cwd(),
     includeBaseCodingTools: kind === "data",
-    includeShellTools: kind === "tool",
+    shellTools: kind === "tool" ? "full" : "disabled",
     workspaceOnly: false,
     readOnly: false,
     applyPatchEnabled: false,

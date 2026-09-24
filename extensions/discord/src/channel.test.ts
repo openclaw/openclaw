@@ -288,7 +288,7 @@ describe("discordPlugin outbound", () => {
         hasRepliedRef,
       }),
     ).toEqual({
-      currentChannelId: "987654321",
+      currentChannelId: "channel:987654321",
       currentChatType: "direct",
       currentMessagingTarget: "user:123456789",
       currentMessageId: "message-1",

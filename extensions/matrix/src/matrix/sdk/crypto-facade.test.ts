@@ -28,17 +28,17 @@ function createVerificationManagerMock(
 }
 
 function createRecoveryKeyStoreMock(
-  summary: ReturnType<MatrixRecoveryKeyStore["getRecoveryKeySummary"]> = null,
+  summary: Awaited<ReturnType<MatrixRecoveryKeyStore["getRecoveryKeySummary"]>> = null,
 ): MatrixRecoveryKeyStore {
   return {
-    getRecoveryKeySummary: vi.fn(() => summary),
+    getRecoveryKeySummary: vi.fn(async () => summary),
   } as unknown as MatrixRecoveryKeyStore;
 }
 
 function createFacadeHarness(params?: {
   client?: Partial<MatrixCryptoFacadeDeps["client"]>;
   verificationManager?: Partial<MatrixVerificationManager>;
-  recoveryKeySummary?: ReturnType<MatrixRecoveryKeyStore["getRecoveryKeySummary"]>;
+  recoveryKeySummary?: Awaited<ReturnType<MatrixRecoveryKeyStore["getRecoveryKeySummary"]>>;
   isRoomEncrypted?: MatrixCryptoFacadeDeps["isRoomEncrypted"];
   downloadContent?: MatrixCryptoFacadeDeps["downloadContent"];
 }) {

@@ -1,9 +1,11 @@
 import { channel } from "node:diagnostics_channel";
-import { constants, DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { constants, DatabaseSync, StatementSync } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync.js";
 import {
   assertSqliteSchemaContains,
+  assertSqliteSchemaTablesPresent,
+  collectSqliteNamedIndexContract,
   collectSqliteSchemaIssues,
   createSqliteTableContractReader,
 } from "./sqlite-schema-contract.js";
@@ -62,16 +64,118 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
   }
 
   it("accepts the canonical schema plus unrelated objects", () => {
-    const database = createDatabase(CANONICAL_SCHEMA);
+    // Each cache mode must build a cold contract without warming the later cases.
+    const schema = `${CANONICAL_SCHEMA}\n-- cold contract ${cacheEnabled}\n`;
+    const database = createDatabase(schema);
     try {
       database.exec(`
         CREATE TABLE custom_records (id INTEGER PRIMARY KEY);
         CREATE INDEX idx_custom_records_id ON custom_records(id);
       `);
 
-      expect(() =>
-        assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA),
-      ).not.toThrow();
+      const reads = [
+        vi.spyOn(StatementSync.prototype, "get"),
+        vi.spyOn(StatementSync.prototype, "all"),
+        vi.spyOn(StatementSync.prototype, "iterate"),
+      ];
+      try {
+        expect(() => assertSqliteSchemaContains(database, "test database", schema)).not.toThrow();
+        const readCount = reads.reduce((total, read) => total + read.mock.calls.length, 0);
+        expect(readCount).toBeGreaterThan(0);
+        expect(readCount).toBeLessThanOrEqual(44);
+      } finally {
+        for (const read of reads) {
+          read.mockRestore();
+        }
+      }
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([
+    ["expression direction", "lower(value) COLLATE NOCASE DESC", "lower(value) COLLATE NOCASE ASC"],
+    [
+      "expression collation",
+      "lower(value) COLLATE NOCASE DESC",
+      "lower(value) COLLATE BINARY DESC",
+    ],
+    ["partial predicate", "WHERE value IS NOT NULL", "WHERE value IS NULL"],
+  ])("preserves composite WITHOUT ROWID indexes and rejects changed %s", (_name, before, after) => {
+    const schema = `
+      CREATE TABLE "composite records" (
+        tenant TEXT COLLATE NOCASE,
+        record TEXT,
+        value TEXT,
+        PRIMARY KEY (tenant DESC, record),
+        UNIQUE (value)
+      ) WITHOUT ROWID;
+      CREATE TABLE empty_records (value TEXT) STRICT;
+      CREATE INDEX "expression index" ON "composite records"
+        (lower(value) COLLATE NOCASE DESC, record ASC) WHERE value IS NOT NULL;
+    `;
+    const database = createDatabase(schema);
+    try {
+      // The primary key has no sqlite_schema index row; its terms must still match.
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+      database.exec('DROP INDEX "expression index";');
+      database.exec(
+        `CREATE INDEX "expression index" ON "composite records"
+        (lower(value) COLLATE NOCASE DESC, record ASC) WHERE value IS NOT NULL;`.replace(
+          before,
+          after,
+        ),
+      );
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([
+        {
+          code: "missing-or-drifted-index",
+          objectName: "expression index",
+          message: "missing or drifted index expression index",
+        },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([
+    "CREATE TABLE pragma_index_list (id INTEGER);",
+    "CREATE TEMP VIEW pragma_index_xinfo AS SELECT 1 AS id;",
+  ])("keeps schema checks working when PRAGMA function names are shadowed: %s", (collisionSql) => {
+    const schema = `${CANONICAL_SCHEMA}\n${collisionSql}`;
+    const database = createDatabase(schema);
+    try {
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+      database.exec("DROP INDEX idx_children_parent;");
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([
+        {
+          code: "missing-or-drifted-index",
+          objectName: "idx_children_parent",
+          message: "missing or drifted index idx_children_parent",
+        },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps index terms separate when a temp table shadows a main table", () => {
+    const schema = `
+      CREATE TABLE a (id INTEGER PRIMARY KEY, main_a TEXT);
+      CREATE TABLE b (id INTEGER PRIMARY KEY, main_b TEXT);
+      CREATE INDEX same_index ON b(main_b);
+      CREATE TEMP TABLE a (id INTEGER PRIMARY KEY, temp_col TEXT);
+      CREATE INDEX temp.same_index ON a(temp_col DESC);
+    `;
+    const database = createDatabase(schema);
+    try {
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+      database.exec("DROP INDEX temp.same_index;");
+      expect(collectSqliteSchemaIssues(database, schema)).toContainEqual({
+        code: "missing-or-drifted-index",
+        objectName: "same_index",
+        message: "missing or drifted index same_index",
+      });
     } finally {
       database.close();
     }
@@ -88,6 +192,34 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
         /missing or drifted index idx_children_parent; run openclaw doctor --fix to repair it\./,
       );
     } finally {
+      database.close();
+    }
+  });
+
+  it("preserves SQL-column authorization errors for an absent named index", () => {
+    const database = createDatabase(CANONICAL_SCHEMA);
+    try {
+      database.exec("DROP INDEX idx_children_parent;");
+      expect(collectSqliteNamedIndexContract(database, "idx_children_parent")).toBeUndefined();
+
+      database.setAuthorizer((action, table, column, schema) => {
+        if (
+          action === constants.SQLITE_READ &&
+          (table === "sqlite_master" || table === "sqlite_schema") &&
+          column === "sql" &&
+          schema === "main"
+        ) {
+          return constants.SQLITE_DENY;
+        }
+        return constants.SQLITE_OK;
+      });
+      expect(() => collectSqliteNamedIndexContract(database, "idx_children_parent")).toThrow(
+        /access to sqlite_(?:master|schema)\.sql is prohibited/iu,
+      );
+      database.setAuthorizer(null);
+      expect(collectSqliteNamedIndexContract(database, "idx_children_parent")).toBeUndefined();
+    } finally {
+      database.setAuthorizer(null);
       database.close();
     }
   });
@@ -597,3 +729,45 @@ function schemaWithFutureColumn(declaration: string): string {
     `    value TEXT,\n    future_note ${declaration}\n  ) STRICT;`,
   );
 }
+
+it("reports missing tables in canonical order across a large schema", () => {
+  const names = Array.from(
+    { length: 503 },
+    (_, index) => `table_${String(index).padStart(4, "0")}`,
+  );
+  const schema = names.map((name) => `CREATE TABLE ${name} (id INTEGER PRIMARY KEY);`).join("\n");
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec(schema);
+    database.exec("DROP TABLE table_0001; DROP TABLE table_0501;");
+    expect(() => assertSqliteSchemaTablesPresent(database, "large database", schema)).toThrow(
+      "SQLite schema is incomplete or noncanonical for large database: missing table table_0001; missing table table_0501; run openclaw doctor --fix to repair it.",
+    );
+    database.exec(
+      "CREATE TABLE table_0001 (id INTEGER PRIMARY KEY); CREATE TABLE table_0501 (id INTEGER PRIMARY KEY);",
+    );
+    expect(() => assertSqliteSchemaTablesPresent(database, "large database", schema)).not.toThrow();
+  } finally {
+    database.close();
+  }
+});
+
+it("refuses table presence when the authorizer ignores the SELECT", () => {
+  const schema = "CREATE TABLE retained (id INTEGER PRIMARY KEY);";
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec(schema);
+    expect(() =>
+      assertSqliteSchemaTablesPresent(database, "restricted database", schema),
+    ).not.toThrow();
+    database.setAuthorizer((action) =>
+      action === constants.SQLITE_SELECT ? constants.SQLITE_IGNORE : constants.SQLITE_OK,
+    );
+    expect(() => assertSqliteSchemaTablesPresent(database, "restricted database", schema)).toThrow(
+      "missing table retained; run openclaw doctor --fix to repair it.",
+    );
+  } finally {
+    database.setAuthorizer(null);
+    database.close();
+  }
+});

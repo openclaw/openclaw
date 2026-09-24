@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
@@ -51,6 +52,9 @@ beforeEach(() => {
 afterEach(async () => {
   externalAuthTesting.resetResolveExternalAuthProfilesForTest();
   clearRuntimeAuthProfileStoreSnapshots();
+  for (const stateDir of tempDirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
   closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });

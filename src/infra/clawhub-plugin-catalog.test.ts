@@ -1,5 +1,9 @@
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
+import { PluginDiscoveryDetailSchema } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { joinClawHubPluginDetail } from "../plugins/catalog-discovery.js";
 import { jsonResponse, requestUrl } from "../test-helpers/http.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   fetchClawHubPluginCatalog,
   fetchClawHubPluginCategories,
@@ -16,6 +20,7 @@ const remotePlugin = {
   isOfficial: false,
   summary: "Long-term memory",
   ownerHandle: "alice",
+  ownerImage: "https://cdn.example.com/alice.png",
   categories: ["memory"],
   latestVersion: "1.2.3",
   runtimeId: "memory-plus",
@@ -24,6 +29,59 @@ const remotePlugin = {
 };
 
 describe("ClawHub plugin catalog client", () => {
+  it.each([false, true])(
+    "attributes manual search unless telemetry is disabled: %s",
+    async (disabled) => {
+      await withEnvAsync({ CLAWHUB_DISABLE_TELEMETRY: String(disabled) }, async () => {
+        const fetchImpl = vi.fn(async (_input: string | URL | Request) =>
+          jsonResponse({ results: [{ score: 9, package: remotePlugin }] }),
+        );
+        const result = await fetchClawHubPluginCatalog({
+          baseUrl: "https://example.com",
+          query: "memory",
+          searchSource: "openclaw-control-ui",
+          category: "memory",
+          limit: 5,
+          fetchImpl,
+        });
+        expect(fetchImpl).toHaveBeenCalledOnce();
+        const url = new URL(requestUrl(fetchImpl.mock.calls[0]![0]));
+        expect(url.pathname).toBe("/api/v1/plugins/search");
+        expect(Object.fromEntries(url.searchParams)).toEqual({
+          q: "memory",
+          category: "memory",
+          limit: "5",
+          ...(disabled ? {} : { searchSource: "openclaw-control-ui" }),
+        });
+        expect(result.items.map((item) => item.packageName)).toEqual(["memory-plus"]);
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "replays transient failures only when search cannot record an observation: %s",
+    async (disabled) => {
+      await withEnvAsync({ CLAWHUB_DISABLE_TELEMETRY: String(disabled) }, async () => {
+        const fetchImpl = vi
+          .fn(async () => jsonResponse({ results: [{ score: 9, package: remotePlugin }] }))
+          .mockRejectedValueOnce(new TypeError("fetch failed"));
+        const result = fetchClawHubPluginCatalog({
+          baseUrl: "https://example.com",
+          query: "memory",
+          searchSource: "openclaw-control-ui",
+          fetchImpl,
+        });
+        if (disabled) {
+          await expect(result).resolves.toMatchObject({ items: [{ packageName: "memory-plus" }] });
+          expect(fetchImpl).toHaveBeenCalledTimes(2);
+        } else {
+          await expect(result).rejects.toThrow("fetch failed");
+          expect(fetchImpl).toHaveBeenCalledOnce();
+        }
+      });
+    },
+  );
+
   it("reads the bounded plugin overview in one request", async () => {
     let requestedUrl = "";
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
@@ -117,6 +175,7 @@ describe("ClawHub plugin catalog client", () => {
 
   it.each([
     [remotePlugin.icon, `https://example.com${remotePlugin.icon}`],
+    [null, remotePlugin.ownerImage],
     ["https://cdn.example.com/memory-plus.svg", "https://cdn.example.com/memory-plus.svg"],
   ])(
     "uses plugin search with a resolved icon and no invented pagination: %s",
@@ -226,6 +285,7 @@ describe("ClawHub plugin catalog client", () => {
 
   it.each([
     ["agent-runtimes", "bot"],
+    ["voice", "mic"],
     ["integrations", "plug"],
     ["developer-tools", "code-xml"],
     ["infrastructure", "server"],
@@ -341,13 +401,27 @@ describe("ClawHub plugin catalog client", () => {
     },
   );
 
-  it("assembles normalized detail from ClawHub package metadata and release endpoints", async () => {
+  it("reads complete exact-version plugin detail in one request", async () => {
     const requestedUrls: string[] = [];
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(requestUrl(input));
       requestedUrls.push(`${url.pathname}${url.search}`);
-      if (url.pathname.endsWith("/versions")) {
-        return jsonResponse({
+      return jsonResponse({
+        package: {
+          ...remotePlugin,
+          topics: ["Retrieval"],
+          createdAt: 100,
+          updatedAt: 300,
+          compatibility: { minGatewayVersion: ">=2.0.0" },
+          scanStatus: "clean",
+        },
+        owner: {
+          handle: "alice",
+          displayName: "Alice",
+          official: true,
+          image: "https://avatars.example.com/alice.png",
+        },
+        versions: {
           items: [
             {
               version: "1.2.3",
@@ -358,55 +432,52 @@ describe("ClawHub plugin catalog client", () => {
             { version: "1.2.2", createdAt: 200, changelog: "Previous release", distTags: [] },
           ],
           nextCursor: null,
-        });
-      }
-      if (url.pathname.endsWith("/versions/1.2.2")) {
-        return jsonResponse({
-          package: { name: "memory-plus", displayName: "Memory Plus", family: "code-plugin" },
-          version: {
-            version: "1.2.2",
-            createdAt: 200,
-            changelog: "Previous release",
-            pluginManifestSummary: {
-              schemaVersion: 1,
-              configFields: [
-                { name: "apiKey", description: "Service API key", required: true, sensitive: true },
-              ],
-              mcpServers: [{ name: "memory" }],
-              bundledSkills: [
-                {
-                  name: "Recall",
-                  description: "Recall saved knowledge",
-                  rootPath: "skills/recall",
-                  skillMdPath: "skills/recall/SKILL.md",
-                  sha256: "a".repeat(64),
-                  size: 42,
-                },
-              ],
-              compatibility: { minGatewayVersion: ">=1.0.0" },
-            },
-            verification: {
-              tier: "source-linked",
-              scope: "artifact-only",
-              summary: "Linked to source.",
-              sourceRepo: "alice/memory-plus",
-              sourceCommit: "abc123",
-              sourcePath: "plugins/memory-plus",
-              scanStatus: "clean",
-            },
-            llmAnalysis: {
-              status: "clean",
-              verdict: "benign",
-              summary: "Capabilities match the stated purpose.",
-              guidance: "Review the API key before enabling.",
-              checkedAt: 400,
-            },
+        },
+        version: {
+          version: "1.2.2",
+          createdAt: 200,
+          changelog: "Previous release",
+          pluginManifestSummary: {
+            schemaVersion: 1,
+            configFields: [
+              { name: "apiKey", description: "Service API key", required: true, sensitive: true },
+            ],
+            mcpServers: [{ name: "memory" }],
+            contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
+            providers: ["memory-model"],
+            channels: ["memory-chat"],
+            bundledSkills: [
+              {
+                name: "Recall",
+                description: "Recall saved knowledge",
+                rootPath: "skills/recall",
+                skillMdPath: "skills/recall/SKILL.md",
+                sha256: "a".repeat(64),
+                size: 42,
+              },
+            ],
+            compatibility: { minGatewayVersion: ">=1.0.0" },
           },
-        });
-      }
-      if (url.pathname.endsWith("/versions/1.2.2/security")) {
-        return jsonResponse({
+          verification: {
+            tier: "source-linked",
+            scope: "artifact-only",
+            summary: "Linked to source.",
+            sourceRepo: "alice/memory-plus",
+            sourceCommit: "abc123",
+            sourcePath: "plugins/memory-plus",
+            scanStatus: "clean",
+          },
+          llmAnalysis: {
+            status: "clean",
+            verdict: "benign",
+            summary: "Capabilities match the stated purpose.",
+            guidance: "Review the API key before enabling.",
+            checkedAt: 400,
+          },
+        },
+        security: {
           overview: "Exact release passed ClawHub security review.",
+          verdict: "review",
           securityAuditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
           trust: {
             scanStatus: "clean",
@@ -416,25 +487,8 @@ describe("ClawHub plugin catalog client", () => {
             pending: false,
             stale: false,
           },
-        });
-      }
-      if (url.pathname.endsWith("/file")) {
-        return new Response("# Memory Plus\n\nLong-term memory.", { status: 200 });
-      }
-      return jsonResponse({
-        package: {
-          ...remotePlugin,
-          topics: ["Retrieval"],
-          createdAt: 100,
-          updatedAt: 300,
-          compatibility: { minGatewayVersion: ">=1.0.0" },
-          scanStatus: "clean",
         },
-        owner: {
-          handle: "alice",
-          displayName: "Alice",
-          image: "https://avatars.example.com/alice.png",
-        },
+        readme: "# Memory Plus\n\nLong-term memory.",
       });
     });
 
@@ -445,15 +499,7 @@ describe("ClawHub plugin catalog client", () => {
       fetchImpl,
     });
 
-    expect(requestedUrls[0]).toBe("/api/v1/packages/memory-plus");
-    expect(requestedUrls.slice(1).toSorted()).toEqual(
-      [
-        "/api/v1/packages/memory-plus/versions?limit=10",
-        "/api/v1/packages/memory-plus/versions/1.2.2",
-        "/api/v1/packages/memory-plus/file?path=README.md&preview=1&version=1.2.2",
-        "/api/v1/packages/memory-plus/versions/1.2.2/security",
-      ].toSorted(),
-    );
+    expect(requestedUrls).toEqual(["/api/v1/packages/memory-plus/detail?version=1.2.2"]);
     expect(detail).toMatchObject({
       packageName: "memory-plus",
       iconUrl: `https://example.com${remotePlugin.icon}`,
@@ -461,6 +507,7 @@ describe("ClawHub plugin catalog client", () => {
         handle: "alice",
         displayName: "Alice",
         imageUrl: "https://avatars.example.com/alice.png",
+        official: true,
       },
       topics: ["Retrieval"],
       createdAt: 100,
@@ -471,6 +518,9 @@ describe("ClawHub plugin catalog client", () => {
         { name: "apiKey", description: "Service API key", required: true, sensitive: true },
       ],
       mcpServers: ["memory"],
+      contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
+      providers: ["memory-model"],
+      channels: ["memory-chat"],
       skills: [{ name: "Recall", description: "Recall saved knowledge" }],
       versions: [
         { version: "1.2.3", createdAt: 300, changelog: "Current release", tags: ["latest"] },
@@ -486,47 +536,50 @@ describe("ClawHub plugin catalog client", () => {
       },
       security: {
         status: "clean",
+        verdict: "review",
         auditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
         summary: "Exact release passed ClawHub security review.",
       },
     });
+    const joined = joinClawHubPluginDetail({
+      remote: detail,
+      local: { plugins: [], diagnostics: [], mutationAllowed: true },
+    });
+    expect(joined.detail).toMatchObject({
+      contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
+      providers: ["memory-model"],
+      channels: ["memory-chat"],
+    });
+    expect(Value.Check(PluginDiscoveryDetailSchema, joined.detail)).toBe(true);
   });
 
-  it("keeps plugin detail available when optional security metadata fails", async () => {
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      const url = new URL(requestUrl(input));
-      if (url.pathname.endsWith("/security")) {
-        return jsonResponse({});
-      }
-      if (url.pathname.endsWith("/versions")) {
-        return jsonResponse({ items: [] });
-      }
-      if (url.pathname.endsWith("/versions/1.0.0")) {
-        return jsonResponse({ version: { version: "1.0.0" } });
-      }
-      if (url.pathname.endsWith("/file")) {
-        return new Response("", { status: 404 });
-      }
-      return jsonResponse({
-        package: {
-          name: "memory-plus",
-          displayName: "Memory Plus",
-          family: "code-plugin",
-          isOfficial: false,
-          categories: ["memory"],
-          latestVersion: "1.0.0",
-        },
+  it.each([undefined, null, {}])(
+    "keeps detail available without a release or optional security: %s",
+    async (security) => {
+      const fetchImpl = vi.fn(async () =>
+        jsonResponse({
+          package: {
+            ...remotePlugin,
+            latestVersion: undefined,
+            compatibility: { minGatewayVersion: ">=2.0.0" },
+          },
+          versions: { items: [] },
+          version: null,
+          readme: null,
+          security,
+        }),
+      );
+      const detail = await fetchClawHubPluginDetail({
+        baseUrl: "https://example.com",
+        packageName: "memory-plus",
+        skipAuth: true,
+        fetchImpl,
       });
-    });
-
-    const detail = await fetchClawHubPluginDetail({
-      baseUrl: "https://example.com",
-      packageName: "memory-plus",
-      version: "1.0.0",
-      fetchImpl,
-    });
-
-    expect(detail.packageName).toBe("memory-plus");
-    expect(detail.security).toBeUndefined();
-  });
+      expect(detail).toMatchObject({ packageName: "memory-plus", versions: [], configFields: [] });
+      expect(detail.readme).toBeUndefined();
+      expect(detail.security).toBeUndefined();
+      expect(detail.compatibility).toEqual({ minGatewayVersion: ">=2.0.0" });
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    },
+  );
 });

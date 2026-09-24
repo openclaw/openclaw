@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveMigrationCheckpointIdentity } from "../commands/doctor-config-preflight-checkpoint.js";
 import {
   persistRefreshedPluginIndex,
   type DoctorConfigPreflightPluginSnapshotRead,
@@ -153,12 +154,17 @@ describe("persisted plugin registry Doctor contract freshness", () => {
 
     const lease = acquireStartupMigrationLease({ env });
     try {
-      const persisted = await persistRefreshedPluginIndex({
+      const { snapshotRead: persisted } = await persistRefreshedPluginIndex({
         env,
         lease,
         measure: async (_name, run) => await run(),
         snapshotRead: derived,
         readPersistedSnapshot: readSnapshot,
+        expectedIdentity: resolveMigrationCheckpointIdentity({
+          snapshot: derived.snapshot,
+          baseConfig: config,
+          pluginMigrationFingerprint: derived.pluginMigrationFingerprint,
+        }),
       });
       expect(persisted.pluginMetadataSnapshot?.registrySource).toBe("persisted");
       expect(persisted.pluginMetadataSnapshot?.index.plugins).toEqual(

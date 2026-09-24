@@ -54,7 +54,7 @@ const providerThinkingMocks = vi.hoisted(() => ({
     vi.fn<typeof import("../plugins/provider-thinking.js").resolveEffectiveThinkingProfile>(),
 }));
 
-vi.mock("../acp/runtime/session-meta.js", () => ({
+vi.mock("../acp/runtime/session-meta-readonly.js", () => ({
   readAcpSessionMetaForEntry: acpSessionMetaMocks.readAcpSessionMetaForEntry,
 }));
 
@@ -240,24 +240,24 @@ function expectAuthOverride(
   }
 }
 
-async function applySubagentModelPatch(cfg: OpenClawConfig) {
-  return expectPatchOk(
-    await runPatch({
-      cfg,
-      storeKey: KIMI_SUBAGENT_KEY,
-      patch: {
-        key: KIMI_SUBAGENT_KEY,
-        model: SUBAGENT_MODEL,
-      },
-      loadGatewayModelCatalog: async () => [
-        { provider: "anthropic", id: ANTHROPIC_SONNET_ID, name: "sonnet" },
-        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.7-Code", name: "kimi" },
-      ],
-    }),
-  );
+async function applySubagentModelPatch(cfg: OpenClawConfig, store: Record<string, SessionEntry>) {
+  return runPatch({
+    cfg,
+    store,
+    storeKey: KIMI_SUBAGENT_KEY,
+    patch: {
+      key: KIMI_SUBAGENT_KEY,
+      model: SUBAGENT_MODEL,
+    },
+    loadGatewayModelCatalog: async () => [
+      { provider: "anthropic", id: ANTHROPIC_SONNET_ID, name: "sonnet" },
+      { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.7-Code", name: "kimi" },
+    ],
+  });
 }
 
 function makeKimiSubagentCfg(params: {
+  allowModel: boolean;
   agentPrimaryModel?: string;
   agentSubagentModel?: string;
   defaultsSubagentModel?: string;
@@ -266,6 +266,7 @@ function makeKimiSubagentCfg(params: {
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-sonnet-4-6" },
+        modelPolicy: { allow: [ANTHROPIC_SONNET_MODEL] },
         subagents: params.defaultsSubagentModel
           ? { model: params.defaultsSubagentModel }
           : undefined,
@@ -273,15 +274,15 @@ function makeKimiSubagentCfg(params: {
           "anthropic/claude-sonnet-4-6": { alias: "default" },
         },
       },
-      list: [
-        {
-          id: "kimi",
+      entries: {
+        kimi: {
+          ...(params.allowModel ? { modelPolicy: { allow: [SUBAGENT_MODEL] } } : {}),
           model: params.agentPrimaryModel ? { primary: params.agentPrimaryModel } : undefined,
           subagents: params.agentSubagentModel ? { model: params.agentSubagentModel } : undefined,
         },
-      ],
+      },
     },
-  } as OpenClawConfig;
+  };
 }
 
 function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
@@ -516,7 +517,7 @@ describe("gateway sessions patch", () => {
 
   test.each([
     ["agent:main:dashboard:child", { spawnedBy: MAIN_SESSION_KEY }],
-    ["agent:main:dashboard:child", { parentSessionKey: MAIN_SESSION_KEY }],
+    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:dashboard:parent" }],
     ["agent:main:subagent:child", {}],
   ] as const)("rejects child pins on %s with %j", async (key, lineage) => {
     const original: SessionEntry = { sessionId: "child", updatedAt: 1, pinnedAt: 10, ...lineage };
@@ -564,6 +565,39 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(pinned.pinnedAt).toEqual(expect.any(Number));
+  });
+
+  test.each([
+    ["agent:main:dashboard:work", { parentSessionKey: MAIN_SESSION_KEY }],
+    ["agent:other:dashboard:work", { parentSessionKey: "agent:other:main" }],
+  ] as const)("allows pins on Home-parented sessions on %s", async (key, lineage) => {
+    const pinned = expectPatchOk(
+      await runPatch({
+        storeKey: key,
+        store: { [key]: { sessionId: "work", updatedAt: 1, ...lineage } },
+        patch: { key, pinned: true },
+      }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
+  });
+
+  test("preserves existing pins on Home-parented sessions through metadata patches", async () => {
+    const key = "agent:main:dashboard:work";
+    const updated = expectPatchOk(
+      await runPatch({
+        storeKey: key,
+        store: {
+          [key]: {
+            sessionId: "work",
+            updatedAt: 1,
+            pinnedAt: 10,
+            parentSessionKey: MAIN_SESSION_KEY,
+          },
+        },
+        patch: { key, label: "Work session" },
+      }),
+    );
+    expect(updated.pinnedAt).toBe(10);
   });
 
   test("marks archived sessions unread and clears the marker when read", async () => {
@@ -629,13 +663,23 @@ describe("gateway sessions patch", () => {
     expect(entry.agentStatus).toBeUndefined();
   });
 
-  test("persists thinkingLevel=off (does not clear)", async () => {
+  test.each([
+    { field: "thinkingLevel", value: "off" },
+    { field: "responseUsage", value: "off" },
+    { field: "reasoningLevel", value: "off" },
+    { field: "fastMode", value: false },
+    { field: "fastMode", value: true },
+    { field: "verboseLevel", value: "full" },
+    { field: "elevatedLevel", value: "off" },
+    { field: "elevatedLevel", value: "on" },
+  ] as const)("persists explicit $field=$value", async ({ field, value }) => {
     const entry = expectPatchOk(
       await runPatch({
-        patch: { key: MAIN_SESSION_KEY, thinkingLevel: "off" },
+        patch: { key: MAIN_SESSION_KEY, [field]: value },
       }),
     );
-    expect(entry.thinkingLevel).toBe("off");
+    // Explicit off values must survive configured defaults, including messages.responseUsage.
+    expect(entry[field]).toBe(value);
   });
 
   test.each(["thinkingLevel", "contextWindow"] as const)(
@@ -657,17 +701,6 @@ describe("gateway sessions patch", () => {
     },
   );
 
-  test("persists responseUsage=off (does not clear)", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, responseUsage: "off" },
-      }),
-    );
-    // Explicit off must persist so a configured messages.responseUsage default
-    // cannot re-enable the footer the user turned off.
-    expect(entry.responseUsage).toBe("off");
-  });
-
   test("clears responseUsage when patch sets null", async () => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: { responseUsage: "tokens" } as SessionEntry,
@@ -681,15 +714,6 @@ describe("gateway sessions patch", () => {
     expect(entry.responseUsage).toBeUndefined();
   });
 
-  test("persists reasoningLevel=off (does not clear)", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, reasoningLevel: "off" },
-      }),
-    );
-    expect(entry.reasoningLevel).toBe("off");
-  });
-
   test("clears reasoningLevel when patch sets null", async () => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: { reasoningLevel: "stream" } as SessionEntry,
@@ -701,24 +725,6 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.reasoningLevel).toBeUndefined();
-  });
-
-  test("persists fastMode=false (does not clear)", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, fastMode: false },
-      }),
-    );
-    expect(entry.fastMode).toBe(false);
-  });
-
-  test("persists fastMode=true", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, fastMode: true },
-      }),
-    );
-    expect(entry.fastMode).toBe(true);
   });
 
   test("recreates partial rows without dropping session settings", async () => {
@@ -904,38 +910,11 @@ describe("gateway sessions patch", () => {
     expect(cleared.toolOverrides).toBeUndefined();
   });
 
-  test("persists verboseLevel=full", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, verboseLevel: "full" },
-      }),
-    );
-    expect(entry.verboseLevel).toBe("full");
-  });
-
   test("rejects invalid verboseLevel values with all valid choices in the error", async () => {
     const result = await runPatch({
       patch: { key: MAIN_SESSION_KEY, verboseLevel: "maybe" },
     });
     expectPatchError(result, 'invalid verboseLevel (use "on"|"off"|"full")');
-  });
-
-  test("persists elevatedLevel=off (does not clear)", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, elevatedLevel: "off" },
-      }),
-    );
-    expect(entry.elevatedLevel).toBe("off");
-  });
-
-  test("persists elevatedLevel=on", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, elevatedLevel: "on" },
-      }),
-    );
-    expect(entry.elevatedLevel).toBe("on");
   });
 
   test("clears elevatedLevel when patch sets null", async () => {
@@ -1673,6 +1652,45 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("xhigh");
   });
 
+  test.each([
+    { requested: "max", nativeEffort: "max", accepted: true },
+    { requested: "max", nativeEffort: "high", accepted: false },
+  ] as const)(
+    "validates thinking against the selected runtime variant ($nativeEffort, accepted=$accepted)",
+    async ({ requested, nativeEffort, accepted }) => {
+      const host: ModelCatalogEntry = {
+        provider: "runtime-fixture",
+        id: "reasoner",
+        name: "Reasoner",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: [accepted ? "high" : "max"] },
+      };
+      const native: ModelCatalogEntry = {
+        ...host,
+        nativeRuntime: "fixture-native",
+        compat: { supportedReasoningEfforts: [nativeEffort] },
+      };
+      const result = await projectSessionsPatchEntry({
+        cfg: { agents: { defaults: { model: "runtime-fixture/reasoner" } } },
+        storeKey: MAIN_SESSION_KEY,
+        existingEntry: mainStoreEntry({})[MAIN_SESSION_KEY],
+        isLabelInUse: () => false,
+        preparedAgentRuntime: "fixture-native",
+        patch: { key: MAIN_SESSION_KEY, thinkingLevel: requested },
+        loadGatewayModelCatalogSnapshot: async () => ({
+          entries: [host],
+          routeVariants: [host, native],
+        }),
+      });
+
+      if (accepted) {
+        expect(expectPatchOk(result).thinkingLevel).toBe(requested);
+      } else {
+        expectPatchError(result, 'thinkingLevel "max" is not supported');
+      }
+    },
+  );
+
   test("validates global patches against the selected agent", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -1746,7 +1764,7 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("ultra");
   });
 
-  test("remaps stored Ultra to Max when a model patch selects Codex Luna", async () => {
+  test("preserves stored Ultra when a model patch selects Codex Luna", async () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: {
@@ -1765,7 +1783,7 @@ describe("gateway sessions patch", () => {
       }),
     );
 
-    expect(entry.thinkingLevel).toBe("max");
+    expect(entry.thinkingLevel).toBe("ultra");
   });
 
   test("honors an explicit OpenClaw session runtime override for Luna Ultra", async () => {
@@ -1786,7 +1804,7 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("ultra");
   });
 
-  test("clearing a runtime pin remaps thinking through configured routing and invalidates derived context", async () => {
+  test("clearing a runtime pin preserves supported thinking and invalidates derived context", async () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: { agents: { defaults: { model: "openai/gpt-5.6-luna" } } },
@@ -1799,7 +1817,7 @@ describe("gateway sessions patch", () => {
         loadGatewayModelCatalog: loadCatalog("openai/gpt-5.6-luna"),
       }),
     );
-    expect(entry).toMatchObject({ thinkingLevel: "max", liveModelSwitchPending: true });
+    expect(entry).toMatchObject({ thinkingLevel: "ultra", liveModelSwitchPending: true });
     expect(entry).not.toHaveProperty("agentRuntimeOverride");
     expect(entry).not.toHaveProperty("contextTokens");
   });
@@ -1860,11 +1878,11 @@ describe("gateway sessions patch", () => {
         },
       } as OpenClawConfig,
       store: mainStoreEntry({}),
-      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "xhigh" },
       loadGatewayModelCatalog: async () => [],
     });
 
-    expectPatchError(result, 'thinkingLevel "ultra" is not supported');
+    expectPatchError(result, 'thinkingLevel "xhigh" is not supported');
     expect(acpSessionMetaMocks.readAcpSessionMetaForEntry).toHaveBeenCalledWith({
       sessionKey: MAIN_SESSION_KEY,
       agentId: "main",
@@ -1872,13 +1890,13 @@ describe("gateway sessions patch", () => {
     });
   });
 
-  test("treats the persisted harness id as observational when validating Luna Ultra", async () => {
+  test("treats the persisted harness id as observational when validating unsupported Luna XHigh", async () => {
     const result = await runPatch({
       cfg: {
         agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
       } as OpenClawConfig,
       store: mainStoreEntry({ agentHarnessId: "openclaw" }),
-      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "xhigh" },
       loadGatewayModelCatalog: async () => [],
     });
 
@@ -2164,33 +2182,38 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, "invalid groupActivation");
   });
 
-  test("allows target agent own model for subagent session even when missing from global allowlist", async () => {
-    const cfg = makeKimiSubagentCfg({
-      agentPrimaryModel: SUBAGENT_MODEL,
-    });
-
-    const entry = await applySubagentModelPatch(cfg);
+  test.each(
+    [
+      { source: "target agent primary", agentPrimaryModel: SUBAGENT_MODEL },
+      {
+        source: "target agent subagents.model",
+        agentPrimaryModel: ANTHROPIC_SONNET_MODEL,
+        agentSubagentModel: SUBAGENT_MODEL,
+      },
+      { source: "global subagents.model", defaultsSubagentModel: SUBAGENT_MODEL },
+    ].flatMap((config) => [
+      { ...config, allowModel: false },
+      { ...config, allowModel: true },
+    ]),
+  )("requires manual permission for $source (allowed: $allowModel)", async (config) => {
+    const cfg = makeKimiSubagentCfg(config);
+    const store: Record<string, SessionEntry> = {
+      [KIMI_SUBAGENT_KEY]: {
+        sessionId: "subagent-policy",
+        updatedAt: 1,
+        delivery: { kind: "none" },
+      },
+    };
+    const before = structuredClone(store);
+    const result = await applySubagentModelPatch(cfg, store);
+    if (!config.allowModel) {
+      expectPatchError(result, "model not allowed");
+      expect(store).toEqual(before);
+      return;
+    }
+    const entry = expectPatchOk(result);
     expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
     expect(entry.modelOverrideSource).toBe("user");
-  });
-
-  test("allows target agent subagents.model for subagent session even when missing from global allowlist", async () => {
-    const cfg = makeKimiSubagentCfg({
-      agentPrimaryModel: ANTHROPIC_SONNET_MODEL,
-      agentSubagentModel: SUBAGENT_MODEL,
-    });
-
-    const entry = await applySubagentModelPatch(cfg);
-    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
-  });
-
-  test("allows global defaults.subagents.model for subagent session even when missing from global allowlist", async () => {
-    const cfg = makeKimiSubagentCfg({
-      defaultsSubagentModel: SUBAGENT_MODEL,
-    });
-
-    const entry = await applySubagentModelPatch(cfg);
-    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
   });
 
   test("persists trailing @profile suffix as authProfileOverride on model patch", async () => {

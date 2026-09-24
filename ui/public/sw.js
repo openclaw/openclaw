@@ -1,6 +1,3 @@
-// OpenClaw Control – Service Worker
-// Handles offline caching and push notifications.
-
 const CACHE_PREFIX = "openclaw-control-";
 const EMBEDDED_CACHE_VERSION = "__OPENCLAW_CONTROL_UI_BUILD_ID__";
 const URL_CACHE_VERSION = new URL(self.location.href).searchParams
@@ -12,17 +9,17 @@ const CACHE_VERSION =
     : URL_CACHE_VERSION) || "dev";
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 const CONTROL_CACHE_LIMIT = 3;
+const SCOPE_URL = new URL(self.registration.scope);
+const SCOPE_PATH = SCOPE_URL.pathname.endsWith("/") ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
 
 function controlUiPathname(url) {
-  const scopeUrl = new URL(self.registration.scope);
-  const scopePath = scopeUrl.pathname.endsWith("/") ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
-  if (url.origin !== scopeUrl.origin) {
+  if (url.origin !== SCOPE_URL.origin) {
     return null;
   }
-  if (url.pathname === scopeUrl.pathname) {
+  if (url.pathname === SCOPE_URL.pathname) {
     return "/";
   }
-  return url.pathname.startsWith(scopePath) ? `/${url.pathname.slice(scopePath.length)}` : null;
+  return url.pathname.startsWith(SCOPE_PATH) ? `/${url.pathname.slice(SCOPE_PATH.length)}` : null;
 }
 
 // Older pages reload directly and cannot acquire new config-draft guards. Keep
@@ -40,7 +37,6 @@ self.addEventListener("message", (event) => {
   }
 });
 
-// Minimal app-shell files to precache.
 const PRECACHE_URLS = ["./"];
 
 self.addEventListener("install", (event) => {
@@ -186,27 +182,21 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const scopeUrl = new URL(self.registration.scope);
-  const scopePath = scopeUrl.pathname.endsWith("/") ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
   // Relative targets belong beneath the registered scope even when its URL
   // omits a trailing slash; keep the exact scope for default navigation.
-  const scopeNavigationBase = new URL(scopePath, scopeUrl);
+  const scopeNavigationBase = new URL(SCOPE_PATH, SCOPE_URL);
   const notificationUrl = event.notification.data?.url;
   // Notifications shown before an update stored "./" for implicit targets.
   // Preserve their existing in-scope tabs when the new worker handles the click.
   const hasExplicitTarget =
     event.notification.data?.explicitUrl ?? Boolean(notificationUrl && notificationUrl !== "./");
-  const isInScope = (url) =>
-    url.origin === scopeUrl.origin &&
-    (url.pathname === scopeUrl.pathname || url.pathname.startsWith(scopePath));
-
-  let targetUrl = scopeUrl;
+  let targetUrl = SCOPE_URL;
   try {
     const requestedUrl = new URL(
-      (hasExplicitTarget ? notificationUrl : undefined) || scopeUrl.href,
+      (hasExplicitTarget ? notificationUrl : undefined) || SCOPE_URL.href,
       scopeNavigationBase,
     );
-    if (isInScope(requestedUrl)) {
+    if (controlUiPathname(requestedUrl) !== null) {
       targetUrl = requestedUrl;
     }
   } catch {
@@ -225,7 +215,7 @@ self.addEventListener("notificationclick", (event) => {
           continue;
         }
 
-        if (!isInScope(clientUrl)) {
+        if (controlUiPathname(clientUrl) === null) {
           continue;
         }
         if (!hasExplicitTarget) {

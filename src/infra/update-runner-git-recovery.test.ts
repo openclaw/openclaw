@@ -63,7 +63,21 @@ it.each([
         : (
             await updateGitCheckout({
               gitRoot: root,
-              opts: { channel: "extended-stable" },
+              opts: {
+                channel: "extended-stable",
+                inspectGitTarget: async () => {
+                  throw new Error("Unsupported channel must not inspect a candidate");
+                },
+                validateCandidate: async () => {
+                  throw new Error("Unsupported channel must not validate a candidate");
+                },
+                beforeGitMutation: async () => {
+                  throw new Error("Unsupported channel must not prepare a mutation");
+                },
+                runGitDoctor: async () => {
+                  throw new Error("Unsupported channel must not run Doctor");
+                },
+              },
               runCommand: mutation,
               defaultCommandEnv: undefined,
               timeoutMs: budgetMs,

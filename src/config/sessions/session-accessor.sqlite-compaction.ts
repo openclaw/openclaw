@@ -118,7 +118,10 @@ export function persistCompactionBoundaryWithSessionEntrySync(
           transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
         }),
       });
-      writeSessionEntry(database, resolved.sessionKey, entry, { previousEntry: fresh });
+      writeSessionEntry(database, resolved.sessionKey, entry, {
+        previousEntry: fresh,
+        canonicalPreviousEntry: fresh,
+      });
       return {
         result: event,
         before: committed.before,

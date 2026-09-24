@@ -2,19 +2,25 @@ import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsFilesListResult,
-  ModelCatalogEntry,
+  AgentsListResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
-import type { CronState } from "../../lib/cron/index.ts";
+import type { CronState } from "../../lib/cron/types.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { AgentsRouteData } from "./route.ts";
 
-const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods(["config.patch", "config.set"]);
+const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
+  "config.patch",
+  "config.set",
+  "agents.update",
+]);
 
 export type TestAgentsPage = HTMLElement & {
   context: ApplicationContext;
@@ -34,7 +40,7 @@ export type TestAgentsPage = HTMLElement & {
   toolsEffectiveError: string | null;
   toolsEffectiveLoading: boolean;
   toolsEffectiveResult: ToolsEffectiveResult | null;
-  chatModelCatalog: ModelCatalogEntry[];
+  readonly modelCatalog: ModelCatalogPresentation;
   chatModelCatalogStatus: PanelRefreshStatus;
   cron: CronState;
   requestGeneration: number;
@@ -63,6 +69,10 @@ export type TestAgentsPage = HTMLElement & {
   loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
   clearAgentSkills: (agentId: string) => void;
   saveAgentConfig: () => void;
+  identityDraft: { name: string | null; emoji: string | null; avatar: string | null };
+  identitySaving: boolean;
+  identityError: string | null;
+  saveIdentityDraft: () => void;
   setDefaultAgent: (agentId: string) => void;
 };
 
@@ -130,4 +140,103 @@ export function gateway(current: ApplicationGatewaySnapshot): ApplicationContext
   } as unknown as ApplicationContext["gateway"];
   eventListeners.set(result, listeners);
   return result;
+}
+
+export function settingsSelection(
+  agentsList: AgentsListResult | null,
+  selectedId: string | null = "main",
+) {
+  const selection = createAgentSelectionCapability(
+    {
+      connection: { gatewayUrl: "ws://settings.test" },
+      snapshot: { assistantAgentId: "main" },
+      subscribe: () => () => undefined,
+    },
+    { state: { agentsList }, subscribe: () => () => undefined },
+    undefined,
+    undefined,
+    { requireConfiguredAgent: true },
+  );
+  selection.set(selectedId);
+  return selection;
+}
+
+export const agentsList: AgentsListResult = {
+  defaultId: "main",
+  mainKey: "main",
+  scope: "per-sender",
+  agents: [{ id: "main", name: "Main" }],
+};
+
+export function agentsRouteData(
+  currentGateway: ApplicationContext["gateway"],
+  roster: AgentsListResult | null = agentsList,
+  requestedAgentId: string | null = "main",
+  selection = settingsSelection(roster),
+): AgentsRouteData {
+  const pathname = requestedAgentId ? `/settings/agents/${requestedAgentId}` : "/settings/agents";
+  return {
+    gateway: currentGateway,
+    gatewaySnapshot: currentGateway.snapshot,
+    location: { pathname, search: "", hash: "" },
+    requestedAgentId,
+    settingsAgentSelection: selection,
+    selectionIntentRevision: selection.intentRevision,
+    panel: "files",
+    agentsList: roster,
+    error: null,
+  };
+}
+
+export function agentsCapability(ensureFiles: () => Promise<AgentsFilesListResult>) {
+  return {
+    state: {
+      client: null,
+      connected: true,
+      agentsLoading: false,
+      agentsError: null,
+      agentsList,
+    },
+    files: () => ({ list: null, loading: false, error: null }),
+    ensureList: vi.fn(async () => agentsList),
+    refreshList: vi.fn(async () => agentsList),
+    ensureFiles,
+    refreshFiles: ensureFiles,
+    subscribe: vi.fn(() => () => undefined),
+  } as unknown as ApplicationContext["agents"];
+}
+
+export function pageContext(
+  currentGateway: ApplicationContext["gateway"],
+  agents: ApplicationContext["agents"],
+  options?: {
+    agentIdentity?: ApplicationContext["agentIdentity"];
+    sessions?: ApplicationContext["sessions"];
+  },
+): ApplicationContext {
+  const subscribe = vi.fn(() => () => undefined);
+  return {
+    gateway: currentGateway,
+    agents,
+    settingsAgentSelection: settingsSelection(agents.state.agentsList),
+    router: { getState: () => ({ matches: [{ routeId: "agents" }], pendingMatches: [] }) },
+    navigate: vi.fn(),
+    replace: vi.fn(),
+    agentIdentity:
+      options?.agentIdentity ??
+      ({
+        get: () => ({ agentId: "main" }),
+        entries: () => [],
+        ensure: vi.fn(async () => undefined),
+        subscribe,
+      } as unknown as ApplicationContext["agentIdentity"]),
+    sessions:
+      options?.sessions ??
+      ({
+        state: { result: null, modelOverrides: {} },
+        subscribe,
+      } as unknown as ApplicationContext["sessions"]),
+    channels: { subscribe },
+    runtimeConfig: { subscribe },
+  } as unknown as ApplicationContext;
 }

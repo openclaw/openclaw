@@ -63,14 +63,12 @@ export type DurableTab = BrowserSessionTabRecord & {
 
 type DurableOwnership = Extract<BrowserTabOwnership, { status: "durable" }>;
 
-function normalizeProfile(value?: string): string | undefined {
-  return normalizeOptionalLowercaseString(value);
-}
-
 function normalizeProfileAliases(values?: Array<string | undefined>): string[] {
   return [
     ...new Set(
-      (values ?? []).map(normalizeProfile).filter((value): value is string => Boolean(value)),
+      (values ?? [])
+        .map(normalizeOptionalLowercaseString)
+        .filter((value): value is string => Boolean(value)),
     ),
   ].toSorted(compareBrowserSessionTabProfileAliases);
 }
@@ -81,11 +79,12 @@ function resolveInteractionIdentity(params: SessionTabParams): InteractionIdenti
   if (!sessionKey || !targetId) {
     return undefined;
   }
+  const profile = normalizeOptionalLowercaseString(params.profile);
   return {
     sessionKey: normalizeBrowserSessionKey(sessionKey) ?? "",
     targetId,
     route: params.route ?? { kind: "browser-control" },
-    ...(normalizeProfile(params.profile) ? { profile: normalizeProfile(params.profile) } : {}),
+    ...(profile ? { profile } : {}),
   };
 }
 
@@ -99,17 +98,13 @@ function durableOwnership(params: SessionTabParams): DurableOwnership | undefine
 
 function deleteInvalidRecord(key: string, onWarn?: (message: string) => void): void {
   try {
-    const deleted = deleteBrowserSessionTabIf(key, (current) => {
+    deleteBrowserSessionTabIf(key, (current) => {
       if (parseBrowserDashboardStopIntent(key, current)) {
         return false;
       }
       const record = parseBrowserSessionTabRecord(current);
       return !record || browserSessionTabStorageKey(record) !== key;
     });
-    if (deleted) {
-      clearDurableTabAliases(key);
-      activeDurableStorageKeys().delete(key);
-    }
   } catch (error) {
     onWarn?.(`failed to delete invalid browser session tab record: ${String(error)}`);
     return;
@@ -217,15 +212,10 @@ function upsertVolatile(
 }
 
 function deleteDurableCandidate(tab: DurableTab): boolean {
-  const deleted = deleteBrowserSessionTabIf(tab.storageKey, (current) => {
+  return deleteBrowserSessionTabIf(tab.storageKey, (current) => {
     const record = parseBrowserSessionTabRecord(current);
     return Boolean(record && sameBrowserSessionTabRecord(record, tab));
   });
-  if (deleted) {
-    clearDurableTabAliases(tab.storageKey);
-    activeDurableStorageKeys().delete(tab.storageKey);
-  }
-  return deleted;
 }
 
 function clearDurableForVolatile(identity: InteractionIdentity): boolean {

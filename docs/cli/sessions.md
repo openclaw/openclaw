@@ -35,6 +35,9 @@ names and flags wrap without being truncated, and Unicode keys stay aligned.
 Long keys show their beginning and end; use `openclaw sessions --json` for complete
 session keys.
 
+Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
+or `m` labels. JSON output retains exact numeric counts.
+
 Flags:
 
 | Flag                 | Description                                                         |

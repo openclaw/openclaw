@@ -24,6 +24,7 @@ import type {
   MessageReceiptSourceResult,
   OutboundReplyFacts,
 } from "../message/types.js";
+import type { ChannelProgressDraftCompositorSnapshot } from "../progress-draft-compositor.types.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
@@ -361,6 +362,8 @@ type ChannelCrossContextPresentationFactory = (params: {
 
 type ChannelReplyTransport = {
   replyToId?: string | null;
+  /** Mark a channel-inferred target so outbound delivery can consume first-mode replies. */
+  replyToIdSource?: "implicit";
   threadId?: string | number | null;
 };
 
@@ -723,6 +726,8 @@ export type ChannelMessageActionContext = {
   action: ChannelMessageActionName;
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  /** Host-prepared progress display state; never sourced from model-controlled params. */
+  progressSnapshot?: ChannelProgressDraftCompositorSnapshot;
   reply?: OutboundReplyFacts;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
@@ -809,6 +814,13 @@ export type ChannelMessageActionAdapter = {
    * Does not extend conversation-read mutation authority or bypass provider policy.
    */
   readAuthorityActions?: readonly ChannelMessageActionName[];
+  /**
+   * Declare write actions that preserve the host's live request authority.
+   * Invoke assertDirectAdapterHandoff after asynchronous preparation and
+   * immediately before every provider request, including queued retries.
+   * Does not grant authority or bypass current requester/provider permissions.
+   */
+  writeAuthorityActions?: readonly ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {
@@ -830,12 +842,24 @@ export type ChannelMessageActionAdapter = {
         /**
          * Prove that provider-native aliases name the trusted current conversation.
          * Core consults this only for host-owned bundled registrations.
+         * @deprecated Prefer matchesCurrentConversationAsync for storage-backed matching.
+         * Keep this callback synchronous for hosts that predate the async companion.
          */
         matchesCurrentConversation?: (params: {
           args: Record<string, unknown>;
           accountId: string;
           toolContext: ChannelThreadingToolContext;
         }) => boolean;
+        /**
+         * Await provider-owned alias proof after host context and target checks.
+         * Preferred over the synchronous callback when present; false or rejection
+         * never falls back to the synchronous matcher.
+         */
+        matchesCurrentConversationAsync?: (params: {
+          args: Record<string, unknown>;
+          accountId: string;
+          toolContext: ChannelThreadingToolContext;
+        }) => Promise<boolean>;
       }
     >
   >;

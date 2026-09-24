@@ -1,10 +1,11 @@
 // E2E Mock Config Limits tests cover e2e mock config limits script behavior.
-import { type ChildProcess, execFile, spawn, spawnSync } from "node:child_process";
+import { ChildProcess, execFile, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -12,9 +13,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateToolArguments } from "../../packages/llm-core/src/validation.js";
 import { execSchema } from "../../src/agents/bash-tools.schemas.js";
 import { writeJsonAtomic } from "../../src/infra/json-files.js";
+import { redactSensitiveText } from "../../src/logging/redact.js";
 import { captureFullEnv } from "../../src/test-utils/env.js";
 import { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../src/test-utils/ports.js";
+import { withTempDir } from "../../src/test-utils/temp-dir.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -81,15 +84,21 @@ function runScript(scriptPath: string, env: Record<string, string>) {
   });
 }
 
-async function waitForListening(child: ChildProcess, port: number, output: () => string) {
+async function waitForListening(
+  child: ChildProcess,
+  port: number,
+  output: () => string,
+  stderr: () => string,
+) {
   return await new Promise<number>((resolve, reject) => {
     let settled = false;
+    let exited = false;
+    const failure = (message: string) =>
+      new Error(
+        `${message}\nstdout tail:\n${redactSensitiveText(output(), { mode: "tools" }).slice(-4_096)}\nstderr tail:\n${redactSensitiveText(stderr(), { mode: "tools" }).slice(-4_096)}`,
+      );
     const timeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      reject(new Error(`mock server did not listen on ${port}: ${output()}`));
+      finish(failure(`mock server did not listen on ${port}`));
     }, 3_000);
     const finish = (error?: Error, boundPort = port) => {
       if (settled) {
@@ -97,6 +106,9 @@ async function waitForListening(child: ChildProcess, port: number, output: () =>
       }
       settled = true;
       clearTimeout(timeout);
+      child.stdout?.off("data", checkListening);
+      child.off("exit", onExit);
+      child.off("close", onClose);
       if (error) {
         reject(error);
         return;
@@ -104,6 +116,9 @@ async function waitForListening(child: ChildProcess, port: number, output: () =>
       resolve(boundPort);
     };
     const checkListening = () => {
+      if (exited) {
+        return;
+      }
       const match = /(?:^|\n)mock-openai listening on ([1-9]\d{0,4})(?: \(HTTPS?\))?\r?\n/u.exec(
         output(),
       );
@@ -114,11 +129,17 @@ async function waitForListening(child: ChildProcess, port: number, output: () =>
         }
       }
     };
-    checkListening();
+    const onExit = () => {
+      exited = true;
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(failure(`mock server exited before listening: code=${code} signal=${signal}`));
+    };
     child.stdout?.on("data", checkListening);
-    child.once("exit", (code, signal) => {
-      finish(new Error(`mock server exited before listening: code=${code} signal=${signal}`));
-    });
+    child.once("exit", onExit);
+    // Close follows stdio drain; exit can arrive before the final diagnostic chunk.
+    child.once("close", onClose);
+    checkListening();
   });
 }
 
@@ -152,7 +173,7 @@ async function withMockServer(
     },
   ) => Promise<void>,
 ) {
-  const port = env.MOCK_PORT === undefined ? await getFreePort() : Number(env.MOCK_PORT);
+  const port = Number(env.MOCK_PORT ?? "0");
   let stderr = "";
   let stdout = "";
   const child = spawn(process.execPath, [scriptPath], {
@@ -168,7 +189,12 @@ async function withMockServer(
     stderr += chunk;
   });
   try {
-    const boundPort = await waitForListening(child, port, () => stdout);
+    const boundPort = await waitForListening(
+      child,
+      port,
+      () => stdout,
+      () => stderr,
+    );
     await run(`http://127.0.0.1:${boundPort}`, {
       stderr: () => stderr,
       stdout: () => stdout,
@@ -178,183 +204,354 @@ async function withMockServer(
   }
 }
 
+describe("mock server readiness diagnostics", () => {
+  it("includes bounded, redacted output after startup pipes close", async () => {
+    const child = new ChildProcess();
+    const stdout = new PassThrough();
+    child.stdout = stdout;
+    const secret = `synthetic-${"PRIVATE_TOKEN_SEGMENT".repeat(300)}-tail`;
+    let output = `${"s".repeat(6_000)}\nstdout-tail`;
+    let stderr = `${"e".repeat(6_000)}\nAuthorization: Bearer ${secret}\ninitial failure`;
+    const result = waitForListening(
+      child,
+      12_345,
+      () => output,
+      () => stderr,
+    ).then(
+      () => {
+        throw new Error("mock unexpectedly became ready");
+      },
+      (error: unknown) => {
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        return error;
+      },
+    );
+    let settled = false;
+    void result.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    try {
+      child.emit("exit", 1, null);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      const settledBeforeClose = settled;
+      output += "\nmock-openai listening on 12345\n";
+      stdout.emit("data", "late readiness marker");
+      stderr += "\nlate stderr cause";
+      child.emit("close", 1, null);
+      const error = await result;
+      expect(error.message).toContain("mock server exited before listening: code=1 signal=null");
+      expect(error.message).toContain("late stderr cause");
+      expect(error.message).toContain("stdout-tail");
+      expect(error.message).not.toContain("PRIVATE_TOKEN_SEGMENT");
+      expect(error.message.length).toBeLessThanOrEqual(8_300);
+      expect(settledBeforeClose).toBe(false);
+    } finally {
+      child.emit("close", 1, null);
+      stdout.destroy();
+      await result.catch(() => undefined);
+    }
+  });
+});
+
 describe("mock OpenAI response markers", () => {
-  it.concurrent.for([
-    { api: "responses", stream: false },
-    { api: "responses", stream: true },
-    { api: "chat/completions", stream: false },
-    { api: "chat/completions", stream: true },
-  ])(
-    "emits native exec draft-proof calls from $api (stream=$stream)",
-    async ({ api, stream }, { expect: taskExpect }) => {
-      await withMockServer(
-        mockOpenAiPath,
-        { MOCK_DRAFTPROOF_FINAL_DELAY_MS: "80" },
-        async (baseUrl) => {
-          const user = { role: "user", content: "return OPENCLAW_E2E_DRAFTPROOF" };
-          const tool = {
-            name: "exec",
-            description: "Execute a shell command",
-            parameters: execSchema,
-          };
-          const request = async (turns: unknown[]) => {
-            const response = await fetch(`${baseUrl}/v1/${api}`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                [api === "responses" ? "input" : "messages"]: turns,
-                tools: [
-                  api === "responses"
-                    ? { type: "function", ...tool }
-                    : { type: "function", function: tool },
+  it.concurrent.for(
+    [
+      { api: "responses", stream: false },
+      { api: "responses", stream: true },
+      { api: "chat/completions", stream: false },
+      { api: "chat/completions", stream: true },
+    ].flatMap(({ api, stream }) => [false, true].map((modelMap) => ({ api, stream, modelMap }))),
+  )(
+    "emits native exec draft-proof calls from $api (stream=$stream, modelMap=$modelMap)",
+    async ({ api, stream, modelMap }, { expect: taskExpect }) => {
+      await withTempDir("mock-response-markers-", async (root) => {
+        const control = join(root, "response.json");
+        const utilityText = '{"headline":"Structured fixture","health":"on-track"}';
+        await writeFile(
+          control,
+          JSON.stringify({ models: { "fixture-utility": { text: utilityText } } }),
+        );
+        await withMockServer(
+          mockOpenAiPath,
+          {
+            MOCK_DRAFTPROOF_FINAL_DELAY_MS: "80",
+            ...(modelMap ? { MOCK_RESPONSE_CONTROL: control } : {}),
+          },
+          async (baseUrl) => {
+            const user = { role: "user", content: "return OPENCLAW_E2E_DRAFTPROOF" };
+            const tool = {
+              name: "exec",
+              description: "Execute a shell command",
+              parameters: execSchema,
+            };
+            const request = async (turns: unknown[], model = "fixture-agent") => {
+              const response = await fetch(`${baseUrl}/v1/${api}`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  model,
+                  [api === "responses" ? "input" : "messages"]: turns,
+                  tools: [
+                    api === "responses"
+                      ? { type: "function", ...tool }
+                      : { type: "function", function: tool },
+                  ],
+                  stream,
+                }),
+              });
+              taskExpect(response.status).toBe(200);
+              if (!stream) {
+                return [await response.json()];
+              }
+              return (await response.text())
+                .split("\n\n")
+                .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+                .map((line) => JSON.parse(line.slice(6)));
+            };
+
+            if (modelMap) {
+              const utility = await request([user], "fixture-utility");
+              const text =
+                api === "responses"
+                  ? (stream
+                      ? utility.find((event) => event.type === "response.completed").response
+                      : utility[0]
+                    ).output[0].content[0].text
+                  : utility
+                      .map((chunk) =>
+                        stream
+                          ? (chunk.choices[0].delta.content ?? "")
+                          : chunk.choices[0].message.content,
+                      )
+                      .join("");
+              taskExpect(text).toBe(utilityText);
+            }
+            const first = await request([user]);
+            let call;
+            let assistant;
+            if (api === "responses") {
+              if (stream) {
+                taskExpect(first.filter((event) => event.item?.type === "message")).toMatchObject([
+                  { type: "response.output_item.added", output_index: 0 },
+                  { type: "response.output_item.done", output_index: 0 },
+                ]);
+              }
+              const items = stream
+                ? first
+                    .filter((event) => event.type === "response.output_item.done")
+                    .map((event) => event.item)
+                : first[0].output;
+              taskExpect(items).toHaveLength(2);
+              taskExpect(items[0]).toMatchObject({
+                type: "message",
+                phase: "commentary",
+                content: [
+                  { type: "output_text", text: "Checking the workspace before answering." },
                 ],
-                stream,
-              }),
-            });
-            taskExpect(response.status).toBe(200);
-            if (!stream) {
-              return [await response.json()];
+              });
+              call = items[1];
+              taskExpect(call).toMatchObject({ type: "function_call", name: "exec" });
+              assistant = items;
+            } else {
+              const messages = first.map((chunk) =>
+                stream ? chunk.choices[0].delta : chunk.choices[0].message,
+              );
+              const toolIndex = messages.findIndex((message) => message.tool_calls?.length);
+              taskExpect(toolIndex).toBeGreaterThanOrEqual(0);
+              taskExpect(
+                messages
+                  .slice(0, toolIndex + 1)
+                  .map((message) => message.content ?? "")
+                  .join(""),
+              ).toBe("Checking the workspace before answering.");
+              taskExpect(messages.slice(toolIndex + 1).some((message) => message.content)).toBe(
+                false,
+              );
+              const toolCalls = messages[toolIndex].tool_calls;
+              taskExpect(toolCalls).toHaveLength(1);
+              call = { ...toolCalls[0].function, call_id: toolCalls[0].id };
+              taskExpect(call.name).toBe("exec");
+              assistant = [
+                {
+                  role: "assistant",
+                  content: "Checking the workspace before answering.",
+                  tool_calls: toolCalls,
+                },
+              ];
             }
-            return (await response.text())
-              .split("\n\n")
-              .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
-              .map((line) => JSON.parse(line.slice(6)));
-          };
 
-          const first = await request([user]);
-          let call;
-          let assistant;
-          if (api === "responses") {
-            if (stream) {
-              taskExpect(first.filter((event) => event.item?.type === "message")).toMatchObject([
-                { type: "response.output_item.added", output_index: 0 },
-                { type: "response.output_item.done", output_index: 0 },
-              ]);
-            }
-            const items = stream
-              ? first
-                  .filter((event) => event.type === "response.output_item.done")
-                  .map((event) => event.item)
-              : first[0].output;
-            taskExpect(items).toHaveLength(2);
-            taskExpect(items[0]).toMatchObject({
-              type: "message",
-              phase: "commentary",
-              content: [{ type: "output_text", text: "Checking the workspace before answering." }],
+            // A final marker also follows validation errors; prove the emitted call itself works.
+            const args = JSON.parse(call.arguments);
+            validateToolArguments(tool, {
+              type: "toolCall",
+              id: call.call_id,
+              name: call.name,
+              arguments: args,
             });
-            call = items[1];
-            taskExpect(call).toMatchObject({ type: "function_call", name: "exec" });
-            assistant = items;
-          } else {
-            const messages = first.map((chunk) =>
-              stream ? chunk.choices[0].delta : chunk.choices[0].message,
-            );
-            const toolIndex = messages.findIndex((message) => message.tool_calls?.length);
-            taskExpect(toolIndex).toBeGreaterThanOrEqual(0);
-            taskExpect(
-              messages
-                .slice(0, toolIndex + 1)
-                .map((message) => message.content ?? "")
-                .join(""),
-            ).toBe("Checking the workspace before answering.");
-            taskExpect(messages.slice(toolIndex + 1).some((message) => message.content)).toBe(
-              false,
-            );
-            const toolCalls = messages[toolIndex].tool_calls;
-            taskExpect(toolCalls).toHaveLength(1);
-            call = { ...toolCalls[0].function, call_id: toolCalls[0].id };
-            taskExpect(call.name).toBe("exec");
-            assistant = [
-              {
-                role: "assistant",
-                content: "Checking the workspace before answering.",
-                tool_calls: toolCalls,
-              },
+            taskExpect(args.command).toBe("sleep 3 && echo openclaw-draft-proof");
+            let toolOutput = "openclaw-draft-proof\n";
+            // The command is POSIX shell syntax; Windows still covers HTTP and native validation.
+            if (process.platform !== "win32") {
+              const startedAt = performance.now();
+              // Keep the real shell wait without blocking the other draft-proof rows.
+              const execution = promisify(execFile)("bash", ["-c", args.command], {
+                encoding: "utf8",
+                timeout: 10_000,
+              });
+              const result = await execution;
+              taskExpect(execution.child.exitCode, result.stderr).toBe(0);
+              taskExpect(execution.child.signalCode).toBeNull();
+              taskExpect(result.stdout).toBe(toolOutput);
+              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(2_900);
+              toolOutput = result.stdout;
+            }
+
+            const finalStartedAt = performance.now();
+            const completedTurn = [
+              user,
+              ...assistant,
+              api === "responses"
+                ? { type: "function_call_output", call_id: call.call_id, output: toolOutput }
+                : { role: "tool", tool_call_id: call.call_id, content: toolOutput },
             ];
-          }
+            const final = await request(completedTurn);
+            if (api === "responses") {
+              const response = stream
+                ? final.find((event) => event.type === "response.completed").response
+                : final[0];
+              taskExpect(response.output[0].content[0].text).toBe("OPENCLAW_E2E_DRAFTPROOF");
+            } else {
+              taskExpect(
+                final
+                  .map((chunk) =>
+                    stream
+                      ? (chunk.choices[0].delta.content ?? "")
+                      : chunk.choices[0].message.content,
+                  )
+                  .join(""),
+              ).toBe("OPENCLAW_E2E_DRAFTPROOF");
+              taskExpect(performance.now() - finalStartedAt).toBeGreaterThanOrEqual(60);
+            }
 
-          // A final marker also follows validation errors; prove the emitted call itself works.
-          const args = JSON.parse(call.arguments);
-          validateToolArguments(tool, {
-            type: "toolCall",
-            id: call.call_id,
-            name: call.name,
-            arguments: args,
-          });
-          taskExpect(args.command).toBe("sleep 3 && echo openclaw-draft-proof");
-          let toolOutput = "openclaw-draft-proof\n";
-          // The command is POSIX shell syntax; Windows still covers HTTP and native validation.
-          if (process.platform !== "win32") {
-            const startedAt = performance.now();
-            // Keep the real shell wait without blocking the other draft-proof rows.
-            const execution = promisify(execFile)("bash", ["-c", args.command], {
-              encoding: "utf8",
-              timeout: 10_000,
+            const followup = await request([
+              ...completedTurn,
+              { role: "assistant", content: "OPENCLAW_E2E_DRAFTPROOF" },
+              { role: "user", content: "repeat OPENCLAW_E2E_DRAFTPROOF for this next turn" },
+            ]);
+            if (api === "responses") {
+              const items = stream
+                ? followup
+                    .filter((event) => event.type === "response.output_item.done")
+                    .map((event) => event.item)
+                : followup[0].output;
+              taskExpect(items).toContainEqual(
+                taskExpect.objectContaining({ type: "function_call", name: "exec" }),
+              );
+            } else {
+              const calls = followup.flatMap((chunk) => {
+                const message = stream ? chunk.choices[0].delta : chunk.choices[0].message;
+                return message.tool_calls ?? [];
+              });
+              taskExpect(calls).toContainEqual(
+                taskExpect.objectContaining({
+                  function: taskExpect.objectContaining({ name: "exec" }),
+                }),
+              );
+            }
+            const health = await (await fetch(`${baseUrl}/health`)).json();
+            taskExpect(health.requests.selections).toEqual({
+              model: modelMap ? 1 : 0,
+              global: 0,
+              automaticTool: 2,
+              automaticText: 1,
             });
-            const result = await execution;
-            taskExpect(execution.child.exitCode, result.stderr).toBe(0);
-            taskExpect(execution.child.signalCode).toBeNull();
-            taskExpect(result.stdout).toBe(toolOutput);
-            taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(2_900);
-            toolOutput = result.stdout;
-          }
-
-          const finalStartedAt = performance.now();
-          const completedTurn = [
-            user,
-            ...assistant,
-            api === "responses"
-              ? { type: "function_call_output", call_id: call.call_id, output: toolOutput }
-              : { role: "tool", tool_call_id: call.call_id, content: toolOutput },
-          ];
-          const final = await request(completedTurn);
-          if (api === "responses") {
-            const response = stream
-              ? final.find((event) => event.type === "response.completed").response
-              : final[0];
-            taskExpect(response.output[0].content[0].text).toBe("OPENCLAW_E2E_DRAFTPROOF");
-          } else {
-            taskExpect(
-              final
-                .map((chunk) =>
-                  stream
-                    ? (chunk.choices[0].delta.content ?? "")
-                    : chunk.choices[0].message.content,
-                )
-                .join(""),
-            ).toBe("OPENCLAW_E2E_DRAFTPROOF");
-            taskExpect(performance.now() - finalStartedAt).toBeGreaterThanOrEqual(60);
-          }
-
-          const followup = await request([
-            ...completedTurn,
-            { role: "assistant", content: "OPENCLAW_E2E_DRAFTPROOF" },
-            { role: "user", content: "repeat OPENCLAW_E2E_DRAFTPROOF for this next turn" },
-          ]);
-          if (api === "responses") {
-            const items = stream
-              ? followup
-                  .filter((event) => event.type === "response.output_item.done")
-                  .map((event) => event.item)
-              : followup[0].output;
-            taskExpect(items).toContainEqual(
-              taskExpect.objectContaining({ type: "function_call", name: "exec" }),
-            );
-          } else {
-            const calls = followup.flatMap((chunk) => {
-              const message = stream ? chunk.choices[0].delta : chunk.choices[0].message;
-              return message.tool_calls ?? [];
-            });
-            taskExpect(calls).toContainEqual(
-              taskExpect.objectContaining({
-                function: taskExpect.objectContaining({ name: "exec" }),
-              }),
-            );
-          }
-        },
-      );
+          },
+        );
+      });
     },
   );
+
+  it("counts ingress independently of body rejection and excludes health/catalog probes", async () => {
+    await withMockServer(
+      mockOpenAiPath,
+      { OPENCLAW_MOCK_OPENAI_REQUEST_MAX_BYTES: "128" },
+      async (baseUrl) => {
+        const initial = await (await fetch(`${baseUrl}/health`)).json();
+        await (await fetch(`${baseUrl}/v1/models`)).text();
+        const rejected = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          body: "x".repeat(129),
+        });
+        expect(rejected.status).toBe(413);
+        await rejected.text();
+        await (
+          await fetch(`${baseUrl}/v1/embeddings`, {
+            method: "POST",
+            body: JSON.stringify({ input: "sample" }),
+          })
+        ).text();
+        await (await fetch(`${baseUrl}/missing`, { method: "POST" })).text();
+        const final = await (await fetch(`${baseUrl}/health`)).json();
+        expect(final.requests.id).toBe(initial.requests.id);
+        expect(initial.requests.ingress).toEqual({
+          responses: 0,
+          chatCompletions: 0,
+          embeddings: 0,
+          other: 0,
+        });
+        expect(final.requests.ingress).toEqual({
+          responses: 1,
+          chatCompletions: 0,
+          embeddings: 1,
+          other: 1,
+        });
+        expect(final.requests.selections).toEqual({
+          model: 0,
+          global: 0,
+          automaticTool: 0,
+          automaticText: 0,
+        });
+      },
+    );
+  });
+
+  it("matches only own model keys and rejects mixed global/map controls", async () => {
+    await withTempDir("mock-response-controls-", async (root) => {
+      const control = join(root, "response.json");
+      await writeFile(control, JSON.stringify({ models: { arbitrary: { text: "mapped" } } }));
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        const post = () =>
+          fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            body: JSON.stringify({ model: "toString", input: "hello", stream: false }),
+          });
+        expect((await (await post()).json()).output[0].content[0].text).toBe("OPENCLAW_E2E_OK");
+        for (const global of [
+          { text: "global" },
+          { responses: [{ text: "global" }] },
+          { default: { text: "global" } },
+          { scriptVersion: "global" },
+        ]) {
+          await writeFile(
+            control,
+            JSON.stringify({ models: { arbitrary: { text: "mapped" } }, ...global }),
+          );
+          const response = await post();
+          expect(response.status).toBe(500);
+          expect(await response.text()).toContain("exclusive nonempty map");
+        }
+      });
+    });
+  });
 
   it("echoes dynamic OpenClaw E2E and update serving markers", async () => {
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
@@ -742,6 +939,111 @@ describe("mock OpenAI response markers", () => {
     }
   });
 
+  it.each(["current", "legacy"])("resumes the MCP Code Mode fixture (%s catalog)", async (mode) => {
+    const env = { OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE: mode };
+    await withMockServer(mockOpenAiPath, env, async (baseUrl) => {
+      const input: Record<string, unknown>[] = [
+        { content: "mcp code mode api file qa check", role: "user" },
+      ];
+      const request = async () => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            input,
+            stream: false,
+            tools: ["exec", "wait"].map((name) => ({
+              name,
+              parameters: { type: "object" },
+              type: "function",
+            })),
+          }),
+        });
+        expect(response.status).toBe(200);
+        return await response.json();
+      };
+      const first = await request();
+      expect(first.output?.[0]).toMatchObject({ name: "exec", type: "function_call" });
+      const execArguments = JSON.parse(first.output[0].arguments);
+      expect(execArguments).toEqual({
+        code: expect.stringContaining('MCP.fixture.lookupNote({ id: "alpha" })'),
+      });
+      expect(execArguments.code).toContain(
+        mode === "legacy" ? "ALL_TOOLS.some(" : "catalog.all().some(",
+      );
+
+      for (const reason of ["pending_tools", "yield"]) {
+        input.push({
+          output: JSON.stringify({ status: "waiting", runId: "cm_fixture", reason, output: [] }),
+          type: "function_call_output",
+        });
+        const pending = await request();
+        expect(pending.output?.[0]).toMatchObject({
+          arguments: JSON.stringify({ runId: "cm_fixture" }),
+          name: "wait",
+          type: "function_call",
+        });
+      }
+
+      input.push({
+        output: JSON.stringify({
+          status: "completed",
+          value: {
+            marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",
+            resultText: "fixture-note-alpha",
+          },
+        }),
+        type: "function_call_output",
+      });
+      const completed = await request();
+      expect(completed.output?.[0]?.content?.[0]?.text).toContain(
+        "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha",
+      );
+
+      input.push({ output: "fixture call failed", type: "function_call_output" });
+      const failed = await request();
+      expect(failed.output?.[0]?.content?.[0]?.text).toBe(
+        "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
+      );
+    });
+  });
+
+  it.each([
+    { output: { status: "waiting", runId: "cm_fixture" }, tools: ["exec"] },
+    { output: { status: "waiting", runId: "" }, tools: ["exec", "wait"] },
+    { output: { status: "waiting", runId: 42 }, tools: ["exec", "wait"] },
+    {
+      output: { value: { status: "waiting", runId: "nested-operation" } },
+      tools: ["exec", "wait"],
+    },
+    { output: "not JSON", tools: ["exec", "wait"] },
+    { output: "", tools: ["exec", "wait"] },
+    { output: undefined, tools: ["exec", "wait"] },
+  ])("rejects an unusable MCP Code Mode continuation: $output", async ({ output, tools }) => {
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [
+            { content: "mcp code mode api file qa check", role: "user" },
+            {
+              output: typeof output === "string" ? output : JSON.stringify(output),
+              type: "function_call_output",
+            },
+          ],
+          stream: false,
+          tools: tools.map((name) => ({ name, parameters: { type: "object" }, type: "function" })),
+        }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.output?.[0]?.content?.[0]?.text).toBe(
+        "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
+      );
+    });
+  });
+
   it("drives the MCP App fixture tool before returning the visible marker", async () => {
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
       const first = await fetch(`${baseUrl}/v1/responses`, {
@@ -850,8 +1152,9 @@ describe("mock OpenAI response markers", () => {
 });
 
 describe("e2e mock and config helper numeric limits", () => {
-  it("reports the actual OS-assigned port for MOCK_PORT=0", async () => {
-    await withMockServer(mockOpenAiPath, { MOCK_PORT: "0" }, async (baseUrl, output) => {
+  it.each([undefined, "0"])("reports the bound port for MOCK_PORT=%s", async (port) => {
+    const env: Record<string, string> = port === undefined ? {} : { MOCK_PORT: port };
+    await withMockServer(mockOpenAiPath, env, async (baseUrl, output) => {
       expect(Number(new URL(baseUrl).port)).toBeGreaterThan(0);
       expect(output.stdout()).not.toContain("mock-openai listening on 0\n");
       const response = await fetch(`${baseUrl}/v1/responses`, {
@@ -976,6 +1279,7 @@ describe("e2e mock and config helper numeric limits", () => {
       await withMockServer(
         webSearchMockPath,
         {
+          MOCK_PORT: String(await getFreePort()),
           MOCK_REQUEST_LOG: requestLogDirectory,
           RAW_SCHEMA_ERROR: "400 schema rejected",
           SUCCESS_MARKER: "OPENCLAW_SCHEMA_E2E_OK",
@@ -1047,6 +1351,8 @@ describe("SQLite flip mock endpoint ownership", () => {
       const stopFailure = new Error("mock process closure could not be verified");
       let instance: OpenClawTestInstance | undefined;
       let publishedPort: number | undefined;
+      let mockChild: ChildProcess | undefined;
+      const mockClosed = vi.fn();
       let competingBind: unknown;
       let requestLog = "";
       let initialConfig: Record<string, unknown> | undefined;
@@ -1069,11 +1375,16 @@ describe("SQLite flip mock endpoint ownership", () => {
           publicationCount++;
           publishedConfig = record;
           publishedPort = Number(new URL(provider.baseUrl).port);
-          const mockSpawn = vi
+          const mockSpawnIndex = vi
             .mocked(spawn)
-            .mock.calls.find(
-              ([, args]) => Array.isArray(args) && args[0] === "scripts/e2e/mock-openai-server.mjs",
-            );
+            .mock.calls.findIndex(([, args]) => Array.isArray(args) && args[0] === mockOpenAiPath);
+          const mockSpawn = vi.mocked(spawn).mock.calls[mockSpawnIndex];
+          const spawned = vi.mocked(spawn).mock.results[mockSpawnIndex];
+          if (spawned?.type !== "return") {
+            throw new Error("mock OpenAI listener child was not started");
+          }
+          mockChild = spawned.value;
+          mockChild.on("close", mockClosed);
           childEnv = mockSpawn?.[2]?.env;
           competingBind = await tryBind(publishedPort);
           if (asRecord(competingBind)?.code === "EADDRINUSE") {
@@ -1108,6 +1419,11 @@ describe("SQLite flip mock endpoint ownership", () => {
         const result = await runSqliteSessionsTranscriptsFlipProof().catch(
           (error: unknown) => error,
         );
+        const mockAtSettlement = {
+          closeCount: mockClosed.mock.calls.length,
+          exitCode: mockChild?.exitCode,
+          signalCode: mockChild?.signalCode,
+        };
         expect(publicationCount).toBe(1);
         expect(competingBind).toMatchObject({ code: "EADDRINUSE" });
         expect(initialConfig).toBeDefined();
@@ -1122,6 +1438,7 @@ describe("SQLite flip mock endpoint ownership", () => {
           Object.keys(previousEnv).filter((key) => process.env[key] !== previousEnv[key]),
         ).toEqual([]);
         expect(instance).toBeDefined();
+        expect(mockChild).toBeDefined();
         expect({ HOME: childEnv?.HOME, OPENCLAW_STATE_DIR: childEnv?.OPENCLAW_STATE_DIR }).toEqual({
           HOME: instance!.homeDir,
           OPENCLAW_STATE_DIR: instance!.stateDir,
@@ -1133,13 +1450,20 @@ describe("SQLite flip mock endpoint ownership", () => {
           expect((result as AggregateError).errors[0]).toBe(configFailure);
           await expect(stat(instance!.stateDir)).resolves.toBeDefined();
           expect(await tryBind(publishedPort!)).toMatchObject({ code: "EADDRINUSE" });
+          expect(mockAtSettlement.closeCount).toBe(0);
+          expect(mockAtSettlement.exitCode).toBeNull();
+          expect(mockAtSettlement.signalCode).toBeNull();
         } else {
           expect(result).toMatchObject({
             ok: false,
             failures: [expect.stringContaining(configFailure.message)],
           });
           await expect(stat(instance!.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(await tryBind(publishedPort!)).toBeUndefined();
+          // This direct Node child owns the socket; a released port may already be reused.
+          expect(mockAtSettlement.closeCount).toBe(1);
+          expect(mockAtSettlement.exitCode !== null || mockAtSettlement.signalCode !== null).toBe(
+            true,
+          );
         }
       } finally {
         for (const [child, timeout] of vi.mocked(stopChildProcess).mock.calls) {

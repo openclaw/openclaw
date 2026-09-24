@@ -1,3 +1,4 @@
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
@@ -31,92 +32,62 @@ describe("gateway chat metadata shutdown", () => {
     await expect(harness.runtime.readStartup({ agentId: "main" })).resolves.toBeUndefined();
     await harness.runtime.stop();
     expect(onChanged).toHaveBeenCalledOnce();
-    expect(harness.buildProjection).toHaveBeenCalledOnce();
+    expect(harness.buildProjection).not.toHaveBeenCalled();
   });
 
-  test.each([
-    { replacement: false, phase: "agent" },
-    { replacement: true, phase: "agent" },
-    { replacement: false, phase: "session" },
-    { replacement: true, phase: "session" },
-  ])(
-    "rejects readers during $phase preparation and joins abandoned work after sibling failure (replacement: $replacement)",
-    async ({ replacement, phase }) => {
-      const onChanged = vi.fn();
-      const harness = createChatMetadataHarness(
-        { agents: { list: [{ id: "main", default: true }, { id: "other" }] } },
-        { onChanged },
-      );
+  test.each(["commands", "projection"] as const)(
+    "joins evicted on-demand %s work before shutdown completes",
+    async (phase) => {
+      const agentIds = Array.from({ length: 66 }, (_, index) => `agent-${index}`);
+      const harness = createChatMetadataHarness({
+        agents: { list: agentIds.map((id, index) => ({ id, default: index === 0 })) },
+      });
       const release = createDeferred();
       const entered = createDeferred();
-      const failSibling = createDeferred();
       const events: string[] = [];
-      if (replacement) {
-        await harness.runtime.refresh();
-        harness.runtime.invalidate();
-      }
-      const project = ({ facts }: Parameters<typeof harness.buildProjection>[0]) => ({
-        modelCatalog: facts.modelCatalog.entries,
-        models: facts.modelCatalog.entries,
-      });
-      const heldProjection = async (params: Parameters<typeof harness.buildProjection>[0]) => {
+      const hold = async () => {
         entered.resolve();
         await release.promise;
-        events.push("projection settled");
-        return project(params);
+        events.push("work settled");
       };
-      if (phase === "session") {
-        harness.buildProjection.mockImplementationOnce(async (params) => project(params));
+      if (phase === "commands") {
+        harness.buildCommands.mockImplementation(async ({ agentId }) => {
+          if (agentId === "agent-0") {
+            await hold();
+          }
+          return { commands: [] };
+        });
       } else {
-        harness.buildProjection.mockImplementationOnce(heldProjection);
+        harness.buildProjection.mockImplementation(async ({ facts }) => {
+          if (facts.agentId === "agent-0") {
+            await hold();
+          }
+          return { modelCatalog: facts.modelCatalog.entries, models: facts.modelCatalog.entries };
+        });
       }
-      harness.buildProjection.mockImplementationOnce(async () => {
-        await failSibling.promise;
-        throw new Error("sibling projection failed");
+      await harness.runtime.refresh();
+      const reading = harness.runtime.read({ agentId: "agent-0" }).catch((error: unknown) => {
+        events.push("read settled");
+        return error;
       });
-      if (phase === "session") {
-        harness.buildProjection.mockImplementationOnce(heldProjection);
-      }
-      const refresh = harness.runtime.refresh();
-      let settledReads = 0;
-      const readings = [
-        harness.runtime.read({
-          agentId: "main",
-          sessionEntry: { authProfileOverride: "test:session", authProfileOverrideSource: "user" },
-        }),
-        harness.runtime.readStartup({
-          agentId: "main",
-          sessionEntry: { authProfileOverride: "test:session", authProfileOverrideSource: "user" },
-        }),
-      ].map((reading) =>
-        reading
-          .then(
-            () => "published",
-            () => "rejected",
-          )
-          .finally(() => {
-            settledReads += 1;
-          }),
-      );
       try {
         await entered.promise;
-        failSibling.resolve();
-        await expect(refresh).rejects.toThrow("sibling projection failed");
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(settledReads).toBe(2);
-        await expect(Promise.all(readings)).resolves.toEqual(["rejected", "rejected"]);
+        for (const agentId of agentIds.slice(1)) {
+          await harness.runtime.read({ agentId });
+        }
         const stopping = harness.runtime.stop().then(() => events.push("shutdown completed"));
+        await nextEventLoopTurn();
+        expect(events).toEqual([]);
         release.resolve();
         await stopping;
-        expect(events).toEqual(["projection settled", "shutdown completed"]);
-        expect(onChanged).toHaveBeenCalledTimes(replacement ? 2 : 1);
-        await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow("stopped");
+        expect(await reading).toMatchObject({
+          message: "gateway chat metadata runtime is stopped",
+        });
+        expect(events).toEqual(["work settled", "read settled", "shutdown completed"]);
+        await expect(harness.runtime.read({ agentId: "agent-0" })).rejects.toThrow("stopped");
       } finally {
         release.resolve();
-        failSibling.resolve();
-        await Promise.allSettled([refresh, ...readings, harness.runtime.stop()]);
+        await Promise.allSettled([reading, harness.runtime.stop()]);
       }
     },
   );

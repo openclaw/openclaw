@@ -67,6 +67,8 @@ struct RealtimeTalkRelaySessionHintsTests {
         phrases: [String]?,
         provider: String? = "openai",
         model: String? = "gpt-realtime-2.1",
+        supportsVoiceSelection: Bool = false,
+        voiceChangeId: String? = nil,
         catalog: Data?) async throws -> [RealtimeRelayStartupRequest]
     {
         let requests = RealtimeRelayStartupRequestLog()
@@ -83,7 +85,8 @@ struct RealtimeTalkRelaySessionHintsTests {
                     throw HintTestError.unavailable
                 }),
             options: .init(
-                sessionKey: "main", provider: provider, model: model, voice: nil, localStopPhrases: phrases),
+                sessionKey: "main", provider: provider, model: model, voice: nil, localStopPhrases: phrases,
+                supportsVoiceSelection: supportsVoiceSelection, voiceChangeId: voiceChangeId),
             audioCapture: capture,
             pcmPlayer: UnusedPCMStreamingAudioPlayer(),
             onStatus: { _ in },
@@ -113,6 +116,19 @@ struct RealtimeTalkRelaySessionHintsTests {
         let actual = try #require(values)
         #expect(actual.map { Array($0.utf8) } == phrases.map { Array($0.utf8) })
         #expect(params["model"]?.stringValue == "gpt-realtime-2.1")
+    }
+
+    @Test func `transcription hints preserve voice selection capability and replacement identity`() async throws {
+        let requests = try await self.recordCreate(
+            phrases: ["end talking"],
+            supportsVoiceSelection: true,
+            voiceChangeId: "voice-change-fixture",
+            catalog: hintCatalog())
+        let params = try #require(requests.last?.params)
+        #expect(params["transcriptionHints"]?.dictionaryValue?["phrases"]?.arrayValue?
+            .compactMap(\.stringValue) == ["end talking"])
+        #expect(params["capabilities"]?.arrayValue?.compactMap(\.stringValue) == ["voice-selection"])
+        #expect(params["voiceChangeId"]?.stringValue == "voice-change-fixture")
     }
 
     @Test func `ordinary and ineligible sessions do not discover or send hints`() async throws {

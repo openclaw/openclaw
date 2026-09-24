@@ -47,7 +47,6 @@ export type GatewayStartupConfigMeasure = <T>(
 
 export type GatewayStartupConfigSnapshotLoadResult = {
   snapshot: ConfigFileSnapshot;
-  wroteConfig: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
@@ -101,7 +100,6 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     ));
   const configSnapshot = snapshotRead.snapshot;
   const pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
-  const wroteConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && resolveIsConfigReadOnly()) {
     throw createInvalidConfigError(
       configSnapshot.path,
@@ -130,7 +128,6 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   if (autoEnable.changes.length === 0) {
     return {
       snapshot: configSnapshot,
-      wroteConfig,
       ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     };
   }
@@ -149,7 +146,6 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   retainLegacyDefaultAgentId(runtimeConfig, legacyDefaultAgentId);
   return {
     snapshot: withRuntimeConfig(configSnapshot, runtimeConfig),
-    wroteConfig,
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   };
 }

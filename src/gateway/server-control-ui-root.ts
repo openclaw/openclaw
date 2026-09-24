@@ -160,15 +160,13 @@ export function createGatewayControlUiRootLifecycle(
       return;
     }
     if (state.kind === "bundled") {
-      await state.retainedAssets
-        ?.prepare({ isCancelled: isStopped, signal })
-        .catch((error: unknown) => {
-          if (isStopped()) {
-            return;
-          }
-          const detail = error instanceof Error ? error.message : String(error);
-          params.log.warn(`gateway: Control UI asset retention failed: ${detail}`);
-        });
+      await state.retainedAssets?.prepare({ signal }).catch((error: unknown) => {
+        if (isStopped()) {
+          return;
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        params.log.warn(`gateway: Control UI asset retention failed: ${detail}`);
+      });
     }
   };
   const start = (): Promise<void> => {

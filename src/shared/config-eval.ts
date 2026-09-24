@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { getOrCreatePromise } from "./lazy-promise.js";
 
 /** Normalizes primitive config values into the truthiness rules used by requirements checks. */
 function isTruthy(value: unknown): boolean {
@@ -129,6 +130,7 @@ function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean 
 export function evaluateRuntimeEligibility(
   params: {
     os?: string[];
+    platform?: string;
     remotePlatforms?: string[];
     always?: boolean;
   } & RuntimeRequirementEvalParams,
@@ -137,7 +139,7 @@ export function evaluateRuntimeEligibility(
   const remotePlatforms = params.remotePlatforms ?? [];
   if (
     osList.length > 0 &&
-    !osList.includes(process.platform) &&
+    !osList.includes(params.platform ?? process.platform) &&
     !remotePlatforms.some((platform) => osList.includes(platform))
   ) {
     return false;
@@ -153,6 +155,9 @@ function windowsPathExtensions(raw: string | undefined): string[] {
     raw !== undefined ? raw.split(";").map((v) => v.trim()) : [".EXE", ".CMD", ".BAT", ".COM"];
   return ["", ...list.filter(Boolean)];
 }
+
+// Share pending I/O only so completed misses are checked again on the next preparation.
+const pendingBinaryAccess = new Map<string, Promise<void>>();
 
 // Installs can create binaries under unchanged PATH/PATHEXT, so cache only successful probes.
 let binaryCache: { path: string; pathExt: string; hits: Set<string> } | undefined;
@@ -235,7 +240,13 @@ export async function prepareBinaryAvailability(
       assertCurrent?.();
       try {
         // access uses the filesystem's case, permission, and symlink semantics.
-        await fs.promises.access(path.resolve(cwd, candidate), fs.constants.X_OK);
+        const resolvedCandidate = path.resolve(cwd, candidate);
+        await getOrCreatePromise(
+          pendingBinaryAccess,
+          resolvedCandidate,
+          () => fs.promises.access(resolvedCandidate, fs.constants.X_OK),
+          { evictOnSettled: true },
+        );
       } catch {
         continue;
       }

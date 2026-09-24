@@ -136,10 +136,15 @@ describe("diagnostic stability bundles", () => {
     expect(fs.existsSync(path.join(tempDir, "logs", "stability"))).toBe(false);
   });
 
-  it("writes failure bundles even when the recorder snapshot is empty", () => {
+  it("writes redacted failure stacks even when the recorder snapshot is empty", () => {
+    const secret = "sk-1234567890abcdef";
+    const error = Object.assign(new Error("raw startup config payload"), {
+      code: "ERR_CONFIG_PARSE",
+      stack: `Error: OPENAI_API_KEY=${secret}\n    at finishPosixAuthority (relay-host.js:12:3)`,
+    });
     const result = writeDiagnosticStabilityBundleForFailureSync(
       "gateway.restart_startup_failed",
-      Object.assign(new Error("raw startup config payload"), { code: "ERR_CONFIG_PARSE" }),
+      error,
       {
         stateDir: tempDir,
         now: new Date("2026-04-22T12:00:00.000Z"),
@@ -156,17 +161,29 @@ describe("diagnostic stability bundles", () => {
       name: "Error",
       code: "ERR_CONFIG_PARSE",
       message: "raw startup config payload",
+      stack: expect.stringContaining("\n    at finishPosixAuthority (relay-host.js:12:3)"),
     });
     expect(bundle.snapshot.count).toBe(0);
     expect(bundle.snapshot.events).toEqual([]);
-    expect(raw).not.toContain("stack");
+    expect(raw).not.toContain(secret);
+    const readback = readDiagnosticStabilityBundleFileSync(result.path);
+    expect(readback.status).toBe("found");
+    if (readback.status === "found") {
+      expect(readback.bundle.error?.stack).toContain(
+        "\n    at finishPosixAuthority (relay-host.js:12:3)",
+      );
+      expect(readback.bundle.error?.stack).not.toContain(secret);
+    }
   });
 
-  it("keeps bounded failure messages UTF-16 safe", () => {
+  it("keeps bounded failure messages and stacks UTF-16 safe", () => {
     const prefix = "a".repeat(499);
+    const stackPrefix = "a".repeat(7_999);
     const result = writeDiagnosticStabilityBundleForFailureSync(
       "gateway.restart_startup_failed",
-      new Error(`${prefix}😀${"b".repeat(500)}`),
+      Object.assign(new Error(`${prefix}😀${"b".repeat(500)}`), {
+        stack: `${stackPrefix}😀${"b".repeat(1_000)}`,
+      }),
       { stateDir: tempDir },
     );
 
@@ -175,6 +192,7 @@ describe("diagnostic stability bundles", () => {
       return;
     }
     expect(readBundle(result.path).error?.message).toBe(`${prefix}...`);
+    expect(readBundle(result.path).error).toHaveProperty("stack", stackPrefix);
   });
 
   it("preserves redacted shutdown causes and stacks through bundle readback", () => {
@@ -499,6 +517,7 @@ describe("diagnostic stability bundles", () => {
     expect(result.bundle.error?.code).toBe("ERR_TEST");
     expect(result.bundle.error?.message).toContain("OPENAI_API_KEY=");
     expect(result.bundle.error?.message).not.toContain("sk-1234567890abcdef");
+    expect(result.bundle.error).not.toHaveProperty("stack");
     expect(result.bundle.evidence?.memoryPressure?.topSessionFiles?.[0]?.relativePath).toBe(
       "agents/<agent>/sessions/<session>.jsonl",
     );

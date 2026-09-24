@@ -14,7 +14,8 @@ import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycl
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
@@ -24,19 +25,10 @@ import { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { rethrowGatewayStartupError } from "./server-shutdown.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 
-type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
-type LoadGatewayModelCatalogSnapshot =
-  typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
-type ReadPreparedGatewayModelCatalog =
-  typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
-type LoadPreparedGatewayModelCatalogSnapshot =
-  typeof import("./server-model-catalog.js").loadPreparedGatewayModelCatalogSnapshot;
-type ReadPreparedGatewayModelCatalogOwnerSnapshot =
-  typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalogOwnerSnapshot;
-
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
 );
+const bindGatewayModelCatalog = createLazyRuntimeMethodBinder(loadGatewayModelCatalogModule);
 const loadWorkerEnvironmentStartupModule = createLazyRuntimeModule(
   () => import("./server-worker-environment-startup.js"),
 );
@@ -83,29 +75,22 @@ const getChannelRuntime = createLazyRuntimeModule(() =>
   ),
 );
 
-const loadGatewayModelCatalog: LoadGatewayModelCatalog = async (...args) => {
-  const mod = await loadGatewayModelCatalogModule();
-  return mod.loadGatewayModelCatalog(...args);
-};
-const loadGatewayModelCatalogSnapshot: LoadGatewayModelCatalogSnapshot = async (...args) => {
-  const mod = await loadGatewayModelCatalogModule();
-  return mod.loadGatewayModelCatalogSnapshot(...args);
-};
-const readPreparedGatewayModelCatalog: ReadPreparedGatewayModelCatalog = async (...args) => {
-  const mod = await loadGatewayModelCatalogModule();
-  return mod.readPreparedGatewayModelCatalog(...args);
-};
-const loadPreparedGatewayModelCatalogSnapshot: LoadPreparedGatewayModelCatalogSnapshot = async (
-  ...args
-) => {
-  const mod = await loadGatewayModelCatalogModule();
-  return mod.loadPreparedGatewayModelCatalogSnapshot(...args);
-};
-const readPreparedGatewayModelCatalogOwnerSnapshot: ReadPreparedGatewayModelCatalogOwnerSnapshot =
-  async (...args) => {
-    const mod = await loadGatewayModelCatalogModule();
-    return mod.readPreparedGatewayModelCatalogOwnerSnapshot(...args);
-  };
+const loadGatewayModelCatalog = bindGatewayModelCatalog((mod) => mod.loadGatewayModelCatalog);
+const loadGatewayModelCatalogSnapshot = bindGatewayModelCatalog(
+  (mod) => mod.loadGatewayModelCatalogSnapshot,
+);
+const readPreparedGatewayModelCatalog = bindGatewayModelCatalog(
+  (mod) => mod.readPreparedGatewayModelCatalog,
+);
+const readPreparedGatewayModelCatalogBatch = bindGatewayModelCatalog(
+  (mod) => mod.readPreparedGatewayModelCatalogBatch,
+);
+const loadPreparedGatewayModelCatalogSnapshot = bindGatewayModelCatalog(
+  (mod) => mod.loadPreparedGatewayModelCatalogSnapshot,
+);
+const readPreparedGatewayModelCatalogOwnerSnapshot = bindGatewayModelCatalog(
+  (mod) => mod.readPreparedGatewayModelCatalogOwnerSnapshot,
+);
 
 registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
   loadDeferred: (params) => loadPreparedGatewayModelCatalogSnapshot(params),
@@ -126,11 +111,6 @@ function formatRuntimeGatewayAuthTokenWarning(): string {
     "In Nix mode, set gateway.auth.token in your Nix-managed OpenClaw config and rebuild.",
     "For the first-party Nix flow, see https://github.com/openclaw/nix-openclaw#quick-start and https://docs.openclaw.ai/install/nix.",
   ].join(" ");
-}
-
-export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
-  const { resetPreparedModelCatalogStateForTest } = await loadGatewayModelCatalogModule();
-  await resetPreparedModelCatalogStateForTest();
 }
 
 type GatewayKernelOptions = {
@@ -198,6 +178,8 @@ async function createGatewayKernelWithSdkHost(
         bootstrap,
         bootId,
         pluginRegistryOwner: preparedPluginRegistryOwner,
+        getPluginReloadStatus: () =>
+          lifecycleRuntime?.kernel.pluginRuntimeGeneration.getReloadStatus(),
         port,
         opts,
         log,
@@ -230,6 +212,10 @@ async function createGatewayKernelWithSdkHost(
       }),
     );
     lifecycleRuntime = preparedLifecycleRuntime;
+    const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
+    if (databaseStartupAdmission) {
+      preparedLifecycleRuntime.registerGatewayLifetimeSidecars(databaseStartupAdmission.adopt());
+    }
     // Retain teardown first. A timer turn lets I/O run before more cached imports.
     await delay(0, undefined, { signal: runtime.connectionWork.signal });
     runtime.connectionWork.signal.throwIfAborted();
@@ -249,6 +235,7 @@ async function createGatewayKernelWithSdkHost(
         loadGatewayModelCatalog,
         loadGatewayModelCatalogSnapshot,
         readPreparedGatewayModelCatalog,
+        readPreparedGatewayModelCatalogBatch,
       }),
     );
     if (!options.deferEarlyRuntime) {

@@ -4,6 +4,7 @@ import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outco
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -92,9 +93,9 @@ export type TurnAdoptionLifecycle = {
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
-  /** Reports that a deferred turn is still queued behind an active turn. */
+  /** Pre-adoption liveness while waiting for reply-lane admission or preflight compaction. */
   onDeferredHeartbeat?: () => void;
-  /** Requested cadence for queue-owned deferred heartbeats. */
+  /** Requested cadence for pre-adoption heartbeats. */
   deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
   onAbandoned?: () => void;
@@ -137,6 +138,8 @@ type ProgressCallbackResult = boolean | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
+  /** Host-issued capability for the exact findings acknowledged by the current operator. */
+  providerReviewAcknowledgment?: import("../sessions/provider-review.js").ProviderReviewAcknowledgment;
   /** Channel-owned participant name encoding for source replies sent through message actions. */
   groupThreadReplyFormatter?: (
     text: string,
@@ -251,6 +254,11 @@ export type GetReplyOptions = {
     context?: BlockReplyContext,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  /** Receives a block whose producer has already resolved inline directives. */
+  onPreparedBlockReply?: (
+    plan: OutboundPayloadPlan,
+    context?: BlockReplyContext,
+  ) => Promise<void> | void;
   onToolResult?: (
     payload: ReplyPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
@@ -279,6 +287,8 @@ export type GetReplyOptions = {
     approvalId?: string;
     approvalSlug?: string;
     suppressDurableProgress?: true;
+    hideFromChannelProgress?: boolean;
+    suppressChannelProgress?: boolean;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /**
    * Called when the utility-model narration of the in-progress turn changes.

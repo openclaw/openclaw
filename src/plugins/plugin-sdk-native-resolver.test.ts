@@ -414,7 +414,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     );
   });
 
-  it("keeps native aliases on JS dist artifacts when source files exist", () => {
+  it("honors the selected source SDK for native imports", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-source-resolver-"));
     const { loaderModulePath } = writeFakeOpenClawPackage(root);
     const sourceChannelOutboundPath = path.join(root, "src", "plugin-sdk", "channel-outbound.ts");
@@ -430,7 +430,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
 
     const requireFromPlugin = createRequire(externalPluginEntry);
     expect(fs.realpathSync(requireFromPlugin.resolve("openclaw/plugin-sdk/channel-outbound"))).toBe(
-      fs.realpathSync(path.join(root, "dist", "plugin-sdk", "channel-outbound.js")),
+      fs.realpathSync(sourceChannelOutboundPath),
     );
   });
 
@@ -659,6 +659,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     );
     writeInternalCorePackageExports(root, "acp-core", ["runtime/types"]);
     const llmCoreSource = writeInternalCorePackageSource(root, "llm-core", "index.ts");
+    const llmCoreModelContractSource = writeInternalCorePackageSource(
+      root,
+      "llm-core",
+      path.join("model-contracts", "anthropic.ts"),
+    );
     const externalPluginEntry = writeExternalPluginEntry(path.join(root, "external-plugin"));
     const coreSourceParent = path.join(root, "src", "config", "plugin-web-search-config.ts");
     fs.mkdirSync(path.dirname(coreSourceParent), { recursive: true });
@@ -721,6 +726,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/llm-core"))).toBe(
       fs.realpathSync(llmCoreSource),
     );
+    expect(
+      fs.realpathSync(
+        requireFromCoreSource.resolve("@openclaw/llm-core/model-contracts/anthropic"),
+      ),
+    ).toBe(fs.realpathSync(llmCoreModelContractSource));
     expect(() => requireFromPlugin.resolve("@openclaw/normalization-core/string-coerce")).toThrow();
     expect(() =>
       requireFromPlugin.resolve("@openclaw/normalization-core/boolean-coercion"),
@@ -739,9 +749,12 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/tool-schema")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/acp-core/runtime/types")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/llm-core")).toThrow();
+    expect(() =>
+      requireFromPlugin.resolve("@openclaw/llm-core/model-contracts/anthropic"),
+    ).toThrow();
   });
 
-  it("does not register source-only SDK subpaths for native resolution", () => {
+  it("registers source-only SDK subpaths when the host selects source", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-source-only-"));
     const { loaderModulePath } = writeFakeOpenClawPackage(root);
     const sourceOnlyPath = path.join(root, "src", "plugin-sdk", "source-only.ts");
@@ -756,7 +769,9 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     });
 
     const requireFromPlugin = createRequire(externalPluginEntry);
-    expect(() => requireFromPlugin.resolve("openclaw/plugin-sdk/source-only")).toThrow();
+    expect(fs.realpathSync(requireFromPlugin.resolve("openclaw/plugin-sdk/source-only"))).toBe(
+      fs.realpathSync(sourceOnlyPath),
+    );
   });
 
   it("scopes private SSRF SDK aliases to bundled local IPC native parents", () => {

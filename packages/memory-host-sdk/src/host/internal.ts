@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { detectMime } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
@@ -24,16 +25,20 @@ import {
   type MemoryMultimodalModality,
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
-import { detectMime } from "./openclaw-runtime-io.js";
 import {
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
-} from "./openclaw-runtime-memory.js";
+} from "./openclaw-runtime-paths.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
 export { hashText } from "./hash.js";
-export { parseEmbedding, cosineSimilarity } from "./embedding-vector.js";
+export {
+  parseEmbedding,
+  cosineSimilarity,
+  encodeMemoryEmbedding,
+  decodeMemoryEmbedding,
+} from "./embedding-vector.js";
 export {
   chunkMarkdown,
   splitCuratedMarkdownEntries,

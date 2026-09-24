@@ -1179,6 +1179,9 @@ class RoomChatCommandOutboxTest {
   fun claimForSendingIsAtomicAcrossCompetingDispatchers() =
     runTest {
       val queued = store.enqueueQueued("claim me", nowMs = 10)
+      store.enqueueQueued("same gateway", nowMs = 20)
+      store.enqueueQueued("other gateway", nowMs = 20, gatewayId = "gateway-b")
+      queryDriver.resetReads()
       val ready = List(2) { CompletableDeferred<Unit>() }
       val start = CompletableDeferred<Unit>()
       val claims =
@@ -1194,7 +1197,12 @@ class RoomChatCommandOutboxTest {
 
       // Only the winning dispatcher may send, even when both observed the same attempt.
       assertEquals(listOf(0, 1), claims.awaitAll().sorted())
-      assertEquals(ChatOutboxStatus.Sending, store.load("gateway-a").single().status)
+      val commandRows = queryDriver.commandRowCount()
+      assertTrue("Two claims read $commandRows command rows", commandRows <= 2)
+      val sameGateway = store.load("gateway-a")
+      assertEquals(ChatOutboxStatus.Sending, sameGateway.single { it.id == queued.id }.status)
+      assertEquals(ChatOutboxStatus.Queued, sameGateway.single { it.id != queued.id }.status)
+      assertEquals(ChatOutboxStatus.Queued, store.load("gateway-b").single().status)
     }
 
   @Test

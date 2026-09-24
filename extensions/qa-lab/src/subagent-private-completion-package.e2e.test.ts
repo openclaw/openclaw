@@ -184,8 +184,20 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
     const sourceTree = (
       await exec("git", ["rev-parse", "HEAD^{tree}"], { cwd: repoRoot })
     ).stdout.trim();
-    const candidateVersion = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"))
-      .version as string;
+    const candidateManifest = record(
+      JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8")),
+    );
+    const candidateVersion = candidateManifest.version;
+    const candidateAgentSchemaVersion = record(
+      record(candidateManifest.openclaw).schemaVersions,
+    ).agent;
+    if (
+      typeof candidateVersion !== "string" ||
+      typeof candidateAgentSchemaVersion !== "number" ||
+      !Number.isSafeInteger(candidateAgentSchemaVersion)
+    ) {
+      throw new Error("Candidate package must declare its version and agent schema version");
+    }
     const published = JSON.parse(
       (await exec("npm", ["view", `openclaw@${releasedVersion}`, "version", "dist", "--json"]))
         .stdout,
@@ -369,6 +381,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       );
       const children = await waitForQaTransportCondition(
         async () => {
+          await mock.terminalRequesters.settle(gateway);
           const currentChildren = await tasks(sessionKey);
           return currentChildren.length === 2 &&
             currentChildren.every(
@@ -447,6 +460,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       );
       const child = await waitForQaTransportCondition(
         async () => {
+          await mock.terminalRequesters.settle(gateway);
           const currentChild = (await tasks(sessionKey)).find(
             (task) => task.title === "qa-terminal-silent",
           );
@@ -634,10 +648,10 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
           schemaVersion: 19,
         });
         upgradedIdentity = await install(candidateTarball!);
-        // Schema 20 predates private completions. The target Doctor owns this
-        // upgrade; a schema-19 build cannot reopen that upgraded database.
+        // The target Doctor owns its declared schema upgrade; a released
+        // schema-19 build cannot reopen that upgraded database.
         await runInstalled(["doctor", "--fix", "--non-interactive"]);
-        assertSchema(20);
+        assertSchema(candidateAgentSchemaVersion);
       });
       await assertOriginalOrdinaryState();
       const privateState = await privateChain("agent:qa:package-upgraded-private");
@@ -673,7 +687,8 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       await waitForQaTransportCondition(() => heldProvider.mainHeld() || undefined, 30_000, 50);
       heldProvider.releaseChild();
       const pendingInput = await waitForQaTransportCondition(
-        () => {
+        async () => {
+          await mock.terminalRequesters.settle(gateway);
           const pendingRow = rows(
             agentDb,
             "SELECT * FROM session_pending_inputs WHERE session_key = ? AND state = 'queued'",
@@ -977,7 +992,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         }
         reopenedIdentity = await install(candidateTarball!);
         await runInstalled(["doctor", "--fix", "--non-interactive"]);
-        assertSchema(20);
+        assertSchema(candidateAgentSchemaVersion);
       });
       await ordinaryChild("agent:qa:package-reopened-ordinary");
       await assertOriginalOrdinaryState();
@@ -1011,7 +1026,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         }));
       await writeFile(
         path.join(evidenceDir, "verdict.json"),
-        `${JSON.stringify({ passed, sourceTree, candidateSha256, released: published, phases, chatEvents, proof: "Only entries in phases represent completed assertions. Real installed executables and ordinary WebChat/native-subagent controls qualify each recorded phase.", limitation: "Schema 20 predates this feature; released schema-19 builds cannot reopen it. Rollback restores a verified pre-upgrade backup and loses post-backup work. The released registry-reader probe is synthetic envelope insertion into genuine released data, not a full database downgrade. Same-candidate restart owns receipt/pending-input durability; abrupt crash windows are covered separately by Gateway/SQLite tests. Chat observers cover connected post-startup intervals, supplemented by durable history/provider records. Child-session events and parent-session tool arguments remain operator-visible." }, null, 2)}\n`,
+        `${JSON.stringify({ passed, sourceTree, candidateSha256, released: published, phases, chatEvents, proof: "Only entries in phases represent completed assertions. Real installed executables and ordinary WebChat/native-subagent controls qualify each recorded phase.", limitation: "Released schema-19 builds cannot reopen the upgraded candidate database. Rollback restores a verified pre-upgrade backup and loses post-backup work. The released registry-reader probe is synthetic envelope insertion into genuine released data, not a full database downgrade. Same-candidate restart owns receipt/pending-input durability; abrupt crash windows are covered separately by Gateway/SQLite tests. Chat observers cover connected post-startup intervals, supplemented by durable history/provider records. Child-session events and parent-session tool arguments remain operator-visible." }, null, 2)}\n`,
       );
     }
   }, 1_500_000);

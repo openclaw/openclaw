@@ -1,8 +1,8 @@
 import { flushCompileCache } from "node:module";
 import "./worker-deploy-runtime.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
-import { drainOneShotOutput } from "../cli/one-shot-output.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
+import { drainProcessOutput } from "../process/output-drain.js";
 import workerDeployBrowserRuntime from "./worker-deploy-browser-runtime.js";
 import { runWorkerProcess } from "./worker-process.js";
 
@@ -40,5 +40,5 @@ try {
 } catch (error) {
   process.stderr.write(`${formatCliOperatorError(error)}\n`);
   process.exitCode = 1;
-  drainOneShotOutput(() => process.exit(1));
+  drainProcessOutput(() => process.exit(1));
 }

@@ -433,19 +433,26 @@ export function projectUpstreamProviderCatalogModel(params: {
   if (Array.isArray(modalities?.input) && modalities.input.includes("image")) {
     input.push("image");
   }
-  const reasoningOptions = Array.isArray(model.reasoning_options) ? model.reasoning_options : [];
-  const reasoningEfforts = [
-    ...new Set(
-      reasoningOptions.flatMap((option) => {
-        const record = readLiveModelCatalogRecord(option);
-        return record?.type === "effort" && Array.isArray(record.values)
-          ? record.values.filter(
-              (value): value is string => typeof value === "string" && Boolean(value),
-            )
-          : [];
-      }),
-    ),
-  ];
+  const reasoningOptions = Array.isArray(model.reasoning_options)
+    ? model.reasoning_options
+    : undefined;
+  const effortOptions = reasoningOptions?.flatMap((option) => {
+    const record = readLiveModelCatalogRecord(option);
+    return record?.type === "effort" && Array.isArray(record.values) ? [record.values] : [];
+  });
+  // Upstream distinguishes absent controls from no controls and uses null for native "none".
+  const reasoningEfforts =
+    effortOptions?.length || reasoningOptions?.length === 0
+      ? [
+          ...new Set(
+            effortOptions
+              ?.flat()
+              .flatMap((value) =>
+                value === null ? ["none"] : typeof value === "string" && value ? [value] : [],
+              ),
+          ),
+        ]
+      : undefined;
   const contextTokens = readLiveModelCatalogPositiveSafeIntegerField(limit, "input");
   return {
     id,
@@ -465,6 +472,7 @@ export function projectUpstreamProviderCatalogModel(params: {
     ...(contextTokens && contextTokens <= contextWindow ? { contextTokens } : {}),
     maxTokens,
     ...(api === "openai-responses" &&
+    reasoningEfforts &&
     reasoningEfforts.length > 0 &&
     !reasoningEfforts.includes("none")
       ? { thinkingLevelMap: { off: null } }
@@ -473,8 +481,11 @@ export function projectUpstreamProviderCatalogModel(params: {
       supportsUsageInStreaming: true,
       maxTokensField: "max_tokens",
       ...(typeof model.tool_call === "boolean" ? { supportsTools: model.tool_call } : {}),
-      ...(reasoningEfforts.length > 0
-        ? { supportsReasoningEffort: true, supportedReasoningEfforts: reasoningEfforts }
+      ...(reasoningEfforts
+        ? {
+            supportsReasoningEffort: reasoningEfforts.length > 0,
+            supportedReasoningEfforts: reasoningEfforts,
+          }
         : {}),
       ...(api === "openai-completions"
         ? { supportsDeveloperRole: false, supportsStrictMode: false }

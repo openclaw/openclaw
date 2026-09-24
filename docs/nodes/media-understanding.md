@@ -115,6 +115,10 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
   </Tab>
 </Tabs>
 
+CLI entries need a nonblank `command` and a nonempty `args` list. Arguments remain literal strings with optional template interpolation; existing literal file paths and custom wrapper arguments are supported. Pass the attachment through a template such as `{{AttachmentPath}}` or your command's existing input contract. Empty argument lists are not supported because OpenClaw does not feed attachments to CLI stdin. `openclaw doctor` reports missing commands or args with the exact config path and a manual fix; it does not invent commands or rewrite these entries. At runtime, an incomplete entry records a failure without launching the binary, and the next configured model is tried. If none succeeds, the attachment gets a failure outcome and a warning is logged. Config validation remains permissive for these fields so an existing config can still start the Gateway after an update.
+
+Remote attachments are staged as temporary files only when a CLI needs a file path. The media-understanding run owns those files and removes them after processing; a failed staging attempt leaves other staged attachments available. Existing local attachments are read in place and retained.
+
 ### Provider credentials
 
 Provider media understanding uses the same auth resolution as normal model calls: auth profiles, environment variables, then `models.providers.<providerId>.apiKey`. `tools.media.models[]` entries do not accept an inline `apiKey` field.
@@ -255,6 +259,8 @@ Per-capability `attachments` controls which attachments are processed:
 
 When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 
+Local attachments stay within the session's allowed media roots. Directory aliases such as macOS `/tmp` and `/private/tmp` are accepted when the opened file remains inside those roots; they do not grant access to sibling sandbox workspaces.
+
 ### File-attachment extraction
 
 - Every inbound document attachment ends in a model-visible file block. Attachments routed to image, audio, or video understanding are outside this contract; those stages own their outcomes.
@@ -268,6 +274,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 - A file with no extractable text, including an empty local text file, gets `[No extractable text]` and does not consume the skip-marker budget.
 - At most five skip markers render per message; further skipped attachments collapse into one reason-neutral `[<n> more attachments skipped]` summary so junk attachments cannot grow the prompt without bound. File and image, audio, or video markers share this five-marker budget.
 - If a PDF falls back to rendered page images, OpenClaw forwards those images to vision-capable reply models and keeps the placeholder `[PDF content rendered to images]` in the file block.
+- If page, text, or image limits make document extraction partial, the file block starts with a bounded `[Partial document: ...]` marker so the reply model does not mistake the visible prefix for the complete attachment.
 - Image, audio, and video decisions record one closed disposition for every attachment candidate: handled, handed to native vision, not selected after the attachment limit, disabled, missing a model, denied by chat scope, or failed.
 - Unhandled media gets a bounded model-visible marker. Images handed to native vision do not add markers. When a native harness owns the turn and OpenClaw runs only audio preprocessing, failed or skipped audio still gets a marker; image, video, and document inputs remain owned by the harness. Too-small audio keeps its placeholder transcript without a duplicate marker.
 

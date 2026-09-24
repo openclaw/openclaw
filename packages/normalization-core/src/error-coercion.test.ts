@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import {
   coerceErrorMessage,
+  collectNestedErrorCandidates,
   formatErrorMessage,
   stringifyNonErrorCause,
   toErrorObject,
@@ -27,6 +28,7 @@ describe("formatErrorMessage", () => {
       throw body;
     };
     const failure: unknown = await run().catch((error: unknown) => error);
+    expect(collectNestedErrorCandidates(failure)).toEqual([failure, cleanup, body]);
     const redact = vi.fn((text: string) => text.replaceAll("secret", "[REDACTED]"));
 
     expect(formatErrorMessage(failure, { redact })).toContain(
@@ -189,6 +191,25 @@ describe("formatErrorMessage", () => {
 
   it("requires an owner-supplied redactor", () => {
     expect(formatErrorMessage("sensitive", { redact: () => "redacted" })).toBe("redacted");
+  });
+});
+
+describe("collectNestedErrorCandidates", () => {
+  it("keeps other branches when a suppressed accessor throws", () => {
+    const leaf = new Error("body failed");
+    const error = Object.defineProperty({ error: leaf }, "suppressed", {
+      get() {
+        throw new Error("opaque suppressed branch");
+      },
+    });
+    expect(collectNestedErrorCandidates(error)).toEqual([error, leaf]);
+  });
+
+  it("deduplicates cyclic suppressed branches", () => {
+    const leaf = new Error("body failed");
+    const error = { error: leaf, suppressed: undefined as unknown };
+    error.suppressed = error;
+    expect(collectNestedErrorCandidates(error)).toEqual([error, leaf]);
   });
 });
 

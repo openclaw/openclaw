@@ -22,6 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import {
   MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
@@ -41,6 +42,7 @@ const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchem
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports: Record<string, string[]> = {
   "diagnostic-flags": ["isDiagnosticFlagEnabled"],
+  "diagnostic-runtime": ["areDiagnosticsEnabledForProcess", "createSubsystemLogger"],
   "secret-input-runtime": [
     "assertPluginCapabilitySecretAvailable",
     "coerceSecretRef",
@@ -352,14 +354,17 @@ if (declarationBudget.shouldFail) {
     declarationBudget.budgetKind === "private-qa-public-entry"
       ? "PRIVATE QA PUBLIC-ENTRY PLUGIN SDK"
       : "PLUGIN SDK";
-  console.error(
-    `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes.`,
-  );
-  console.error(
-    `Budget: ${declarationBudget.ratchetBytes}-byte ratchet + ${declarationBudget.varianceBytes}-byte Rolldown output variance.`,
-  );
-  console.error("Keep plugin SDK declarations in the canonical unified tsdown graph.");
-  missing += 1;
+  if (
+    reportLimitViolations([
+      {
+        file: "scripts/lib/plugin-sdk-declaration-budget.mts",
+        title: "Plugin SDK declaration size budget",
+        message: `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes. Budget: ${declarationBudget.ratchetBytes}-byte ratchet + ${declarationBudget.varianceBytes}-byte Rolldown output variance. Keep plugin SDK declarations in the canonical unified tsdown graph.`,
+      },
+    ])
+  ) {
+    missing += 1;
+  }
 } else if (declarationBudget.budgetKind === "private-qa-public-entry") {
   console.log(
     `Private QA build public-entry declaration graph: ${declarationBytes}/${declarationBudget.budgetBytes} bytes (${MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES}-byte ratchet + ${PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES}-byte output variance); publication ratchet ${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes is not applied.`,

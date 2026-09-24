@@ -27,20 +27,14 @@ import { runManualStage } from "./onboard-guided-manual.js";
 import { enableDefaultOnboardingInternalHooks } from "./onboard-hooks.js";
 import {
   hasInteractiveOnboardingTty,
-  launchHatchTui,
+  runGuidedOnboardingHandoff,
+  type GuidedOnboardingHandoff,
+  type GuidedOnboardingHandoffDeps,
   runInteractiveOnboarding,
 } from "./onboard-interactive-runner.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
-export type GuidedOnboardingDeps = {
-  runSystemAgentChat?: (
-    workspace: string,
-    runtime: RuntimeEnv,
-    acceptRisk: boolean,
-    agentName?: string,
-  ) => Promise<void>;
-  launchHatchTui?: (workspace: string) => Promise<void>;
-  runForegroundGateway?: typeof import("./onboard-quickstart-host.js").runQuickstartForegroundGateway;
+export type GuidedOnboardingDeps = GuidedOnboardingHandoffDeps & {
   detect?: typeof import("../system-agent/setup-inference.js").detectSetupInference;
   activate?: typeof import("../system-agent/setup-inference.js").activateSetupInference;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
@@ -61,12 +55,6 @@ export type GuidedOnboardingDeps = {
   runBrowserHandoff?: typeof import("./onboard-browser-handoff.js").runBrowserHatchHandoff;
   platform?: NodeJS.Platform;
 };
-
-type GuidedOnboardingHandoff =
-  | { workspace: string; next: "browser" }
-  | { workspace: string; next: "foreground-gateway"; agentId?: string }
-  | { workspace: string; next: "hatch"; local: boolean; agentId?: string }
-  | { workspace: string; next: "chat"; agentName?: string };
 
 async function runGuidedOnboardingFlow(
   opts: OnboardOptions,
@@ -617,7 +605,19 @@ async function runGuidedOnboardingFlow(
     await prompter.outro(t("wizard.guided.setupDone"));
     return null;
   }
-  if (wantsDiscovery && !quickstart) {
+  const { resolveConfiguredSetupModelForAgent } = await import("../agents/utility-model.js");
+  const setupOnly =
+    resolveConfiguredSetupModelForAgent({
+      cfg: persistedConfig,
+      agentId: handoffAgentId ?? resolveSystemAgentOnboardingTarget(persistedConfig).agentId,
+    })?.modelTarget === "utility";
+  if (setupOnly) {
+    await prompter.note(
+      "Your setup and utility model is ready. It can help finish setup here. Choose a primary model in Model Setup or run openclaw onboard before regular agent chat.",
+      "Setup and utility inference",
+    );
+  }
+  if (wantsDiscovery && !quickstart && !setupOnly) {
     // Import destinations come from the final persisted agent workspace. Importing
     // before setup apply strands memories when first run specifies --workspace.
     const runMemoryImport =
@@ -649,7 +649,7 @@ async function runGuidedOnboardingFlow(
         })
       ).nextConfig;
     }
-    recommendationOutcome.commitResult();
+    await recommendationOutcome.commitResult();
   }
   const hatchWorkspace = handoffAgentId
     ? agentWorkspace
@@ -685,6 +685,10 @@ async function runGuidedOnboardingFlow(
       return { workspace: hatchWorkspace, next: "browser" };
     }
   }
+  if (setupOnly) {
+    await prompter.outro("Continuing with the OpenClaw setup assistant.");
+    return { workspace: hatchWorkspace, next: "chat" };
+  }
   await prompter.note(t("wizard.guided.findMeLater"), t("wizard.guided.welcomeTitle"));
   await prompter.outro(t("wizard.guided.hatchingNow"));
   // The TUI opens the configured default agent/workspace; on a configured
@@ -711,47 +715,5 @@ export async function runGuidedOnboarding(
   await runInteractiveOnboarding(async () => {
     state.handoff = await runGuidedOnboardingFlow(opts, runtime, deps);
   }, runtime);
-  const handoff = state.handoff;
-  if (!handoff) {
-    return;
-  }
-  if (handoff.next === "foreground-gateway") {
-    const runForegroundGateway =
-      deps.runForegroundGateway ??
-      (await import("./onboard-quickstart-host.js")).runQuickstartForegroundGateway;
-    await runForegroundGateway({
-      runtime,
-      ...(handoff.agentId ? { agentId: handoff.agentId } : {}),
-      ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
-    });
-    return;
-  }
-  // Interactive surfaces start only after the wizard lifecycle restores stdin
-  // so the TUI (or recovery chat) receives a clean TTY.
-  if (handoff.next === "hatch") {
-    if (deps.launchHatchTui) {
-      await deps.launchHatchTui(handoff.workspace);
-    } else {
-      await launchHatchTui(handoff.workspace, handoff.local, handoff.agentId);
-    }
-    return;
-  }
-  if (handoff.next === "browser") {
-    return;
-  }
-  // Chat handoff: legacy remote-gateway flow, or local recovery after a
-  // failed setup apply — the conversational chat can finish interactively.
-  if (deps.runSystemAgentChat) {
-    await deps.runSystemAgentChat(handoff.workspace, runtime, true, handoff.agentName);
-  } else {
-    const { runConversationalOnboarding } = await import("./onboard-interactive.js");
-    await runConversationalOnboarding(
-      {
-        workspace: handoff.workspace,
-        ...(handoff.agentName ? { agentName: handoff.agentName } : {}),
-        acceptRisk: true,
-      },
-      runtime,
-    );
-  }
+  await runGuidedOnboardingHandoff(state.handoff, opts, runtime, deps);
 }

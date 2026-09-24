@@ -62,15 +62,33 @@ const OVERSIZED_MCP_TEXT = "x".repeat(MCP_HTTP_MAX_PARSE_BYTES + 1024);
 function mcpResultResponse(
   id: string | number | undefined,
   result: unknown,
-  options?: { contentType?: string; stream?: boolean },
+  options?: { contentType?: string; stream?: boolean; lineEnding?: string; chunkBytes?: number },
 ): Response {
   const payload = JSON.stringify({ jsonrpc: "2.0", id, result });
-  return new Response(options?.stream ? `event: message\ndata: ${payload}\n\n` : payload, {
-    headers: {
-      "content-type":
-        options?.contentType ?? (options?.stream ? "text/event-stream" : "application/json"),
+  const lineEnding = options?.lineEnding ?? "\n";
+  const body = options?.stream
+    ? `: keepalive${lineEnding}event: message${lineEnding}data: ${payload}${lineEnding}${lineEnding}: end${lineEnding}`
+    : payload;
+  const bytes = new TextEncoder().encode(body);
+  const chunkBytes = options?.chunkBytes;
+  return new Response(
+    chunkBytes
+      ? new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (let cursor = 0; cursor < bytes.length; cursor += chunkBytes) {
+              controller.enqueue(bytes.subarray(cursor, cursor + chunkBytes));
+            }
+            controller.close();
+          },
+        })
+      : bytes,
+    {
+      headers: {
+        "content-type":
+          options?.contentType ?? (options?.stream ? "text/event-stream" : "application/json"),
+      },
     },
-  });
+  );
 }
 
 describe("OpenClaw MCP HTTP lifecycle adapters", () => {
@@ -114,53 +132,77 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     }
   });
 
-  it("rejects an oversized SSE message before the SDK parses it", async () => {
-    const fetchMock = initializedFetch({
-      onGet: () => new Response(null, { status: 405 }),
-      onPost: (message) => {
-        if (message.method !== "tools/call") {
-          return new Response(null, { status: 202 });
-        }
-        const payload = JSON.stringify({
-          jsonrpc: "2.0",
-          id: message.id,
-          result: { content: [{ type: "text", text: OVERSIZED_MCP_TEXT }] },
-        });
-        return new Response(`event: message\ndata: ${payload}\n\n`, {
-          headers: { "content-type": "text/event-stream" },
-        });
-      },
-    });
-    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
-      fetch: fetchMock,
-    });
-    const client = new Client({ name: "test", version: "1" });
-    const onerror = vi.fn();
-    // MCP clients expose callback properties rather than EventTarget listeners.
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    client.onerror = onerror;
-
-    try {
-      await client.connect(transport);
-      const error = await client
-        .callTool({ name: "oversized", arguments: {} }, undefined, { timeout: 100 })
-        .then(
-          () => undefined,
-          (reason: unknown) => reason,
-        );
-      expect(String(error)).toContain("Connection closed");
-      expect(onerror).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining("SSE event exceeds 10485760") }),
+  it.each([false, true])(
+    "rejects an oversized SSE message before parsing (multiline=%s)",
+    async (multiline) => {
+      const fetchMock = initializedFetch({
+        onGet: () => new Response(null, { status: 405 }),
+        onPost: (message) => {
+          if (message.method !== "tools/call") {
+            return new Response(null, { status: 202 });
+          }
+          const midpoint = Math.floor(OVERSIZED_MCP_TEXT.length / 2);
+          const payload = JSON.stringify(
+            {
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                content: [
+                  { type: "text", text: OVERSIZED_MCP_TEXT.slice(0, midpoint) },
+                  { type: "text", text: OVERSIZED_MCP_TEXT.slice(midpoint) },
+                ],
+              },
+            },
+            null,
+            multiline ? 2 : undefined,
+          );
+          const event = payload
+            .split("\n")
+            .map((line) => `data: ${line}`)
+            .join("\n");
+          return new Response(`event: message\n${event}\n\n`, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      });
+      const transport = new OpenClawStreamableHTTPClientTransport(
+        new URL("http://mcp.invalid/mcp"),
+        {
+          fetch: fetchMock,
+        },
       );
-    } finally {
-      await disposeMcpClient({ client, transport, transportType: "streamable-http" });
-    }
-  });
+      const client = new Client({ name: "test", version: "1" });
+      const onerror = vi.fn();
+      // MCP clients expose callback properties rather than EventTarget listeners.
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener
+      client.onerror = onerror;
+
+      try {
+        await client.connect(transport);
+        const error = await client
+          .callTool({ name: "oversized", arguments: {} }, undefined, { timeout: 100 })
+          .then(
+            () => undefined,
+            (reason: unknown) => reason,
+          );
+        expect(String(error)).toContain("Connection closed");
+        expect(onerror).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: expect.stringContaining("SSE event exceeds 10485760"),
+          }),
+        );
+      } finally {
+        await disposeMcpClient({ client, transport, transportType: "streamable-http" });
+      }
+    },
+  );
 
   it.each([
     { label: "JSON", stream: false },
-    { label: "SSE", stream: true },
-  ])("accepts an under-limit $label message", async ({ stream }) => {
+    { label: "SSE LF", stream: true, lineEnding: "\n" },
+    { label: "SSE CR", stream: true, lineEnding: "\r" },
+    { label: "SSE split CRLF", stream: true, lineEnding: "\r\n", chunkBytes: 1 },
+  ])("accepts an under-limit $label message", async ({ stream, lineEnding, chunkBytes }) => {
     const fetchMock = initializedFetch({
       onGet: () => new Response(null, { status: 405 }),
       onPost: (message) =>
@@ -168,7 +210,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
           ? mcpResultResponse(
               message.id,
               { content: [{ type: "text", text: "under-limit" }] },
-              { stream },
+              { stream, lineEnding, chunkBytes },
             )
           : new Response(null, { status: 202 }),
     });

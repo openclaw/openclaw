@@ -18,10 +18,9 @@ import { rethrowTelegramSendError, shouldRetryTelegramSendError } from "./networ
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
 import { makeProxyFetch } from "./proxy.js";
 import {
-  getTelegramNativeQuoteReplyMessageId,
-  isTelegramQuoteParamError,
-  removeTelegramNativeQuoteParam,
-} from "./reply-parameters.js";
+  bindTelegramRequestAuthority,
+  findTelegramRequestAuthorityError,
+} from "./request-authority.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
 import { requireRuntimeConfig, type OpenClawConfig } from "./send.runtime.js";
@@ -358,41 +357,6 @@ export function isTelegramMessageDeleteNoopError(err: unknown): boolean {
   return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
 }
 
-export async function withTelegramNativeQuoteFallback<T>(params: {
-  label: string;
-  requestParams: Record<string, unknown>;
-  request: (requestParams: Record<string, unknown>, label: string) => Promise<T>;
-  removeNativeQuoteParam?: (requestParams: Record<string, unknown>) => Record<string, unknown>;
-}): Promise<{ result: T; acceptedParams: Record<string, unknown> }> {
-  try {
-    return {
-      result: await params.request(params.requestParams, params.label),
-      acceptedParams: params.requestParams,
-    };
-  } catch (err) {
-    if (
-      getTelegramNativeQuoteReplyMessageId(params.requestParams) == null ||
-      !isTelegramQuoteParamError(err)
-    ) {
-      throw err;
-    }
-    // Model quotes can drift from the source text; rejecting the quote must not
-    // discard its message reply target or topic routing.
-    sendLogger.warn(
-      `telegram ${params.label} native quote rejected, retrying with legacy reply_to_message_id: ${formatErrorMessage(
-        err,
-      )}`,
-    );
-    const acceptedParams = (params.removeNativeQuoteParam ?? removeTelegramNativeQuoteParam)(
-      params.requestParams,
-    );
-    return {
-      result: await params.request(acceptedParams, `${params.label}-legacy-reply`),
-      acceptedParams,
-    };
-  }
-}
-
 export type TelegramApiContext = {
   cfg: OpenClawConfig;
   account: ResolvedTelegramAccount;
@@ -424,14 +388,29 @@ function resolveTelegramApiContext(opts: {
     // One op-level lease covers the full send/action (including pre-request work
     // and retries) so eviction cannot close the transport mid-operation.
     clientOptionsLease = client.lease();
-    const bot = new Bot(token, client.clientOptions ? { client: client.clientOptions } : undefined);
+    const fetch = client.clientOptions?.fetch;
+    const clientOptions =
+      fetch && opts.assertPlatformSendAuthorized
+        ? {
+            ...client.clientOptions,
+            fetch: bindTelegramRequestAuthority(fetch, opts.assertPlatformSendAuthorized),
+          }
+        : client.clientOptions;
+    const bot = new Bot(token, clientOptions ? { client: clientOptions } : undefined);
     if (opts.signal || opts.assertPlatformSendAuthorized) {
       // grammY wraps later transformers around earlier ones. Check authority
       // after the account queue drains, immediately before its HTTP client runs.
       bot.api.config.use((prev, method, payload, signal) => {
         opts.signal?.throwIfAborted();
         opts.assertPlatformSendAuthorized?.();
-        return prev(method, payload, signal);
+        return prev(method, payload, signal).catch((error: unknown) => {
+          const rejection =
+            error instanceof HttpError ? findTelegramRequestAuthorityError(error.error) : undefined;
+          if (rejection) {
+            throw rejection.originalError;
+          }
+          throw error;
+        });
       });
     }
     bot.api.config.use(getOrCreateAccountThrottler(token).transformer);

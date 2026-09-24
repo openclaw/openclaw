@@ -40,6 +40,7 @@ type TrajectoryRuntimeInit = {
   sessionKey?: string;
   sessionFile?: string;
   sessionTarget?: SessionTranscriptRuntimeTarget;
+  assertCommitAllowed?: () => void;
   provider?: string;
   modelId?: string;
   modelApi?: string | null;
@@ -175,11 +176,11 @@ function truncateOversizedTrajectoryEvent(
 }
 
 function truncatedTrajectoryValue(reason: string, details: Record<string, unknown> = {}): unknown {
-  return {
-    truncated: true,
-    reason,
-    ...details,
-  };
+  const record = createDiagnosticRecord();
+  record.truncated = true;
+  record.reason = reason;
+  Object.assign(record, details);
+  return record;
 }
 
 function limitTrajectoryPayloadValue(
@@ -308,6 +309,7 @@ function createSqliteTrajectoryRuntimeSink(params: {
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: SessionTranscriptRuntimeTarget;
+  assertCommitAllowed?: () => void;
 }): TrajectoryRuntimeSink | null {
   const target = params.sessionTarget
     ? {
@@ -399,6 +401,7 @@ function createSqliteTrajectoryRuntimeSink(params: {
             maxRuntimeBytes: params.maxRuntimeFileBytes,
             sessionId: marker.sessionId,
             storePath: database.path,
+            assertCommitAllowed: params.assertCommitAllowed,
           },
           events,
         );
@@ -457,6 +460,7 @@ export function createTrajectoryRuntimeRecorder(
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionTarget: params.sessionTarget,
+        assertCommitAllowed: params.assertCommitAllowed,
       });
   if (!sink) {
     return null;

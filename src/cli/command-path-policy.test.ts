@@ -413,7 +413,15 @@ describe("command-path-policy", () => {
       ownsProtocolStdout: true,
       networkProxy: "bypass",
     });
+    for (const action of ["install", "status", "pair", "setup"]) {
+      expectResolvedPolicy(["browser", "extension", action], {
+        configGuard: "validate",
+        networkProxy: "bypass",
+      });
+    }
     expectResolvedPolicy(["browser", "extension", "native-host"], {
+      configGuard: "skip",
+      ensureCliPath: false,
       hideBanner: true,
       ownsProtocolStdout: true,
       networkProxy: "bypass",

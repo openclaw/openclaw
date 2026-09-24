@@ -26,13 +26,11 @@ export async function readActivitySummarySource(params: {
   params.assertCurrent();
   const read = () => {
     params.assertCurrent();
-    const readSnapshot = () =>
-      readSessionTranscriptBoundedMessageTailPage(params.scope, {
-        maxBytes: 0,
-        maxMessages: 0,
-        offset: 0,
-      });
-    const snapshot = readSnapshot();
+    const snapshot = readSessionTranscriptBoundedMessageTailPage(params.scope, {
+      maxBytes: 0,
+      maxMessages: 0,
+      offset: 0,
+    });
     let previous = params.previous;
     if (
       previous &&

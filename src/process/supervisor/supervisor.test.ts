@@ -19,7 +19,12 @@ const { createChildAdapterMock, createPtyAdapterMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("./adapters/child.js", () => ({
-  createChildAdapter: createChildAdapterMock,
+  createChildAdapter: async (
+    ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
+  ) => ({
+    adapter: await createChildAdapterMock(...args),
+    ready: Promise.resolve(),
+  }),
 }));
 
 vi.mock("./adapters/pty.js", () => ({
@@ -241,9 +246,10 @@ describe("process supervisor", () => {
     });
     expect(run.activity.resultSettled).toBe(true);
 
-    const lateAdapter = createStubChildAdapter();
+    const killed = createDeferred();
+    const lateAdapter = createStubChildAdapter({ onKill: () => killed.resolve() });
     startup.resolve(lateAdapter);
-    await Promise.resolve();
+    await killed.promise;
     expect(lateAdapter.killMock).toHaveBeenCalledWith("SIGKILL");
     expect(lateAdapter.disposeMock).not.toHaveBeenCalled();
     lateAdapter.settle(null, "SIGKILL");
@@ -400,15 +406,20 @@ describe("process supervisor", () => {
       scopeKey: "scope:cancel-fenced",
       argv: createSilentIdleArgv(),
     });
+    let replacementCurrent = true;
     const replacementPromise = spawnChild(supervisor, {
       runId: "cancel-fenced-replacement",
       scopeKey: "scope:cancel-fenced",
       replaceExistingScope: true,
       argv: createSilentIdleArgv(),
+      onCancel: () => {
+        replacementCurrent = false;
+      },
     });
 
     expect(createChildAdapterMock).toHaveBeenCalledTimes(1);
     supervisor.cancelScope("scope:cancel-fenced", "manual-cancel");
+    expect(replacementCurrent).toBe(false);
 
     const laterPromise = spawnChild(supervisor, {
       runId: "cancel-fenced-later",

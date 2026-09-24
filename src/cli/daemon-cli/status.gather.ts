@@ -16,6 +16,7 @@ import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectGatewayHeapLimit } from "../../daemon/gateway-heap.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import { formatServiceLabel } from "../../daemon/runtime-format.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
@@ -27,6 +28,7 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
+import { readGatewayLastShutdown } from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import { inspectPortConnections } from "../../infra/ports-inspect.js";
@@ -312,9 +314,28 @@ async function gatherDaemonStatusImpl(
   // native service. Keep that service visible without borrowing its target or auth.
   const useNativeServiceTargetContext =
     localPortOverride === undefined &&
+    serviceState.inspectionReason !== "service-manager-unavailable" &&
     isDefaultInstallIdentity(process.env) &&
     !isGatewayExternallySupervised(process.env);
   const targetServiceCommand = useNativeServiceTargetContext ? command : null;
+  // The RPC handshake can fail while the service still runs another install, so
+  // resolve the locally readable service install facts here and hand them to the
+  // renderer instead of leaving it dependent on Gateway metadata.
+  const serviceLayout = command
+    ? await summarizeGatewayServiceLayout(command).catch(() => undefined)
+    : undefined;
+  if (opts.deep && !trimToUndefined(opts.rpc.url)) {
+    const { preflightOpenClawDatabaseSchemas, OpenClawDatabaseSchemaPreflightError } =
+      await import("../../state/openclaw-database-preflight.js");
+    // Diagnose a refused database before config and lifecycle readers try to open it.
+    const schemas = await preflightOpenClawDatabaseSchemas({
+      env: { ...process.env, ...targetServiceCommand?.environment },
+      scope: "state",
+    });
+    if (schemas.incompatible.length > 0) {
+      throw new OpenClawDatabaseSchemaPreflightError(schemas.incompatible);
+    }
+  }
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit: ServiceConfigAudit = await loadServiceAuditModule().then(
     ({ auditGatewayServiceConfig }) =>
@@ -344,6 +365,17 @@ async function gatherDaemonStatusImpl(
   const hasUrlOverride = Boolean(probeUrlOverride);
   const serviceTargetsProbe = useNativeServiceTargetContext && !hasUrlOverride;
   const shouldInspectLocalGateway = !hasUrlOverride;
+  const lastShutdown =
+    opts.deep && shouldInspectLocalGateway ? readGatewayLastShutdown(mergedDaemonEnv) : undefined;
+  let duelingScopesWarning: string | null = null;
+  if (opts.deep && serviceTargetsProbe && process.platform === "linux") {
+    const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =
+      await import("../../daemon/systemd-scope.js");
+    const installation = await findSystemdGatewayInstallation(serviceEnv).catch(() => null);
+    duelingScopesWarning = installation
+      ? formatDuelingScopesWarning(installation, daemonPort)
+      : null;
+  }
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
@@ -371,6 +403,14 @@ async function gatherDaemonStatusImpl(
             deep: true,
           }),
         )
+        .then((services) =>
+          services.filter(
+            (extra) =>
+              extra.platform !== "linux" ||
+              extra.scope !== runtime?.systemd?.scope ||
+              extra.label !== runtime?.systemd?.unit,
+          ),
+        )
         .catch(() => [])
     : [];
   const launchdDiagnostics =
@@ -389,6 +429,7 @@ async function gatherDaemonStatusImpl(
       : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
+  let redactedProbeCredential = false;
   let allowRpcConfigCredentials = true;
   let skippedProbeAuthForDisabledExecSecretRef = false;
   if (opts.probe) {
@@ -421,6 +462,7 @@ async function gatherDaemonStatusImpl(
       );
       daemonProbeAuth = probeAuthResolution.auth;
       rpcAuthWarning = probeAuthResolution.warning;
+      redactedProbeCredential = probeAuthResolution.warningCode === "SECRET_REF_REDACTED_VALUE";
     } else {
       allowRpcConfigCredentials = false;
       skippedProbeAuthForDisabledExecSecretRef = true;
@@ -449,7 +491,7 @@ async function gatherDaemonStatusImpl(
         }),
       )
     : undefined;
-  if (rpc?.ok && !skippedProbeAuthForDisabledExecSecretRef) {
+  if (rpc?.ok && !skippedProbeAuthForDisabledExecSecretRef && !redactedProbeCredential) {
     rpcAuthWarning = undefined;
   }
   const health =
@@ -565,19 +607,26 @@ async function gatherDaemonStatusImpl(
   const hostDesktop = await (
     await import("../../gateway/desktop/host-source.js")
   ).inspectHostDesktop({ config: daemonCfg.desktop?.host });
+  const targetRole: "target" | "diagnostic-only" = serviceTargetsProbe
+    ? "target"
+    : "diagnostic-only";
 
   return {
     cli: resolveCliStatusSummary(),
     logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
       inspectionReason: serviceState.inspectionReason,
-      label: service.label,
+      label: formatServiceLabel(service.label, runtime),
+      ...(serviceState.systemdInstallation
+        ? { systemdInstallation: serviceState.systemdInstallation }
+        : {}),
       loaded: loadState.status === "unknown" ? null : loaded,
       loadState,
       loadedText: service.loadedText,
       notLoadedText: service.notLoadedText,
-      targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",
+      targetRole,
       command,
+      ...(serviceLayout ? { layout: serviceLayout } : {}),
       runtime: runtime?.inspectionFailure
         ? {
             ...runtime,
@@ -604,6 +653,8 @@ async function gatherDaemonStatusImpl(
     },
     gateway: {
       ...gateway,
+      ...(lastShutdown ? { lastShutdown } : {}),
+      ...(duelingScopesWarning ? { duelingScopesWarning } : {}),
       ...(windowsFirewall?.applies ? { windowsFirewall } : {}),
       ...(opts.probe
         ? {

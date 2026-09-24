@@ -3,8 +3,10 @@ import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/confi
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayServer } from "./server.js";
-import { agentCommandMock, getGatewayTestPort, testState } from "./test-helpers.js";
+import { agentCommandMock, testState } from "./test-helpers.js";
+import { startClaimedGateway } from "./test-helpers.listener.js";
 
 type OwnerIdentityRequests = {
   post: (stream: boolean | undefined, headers: Record<string, string>) => Promise<Response>;
@@ -70,7 +72,6 @@ export async function expectHttpForeignSessionAuthority(params: {
   await withEnvAsync(
     { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
     async () => {
-      const port = await getGatewayTestPort();
       let server: GatewayServer | undefined;
       const previousGatewayAuth = testState.gatewayAuth;
       const trustedProxyAuth = {
@@ -103,7 +104,9 @@ export async function expectHttpForeignSessionAuthority(params: {
           },
         });
         resetConfigRuntimeState();
-        server = await params.startServer(port, requestAuth);
+        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        const port = portClaim.port;
+        server = await startClaimedGateway(portClaim, () => params.startServer(port, requestAuth));
 
         const owner = ensureProfileForEmail(params.ownerEmail);
         const sessionKey = params.sessionKey;

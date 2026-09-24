@@ -5,9 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../../lib/sessions/route-navigation.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { loadChatRoute } from "../chat/route-loader.ts";
+import { renderDashboards } from "../dashboards/view.ts";
 import { props, row } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
 
@@ -66,7 +69,7 @@ describe("session activity semantics", () => {
       expect(links).toHaveLength(rows.length);
       for (const [index, session] of rows.entries()) {
         const link = links[index]!;
-        const pathname = `/control/${session.boardFace}/research/research-${session.boardFace}-12345678`;
+        const pathname = `/control/${session.boardFace}/research/research-${session.boardFace}-1234567890abcdef1234567890abcde${index}`;
         expect(link.getAttribute("href")).toBe(pathname);
         link.click();
         expect(input.context.navigate).toHaveBeenLastCalledWith(session.boardFace, {
@@ -92,7 +95,15 @@ describe("session activity semantics", () => {
       input.context = {
         ...input.context,
         basePath: "/control",
-        agents: { state: { agentsList: { defaultId: "main", mainKey: "workspace" } } },
+        agents: {
+          state: {
+            agentsList: {
+              defaultId: "main",
+              mainKey: "workspace",
+              scope: key === "global" ? "global" : "per-sender",
+            },
+          },
+        },
         agentSelection: { state: { selectedId: "research" } },
       } as unknown as ApplicationContext;
       const container = document.createElement("div");
@@ -107,6 +118,92 @@ describe("session activity semantics", () => {
         "chat",
         search ? { pathname, search } : { pathname },
       );
+    },
+  );
+
+  it.each(
+    (["activity", "dashboards"] as const).flatMap((surface) =>
+      (
+        [
+          ["unknown", false, null],
+          ["unknown", true, null],
+          ["global", false, null],
+          ["global", true, "global"],
+          ["agent:qa-writer:global", false, "agent:qa-writer:global"],
+        ] as const
+      ).map(([key, globalScope, expectedKey]) => ({ surface, key, globalScope, expectedKey })),
+    ),
+  )(
+    "$surface preserves $key identity with global scope $globalScope",
+    async ({ surface, key, globalScope, expectedKey }) => {
+      const session = row(key, { id: "owner" }, Date.now(), {
+        agentId: "qa-writer",
+        displayName: "Stored session",
+      });
+      const input = props({ rows: [session] });
+      const agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: globalScope ? "global" : "per-sender",
+      } as const;
+      const request = vi.fn(async () => {
+        throw new Error(
+          "An exact Home or qualified literal open must not discover another session",
+        );
+      });
+      input.context = {
+        ...input.context,
+        agents: { state: { agentsList: { ...agentsList, agents: [] } } },
+        gateway: {
+          ...input.context.gateway,
+          snapshot: {
+            ...input.context.gateway.snapshot,
+            phase: "connected",
+            client: createTestGatewayClient(request),
+          },
+        },
+      } as unknown as ApplicationContext;
+      const container = document.createElement("div");
+      document.body.append(container);
+      render(
+        surface === "activity"
+          ? renderSessionActivityView(input)
+          : renderDashboards({
+              result: input.result!,
+              error: null,
+              basePath: "",
+              fallbackAgentId: "main",
+              mainKey: "main",
+              globalScope,
+            }),
+        container,
+      );
+      const item = container.querySelector<HTMLElement>(
+        surface === "activity" ? "[data-activity-session]" : ".dashboard-card__main",
+      )!;
+      expect(item.textContent).toContain("Stored session");
+      if (!expectedKey) {
+        expect(item.hasAttribute("href")).toBe(false);
+        item.click();
+        expect(input.context.navigate).not.toHaveBeenCalled();
+        return;
+      }
+      const href = item.getAttribute("href")!;
+      const loaded = await loadChatRoute(
+        input.context,
+        { pathname: href, search: "", hash: "" },
+        surface === "activity" ? "chat" : "dashboard",
+        new AbortController().signal,
+      );
+      expect(loaded).toMatchObject({ kind: "session" });
+      if (!("kind" in loaded) || loaded.kind !== "session") {
+        throw new Error("Expected a loaded session");
+      }
+      expect(resolveUiConversationIdentity({ agentsList }, loaded.sessionKey)).toEqual({
+        sessionKey: expectedKey,
+        agentId: "qa-writer",
+      });
+      expect(request).not.toHaveBeenCalled();
     },
   );
 

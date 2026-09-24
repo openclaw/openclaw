@@ -13,7 +13,7 @@ import {
   notifyProviderStreamOpened,
   withProviderAcceptanceObserver,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
 function createStreamDeps(): {
@@ -167,6 +167,14 @@ function countCacheControlMarkers(payload: unknown): number {
 }
 
 describe("createAnthropicVertexStreamFn", () => {
+  beforeEach(() => {
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeAll(async () => {
     ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
       await import("./stream-runtime.js"));
@@ -517,23 +525,70 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(transportOptions.effort).toBe("max");
   });
 
-  it("disables manual thinking when the configured budget is below 1024", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-haiku-4-5", maxTokens: 8192 });
-
-    void streamFn(
-      model,
-      { messages: [] },
-      {
-        reasoning: "low",
-        thinkingBudgets: { low: 512 },
-      },
+  it.each([
+    {
+      name: "low thinking with the model output limit",
+      modelMaxTokens: 8192,
+      options: { reasoning: "low" },
+      thinking: { type: "enabled", budget_tokens: 2048 },
+      maxTokens: 8192,
+    },
+    {
+      name: "high thinking fitted below the model output limit",
+      modelMaxTokens: 8192,
+      options: { reasoning: "high" },
+      thinking: { type: "enabled", budget_tokens: 7168 },
+      maxTokens: 8192,
+    },
+    {
+      name: "low thinking alongside an explicit visible-output cap",
+      modelMaxTokens: 8192,
+      options: { reasoning: "low", maxTokens: 1024 },
+      thinking: { type: "enabled", budget_tokens: 2048 },
+      maxTokens: 3072,
+    },
+    {
+      name: "high thinking alongside an explicit visible-output cap",
+      modelMaxTokens: 32768,
+      options: { reasoning: "high", maxTokens: 1024 },
+      thinking: { type: "enabled", budget_tokens: 16384 },
+      maxTokens: 17408,
+    },
+    {
+      name: "disabled sub-minimum thinking without inflating the output cap",
+      modelMaxTokens: 8192,
+      options: { reasoning: "low", maxTokens: 1024, thinkingBudgets: { low: 512 } },
+      thinking: { type: "disabled" },
+      maxTokens: 1024,
+    },
+  ] as const)("sends $name on Vertex", async ({ modelMaxTokens, options, thinking, maxTokens }) => {
+    const { deps } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn(
+      "vertex-project",
+      "us-east5",
+      undefined,
+      { ...deps, streamAnthropic: streamModel },
+      {},
     );
+    const onPayload = vi.fn((_payload: unknown) => {
+      throw new Error("stop before network");
+    });
+    const model: Model<"anthropic-messages"> = {
+      ...makeModel({ id: "claude-haiku-4-5", maxTokens: modelMaxTokens }),
+      name: "Claude Haiku 4.5",
+      input: ["text"],
+      contextWindow: 200_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
+    const stream = await streamFn(
+      model,
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { ...options, onPayload },
+    );
+    const result = await stream.result();
 
-    const transportOptions = streamTransportOptions(streamAnthropicMock);
-    expect(transportOptions.thinkingEnabled).toBe(false);
-    expect(transportOptions).not.toHaveProperty("thinkingBudgetTokens");
+    expect(onPayload, result.errorMessage).toHaveBeenCalledOnce();
+    expect(onPayload.mock.calls[0]?.[0]).toMatchObject({ thinking, max_tokens: maxTokens });
   });
 
   it("preserves native max reasoning for Sonnet 4.6", () => {

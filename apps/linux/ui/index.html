@@ -3,20 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <title>OpenClaw</title>
+    <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="window-chrome.css" />
     <script src="gateway-notice.js"></script>
   </head>
   <body>
     <main class="shell">
-      <section class="brand" aria-label="OpenClaw">
-        <img class="brand-mark" src="mascot.svg" alt="" aria-hidden="true" />
-        <span>OPENCLAW</span>
-      </section>
-
       <section class="panel" aria-live="polite">
+        <header class="brand" aria-label="OpenClaw">
+          <img class="brand-mark" src="mascot.svg" alt="" aria-hidden="true" />
+          <span>OpenClaw</span>
+        </header>
         <section id="update-banner" class="update-banner hidden" aria-live="polite">
           <div class="update-row">
             <div class="update-copy">
@@ -25,7 +25,14 @@
             </div>
             <div class="update-actions">
               <button id="update-action" class="update-action hidden" type="button"></button>
-              <button id="update-dismiss" class="update-dismiss" type="button" aria-label="Dismiss update notice">×</button>
+              <button
+                id="update-dismiss"
+                class="update-dismiss"
+                type="button"
+                aria-label="Dismiss update notice"
+              >
+                ×
+              </button>
             </div>
           </div>
           <progress id="update-progress" class="update-progress hidden"></progress>
@@ -36,28 +43,38 @@
           <span id="eyebrow" class="eyebrow">DESKTOP COMPANION</span>
         </div>
         <h1 id="title">Connecting to OpenClaw</h1>
-        <p id="description">
-          Finding your gateway and preparing the Control UI.
-        </p>
+        <p id="description">Finding your gateway and preparing the Control UI.</p>
 
         <section id="welcome-screen" class="welcome-screen hidden" aria-labelledby="title">
           <div class="feature-list">
             <div class="feature-row">
-              <span class="feature-icon" aria-hidden="true">✦</span>
+              <span class="feature-icon" aria-hidden="true"
+                ><svg viewBox="0 0 24 24">
+                  <path d="m12 3 2.7 6.3L21 12l-6.3 2.7L12 21l-2.7-6.3L3 12l6.3-2.7Z" /></svg
+              ></span>
               <div>
                 <strong>Ask, create, and automate</strong>
                 <span>Give your assistant tasks and let it help across your computer.</span>
               </div>
             </div>
             <div class="feature-row">
-              <span class="feature-icon" aria-hidden="true">◉</span>
+              <span class="feature-icon" aria-hidden="true"
+                ><svg viewBox="0 0 24 24">
+                  <path
+                    d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5A8.5 8.5 0 0 1 9.5 3h3a8.5 8.5 0 0 1 8.5 8.5Z"
+                  /></svg
+              ></span>
               <div>
                 <strong>Chat wherever you like</strong>
                 <span>This app, WhatsApp, Telegram, Discord, Slack — your choice.</span>
               </div>
             </div>
             <div class="feature-row">
-              <span class="feature-icon" aria-hidden="true">◇</span>
+              <span class="feature-icon" aria-hidden="true"
+                ><svg viewBox="0 0 24 24">
+                  <path d="m12 3 8 4v5c0 5-8 9-8 9s-8-4-8-9V7Z" />
+                  <path d="m8 12 3 3 5-6" /></svg
+              ></span>
               <div>
                 <strong>Stay in control</strong>
                 <span>Everything runs where you decide, with permissions you grant.</span>
@@ -65,8 +82,8 @@
             </div>
           </div>
           <p class="welcome-notice">
-            OpenClaw can take actions using the permissions and services you enable.
-            Review prompts and only connect tools you trust.
+            OpenClaw can take actions using the permissions and services you enable. Review prompts
+            and only connect tools you trust.
           </p>
           <button id="welcome-continue" class="primary welcome-continue" type="button">
             Get started
@@ -74,64 +91,154 @@
         </section>
 
         <section id="connection-choices" class="connection-choices hidden" aria-labelledby="title">
-          <button id="connection-local" class="connection-card selected" type="button" aria-pressed="true">
-            <span class="connection-icon" aria-hidden="true">▣</span>
+          <button
+            id="connection-local"
+            class="connection-card selected"
+            type="button"
+            aria-pressed="true"
+          >
+            <span class="connection-icon" aria-hidden="true"
+              ><svg viewBox="0 0 24 24">
+                <rect x="3" y="3" width="18" height="13" rx="2" />
+                <path d="M8 21h8M12 16v5" /></svg
+            ></span>
             <span class="connection-copy">
               <strong>On this computer</strong>
-              <span id="local-subtitle">Private to this computer. Installs and starts automatically.</span>
+              <span id="local-subtitle"
+                >Private to this computer. Installs and starts automatically.</span
+              >
             </span>
             <span class="connection-badge">Recommended</span>
           </button>
           <button id="connection-remote" class="connection-card" type="button" aria-pressed="false">
-            <span class="connection-icon" aria-hidden="true">◎</span>
+            <span class="connection-icon" aria-hidden="true"
+              ><svg viewBox="0 0 24 24">
+                <rect x="3" y="3" width="18" height="7" rx="2" />
+                <rect x="3" y="14" width="18" height="7" rx="2" />
+                <path d="M7 6.5h.01M7 17.5h.01" /></svg
+            ></span>
             <span class="connection-copy">
               <strong>On another computer</strong>
               <span id="remote-subtitle">Connect to a Gateway running elsewhere.</span>
             </span>
           </button>
 
-          <section id="remote-details" class="remote-details hidden" aria-labelledby="remote-title">
+          <form
+            id="remote-details"
+            class="remote-details hidden"
+            aria-labelledby="remote-title"
+            novalidate
+          >
             <div class="remote-heading">
               <strong id="remote-title">Remote connection</strong>
               <span>Connect with a Gateway address or an SSH tunnel.</span>
             </div>
 
             <div class="transport-picker" role="group" aria-label="Remote connection type">
-              <button id="remote-transport-direct" class="transport-option selected" type="button" aria-pressed="true">
+              <button
+                id="remote-transport-direct"
+                class="transport-option selected"
+                type="button"
+                aria-pressed="true"
+              >
                 Gateway URL
               </button>
-              <button id="remote-transport-ssh" class="transport-option" type="button" aria-pressed="false">
+              <button
+                id="remote-transport-ssh"
+                class="transport-option"
+                type="button"
+                aria-pressed="false"
+              >
                 SSH tunnel
               </button>
             </div>
 
             <div id="remote-url-field" class="remote-field">
               <label for="remote-url">Gateway URL</label>
-              <input id="remote-url" type="url" placeholder="https://gateway.example.ts.net" autocomplete="url" />
+              <input
+                id="remote-url"
+                type="url"
+                placeholder="https://gateway.example.ts.net"
+                autocomplete="url"
+              />
             </div>
 
             <div id="remote-ssh-field" class="remote-field hidden">
               <label for="remote-ssh-target">SSH target</label>
-              <input id="remote-ssh-target" type="text" placeholder="you@gateway.example.com" autocomplete="off" spellcheck="false" />
+              <input
+                id="remote-ssh-target"
+                type="text"
+                placeholder="you@gateway.example.com"
+                autocomplete="off"
+                spellcheck="false"
+              />
               <label for="remote-port">Gateway port</label>
-              <input id="remote-port" type="number" min="1" max="65535" value="18789" inputmode="numeric" />
+              <input
+                id="remote-port"
+                type="number"
+                min="1"
+                max="65535"
+                value="18789"
+                inputmode="numeric"
+              />
             </div>
 
-            <details class="remote-auth">
-              <summary>Gateway authentication</summary>
-              <div class="remote-field">
-                <label for="remote-token">Gateway token</label>
-                <input id="remote-token" type="password" placeholder="Optional gateway access token" autocomplete="off" />
-                <label for="remote-password">Gateway password</label>
-                <input id="remote-password" type="password" placeholder="Optional gateway password" autocomplete="off" />
+            <div class="remote-auth">
+              <div class="remote-field select-field">
+                <label for="remote-auth-method">Authentication</label>
+                <select id="remote-auth-method">
+                  <option value="token">Token</option>
+                  <option value="password">Password</option>
+                </select>
               </div>
-            </details>
+              <div class="remote-credential">
+                <div id="remote-token-field" class="remote-field">
+                  <label for="remote-token">Gateway token</label>
+                  <input
+                    id="remote-token"
+                    type="password"
+                    placeholder="Enter token"
+                    autocomplete="off"
+                    spellcheck="false"
+                    aria-describedby="remote-credential-hint"
+                  />
+                </div>
+                <div id="remote-password-field" class="remote-field" hidden>
+                  <label for="remote-password">Gateway password</label>
+                  <input
+                    id="remote-password"
+                    type="password"
+                    placeholder="Enter password"
+                    autocomplete="off"
+                    spellcheck="false"
+                    aria-describedby="remote-credential-hint"
+                    disabled
+                  />
+                </div>
+                <button
+                  id="toggle-remote-credential"
+                  class="secret-toggle"
+                  type="button"
+                  aria-label="Show credential"
+                  aria-pressed="false"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+                    <circle cx="12" cy="12" r="3" />
+                    <path class="secret-hidden" d="m3 3 18 18" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <p id="remote-credential-hint" class="hint">
+              Only needed if your Gateway requires a token or password.
+            </p>
 
             <p id="remote-feedback" class="remote-feedback hidden" role="status"></p>
-            <button id="remote-connect" class="primary remote-connect" type="button">
+            <button id="remote-connect" class="primary remote-connect" type="submit">
               Connect to Gateway
             </button>
-          </section>
+          </form>
 
           <div class="setup-navigation">
             <button id="setup-back" class="button-subtle" type="button">Back</button>
@@ -145,22 +252,28 @@
           <span id="activity-label">Checking local services…</span>
         </div>
 
+        <div id="action-controls" class="controls action-controls hidden">
+          <button id="primary-action" class="primary">Try again</button>
+          <button id="edit-connection" class="button-subtle hidden" type="button">
+            Edit connection
+          </button>
+        </div>
+
         <div id="install-controls" class="controls hidden">
           <label for="channel">Release channel</label>
           <div class="control-row">
-            <select id="channel">
-              <option value="stable">Stable</option>
-              <option value="beta">Beta</option>
-              <option value="dev">Development</option>
-            </select>
+            <div class="select-field channel-field">
+              <select id="channel">
+                <option value="stable">Stable</option>
+                <option value="beta">Beta</option>
+                <option value="dev">Development</option>
+              </select>
+            </div>
             <button id="install-button" class="primary">Install OpenClaw</button>
           </div>
-          <p id="install-hint" class="hint">Installs the CLI and managed Node runtime in ~/.openclaw.</p>
-        </div>
-
-        <div id="action-controls" class="controls hidden">
-          <button id="primary-action" class="primary">Try again</button>
-          <button id="edit-connection" class="button-subtle hidden" type="button">Edit connection</button>
+          <p id="install-hint" class="hint">
+            Installs the CLI and managed Node runtime in ~/.openclaw.
+          </p>
         </div>
 
         <section id="discovery" class="discovery" aria-labelledby="discovery-title">
@@ -180,13 +293,12 @@
           </div>
           <pre id="install-log"></pre>
         </div>
+        <footer>
+          <span id="footer-mode">LOCAL GATEWAY</span>
+          <span class="footer-separator"></span>
+          <span>CLOSE TO TRAY</span>
+        </footer>
       </section>
-
-      <footer>
-        <span id="footer-mode">LOCAL GATEWAY</span>
-        <span class="footer-separator"></span>
-        <span>CLOSE TO TRAY</span>
-      </footer>
     </main>
     <script type="module" src="main.js"></script>
   </body>

@@ -344,6 +344,11 @@ export const McpConfigSchema = z
 
 export const NodeHostSchema = z
   .strictObject({
+    autoUpdate: z
+      .strictObject({
+        enabled: z.boolean().optional(),
+      })
+      .optional(),
     agentRuns: NodeHostAgentRunsSchema,
     workerRuns: NodeHostWorkerRunsSchema,
     browserProxy: z

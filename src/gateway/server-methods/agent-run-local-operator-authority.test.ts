@@ -1,13 +1,27 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
+import {
   claimAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
 } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import {
+  consumeCronCreatorAuthorityGrant,
+  mintCronCreatorAuthorityGrant,
+} from "../cron-creator-authority-grant.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+  retainGatewayDeviceRevocation,
+} from "../device-revocation.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
+  isDirectGatewayChatUserTurn,
   resolveGatewayChatCronCreatorAuthorityAdmission,
   resolveGatewayCronCreatorAuthorityAdmission,
   type GatewayCronCreatorAuthorityAdmission,
@@ -163,6 +177,66 @@ function createChatParams(
 }
 
 describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
+  it.each(["agent", "chat"] as const)(
+    "keeps %s creator grants bound to the original caller after request completion",
+    async (entry) => {
+      const context = {};
+      const caller = captureGatewayDeviceRevocation(
+        context,
+        { deviceId: "original-device", role: "operator" },
+        () => true,
+      );
+      const admission =
+        entry === "agent"
+          ? resolveGatewayCronCreatorAuthorityAdmission({
+              ...createParams(),
+              isCurrent: caller.isCurrent,
+            })
+          : resolveGatewayChatCronCreatorAuthorityAdmission(
+              createChatParams({ isCurrent: caller.isCurrent }),
+            );
+      if (!admission) {
+        throw new Error("expected direct operator admission");
+      }
+      const release = retainGatewayDeviceRevocation(admission.isCurrent);
+      caller.release();
+      const capability = createCronCreatorAuthorityCapability(
+        admission.runId,
+        admission.callerOrigin,
+        admission.managementEntitlement,
+        admission.isCurrent,
+      );
+      if (!capability) {
+        throw new Error("expected creator capability");
+      }
+      try {
+        await runWithCronCreatorAuthorityCapability(capability, async () => {
+          const grant = mintCronCreatorAuthorityGrant(capability);
+          invalidateGatewayDeviceRevocation(context, "original-device", "operator");
+          expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
+            "cron authority is no longer active",
+          );
+        });
+      } finally {
+        caller.release();
+        release?.();
+      }
+    },
+  );
+
+  it.each([
+    ["Incognito", { isIncognito: true }],
+    ["fresh message after reconnect", { isReconnectResume: true }],
+  ] as const)("keeps %s dashboard input separate from cron authority", (_label, mode) => {
+    const params = createChatParams({
+      client: createClient({ isLocalClient: undefined, controlUiAdmin: true }),
+      ...mode,
+    });
+    expect(isDirectGatewayChatUserTurn(params)).toBe(true);
+    expect(resolveGatewayChatCronCreatorAuthorityAdmission(params)).toBeUndefined();
+    expect(isDirectGatewayChatUserTurn({ ...params, isDirectExternalUser: false })).toBe(false);
+  });
+
   it("mints only for a direct external local-admin user turn", () => {
     expect(resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams())).toEqual({
       runId: "run-local-chat",
@@ -178,7 +252,8 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
         {
           runId: "run-local-chat",
           callerOrigin: { kind: isLocalClient ? "local" : "unknown" },
-          controlUiAdmin: true,
+          ...(!isLocalClient ? { callerScopedCreation: true } : {}),
+          managementEntitlement: { source: "control-ui-admin" },
         },
       );
     },

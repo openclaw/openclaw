@@ -36,7 +36,7 @@ vi.mock("../agents/mcp-oauth.js", () => ({
   clearMcpOAuthRequesters: vi.fn(),
   clearMcpOAuthServer: vi.fn(),
   completeMcpOAuthAuthorization: mocks.completeMcpOAuthAuthorization,
-  countMcpOAuthPrincipals: vi.fn(() => 0),
+  countMcpOAuthPrincipals: vi.fn(async () => 0),
   readMcpOAuthCredentialsStatus: mocks.readMcpOAuthCredentialsStatus,
   startMcpOAuthAuthorization: mocks.startMcpOAuthAuthorization,
 }));

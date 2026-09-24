@@ -7,12 +7,18 @@ import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../infra/agent-run-registry.js";
+import type {
+  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2,
+} from "../plugin-sdk/agent-harness-runtime.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
   consumeCronCreatorAuthorityGrant,
   createCronCreatorAuthorityRunScope,
   getCronManagementAuthority,
+  getCronManagementCallerOrigin,
   mintCronCreatorAuthorityGrant,
+  resolveCronCreatorAuthorityGrantProvenance,
   revokeCronCreatorAuthorityRunScope,
   withCronManagementGrant,
 } from "./cron-creator-authority-grant.js";
@@ -30,7 +36,7 @@ function createManagementFixture(controlUiAdmin = true) {
   const scope = createCronCreatorAuthorityRunScope(
     runId,
     { kind: "local" },
-    controlUiAdmin ? true : undefined,
+    controlUiAdmin ? { source: "control-ui-admin" } : undefined,
     () => continuationCurrent,
   );
   const operation = new AbortController();
@@ -56,6 +62,32 @@ function createManagementFixture(controlUiAdmin = true) {
 }
 
 describe("cron creator authority grants", () => {
+  it.each(["control-ui-admin", "channel-owner"] as const)(
+    "preserves the %s SDK projection without granting creator authority",
+    (source) => {
+      const entitlement =
+        source === "channel-owner" ? { source, isCurrent: () => true } : { source };
+      const scope = createCronCreatorAuthorityRunScope(
+        "sdk-compat",
+        { kind: "unknown" },
+        entitlement,
+      );
+      const legacy: Pick<EmbeddedRunAttemptParams, "cronCreatorAuthorityCapability"> = {
+        cronCreatorAuthorityCapability: scope,
+      };
+      const current: Pick<EmbeddedRunAttemptParamsV2, "cronCreatorAuthorityCapability"> = legacy;
+      expect(legacy.cronCreatorAuthorityCapability?.controlUiAdmin).toBe(
+        source === "control-ui-admin" ? true : undefined,
+      );
+      expect(current.cronCreatorAuthorityCapability?.controlUiAdmin).toBe(
+        source === "control-ui-admin" ? true : undefined,
+      );
+      expect(() => mintCronCreatorAuthorityGrant(scope)).toThrow(
+        "Automation creation is not granted",
+      );
+      revokeCronCreatorAuthorityRunScope(scope);
+    },
+  );
   it("consumes an exact live grant only once", () => {
     const scope = createCronCreatorAuthorityRunScope("run-1");
     const grant = mintCronCreatorAuthorityGrant(scope);
@@ -65,6 +97,32 @@ describe("cron creator authority grants", () => {
       "Configured MCP cron authority is no longer active",
     );
     revokeCronCreatorAuthorityRunScope(scope);
+  });
+
+  it("carries direct-local origin without claiming channel requester authority", () => {
+    const local = createCronCreatorAuthorityRunScope("run-local", { kind: "local" });
+    const grant = mintCronCreatorAuthorityGrant(
+      local,
+      undefined,
+      undefined,
+      undefined,
+      "requester",
+    );
+
+    expect(resolveCronCreatorAuthorityGrantProvenance(grant, local.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerOrigin: { kind: "local" },
+    });
+
+    const external = createCronCreatorAuthorityRunScope("run-external", {
+      kind: "external",
+      channel: "discord",
+    });
+    expect(() =>
+      mintCronCreatorAuthorityGrant(external, undefined, undefined, undefined, "requester"),
+    ).toThrow("requires authenticated creator facts");
+    revokeCronCreatorAuthorityRunScope(local);
+    revokeCronCreatorAuthorityRunScope(external);
   });
 
   it("rejects a runId mismatch without consuming the exact grant", () => {
@@ -142,7 +200,8 @@ describe("cron creator authority grants", () => {
 });
 
 describe("cron management authority grants", () => {
-  const denied = /Retry from a fresh authenticated Control UI administrator turn/;
+  const denied =
+    /Retry from a fresh authenticated configured channel owner or Control UI administrator turn/;
 
   it("retains a redeemed queued operation until its exact run closes, without permitting replay", async () => {
     const fixture = createManagementFixture();
@@ -151,12 +210,15 @@ describe("cron management authority grants", () => {
     await withCronManagementGrant(grant, fixture.identity, "cron.get", async () => {
       retained = getCronManagementAuthority(fixture.identity);
       expect(retained).toBeTypeOf("function");
+      expect(getCronManagementCallerOrigin(fixture.identity)).toEqual({ kind: "local" });
       expect(getCronManagementAuthority({ ...fixture.identity })).toBeUndefined();
+      expect(getCronManagementCallerOrigin({ ...fixture.identity })).toBeUndefined();
       retained!();
       await Promise.resolve();
       retained!();
     });
     expect(getCronManagementAuthority(fixture.identity)).toBeUndefined();
+    expect(getCronManagementCallerOrigin(fixture.identity)).toBeUndefined();
     expect(retained).not.toThrow();
     revokeCronCreatorAuthorityRunScope(fixture.scope);
     expect(retained).toThrow(denied);

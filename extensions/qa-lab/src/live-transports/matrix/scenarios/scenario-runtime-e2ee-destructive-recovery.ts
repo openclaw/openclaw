@@ -4,10 +4,10 @@ import path from "node:path";
 import { createMatrixQaClient } from "../substrate/client.js";
 import {
   createMatrixQaOpenClawCliRuntime,
-  formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
   type MatrixQaCliRunResult,
 } from "./scenario-runtime-cli.js";
+import { parseMatrixQaCliJson } from "./scenario-runtime-e2ee-cli-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 export type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
@@ -112,25 +112,6 @@ export async function loginMatrixQaRecoveryDevice(params: {
     ...device,
     deviceId: device.deviceId,
   };
-}
-
-function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
-  const stdout = result.stdout.trim();
-  const stderr = result.stderr.trim();
-  const payload = stdout || stderr;
-  if (!payload) {
-    throw new Error(`${formatMatrixQaCliCommand(result.args)} did not print JSON`);
-  }
-  try {
-    return JSON.parse(payload) as unknown;
-  } catch (error) {
-    throw new Error(
-      `${formatMatrixQaCliCommand(result.args)} printed invalid JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }\n${redactMatrixQaCliOutput(payload)}`,
-      { cause: error },
-    );
-  }
 }
 
 async function writeMatrixQaCliArtifacts(params: {

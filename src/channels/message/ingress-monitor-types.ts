@@ -74,6 +74,11 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
     raw: TRaw,
     context: ChannelIngressMonitorInspectionContext,
   ) => ChannelIngressMonitorFacts | null;
+  /** Preferred over inspect when the host supports asynchronous inspection. */
+  inspectAsync?: (
+    raw: TRaw,
+    context: ChannelIngressMonitorInspectionContext,
+  ) => Promise<ChannelIngressMonitorFacts | null>;
   payload: ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata>;
   deliver: (
     raw: TRaw,

@@ -273,6 +273,8 @@ export type ChannelOutboundAdapter = {
     messageId: string;
     pin: ReplyPayloadDeliveryPin;
     gatewayClientScopes?: readonly string[];
+    /** @internal Revalidate the delivery owner after preparation and before each provider request. */
+    assertDirectAdapterHandoff?: () => void;
   }) => Promise<void> | void;
   /**
    * @deprecated Use shouldTreatDeliveredTextAsVisible instead.

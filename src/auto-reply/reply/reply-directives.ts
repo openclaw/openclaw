@@ -24,6 +24,8 @@ type ReplyDirectiveParseOptions = {
   silentToken?: string;
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
+  preserveTrailingWhitespace?: boolean;
+  onAudioDirective?: () => void;
 };
 
 /** Parses media, reply-target, audio, and silent directives from reply text. */
@@ -34,6 +36,8 @@ export function parseReplyDirectives(
   const split = splitMediaFromOutput(raw, {
     extractMarkdownImages: options.extractMarkdownImages,
     extractMediaDirectives: options.extractMediaDirectives,
+    preserveTrailingWhitespace: options.preserveTrailingWhitespace,
+    onAudioDirective: options.onAudioDirective,
   });
   let text = split.text ?? "";
 
@@ -41,12 +45,13 @@ export function parseReplyDirectives(
     ? parseInlineDirectives(text, {
         currentMessageId: options.currentMessageId,
         stripAudioTag: false,
+        preserveTrailingWhitespace: options.preserveTrailingWhitespace,
       })
     : undefined;
 
-  text = stripInlineDirectiveTagsForDelivery(
-    replyParsed?.hasReplyTag ? replyParsed.text : text,
-  ).text;
+  text = stripInlineDirectiveTagsForDelivery(replyParsed?.hasReplyTag ? replyParsed.text : text, {
+    preserveTrailingWhitespace: options.preserveTrailingWhitespace,
+  }).text;
 
   const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent = isSilentReplyPayloadText(text, silentToken);

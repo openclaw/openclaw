@@ -3,12 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  beginAgentDeletionJournal,
   claimCompletedAgentDeletionJournal,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import {
@@ -46,6 +50,60 @@ afterEach(() => {
 });
 
 describe("agent lifecycle registry", () => {
+  it("revalidates incarnation and deletion through its current transaction and restores authority after rollback", () => {
+    const options = createOptions();
+    const config = { agents: { entries: { main: {} } } };
+    recordAgentProvenance("main", { createdVia: "operator" }, { ...options, nowMs: 1 });
+    const binding = captureAgentLifecycleBinding(config, "main", options)!;
+    const rollback = new Error("rollback authority changes");
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        recordAgentProvenance("main", { createdVia: "operator" }, { ...options, nowMs: 2 });
+        expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
+        expect(captureAgentLifecycleBinding(config, "main", options)?.provenance?.createdAtMs).toBe(
+          2,
+        );
+        beginAgentDeletionJournal(
+          { ...createEntry("main"), operationId: "delete-main", deleteFiles: false },
+          options,
+        );
+        expect(isAgentDeletionBlocked("main", options)).toBe(true);
+        expect(captureAgentLifecycleBinding(config, "main", options)).toBeUndefined();
+        throw rollback;
+      }, options),
+    ).toThrow(rollback);
+    expect(isAgentDeletionBlocked("main", options)).toBe(false);
+    expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
+  });
+
+  it("does not recreate a missing mandatory deletion journal while reading authority", () => {
+    const options = createOptions();
+    expect(readAgentDeletionJournal("main", options)).toBeUndefined();
+    const database = openOpenClawStateDatabase(options);
+    database.db.exec("DROP TABLE agent_deletion_journal");
+    expect(() => readAgentDeletionJournal("main", options)).toThrow(/agent_deletion_journal/);
+    expect(tableExists(database.db, "agent_deletion_journal")).toBe(false);
+  });
+
+  it("reads current deletion authority outside an inherited discovery snapshot", async () => {
+    const options = createOptions();
+    const config = { agents: { entries: { main: {} } } };
+    recordAgentProvenance("main", { createdVia: "operator" }, options);
+    const binding = captureAgentLifecycleBinding(config, "main", options);
+    await withOpenClawStateDatabaseReadSnapshot(async () => {
+      await withAgentDeletion(
+        "main",
+        async (begin) => {
+          const deletion = begin(createEntry("main"));
+          expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
+          deletion.rollback();
+          expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
+        },
+        options,
+      );
+    }, options);
+  });
+
   it("binds legacy and recreated agents to distinct durable incarnations", () => {
     const options = createOptions();
     const config = { agents: { entries: { main: {} } } };

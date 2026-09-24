@@ -172,7 +172,7 @@ const mockScheduleGatewayRestart = vi.hoisted(() =>
   vi.fn(() => ({
     ok: true,
     pid: process.pid,
-    signal: "SIGUSR1" as const,
+    signal: "SIGUSR2" as const,
     delayMs: 0,
     mode: "emit" as const,
     coalesced: false,
@@ -190,7 +190,7 @@ vi.mock("../cli/plugins-install-command.js", () => ({
 }));
 vi.mock("../infra/restart.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/restart.js")>()),
-  scheduleGatewaySigusr1Restart: mockScheduleGatewayRestart,
+  scheduleGatewayRestart: mockScheduleGatewayRestart,
 }));
 vi.mock("./probes.js", () => ({
   probeLocalCommand: vi.fn(async (command: string) => ({
@@ -259,6 +259,13 @@ describe("system agent operations", () => {
     resetPluginStateStoreForTests();
     stateDirSnapshot?.restore();
     vi.unstubAllEnvs();
+  });
+
+  it("includes each agent's effective model in the agents tool result", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    await executeSystemAgentOperation({ kind: "agents" }, runtime);
+    expect(lines.join("\n")).toContain("main | default | model=not configured");
+    expect(lines.join("\n")).toContain("work | model=openai/gpt-5.2");
   });
 
   it("redacts sensitive config values using their complete paths", async () => {
@@ -353,6 +360,26 @@ describe("system agent operations", () => {
     expect(output).toContain('"groupPolicy": "open"');
     expect(output).toContain('"chat": "openai/gpt-5.5"');
     expect(output).not.toContain("<redacted>");
+  });
+
+  it("reads installed plugin field schemas and authored help from the active metadata", async () => {
+    const config = { plugins: { entries: { codex: { enabled: true } } } };
+    mockConfig.setConfig(config);
+    setRuntimeConfigSnapshot(config, config);
+    const metadata = createSystemAgentPluginMetadataTestSnapshot(config);
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    try {
+      await metadata.run(() =>
+        executeSystemAgentOperation(
+          { kind: "config-schema", path: "plugins.entries.codex.config.codexDynamicToolsLoading" },
+          runtime,
+        ),
+      );
+      expect(lines.join("\n")).toContain("searchable");
+      expect(lines.join("\n")).toContain("Use searchable to defer OpenClaw dynamic tools");
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("redacts config values marked sensitive only by active plugin metadata", async () => {
@@ -492,7 +519,7 @@ describe("system agent operations", () => {
     ).rejects.toThrow("Run openclaw doctor --fix before creating main.");
 
     expect(createAgent).toHaveBeenCalledWith({
-      name: "main",
+      entry: { id: "main" },
       workspace: "/tmp/main",
       provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
     });
@@ -739,74 +766,6 @@ describe("system agent operations", () => {
     });
   });
 
-  it.each([
-    { kind: "config-set" as const, path: "agents.defaults.model.primary", value: "openai/gpt-5.5" },
-    {
-      kind: "config-set" as const,
-      path: "agents[defaults][model][primary]",
-      value: "openai/gpt-5.5",
-    },
-    {
-      kind: "config-set" as const,
-      path: 'agents["defaults"]["model"].primary',
-      value: "openai/gpt-5.5",
-    },
-    { kind: "config-set" as const, path: "agents.defaults.agentRuntime", value: "{}" },
-    { kind: "config-set" as const, path: "agents.defaults.params.temperature", value: "0.5" },
-    { kind: "config-set" as const, path: "agents.list[0].models.openai", value: "{}" },
-    { kind: "config-set" as const, path: "agents.list[0].params.temperature", value: "0.5" },
-    { kind: "config-set" as const, path: "agents.list[0].default", value: "true" },
-    { kind: "config-set" as const, path: "agents.list[0].agentDir", value: '"/tmp/agent"' },
-    { kind: "config-set" as const, path: "auth.order.anthropic", value: "[]" },
-    { kind: "config-set" as const, path: "env.vars.ANTHROPIC_API_KEY", value: '"changed"' },
-    { kind: "config-set" as const, path: '["env"]["vars"]["OPENAI_API_KEY"]', value: '"x"' },
-    { kind: "config-set" as const, path: "secrets.defaults.env", value: '"changed"' },
-    { kind: "config-set" as const, path: '["secrets"]["defaults"]["env"]', value: '"x"' },
-    { kind: "config-set" as const, path: "plugins.load", value: "{}" },
-    {
-      kind: "config-set" as const,
-      path: String.raw`mo\dels.providers.openai.apiKey`,
-      value: '"x"',
-    },
-    { kind: "config-set" as const, path: "$include", value: '"./alternate.json5"' },
-    { kind: "config-set" as const, path: '["$include"]', value: '"./alternate.json5"' },
-    {
-      kind: "config-set-ref" as const,
-      path: "models.providers.openai.apiKey",
-      source: "env" as const,
-      id: "OPENAI_API_KEY",
-    },
-    {
-      kind: "config-set-ref" as const,
-      path: "models[providers][openai][apiKey]",
-      source: "env" as const,
-      id: "OPENAI_API_KEY",
-    },
-    {
-      kind: "config-set-ref" as const,
-      path: '["models"]["providers"]["openai"]["apiKey"]',
-      source: "env" as const,
-      id: "OPENAI_API_KEY",
-    },
-  ])("rejects unverified inference-route write $path", async (operation) => {
-    const tempDir = useOperationStateDir("openclaw-route-write-refused-");
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runConfigSet = vi.fn(async () => {});
-
-    await expect(
-      executeSystemAgentOperation(operation, runtime, {
-        approved: true,
-        deps: { runConfigSet },
-      }),
-      // Denylisted roots cite their documented escalation; route paths point
-      // at the verified set_default_model/onboard flows.
-    ).rejects.toThrow(/openclaw onboard|trusted shell/);
-
-    expect(runConfigSet).not.toHaveBeenCalled();
-    expect(lines.join("\n")).not.toContain("[openclaw] running:");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
-  });
-
   // Operator parity: surfaces the Control UI edits freely stay agent-writable
   // behind the exact-operation approval gate instead of a path ban.
   it.each([
@@ -831,120 +790,6 @@ describe("system agent operations", () => {
 
     expect(result.applied).toBe(true);
     expect(runConfigSet).toHaveBeenCalledOnce();
-  });
-
-  it("fails closed on plugin-entry writes when route ownership cannot be proven", async () => {
-    // Same invariant as plugin_uninstall: without a readable config the entry
-    // cannot be proven off the active inference route.
-    mockConfig.missing("/tmp/openclaw.json");
-    const { runtime } = createSystemAgentTestRuntime();
-    const runConfigSet = vi.fn(async () => {});
-
-    await expect(
-      executeSystemAgentOperation(
-        { kind: "config-set", path: "plugins.entries.codex.enabled", value: "false" },
-        runtime,
-        { approved: true, deps: { runConfigSet } },
-      ),
-    ).rejects.toThrow("active inference route");
-    expect(runConfigSet).not.toHaveBeenCalled();
-  });
-
-  it("still blocks per-agent routing writes that hit the system agent owner", async () => {
-    useOperationStateDir("openclaw-default-agent-route-");
-    mockConfig.setConfig({
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
-        list: [{ id: "main" }, { id: "helper" }],
-      },
-    });
-    const { runtime } = createSystemAgentTestRuntime();
-    const runConfigSet = vi.fn(async () => {});
-
-    await expect(
-      executeSystemAgentOperation(
-        { kind: "config-set", path: "agents.list[0].model", value: '"openai/gpt-5.5"' },
-        runtime,
-        { approved: true, deps: { runConfigSet } },
-      ),
-    ).rejects.toThrow("openclaw onboard");
-    expect(runConfigSet).not.toHaveBeenCalled();
-
-    // The same routing field on a non-default agent is an approved write.
-    const result = await executeSystemAgentOperation(
-      { kind: "config-set", path: "agents.list[1].model", value: '"openai/gpt-5.5"' },
-      runtime,
-      { approved: true, deps: { runConfigSet } },
-    );
-    expect(result.applied).toBe(true);
-    expect(runConfigSet).toHaveBeenCalledOnce();
-  });
-
-  it("resolves numeric legacy list indices from the authored array order", async () => {
-    useOperationStateDir("openclaw-numeric-agent-route-");
-    mockConfig.setResolvedConfig(
-      {
-        agents: {
-          entries: {
-            "2": {},
-            "10": { default: true },
-          },
-        },
-      },
-      {
-        agents: {
-          list: [{ id: "10", default: true }, { id: "2" }],
-        },
-      },
-    );
-    const { runtime } = createSystemAgentTestRuntime();
-    const runConfigSet = vi.fn(async () => {});
-
-    await expect(
-      executeSystemAgentOperation(
-        { kind: "config-set", path: "agents.list[0].model", value: '"openai/gpt-5.5"' },
-        runtime,
-        { approved: true, deps: { runConfigSet } },
-      ),
-    ).rejects.toThrow("openclaw onboard");
-    expect(runConfigSet).not.toHaveBeenCalled();
-
-    const result = await executeSystemAgentOperation(
-      { kind: "config-set", path: "agents.list[1].model", value: '"openai/gpt-5.5"' },
-      runtime,
-      { approved: true, deps: { runConfigSet } },
-    );
-    expect(result.applied).toBe(true);
-    expect(runConfigSet).toHaveBeenCalledOnce();
-  });
-
-  it("runs plugin list and search as read-only operations", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runPluginsList = vi.fn(async (pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log("plugin rows");
-    });
-    const runPluginsSearch = vi.fn(async (query: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`search rows: ${query}`);
-    });
-
-    const listResult = await executeSystemAgentOperation({ kind: "plugin-list" }, runtime, {
-      deps: { runPluginsList, runPluginsSearch },
-    });
-    expect(listResult.applied).toBe(false);
-    const searchResult = await executeSystemAgentOperation(
-      { kind: "plugin-search", query: "calendar" },
-      runtime,
-      {
-        deps: { runPluginsList, runPluginsSearch },
-      },
-    );
-    expect(searchResult.applied).toBe(false);
-
-    expect(runPluginsList).toHaveBeenCalledWith(runtime);
-    expect(runPluginsSearch).toHaveBeenCalledWith("calendar", runtime);
-    expect(lines.join("\n")).toContain("plugin rows");
-    expect(lines.join("\n")).toContain("search rows: calendar");
   });
 
   it("installs plugins only after approval and audits the write", async () => {

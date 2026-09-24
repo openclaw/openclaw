@@ -6,8 +6,9 @@ import type {
   SessionsListResult,
 } from "../../../api/types.ts";
 import { renderAgentIdentityAvatar } from "../../../components/identity-avatar-view.ts";
-import "../../../components/openclaw-mascot.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../components/openclaw-mascot.ts";
+import { registerCommandPaletteEnglish } from "../../../i18n/locales/en-command-palette.ts";
 import { resolveAgentTextAvatar } from "../../../lib/agents/display.ts";
 import {
   resolveAgentAvatarUrl,
@@ -27,6 +28,8 @@ import {
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
+
+registerCommandPaletteEnglish();
 
 type ChatWelcomeProps = {
   currentAgentId?: string;

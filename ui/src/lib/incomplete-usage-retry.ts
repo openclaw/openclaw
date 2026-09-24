@@ -4,7 +4,7 @@ const INCOMPLETE_USAGE_RETRY_LIMIT = 3;
 type IncompleteUsageRetryOptions = {
   retry: () => void | Promise<void>;
   onExhausted?: () => void;
-  retryMs?: number;
+  retryMs?: number | ((attempt: number) => number);
   limit?: number;
 };
 
@@ -58,6 +58,10 @@ export class IncompleteUsageRetry {
     this.attempts += 1;
     this.pendingIncomplete = false;
     const cycle = this.cycle;
+    const delayMs =
+      typeof this.options.retryMs === "function"
+        ? this.options.retryMs(this.attempts)
+        : (this.options.retryMs ?? INCOMPLETE_USAGE_RETRY_MS);
     this.timer = window.setTimeout(() => {
       this.timer = null;
       let result: void | Promise<void>;
@@ -85,7 +89,7 @@ export class IncompleteUsageRetry {
         this.pendingIncomplete = false;
         this.armRetry();
       });
-    }, this.options.retryMs ?? INCOMPLETE_USAGE_RETRY_MS);
+    }, delayMs);
     return "retrying";
   }
 

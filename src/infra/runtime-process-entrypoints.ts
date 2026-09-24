@@ -4,6 +4,36 @@ const currentModuleUrl = import.meta.url;
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 
 export const runtimeProcessEntrypoints = {
+  secretEgressProxy: {
+    currentModuleUrl,
+    sourceWorkerName: "../secrets/egress-proxy/proxy.worker",
+    distWorkerPath: "secrets/egress-proxy/proxy.worker.js",
+  },
+  codeModeNode: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/code-mode-node.worker",
+    distWorkerPath: "agents/code-mode-node.worker.js",
+  },
+  cronReadOnly: {
+    currentModuleUrl,
+    sourceWorkerName: "../cron/store/read-only.worker",
+    distWorkerPath: "cron/store/read-only.worker.js",
+  },
+  stateRead: {
+    currentModuleUrl,
+    sourceWorkerName: "../state/openclaw-state-read.worker",
+    distWorkerPath: "state/openclaw-state-read.worker.js",
+  },
+  spawnBroker: {
+    currentModuleUrl,
+    sourceWorkerName: "../process/spawn-broker/worker",
+    distWorkerPath: "process/spawn-broker/worker.js",
+  },
+  cronStreamMatcher: {
+    currentModuleUrl,
+    sourceWorkerName: "../gateway/cron-stream-matcher.worker",
+    distWorkerPath: "gateway/cron-stream-matcher.worker.js",
+  },
   nativeHookRelayClient: {
     currentModuleUrl,
     sourceWorkerName: "../agents/harness/native-hook-relay-client.worker",
@@ -33,6 +63,41 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-state.worker",
     distWorkerPath: "state/openclaw-state.worker.js",
+  },
+  authProfileInlineUsage: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/auth-profiles/inline-usage.worker",
+    distWorkerPath: "agents/auth-profiles/inline-usage.worker.js",
+  },
+  agentDatabaseExecution: {
+    currentModuleUrl,
+    sourceWorkerName: "../state/openclaw-agent-execution.worker",
+    distWorkerPath: "state/openclaw-agent-execution.worker.js",
+  },
+  workspaceMemory: {
+    currentModuleUrl,
+    sourceWorkerName: "../worker/memory-worker-entry",
+    distWorkerPath: "worker/memory-worker-entry.js",
+  },
+  workspaceSkills: {
+    currentModuleUrl,
+    sourceWorkerName: "../worker/skills-worker-entry",
+    distWorkerPath: "worker/skills-worker-entry.js",
+  },
+  boardStore: {
+    currentModuleUrl,
+    sourceWorkerName: "../boards/sqlite-board-store.worker",
+    distWorkerPath: "boards/sqlite-board-store.worker.js",
+  },
+  sessionSharingStore: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-sharing-store.worker",
+    distWorkerPath: "config/sessions/session-sharing-store.worker.js",
+  },
+  heartbeatOutcomeStore: {
+    currentModuleUrl,
+    sourceWorkerName: "heartbeat-outcome-store.worker",
+    distWorkerPath: "infra/heartbeat-outcome-store.worker.js",
   },
   sqliteStore: {
     currentModuleUrl,
@@ -84,6 +149,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "update-candidate-state.worker",
     distWorkerPath: "infra/update-candidate-state.worker.js",
   },
+  doctorLint: {
+    currentModuleUrl,
+    sourceWorkerName: "../commands/doctor-lint.worker",
+    distWorkerPath: "commands/doctor-lint.worker.js",
+  },
   databaseVerify: {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-database-verify.worker",
@@ -103,6 +173,16 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../config/sessions/session-transcript.worker",
     distWorkerPath: "config/sessions/session-transcript.worker.js",
+  },
+  sessionManagerMetadata: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/sessions/session-manager-metadata.worker",
+    distWorkerPath: "agents/sessions/session-manager-metadata.worker.js",
+  },
+  sessionTranscriptReports: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-accessor.sqlite-transcript-reports.worker",
+    distWorkerPath: "config/sessions/session-accessor.sqlite-transcript-reports.worker.js",
   },
   sessionTranscriptReconcile: {
     currentModuleUrl,

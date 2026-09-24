@@ -1,6 +1,7 @@
 // Adapts node:sqlite sync database calls for Kysely-style query execution.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { toUSVString } from "node:util";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Compilable, CompiledQuery, Kysely, QueryResult, RawBuilder } from "kysely";
 import {
   InsertQueryNode,
@@ -16,15 +17,15 @@ import {
   kyselyByDatabase,
   queryErrorHandlerByDatabase,
 } from "./kysely-sync-cache-state.js";
+import { captureSqliteReaderOwner, retainSqliteReader } from "./sqlite-reader-lifecycle.js";
 
-// Node 26.6 fixed all() column counts after statement reprepare (nodejs/node#64219).
+// Node 24.20 and 26.6 fixed all() column counts after statement reprepare (nodejs/node#64219).
+const nodeVersion = parseNodeReleaseVersion(process.versions.node);
 const supportsRepreparedAll =
   !process.versions.bun &&
-  isNodeVersionAtLeast(parseNodeReleaseVersion(process.versions.node), {
-    major: 26,
-    minor: 6,
-    patch: 0,
-  });
+  ((nodeVersion?.major === 24 &&
+    isNodeVersionAtLeast(nodeVersion, { major: 24, minor: 20, patch: 0 })) ||
+    isNodeVersionAtLeast(nodeVersion, { major: 26, minor: 6, patch: 0 }));
 
 // Sync query helpers execute compiled Kysely SQL against node:sqlite without
 // going through Kysely's async driver path.
@@ -74,13 +75,17 @@ function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): voi
   }
 }
 
+function throwSqliteIteratorCleanupError(error: unknown): never {
+  throw toErrorObject(error, "SQLite iterator cleanup failed");
+}
+
 /** Execute a compiled Kysely query synchronously against node:sqlite. */
 function executeCompiledSqliteQuerySync<Row>(
   db: DatabaseSync,
   compiledQuery: CompiledQuery<Row>,
   firstRowOnly = false,
+  parameters = compiledQuery.parameters as SQLInputValue[],
 ): QueryResult<Row> {
-  const parameters = compiledQuery.parameters as SQLInputValue[];
   try {
     const sql = compiledQuery.sql;
     installStatementInvalidation(db);
@@ -102,19 +107,46 @@ function executeCompiledSqliteQuerySync<Row>(
         // Older Node all() snapshots the column count before SQLite can reprepare
         // an expired statement. Eagerly consuming iterate() reads it after step.
         const iterator = statement.iterate(...parameters);
+        const reader = retainSqliteReader(db, "kysely eager query");
+        let cleanupError: unknown;
+        let failed = false;
+        let failure: unknown;
+        const rows: Row[] = [];
         try {
-          return { rows: [...iterator] as Row[] };
-        } catch (error) {
-          try {
-            iterator.return?.();
-          } catch {
-            // Preserve the step error if iterator cleanup itself fails.
+          for (const row of iterator) {
+            reader.progress();
+            rows.push(row as Row);
           }
-          throw error;
+        } catch (error) {
+          failed = true;
+          failure = error;
         }
+        try {
+          iterator.return?.();
+        } catch (error) {
+          cleanupError = error;
+        }
+        reader.release();
+        if (failed) {
+          throw toErrorObject(failure, "SQLite query failed");
+        }
+        if (cleanupError !== undefined) {
+          throw toErrorObject(cleanupError, "SQLite query cleanup failed");
+        }
+        return { rows };
       }
 
-      const { changes, lastInsertRowid } = statement.run(...parameters);
+      // SQLite retains a connection-wide 64-bit last rowid even for UPDATE/DELETE.
+      // Request bigint results before executing so a valid write cannot fail while
+      // Node converts that retained identity to an unsafe JavaScript number.
+      statement.setReadBigInts(true);
+      let outcome: ReturnType<typeof statement.run>;
+      try {
+        outcome = statement.run(...parameters);
+      } finally {
+        statement.setReadBigInts(false);
+      }
+      const { changes, lastInsertRowid } = outcome;
       const result: QueryResult<Row> = {
         numAffectedRows: BigInt(changes),
         rows: [],
@@ -173,11 +205,7 @@ export function prepareSqliteQuerySync<Params, Row = unknown>(
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => QueryResult<Row> {
   const { compiled, bind } = compileSqliteQueryBindings(build);
-  return (params) =>
-    executeCompiledSqliteQuerySync(db, {
-      ...compiled,
-      parameters: bind(params),
-    });
+  return (params) => executeCompiledSqliteQuerySync(db, compiled, false, bind(params));
 }
 
 /** Compile a fixed first-row read once and bind fresh values on every execution. */
@@ -186,9 +214,7 @@ export function prepareSqliteQueryTakeFirstSync<Params, Row = unknown>(
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => Row | undefined {
   const { compiled, bind } = compileSqliteQueryBindings(build);
-  return (params) =>
-    executeCompiledSqliteQuerySync<Row>(db, { ...compiled, parameters: bind(params) }, true)
-      .rows[0];
+  return (params) => executeCompiledSqliteQuerySync<Row>(db, compiled, true, bind(params)).rows[0];
 }
 
 /** Compile once and capture fresh bindings before lazily opening each private iterator. */
@@ -206,34 +232,49 @@ export function prepareSqliteQueryIterator<Params, Row = unknown>(
 }
 
 /** Compile and lazily iterate a Kysely query synchronously against node:sqlite. */
-export function* iterateSqliteQuerySync<Row>(
+export function iterateSqliteQuerySync<Row>(
   db: DatabaseSync,
   query: Compilable<Row>,
 ): IterableIterator<Row> {
-  const compiledQuery = query.compile();
-  try {
-    // Iterators keep statement state across yields. A private statement prevents
-    // nested iteration of identical SQL from resetting an earlier iterator.
-    const statement = db.prepare(compiledQuery.sql);
-    if (!SelectQueryNode.is(compiledQuery.query) && statement.columns().length === 0) {
-      return;
-    }
-    const parameters = compiledQuery.parameters as SQLInputValue[];
-    const iterator = statement.iterate(...parameters);
+  const owner = captureSqliteReaderOwner();
+  return (function* () {
+    const compiledQuery = query.compile();
     try {
-      yield* iterator as Iterable<Row>;
-    } catch (error) {
-      try {
-        iterator.return?.();
-      } catch {
-        // Preserve the step error if iterator cleanup itself fails.
+      // Iterators keep statement state across yields. A private statement prevents
+      // nested iteration of identical SQL from resetting an earlier iterator.
+      const statement = db.prepare(compiledQuery.sql);
+      if (!SelectQueryNode.is(compiledQuery.query) && statement.columns().length === 0) {
+        return;
       }
+      const parameters = compiledQuery.parameters as SQLInputValue[];
+      const iterator = statement.iterate(...parameters);
+      const reader = retainSqliteReader(db, "kysely iterator", owner);
+      let cleanupError: unknown;
+      let failed = false;
+      try {
+        for (const row of iterator) {
+          reader.progress();
+          yield row as Row;
+        }
+      } catch (error) {
+        failed = true;
+        throw toErrorObject(error, "SQLite iterator failed");
+      } finally {
+        try {
+          iterator.return?.();
+        } catch (error) {
+          cleanupError = error;
+        }
+        reader.release();
+        if (!failed && cleanupError !== undefined) {
+          throwSqliteIteratorCleanupError(cleanupError);
+        }
+      }
+    } catch (error) {
+      reportNodeSqliteKyselyQueryError(db, error);
       throw error;
     }
-  } catch (error) {
-    reportNodeSqliteKyselyQueryError(db, error);
-    throw error;
-  }
+  })();
 }
 
 /** Execute a Kysely query synchronously and return its first row. */

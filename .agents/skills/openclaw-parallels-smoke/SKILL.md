@@ -108,7 +108,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 The macOS smoke and same-guest update lanes route guest commands through
 `scripts/e2e/parallels/parallels-exec.py`; macOS hosts need `python3` with its standard
-library. On the verified Parallels 27.0.0 (58628) Apple-silicon installation, the
+library. On verified Parallels 27.0.0 (58628) and 27.0.2 (58673) Apple-silicon installations, the
 client retains SDK login-job handles through result extraction, avoiding the
 host CLI's intermittent `PrlJob_GetRetCode: Invalid argument` failure. This error
 is not proof that the guest needs reinstallation or another Tools update.
@@ -117,7 +117,10 @@ Selection checks the actual `prlctl` on PATH and the installed CLI digest before
 execution. Other binaries retain ordinary `prlctl`; an SDK failure never retries
 through another transport. Root/current-user choice, raw shell-argument joining,
 stdin, stdout/stderr, and guest exit status are preserved. Callers still own shell
-quoting. Snapshot/start/stop/input/capture and Linux/Windows execution are unchanged.
+quoting. Bare UUIDs use the CLI's braced lookup form; when that UUID is absent,
+the client checks the original literal VM name once before any guest execution.
+Other lookup failures are terminal. Snapshot/start/stop/input/capture and
+Linux/Windows execution are unchanged.
 
 For an already-owned, running macOS guest, the same transport can be checked directly:
 

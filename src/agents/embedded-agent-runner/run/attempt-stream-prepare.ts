@@ -1,11 +1,8 @@
-import { randomUUID } from "node:crypto";
 /**
  * Prepares stream subscription, tool execution, and the active run queue.
  */
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import { validateAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import {
@@ -17,24 +14,16 @@ import {
   closeDiagnosticEmbeddedRunOwner,
   type DiagnosticEmbeddedRunOwner,
 } from "../../../logging/diagnostic-run-activity.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import {
-  createNestedToolActivity,
-  readNestedToolActivity,
   projectNestedToolActivityForHooks,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
-import { raceWithAbortSignal } from "../../agent-tools.abort.js";
-import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { sanitizeToolResult } from "../../embedded-agent-tool-results.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
+import { resolveReplyExpectation } from "../../reply-completion.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
@@ -42,14 +31,7 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import {
-  copyInternalToolResultState,
-  getInternalToolExecutionPreparer,
-} from "../../runtime/internal-hooks.js";
-import type { AgentSession } from "../../sessions/index.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
-import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { log } from "../logger.js";
 import {
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
@@ -63,7 +45,7 @@ import {
   type EmbeddedAgentQueueMessageOptions,
   setActiveEmbeddedRun,
 } from "../runs.js";
-import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
+import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
@@ -72,6 +54,12 @@ import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
 } from "./attempt-queue-message.js";
+import type { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
+import {
+  withEmbeddedAttemptSteeringAdmission,
+  type EmbeddedAttemptSteeringAdmission,
+} from "./attempt-steering-admission.js";
+import { createSubscribedToolSearchExecutor } from "./attempt-tool-search-executor.js";
 import {
   createEmbeddedAttemptDeferredLifecycleOwner,
   type EmbeddedAttemptDeferredLifecycleOwner,
@@ -82,65 +70,70 @@ import {
   resolveReportedModelRef,
 } from "./helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
-import { notifyToolActivity } from "./tool-activity-heartbeat.js";
-import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
-
-type HookRunner = ReturnType<typeof getGlobalHookRunner>;
-type StreamRunState = {
-  aborted: boolean;
-  promptError: unknown;
-  timedOut: boolean;
-  yieldDetected: boolean;
-};
+import type { EmbeddedRunAttemptParams, StreamRunState } from "./types.js";
 
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
   kind: "embedded";
   cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
 };
 
-export function prepareEmbeddedAttemptStream(input: {
+type PrepareEmbeddedAttemptStreamInput = {
   attempt: EmbeddedRunAttemptInternalParams;
+  agentSession: Pick<
+    Awaited<ReturnType<typeof prepareEmbeddedAttemptAgentSession>>,
+    | "activeSession"
+    | "hookRunner"
+    | "clientToolCallSlots"
+    | "hasDeliveredSourceReply"
+    | "markSourceReplyDelivered"
+    | "builtinToolNames"
+    | "coreBuiltinToolNames"
+    | "replaySafeToolNames"
+    | "codeModeExecToolNames"
+    | "sideEffectToolOwners"
+    | "trustedLocalMediaToolNames"
+  >;
   applyPermissionMode?: (
     mode: NonNullable<EmbeddedRunAttemptParams["permissionMode"]> | null,
     revokeApprovals: () => void,
   ) => void;
-  activeSession: AgentSession;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
   runtimeChannel?: string;
-  hookRunner: HookRunner;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
-  clientToolCallSlots: readonly EmbeddedAttemptClientToolCallSlot[];
   nestedToolActivities: NestedToolActivity[];
   isReplaySafeTool: (tool: Parameters<ToolSearchCatalogToolExecutor>[0]["tool"]) => boolean;
   runAbortController: AbortController;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
   markExternalAbort: () => void;
   getRunState: () => StreamRunState;
-  hasDeliveredSourceReply: () => boolean;
-  markSourceReplyDelivered: () => void;
   onBlockReply: EmbeddedRunAttemptParams["onBlockReply"];
   onBlockReplyFlush: EmbeddedRunAttemptParams["onBlockReplyFlush"];
-  sandboxSessionKey: string;
-  builtinToolNames: ReadonlySet<string>;
-  coreBuiltinToolNames?: ReadonlySet<string>;
-  replaySafeToolNames: ReadonlySet<string>;
-  codeModeExecToolNames?: ReadonlySet<string>;
-  sideEffectToolOwners?: ReadonlyMap<string, string>;
-  trustedLocalMediaToolNames: ReadonlySet<string>;
   diagnosticOwner: DiagnosticEmbeddedRunOwner;
   trajectoryRecorder?: Parameters<
     typeof createEmbeddedAttemptDeferredLifecycleOwner
   >[0]["trajectoryRecorder"];
-}) {
-  const attempt = input.attempt;
-  const activityScope = randomUUID();
-  let nestedStartOrder = 0;
-  const hookRunner = input.hookRunner;
+};
+
+export function prepareEmbeddedAttemptStream(input: PrepareEmbeddedAttemptStreamInput) {
+  return withEmbeddedAttemptSteeringAdmission(
+    input.agentSession.activeSession,
+    input.runAbortController.signal,
+    (admission) => prepareStream(input, admission),
+  );
+}
+
+function prepareStream(
+  input: PrepareEmbeddedAttemptStreamInput,
+  admission: EmbeddedAttemptSteeringAdmission,
+) {
+  const { attempt, agentSession } = input;
+  const { activeSession, hookRunner } = agentSession;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
-  let acceptingSteerMessages = true;
   let activeQueueAdmissions = 0;
+  const isSteeringAdmissionOpen = () =>
+    admission.accepting && !input.getRunState().aborted && !input.runAbortController.signal.aborted;
   const shouldRunBeforeAgentFinalize =
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("before_agent_finalize");
@@ -174,21 +167,21 @@ export function prepareEmbeddedAttemptStream(input: {
           return;
         }
         const state = input.getRunState();
-        const hasCompletedClientToolCall = input.clientToolCallSlots.some((slot) => slot.completed);
-        const silentFinalReply =
-          attempt.silentExpected && isSilentReplyText(lastAssistantMessage, SILENT_REPLY_TOKEN);
+        const hasCompletedClientToolCall = agentSession.clientToolCallSlots.some(
+          (slot) => slot.completed,
+        );
         if (
           state.aborted ||
           state.promptError ||
           state.timedOut ||
           hasCompletedClientToolCall ||
           state.yieldDetected ||
-          silentFinalReply
+          (attempt.silentExpected && isSilentReplyText(lastAssistantMessage, SILENT_REPLY_TOKEN))
         ) {
           return;
         }
         const hookMessages = projectNestedToolActivityForHooks(
-          input.activeSession.messages,
+          activeSession.messages,
           input.nestedToolActivities,
         );
         const reportedModelRef = resolveReportedModelRef({
@@ -210,13 +203,13 @@ export function prepareEmbeddedAttemptStream(input: {
         }
         // A queued user message wins over finalization. Close admission before
         // awaiting the hook so no later steer can become a child of the draft.
-        acceptingSteerMessages = false;
+        admission.accepting = false;
         if (
           activeQueueAdmissions > 0 ||
-          input.activeSession.pendingMessageCount > 0 ||
-          input.activeSession.agent.hasQueuedMessages()
+          activeSession.pendingMessageCount > 0 ||
+          activeSession.agent.hasQueuedMessages()
         ) {
-          acceptingSteerMessages = true;
+          admission.accepting = true;
           return;
         }
         let keepAdmissionClosed = false;
@@ -237,22 +230,13 @@ export function prepareEmbeddedAttemptStream(input: {
               messages: hookMessages,
             },
             ctx: {
-              runId: attempt.runId,
-              trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
-              agentId: input.hookAgentId,
-              sessionKey: attempt.sessionKey,
-              sessionId: attempt.sessionId,
-              workspaceDir: attempt.workspaceDir,
+              ...buildEmbeddedAgentHookContext(
+                attempt,
+                input.hookAgentId,
+                freezeDiagnosticTraceContext(input.diagnosticTrace),
+              ),
               modelProviderId: reportedModelRef.provider,
               modelId: reportedModelRef.model,
-              trigger: attempt.trigger,
-              ...buildAgentHookContextChannelFields(attempt),
-              ...buildAgentHookContextIdentityFields({
-                trigger: attempt.trigger,
-                senderId: attempt.senderId,
-                chatId: attempt.chatId,
-                channelContext: attempt.channelContext,
-              }),
             },
             hookRunner,
           });
@@ -279,7 +263,7 @@ export function prepareEmbeddedAttemptStream(input: {
           return { suppressTerminalDelivery: true };
         } finally {
           if (!keepAdmissionClosed) {
-            acceptingSteerMessages = true;
+            admission.accepting = true;
           }
         }
       }
@@ -289,13 +273,14 @@ export function prepareEmbeddedAttemptStream(input: {
   // Terminal callbacks run after queue construction; keep the queue in this
   // phase so active-run clearing and subscription teardown share one owner.
   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
-  const subscription = subscribeEmbeddedAgentSession({
-    session: input.activeSession,
+  const streamSubscription = subscribeEmbeddedAgentSession({
+    session: activeSession,
     onModelUsage: input.onModelUsage,
     runId: attempt.runId,
     lifecycleGeneration: attempt.lifecycleGeneration,
     messageChannel: input.runtimeChannel,
     initialReplayState: attempt.initialReplayState,
+    assistantErrorTranscript: attempt.assistantErrorTranscript,
     hookRunner: getGlobalHookRunner() ?? undefined,
     verboseLevel: attempt.verboseLevel,
     reasoningMode: attempt.reasoningLevel ?? "off",
@@ -305,8 +290,8 @@ export function prepareEmbeddedAttemptStream(input: {
     shouldEmitToolResult: attempt.shouldEmitToolResult,
     shouldEmitToolOutput: attempt.shouldEmitToolOutput,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
-    hasDeliveredMessageToolOnlySourceReply: input.hasDeliveredSourceReply,
-    onDeliveredMessageToolOnlySourceReply: input.markSourceReplyDelivered,
+    hasDeliveredMessageToolOnlySourceReply: agentSession.hasDeliveredSourceReply,
+    onDeliveredMessageToolOnlySourceReply: agentSession.markSourceReplyDelivered,
     onAgentToolResult: attempt.onAgentToolResult,
     observeToolTerminal: attempt.observeToolTerminal,
     trajectoryRecorder: input.trajectoryRecorder,
@@ -368,140 +353,28 @@ export function prepareEmbeddedAttemptStream(input: {
     hasRepliedRef: attempt.hasRepliedRef,
     sessionId: attempt.sessionId,
     agentId: input.hookAgentId,
-    builtinToolNames: input.builtinToolNames,
-    coreBuiltinToolNames: input.coreBuiltinToolNames,
-    replaySafeToolNames: input.replaySafeToolNames,
-    ...(input.codeModeExecToolNames ? { codeModeExecToolNames: input.codeModeExecToolNames } : {}),
-    ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
-    trustedLocalMediaToolNames: input.trustedLocalMediaToolNames,
+    builtinToolNames: agentSession.builtinToolNames,
+    coreBuiltinToolNames: agentSession.coreBuiltinToolNames,
+    replaySafeToolNames: agentSession.replaySafeToolNames,
+    codeModeExecToolNames: agentSession.codeModeExecToolNames,
+    sideEffectToolOwners: agentSession.sideEffectToolOwners,
+    trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
     internalEvents: attempt.internalEvents,
   });
+  const unsubscribe = admission.bindStreamUnsubscribe(streamSubscription.unsubscribe);
+  const subscription = { ...streamSubscription, unsubscribe };
   toolMetasForTerminal = subscription.toolMetas;
 
-  const toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor = async (toolParams) => {
-    const runSignal = input.runAbortController.signal;
-    const signal = AbortSignal.any([toolParams.signal ?? runSignal, runSignal]);
-    const yieldRunSignal = toolParams.toolName === "sessions_yield" ? runSignal : undefined;
-    const startedAt = Date.now();
-    const startOrder = nestedStartOrder++;
-    const manager = input.activeSession.sessionManager;
-    const afterEntryId = manager.getAppendParentId();
-    if (toolParams.source === "openclaw" && toolParams.sourceName === "core") {
-      recordStructuredReplayTrustForToolCall(
-        toolParams.toolCallId,
-        toolParams.tool as never,
-        attempt.runId,
-      );
-    }
-    return await raceWithAbortSignal(
-      subscription.runToolLifecycle({
-        toolName: toolParams.toolName,
-        toolCallId: toolParams.toolCallId,
-        parentToolCallId: toolParams.parentToolCallId,
-        args: toolParams.input,
-        replaySafe: toolParams.replaySafe ?? input.isReplaySafeTool(toolParams.tool),
-        hideFromChannelProgress:
-          "hideFromChannelProgress" in toolParams.tool &&
-          toolParams.tool.hideFromChannelProgress === true,
-        onTerminal: async (terminal) => {
-          const message = {
-            ...createNestedToolActivity({
-              runId: attempt.runId,
-              scopeId: activityScope,
-              afterEntryId,
-              startOrder,
-              parentToolCallId: toolParams.parentToolCallId,
-              toolCallId: toolParams.toolCallId,
-              toolName: toolParams.toolName,
-              input: terminal.executedArguments,
-              result: sanitizeToolResult(terminal.result),
-              isError: terminal.isError,
-              startedAt,
-              timestamp: Date.now(),
-            }),
-            idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
-          };
-          await runWithOwnedSessionTranscriptWrite(
-            { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
-            () =>
-              withSessionManagerWrite(manager, () => {
-                // Revalidate the exact attempt after awaited acceptance and writer admission.
-                if (
-                  ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) !== queueHandle ||
-                  input.getRunState().aborted
-                ) {
-                  return;
-                }
-                if (isRecord(terminal.result)) {
-                  copyInternalToolResultState(terminal.result, message);
-                }
-                manager.appendMessage(message);
-                const recorded = readNestedToolActivity(
-                  redactTranscriptMessage(message, attempt.config),
-                );
-                if (!recorded) {
-                  throw new Error("Nested activity became invalid during transcript redaction");
-                }
-                input.nestedToolActivities.push(recorded);
-              }),
-          );
-          notifyToolActivity(attempt.runId);
-        },
-        // Acceptance belongs inside execution: observers must never see a rejected success.
-        execute: async (onImplementationStart) =>
-          await raceWithAbortSignal(
-            (async () => {
-              signal.throwIfAborted();
-              const preparer = getInternalToolExecutionPreparer(toolParams.tool);
-              if (!preparer) {
-                onImplementationStart();
-                return await toolParams.tool.execute(
-                  toolParams.toolCallId,
-                  toolParams.input,
-                  signal,
-                  toolParams.onUpdate,
-                  undefined as never,
-                );
-              }
-              const prepared = await preparer({
-                toolCallId: toolParams.toolCallId,
-                args: toolParams.input,
-                signal,
-                onUpdate: toolParams.onUpdate,
-              });
-              try {
-                if (prepared.kind === "immediate") {
-                  if (prepared.outcome.kind === "error") {
-                    throw prepared.outcome.error;
-                  }
-                  return prepared.outcome.result;
-                }
-                return await prepared.execute(onImplementationStart);
-              } finally {
-                prepared.dispose();
-              }
-            })().then((result) => {
-              signal.throwIfAborted();
-              // Nested tools bypass the session's tool_result middleware hook.
-              // Preserve committed delivery before output acceptance can reject it.
-              recordEmbeddedToolReceipt(
-                manager,
-                toolParams.toolCallId,
-                result.details,
-                toolParams.source === "openclaw" &&
-                  toolParams.sourceName === "core" &&
-                  toolParams.toolName === "message",
-              );
-              return toolParams.acceptResultBeforeProjection(result);
-            }),
-            signal,
-            yieldRunSignal,
-          ),
-      }),
-      signal,
-      yieldRunSignal,
-    );
-  };
+  const toolSearchCatalogExecutor = createSubscribedToolSearchExecutor({
+    attempt,
+    runSignal: input.runAbortController.signal,
+    sessionManager: activeSession.sessionManager,
+    subscription,
+    isCurrent: () =>
+      ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle && !input.getRunState().aborted,
+    isReplaySafeTool: input.isReplaySafeTool,
+    nestedToolActivities: input.nestedToolActivities,
+  });
 
   let externalAbortAccepted = false;
   const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
@@ -527,9 +400,7 @@ export function prepareEmbeddedAttemptStream(input: {
     // check. Revalidate this exact publication and its live scope at the effect.
     registration?.toolAuthority?.assertActive();
     return (
-      acceptingSteerMessages &&
-      !input.getRunState().aborted &&
-      !input.runAbortController.signal.aborted &&
+      isSteeringAdmissionOpen() &&
       registration !== undefined &&
       ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration &&
       ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle &&
@@ -568,10 +439,10 @@ export function prepareEmbeddedAttemptStream(input: {
     activeQueueAdmissions++;
     try {
       if (options?.steeringMode) {
-        input.activeSession.agent.steeringMode = options.steeringMode;
+        activeSession.agent.steeringMode = options.steeringMode;
       }
       return await steerActiveSessionWithOptionalDeliveryWait(
-        input.activeSession,
+        activeSession,
         text,
         options,
         attempt.sessionKey,
@@ -607,10 +478,7 @@ export function prepareEmbeddedAttemptStream(input: {
     });
   const messageInjection = {
     version: 2 as const,
-    isAvailable: () =>
-      acceptingSteerMessages &&
-      !input.getRunState().aborted &&
-      !input.runAbortController.signal.aborted,
+    isAvailable: isSteeringAdmissionOpen,
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
@@ -631,7 +499,7 @@ export function prepareEmbeddedAttemptStream(input: {
     applyPermissionMode: applyPermissionMode
       ? async (mode, revokeApprovals) => {
           if (
-            !acceptingSteerMessages ||
+            !admission.accepting ||
             input.runAbortController.signal.aborted ||
             ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) !== queueHandle
           ) {
@@ -658,16 +526,14 @@ export function prepareEmbeddedAttemptStream(input: {
     queueMessage,
     messageInjection,
     messageInjectionV2: messageInjection,
-    isStreaming: () => input.activeSession.isStreaming,
+    isStreaming: () => activeSession.isStreaming,
     isAborted: () => input.getRunState().aborted,
-    isStopped: () =>
-      !acceptingSteerMessages ||
-      input.getRunState().aborted ||
-      input.runAbortController.signal.aborted,
+    isStopped: () => !isSteeringAdmissionOpen(),
     isCompacting: () => subscription.isCompacting(),
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
+    terminalReplyExpectation: resolveReplyExpectation(attempt),
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
     cancel: abortActiveRunExternally,
     abort: (reason) => abortActiveRunExternally(reason),
@@ -697,13 +563,18 @@ export function prepareEmbeddedAttemptStream(input: {
         ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration &&
         ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle,
       trajectoryRecorder: input.trajectoryRecorder ?? null,
-      clearActiveRun: () =>
-        clearActiveEmbeddedRun(
-          attempt.sessionId,
-          queueHandle,
-          attempt.sessionKey,
-          attempt.sessionFile,
-        ),
+      clearActiveRun: () => {
+        try {
+          unsubscribe();
+        } finally {
+          clearActiveEmbeddedRun(
+            attempt.sessionId,
+            queueHandle,
+            attempt.sessionKey,
+            attempt.sessionFile,
+          );
+        }
+      },
     });
     try {
       attempt.onDeferredLifecycleOwner(deferredLifecycleOwner);
@@ -720,8 +591,6 @@ export function prepareEmbeddedAttemptStream(input: {
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,
     getBeforeAgentFinalizeRevisionEntryId: () => beforeAgentFinalizeRevisionEntryId,
-    stopAcceptingSteerMessages: () => {
-      acceptingSteerMessages = false;
-    },
+    stopAcceptingSteerMessages: admission.stop,
   };
 }

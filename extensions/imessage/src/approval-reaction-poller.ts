@@ -1,4 +1,3 @@
-// Imessage plugin module implements approval reaction poller behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asDateTimestampMs, asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";

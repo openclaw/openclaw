@@ -6,7 +6,7 @@ import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeNativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { runNativeHookRelayCliFromArgv } from "./native-hook-relay-cli.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -51,7 +51,7 @@ describe("native hook relay locator worker", () => {
           expiresAtMs: Date.now() + 60_000,
         },
       });
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
 
       const stdout = new PassThrough();
       const stderr = new PassThrough();
@@ -127,7 +127,7 @@ describe("native hook relay locator worker", () => {
         }
       }
     } finally {
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });

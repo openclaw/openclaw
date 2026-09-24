@@ -8,7 +8,12 @@ enum TalkStopPhrase {
             guard !words.isEmpty else { return false }
             // Treat preferences as literal speech, never regular expressions.
             // Whole-utterance matching preserves quoted and longer conversation.
-            let literal = words.map { NSRegularExpression.escapedPattern(for: String($0)) }.joined(separator: #"\s+"#)
+            var literal = words.map { NSRegularExpression.escapedPattern(for: String($0)) }.joined(separator: #"\s+"#)
+            // Speech recognition can render the standalone "end talking" command as "and talking".
+            // Keep this alias conditional on that configured phrase; other phrases stay literal.
+            if words.map({ $0.lowercased() }).joined(separator: " ") == "end talking" {
+                literal = #"(?:end|and)\s+talking"#
+            }
             let command = #"^(?:please[\s,]+)?"# + literal + #"(?:[\s,]+please)?\s*[.!?。！？]*$"#
             return text.range(of: command, options: [.regularExpression, .caseInsensitive]) != nil
         }

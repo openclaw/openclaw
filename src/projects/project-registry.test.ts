@@ -5,11 +5,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as processExec from "../process/exec.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -28,16 +29,18 @@ import { parseProjectGitUrl } from "./project-git-url.js";
 import {
   listProjectRegistry,
   ProjectCheckoutError,
-  registerClonedProjectRegistry,
   registerProjectRegistry,
   removeProjectRegistry,
 } from "./project-registry.js";
+import { registerClonedProjectRegistry } from "./project-registry.test-support.js";
 
 const execFileAsync = promisify(execFile);
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  tempDirs.cleanup();
 });
 
 async function initializeRepository(
@@ -87,6 +90,7 @@ describe("project registry", () => {
     const root = tempDirs.make("openclaw-project-schema-");
     const options = { path: path.join(root, "state.sqlite") };
     openOpenClawStateDatabase(options);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(options.path);
@@ -100,10 +104,10 @@ describe("project registry", () => {
         .get(),
     ).toBeUndefined();
 
-    expect(listProjectRegistry({} as OpenClawConfig, options)).toEqual([
+    expect(await listProjectRegistry({} as OpenClawConfig, options)).toEqual([
       expect.objectContaining({ id: "workspace:main", source: "workspace" }),
     ]);
-    expect(listProjectRegistry({} as OpenClawConfig, options)).toHaveLength(1);
+    expect(await listProjectRegistry({} as OpenClawConfig, options)).toHaveLength(1);
 
     const rows = state.db
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'projects'")
@@ -136,11 +140,9 @@ describe("project registry", () => {
         ],
       },
     } as OpenClawConfig;
-    expect(listProjectRegistry(cfg, options).map((project) => project.displayName)).toEqual([
-      "alpha",
-      "OpenClaw",
-      "zeta",
-    ]);
+    expect((await listProjectRegistry(cfg, options)).map((project) => project.displayName)).toEqual(
+      ["alpha", "OpenClaw", "zeta"],
+    );
     const sharedWorkspaceCfg = {
       agents: {
         list: [
@@ -149,19 +151,19 @@ describe("project registry", () => {
         ],
       },
     } as OpenClawConfig;
-    expect(listProjectRegistry(sharedWorkspaceCfg, options).map((project) => project.id)).toEqual([
-      "openclaw",
-      "workspace:main",
-      "workspace:work",
-    ]);
+    expect(
+      (await listProjectRegistry(sharedWorkspaceCfg, options)).map((project) => project.id),
+    ).toEqual(["openclaw", "workspace:main", "workspace:work"]);
     expect(await removeProjectRegistry(first, options)).toBe(true);
     expect(await removeProjectRegistry(first, options)).toBe(false);
-    expect(listProjectRegistry(cfg, options).map((project) => project.id)).not.toContain(first.id);
+    expect((await listProjectRegistry(cfg, options)).map((project) => project.id)).not.toContain(
+      first.id,
+    );
   });
 
   it.each(["entries", "list"] as const)(
     "bounds %s roster reads while observing workspace edits on the next listing",
-    (shape) => {
+    async (shape) => {
       const root = tempDirs.make("openclaw-project-roster-");
       const options = { path: path.join(root, "state.sqlite") };
       const agents = Array.from({ length: 64 }, (_, index) => ({
@@ -191,7 +193,7 @@ describe("project registry", () => {
         agents: shape === "entries" ? { entries } : { list: agents },
       };
 
-      const before = listProjectRegistry(cfg, options);
+      const before = await listProjectRegistry(cfg, options);
       // Listing every workspace must not re-read each preceding agent for every point lookup.
       expect(reads).toBeLessThanOrEqual(agents.length * 4);
       expect(before.map((project) => project.id)).toEqual(
@@ -201,7 +203,7 @@ describe("project registry", () => {
       const edited = shape === "entries" ? entries[editedId]! : agents[0]!;
       const previousWorkspace = edited.workspace;
       edited.workspace = path.join(root, "changed");
-      const after = listProjectRegistry(cfg, options);
+      const after = await listProjectRegistry(cfg, options);
       expect(after.find((project) => project.id === `workspace:${editedId}`)?.repoRoot).toBe(
         edited.workspace,
       );
@@ -396,7 +398,7 @@ describe("project registry", () => {
     );
 
     expect(added).toEqual(registered);
-    expect(listProjectRegistry({} as OpenClawConfig, options)).toHaveLength(2);
+    expect(await listProjectRegistry({} as OpenClawConfig, options)).toHaveLength(2);
   });
 
   it("serializes an existing cloned-project return with checkout deletion", async () => {
@@ -494,7 +496,7 @@ describe("project registry", () => {
     await expect(deletion).resolves.toBe(true);
     const registrationResult = await registration;
     expect(registrationResult).toMatchObject({ error: expect.any(ProjectCheckoutError) });
-    expect(listProjectRegistry({} as OpenClawConfig, options)).toEqual([
+    expect(await listProjectRegistry({} as OpenClawConfig, options)).toEqual([
       expect.objectContaining({ source: "workspace" }),
     ]);
     await expect(fs.stat(checkout)).rejects.toMatchObject({ code: "ENOENT" });

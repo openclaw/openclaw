@@ -676,7 +676,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       expect(activeSession.messages).toEqual(expectedSnapshotMessages);
       expect(sessionManager.getLeafId()).toBe(appended.entryId);
       if (scenario === "after-reset-metadata") {
-        sessionManager.appendThinkingLevelChange("low");
+        await sessionManager.appendThinkingLevelChange("low");
       }
       const persistedBefore = loadTranscriptEventsSync(target);
       const handle = {
@@ -809,7 +809,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       ...input,
       activeSession,
       images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
-      leasedSteering: { leaseId: "lease-1", runIds: ["missing-run"] },
+      leasedSteering: { leaseId: "lease-1", runIds: ["missing-run"], isCurrent: () => true },
       promptActiveSession,
       runtimeOnly: true,
     });

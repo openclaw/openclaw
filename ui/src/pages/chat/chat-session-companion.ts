@@ -1,71 +1,124 @@
+import { asRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCompanionExchange,
   SessionsCompanionAskResult,
   SessionsCompanionResetResult,
   SessionsCompanionStateResult,
 } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { buildChatApiAttachments } from "./attachment-api.ts";
+import {
+  releaseChatAttachmentPayloads,
+  releaseDisplacedChatAttachmentPayloads,
+} from "./attachment-payload-store.ts";
+import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 
 const COMPANION_BUSY_DETAIL_CODE = "SESSION_COMPANION_BUSY";
 const MAX_COMPANION_EXCHANGES = 24;
 const COMPANION_ASK_TIMEOUT_MS = 70_000;
 
+export type ChatSessionCompanionTurn = {
+  question: string;
+  attachments?: ChatAttachment[];
+} & (
+  | { status: "pending" }
+  | ({ status: "answered" } & SessionCompanionExchange)
+  | {
+      status: "failed";
+      hint:
+        | "busy"
+        | "history-unavailable"
+        | "missing"
+        | "model-unavailable"
+        | "rate-limited"
+        | "unavailable";
+      retryable: boolean;
+    }
+);
+
 export type ChatSessionCompanionThread = {
-  exchanges: SessionCompanionExchange[];
+  turns: ChatSessionCompanionTurn[];
   loading: boolean;
-  pendingQuestion: string | null;
-  failedQuestion: string | null;
-  hint:
-    | "busy"
-    | "history-unavailable"
-    | "missing"
-    | "model-unavailable"
-    | "rate-limited"
-    | "unavailable"
-    | null;
-  retryable?: boolean;
   draft: string;
+  attachments?: ChatAttachment[];
+  attachmentReads?: ChatAttachmentReadLifecycle;
 };
 
 type MutableCompanionThread = ChatSessionCompanionThread & {
-  failedQuestionKnownExchanges: ReadonlySet<string> | null;
   revision: number;
+  // Bounded response identities retain the canonical turn even after UI pruning.
+  responses: Map<ChatSessionCompanionTurn, string>;
 };
 
 function exchangeKey(exchange: SessionCompanionExchange): string {
   return JSON.stringify([exchange.question, exchange.answer, exchange.ts]);
 }
 
-function errorDetailString(error: unknown, field: "code" | "reason"): string | null {
-  if (!error || typeof error !== "object") {
-    return null;
+function reconcileTurns(thread: MutableCompanionThread, exchanges: SessionCompanionExchange[]) {
+  const previousAttachments = thread.turns.flatMap((turn) => turn.attachments ?? []);
+  const known = [...thread.responses];
+  const snapshot = exchanges.map((exchange) => ({ exchange, key: exchangeKey(exchange) }));
+  // Gateway only removes from the front; retain the longest observed suffix still present.
+  while (known.length) {
+    let cursor = 0;
+    if (
+      known.every(([, key]) => {
+        cursor = snapshot.findIndex((entry, index) => index >= cursor && entry.key === key) + 1;
+        return cursor > 0;
+      })
+    ) {
+      break;
+    }
+    known.shift();
   }
-  const details = (error as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
-    return null;
-  }
-  const value = (details as { code?: unknown; reason?: unknown })[field];
-  return typeof value === "string" ? value : null;
-}
-
-function errorIsRetryable(error: unknown): boolean {
-  return Boolean(
-    error && typeof error === "object" && (error as { retryable?: unknown }).retryable,
+  const entries = snapshot.map(({ exchange, key }, position) => {
+    const observed = known[0]?.[1] === key ? known.shift() : undefined;
+    const turn: ChatSessionCompanionTurn = observed?.[0] ?? { status: "answered", ...exchange };
+    return { turn, key, position, fresh: !observed };
+  });
+  const remaining = [...entries];
+  const positions = new Map<ChatSessionCompanionTurn, number>();
+  // Pruned responses still anchor older unseen history before the retained turns.
+  const pruned = new Set(
+    entries
+      .filter(({ turn, fresh }) => !fresh && !thread.turns.includes(turn))
+      .map(({ turn }) => turn),
   );
-}
-
-function createThread(): MutableCompanionThread {
-  return {
-    exchanges: [],
-    loading: false,
-    pendingQuestion: null,
-    failedQuestion: null,
-    failedQuestionKnownExchanges: null,
-    hint: null,
-    retryable: false,
-    draft: "",
-    revision: 0,
-  };
+  const turns = [...pruned, ...thread.turns].flatMap((turn) => {
+    const index = remaining.findIndex(({ turn: answer, fresh }) =>
+      turn.status === "answered"
+        ? turn === answer
+        : turn.status === "failed" && turn.question === answer.question && fresh,
+    );
+    const match = index < 0 ? undefined : remaining.splice(index, 1)[0];
+    if (match) {
+      Object.assign(turn, match.turn);
+      delete turn.attachments;
+      match.turn = turn;
+      positions.set(turn, match.position);
+    }
+    return !match && turn.status === "answered" ? [] : [turn];
+  });
+  for (const { turn, position } of remaining) {
+    // Gateway order places new answers around retries that keep their original local slot.
+    const last = turns.findLastIndex(
+      (candidate) => (positions.get(candidate) ?? Infinity) < position,
+    );
+    const next = turns.findIndex(
+      (candidate, index) => index > last && candidate.status === "answered",
+    );
+    positions.set(turn, position);
+    turns.splice(next < 0 ? turns.length : next, 0, turn);
+  }
+  thread.turns = turns.filter((turn) => !pruned.has(turn)).slice(-MAX_COMPANION_EXCHANGES);
+  releaseDisplacedChatAttachmentPayloads(previousAttachments, [
+    thread.turns.flatMap((turn) => turn.attachments ?? []),
+  ]);
+  thread.responses = new Map(
+    entries.slice(-MAX_COMPANION_EXCHANGES).map(({ turn, key }) => [turn, key]),
+  );
 }
 
 function companionThreadKey(sessionKey: string, agentId?: string | null): string {
@@ -76,7 +129,7 @@ function companionThreadKey(sessionKey: string, agentId?: string | null): string
 export class ChatSessionCompanionThreads {
   private readonly threads = new Map<string, MutableCompanionThread>();
   private readonly hydrationTokens = new Map<string, symbol>();
-  private readonly submissionTokens = new Map<string, symbol>();
+  private readonly submissionTokens = new Map<string, Deferred>();
 
   constructor(private readonly notify: () => void = () => {}) {}
 
@@ -94,6 +147,13 @@ export class ChatSessionCompanionThreads {
     this.notify();
   }
 
+  setAttachments(sessionKey: string, attachments: ChatAttachment[], agentId?: string | null): void {
+    const thread = this.get(sessionKey, agentId);
+    thread.attachments = attachments;
+    thread.revision += 1;
+    this.notify();
+  }
+
   async hydrate(
     sessionKey: string,
     load: (sessionKey: string) => Promise<SessionsCompanionStateResult>,
@@ -105,38 +165,27 @@ export class ChatSessionCompanionThreads {
     }
     const key = companionThreadKey(targetSessionKey, agentId);
     const thread = this.get(targetSessionKey, agentId);
-    const revision = thread.revision;
     const token = Symbol(key);
     this.hydrationTokens.set(key, token);
     thread.loading = true;
     this.notify();
     try {
+      while (this.submissionTokens.has(key)) {
+        await this.submissionTokens.get(key)?.promise;
+      }
+      if (this.hydrationTokens.get(key) !== token) {
+        return;
+      }
+      const revision = thread.revision;
       const result = await load(targetSessionKey);
       if (this.hydrationTokens.get(key) !== token || thread.revision !== revision) {
         return;
       }
-      thread.exchanges = result.exchanges.map(({ question, answer, ts }) => ({
-        question,
-        answer,
-        ts,
-      }));
-      if (
-        thread.failedQuestion &&
-        thread.exchanges.some(
-          (exchange) =>
-            exchange.question === thread.failedQuestion &&
-            !thread.failedQuestionKnownExchanges?.has(exchangeKey(exchange)),
-        )
-      ) {
-        thread.failedQuestion = null;
-        thread.failedQuestionKnownExchanges = null;
-        thread.hint = null;
-        thread.retryable = false;
-      }
+      reconcileTurns(thread, result.exchanges);
       thread.revision += 1;
       this.notify();
     } catch {
-      // A disconnected or older Gateway should not erase a thread already
+      // A disconnected Gateway should not erase a thread already
       // visible in this pane. Ask failures surface an actionable inline hint.
     } finally {
       if (this.hydrationTokens.get(key) === token) {
@@ -149,50 +198,73 @@ export class ChatSessionCompanionThreads {
 
   async submit(
     sessionKey: string,
-    question: string,
-    ask: (sessionKey: string, question: string) => Promise<SessionsCompanionAskResult>,
+    question: string | ChatSessionCompanionTurn,
+    ask: (
+      sessionKey: string,
+      question: string,
+      attachments?: ChatAttachment[],
+    ) => Promise<SessionsCompanionAskResult>,
     agentId?: string | null,
   ): Promise<void> {
     const targetSessionKey = sessionKey.trim();
-    const normalized = question.trim();
+    const normalized = typeof question === "string" ? question.trim() : question.question;
     if (!targetSessionKey || !normalized) {
       return;
     }
     const key = companionThreadKey(targetSessionKey, agentId);
     const thread = this.get(targetSessionKey, agentId);
-    if (thread.pendingQuestion) {
+    if (
+      thread.turns.some((turn) => turn.status === "pending") ||
+      thread.attachmentReads?.pendingReads
+    ) {
       return;
     }
-    thread.pendingQuestion = normalized;
-    thread.failedQuestion = null;
-    thread.failedQuestionKnownExchanges = null;
-    thread.hint = null;
-    thread.retryable = false;
-    thread.draft = "";
+    const turn: ChatSessionCompanionTurn =
+      typeof question === "string"
+        ? {
+            question: normalized,
+            status: "pending",
+            ...(thread.attachments?.length ? { attachments: thread.attachments } : {}),
+          }
+        : question;
+    if (
+      typeof question !== "string" &&
+      (!thread.turns.includes(turn) || turn.status !== "failed")
+    ) {
+      return;
+    }
+    Object.assign(turn, { status: "pending" });
+    if (typeof question === "string") {
+      const turns = [...thread.turns, turn];
+      for (const retired of turns.slice(0, -MAX_COMPANION_EXCHANGES)) {
+        releaseChatAttachmentPayloads(retired.attachments ?? []);
+      }
+      thread.turns = turns.slice(-MAX_COMPANION_EXCHANGES);
+      thread.attachments = [];
+      thread.draft = "";
+    }
     thread.revision += 1;
-    const token = Symbol(key);
-    const knownExchanges = new Set(thread.exchanges.map(exchangeKey));
+    const token = createDeferredCore();
     this.submissionTokens.set(key, token);
     this.notify();
     try {
-      const result = await ask(targetSessionKey, normalized);
+      const result = await ask(targetSessionKey, normalized, turn.attachments);
       if (this.submissionTokens.get(key) !== token) {
         return;
       }
-      thread.exchanges = [
-        ...thread.exchanges,
-        { question: normalized, answer: result.answer, ts: result.ts },
-      ].slice(-MAX_COMPANION_EXCHANGES);
-      thread.failedQuestionKnownExchanges = null;
+      releaseChatAttachmentPayloads(turn.attachments ?? []);
+      delete turn.attachments;
+      Object.assign(turn, { status: "answered", answer: result.answer, ts: result.ts });
+      thread.responses.set(turn, exchangeKey({ question: normalized, ...result }));
+      thread.responses = new Map([...thread.responses].slice(-MAX_COMPANION_EXCHANGES));
     } catch (error) {
       if (this.submissionTokens.get(key) !== token) {
         return;
       }
-      thread.failedQuestion = normalized;
-      thread.failedQuestionKnownExchanges = knownExchanges;
-      const reason = errorDetailString(error, "reason");
-      thread.hint =
-        errorDetailString(error, "code") === COMPANION_BUSY_DETAIL_CODE
+      const details = asRecord(asRecord(error).details);
+      const reason = readStringField(details, "reason") ?? null;
+      const hint =
+        details.code === COMPANION_BUSY_DETAIL_CODE
           ? "busy"
           : reason === "context-unavailable"
             ? "history-unavailable"
@@ -203,11 +275,15 @@ export class ChatSessionCompanionThreads {
                 : reason === "utility-model-unavailable"
                   ? "model-unavailable"
                   : "unavailable";
-      thread.retryable = errorIsRetryable(error) || reason === null;
+      Object.assign(turn, {
+        status: "failed",
+        hint,
+        retryable: Boolean(asRecord(error).retryable) || reason === null,
+      });
     } finally {
+      token.resolve();
       if (this.submissionTokens.get(key) === token) {
         this.submissionTokens.delete(key);
-        thread.pendingQuestion = null;
         thread.revision += 1;
         this.notify();
       }
@@ -229,6 +305,16 @@ export class ChatSessionCompanionThreads {
 
   retire(sessionKey?: string, agentId?: string | null): void {
     const key = sessionKey ? companionThreadKey(sessionKey, agentId) : null;
+    for (const [threadKey, thread] of this.threads) {
+      if (key && key !== threadKey) {
+        continue;
+      }
+      thread.attachmentReads?.abortReads();
+      releaseChatAttachmentPayloads(thread.attachments ?? []);
+      for (const turn of thread.turns) {
+        releaseChatAttachmentPayloads(turn.attachments ?? []);
+      }
+    }
     for (const store of [this.threads, this.hydrationTokens, this.submissionTokens]) {
       void (key ? store.delete(key) : store.clear());
     }
@@ -239,7 +325,15 @@ export class ChatSessionCompanionThreads {
     const key = companionThreadKey(sessionKey, agentId);
     let thread = this.threads.get(key);
     if (!thread) {
-      thread = createThread();
+      thread = {
+        turns: [],
+        loading: false,
+        draft: "",
+        attachments: [],
+        attachmentReads: new ChatAttachmentReadLifecycle(this.notify),
+        revision: 0,
+        responses: new Map(),
+      };
       this.threads.set(key, thread);
     }
     return thread;
@@ -251,10 +345,16 @@ export function requestSessionCompanionAnswer(
   sessionKey: string,
   question: string,
   agentId?: string | null,
+  attachments?: ChatAttachment[],
 ): Promise<SessionsCompanionAskResult> {
   return client.request<SessionsCompanionAskResult>(
     "sessions.companion.ask",
-    { sessionKey, ...(agentId ? { agentId } : {}), question },
+    {
+      sessionKey,
+      ...(agentId ? { agentId } : {}),
+      question,
+      ...(attachments?.length ? { attachments: buildChatApiAttachments(attachments) } : {}),
+    },
     { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
   );
 }

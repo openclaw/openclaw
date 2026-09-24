@@ -78,7 +78,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       root = documents.rootRevision(tabId);
       tab = await chromeApi.tabs.get(tabId);
     } while (root !== documents.rootRevision(tabId));
-    return tab;
+    return documents.resolveTabSnapshot(tabId, tab);
   }
 
   const mutateStorage = (task) => {
@@ -409,9 +409,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const normalized = nextMode === ACCESS_MODE_ALL ? ACCESS_MODE_ALL : ACCESS_MODE_SELECTED;
     if (normalized !== mode) {
       mode = normalized;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
     return mode;
   }
@@ -420,18 +418,14 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const normalized = nextEnabled === true;
     if (normalized !== enabled) {
       enabled = normalized;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
   }
 
   function beginTransition() {
     if (!transitioning) {
       transitioning = true;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
   }
 
@@ -633,10 +627,11 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         continue;
       }
       const accessible = [];
-      for (const tab of tabs) {
+      for (const snapshot of tabs) {
         if (listRevision !== discoveryRevision) {
           break;
         }
+        const tab = documents.resolveTabSnapshot(snapshot.id, snapshot);
         if (tabIsRevoking(tab.id) || !eligibilityForTab(tab).eligible) {
           continue;
         }

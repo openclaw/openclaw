@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type {
   AgentHarness,
   AgentHarnessSessionDeletionParams,
@@ -24,11 +24,15 @@ import {
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import * as personalPublicationLifecycle from "../../state/github-personal-publication-lifecycle.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -37,7 +41,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntryCore,
-  recordSessionParticipant,
   replaceSessionEntry,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
@@ -47,10 +50,11 @@ import {
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { applySessionStoreProjection } from "./session-accessor.sqlite-projection.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 describe("session deletion and native owner state", () => {
   let storePath: string;
@@ -66,10 +70,13 @@ describe("session deletion and native owner state", () => {
     bindings = new Map();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    tempDirs.cleanup();
     vi.unstubAllEnvs();
   });
 
@@ -157,6 +164,39 @@ describe("session deletion and native owner state", () => {
     });
   const read = (key = sessionKey) =>
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
+
+  it.each([false, true])(
+    "deletes only unreferenced transcript IDs without parsing unrelated entries (shared: %s)",
+    async (shared) => {
+      await seed(sessionKey, null);
+      for (let index = 0; index < 24; index += 1) {
+        await replaceSessionEntry(
+          { sessionKey: `agent:main:unrelated-${index}`, storePath },
+          {
+            sessionId: `unrelated-${index}`,
+            updatedAt: Date.now(),
+            ...(shared && index === 0 ? { previousSessionId: sessionId } : {}),
+            skillsSnapshot: { prompt: "saved prompt".repeat(1024), skills: [] },
+          },
+        );
+      }
+      const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+      const parse = vi.spyOn(JSON, "parse");
+      expect((await remove()).deleted).toBe(true);
+      expect(
+        parse.mock.calls.filter(
+          ([json]) => typeof json === "string" && json.includes('"sessionId":"unrelated-'),
+        ),
+      ).toEqual([]);
+      expect(
+        database.db
+          .prepare("SELECT session_id FROM session_windows WHERE session_id = ?")
+          .get(sessionId),
+      ).toEqual(shared ? { session_id: sessionId } : undefined);
+      expect(read()).toBeUndefined();
+    },
+  );
 
   it.each([
     { deleteWindows: false, sparse: false, rejectSuggestions: false },

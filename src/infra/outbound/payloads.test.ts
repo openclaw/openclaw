@@ -2,8 +2,11 @@
 // interactive blocks, mirror text, and suppressed relay status payloads.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -18,29 +21,33 @@ import {
   summarizeOutboundPayloadForTransport,
 } from "./payloads.js";
 
-function resolveMirrorProjection(payloads: readonly ReplyPayload[]) {
-  const normalized = normalizeReplyPayloadsForDelivery(payloads);
-  return {
-    text: normalized
-      .map((payload) => payload.text)
-      .filter((text): text is string => Boolean(text))
-      .join("\n"),
-    mediaUrls: normalized.flatMap(
-      (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
-    ),
-  };
-}
+it("createOutboundPayloadPlan preserves preceding-input metadata for delivery without serializing it", () => {
+  const payload = setReplyPayloadMetadata(
+    { text: "Earlier answer." },
+    { precedingInputAnswer: true },
+  );
+  const plan = createOutboundPayloadPlan([payload]);
+  const delivered = projectOutboundPayloadPlanForDelivery(plan);
+  expect(delivered).toHaveLength(1);
+  expect(delivered.map((reply) => getReplyPayloadMetadata(reply)?.precedingInputAnswer)).toEqual([
+    true,
+  ]);
+  expect(projectOutboundPayloadPlanForJson(plan)[0]).not.toHaveProperty("precedingInputAnswer");
+});
 
 describe("normalizeReplyPayloadsForDelivery", () => {
   it.each(["photo.png", "café 100% image.png"])(
     "deduplicates a file URL directive with its explicit local path: %s",
     (fileName) => {
       const filePath = path.resolve("media", fileName);
+      const fileUrl = pathToFileURL(filePath).href;
+      const attachments = [{ url: fileUrl, name: fileName, mimeType: "image/png", width: 640 }];
       const [payload] = normalizeReplyPayloadsForDelivery([
-        { text: `Caption\nMEDIA:${pathToFileURL(filePath).href}`, mediaUrl: filePath },
+        { text: `Caption\nMEDIA:${fileUrl}`, mediaUrl: filePath, attachments },
       ]);
 
       expect(payload).toMatchObject({ text: "Caption", mediaUrl: filePath, mediaUrls: [filePath] });
+      expect(payload?.attachments).toEqual(attachments);
     },
   );
 
@@ -109,17 +116,24 @@ describe("normalizeReplyPayloadsForDelivery", () => {
   });
 
   it("keeps parsed attachment order before an explicit singular attachment", () => {
-    const [payload] = normalizeReplyPayloadsForDelivery([
-      {
-        text: "MEDIA:https://x.test/one.png\nMEDIA:https://x.test/two.png",
-        mediaUrl: "https://x.test/primary.png",
-      },
-    ]);
+    const source: ReplyPayload = {
+      text: "MEDIA:https://x.test/one.png\nMEDIA:https://x.test/two.png",
+      mediaUrl: "https://x.test/primary.png",
+      attachments: [{ name: "Explicit photo.png", mimeType: "image/png" }],
+    };
+    const originalSource = structuredClone(source);
+    const [payload] = normalizeReplyPayloadsForDelivery([source]);
 
     expect(payload).toMatchObject({
       mediaUrl: undefined,
       mediaUrls: ["https://x.test/one.png", "https://x.test/two.png", "https://x.test/primary.png"],
     });
+    expect(payload?.attachments).toEqual([
+      {},
+      {},
+      { name: "Explicit photo.png", mimeType: "image/png" },
+    ]);
+    expect(source).toEqual(originalSource);
   });
 
   it("keeps parsed attachments when explicit list and singular sources override the first", () => {
@@ -185,7 +199,9 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     expect(normalizeReplyPayloadsForDelivery(payloads)).toMatchObject([
       { text: "v2026.5.20 release note" },
     ]);
-    expect(resolveMirrorProjection(payloads).text).toBe("v2026.5.20 release note");
+    expect(projectOutboundPayloadPlanForMirror(createOutboundPayloadPlan(payloads)).text).toBe(
+      "v2026.5.20 release note",
+    );
     expect(projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(payloads))).toMatchObject([
       { text: "v2026.5.20 release note" },
     ]);
@@ -384,22 +400,11 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
-  it("drops bare silent replies for direct conversations", () => {
+  it.each(["direct", "group"])("drops bare silent replies for %s conversations", (type) => {
     expect(
       projectOutboundPayloadPlanForDelivery(
         createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-          sessionKey: "agent:main:telegram:direct:123",
-          surface: "telegram",
-        }),
-      ),
-    ).toStrictEqual([]);
-  });
-
-  it("drops bare silent replies for groups", () => {
-    expect(
-      projectOutboundPayloadPlanForDelivery(
-        createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-          sessionKey: "agent:main:telegram:group:123",
+          sessionKey: `agent:main:telegram:${type}:123`,
           surface: "telegram",
         }),
       ),
@@ -661,13 +666,6 @@ describe("OutboundPayloadPlan projections", () => {
     { text: " \n", channelData: { mode: "flex" } },
   ];
 
-  it("matches normalizeReplyPayloadsForDelivery", () => {
-    const plan = createOutboundPayloadPlan(matrix);
-    expect(projectOutboundPayloadPlanForDelivery(plan)).toEqual(
-      normalizeReplyPayloadsForDelivery(matrix),
-    );
-  });
-
   it.each([
     ["current tag with one closing bracket", "[[reply_to_current] Visible reply"],
     ["explicit tag with one closing bracket", "[[reply_to:message-7] Visible reply"],
@@ -725,9 +723,12 @@ describe("OutboundPayloadPlan projections", () => {
     });
   });
 
-  it("matches mirror projection behavior", () => {
+  it("mirrors normalized text and attachments in source order", () => {
     const plan = createOutboundPayloadPlan(matrix);
-    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual(resolveMirrorProjection(matrix));
+    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+      text: 'hello\nworld\n{"action":"NO_REPLY","note":"keep"}',
+      mediaUrls: ["https://x.test/1.png", "https://x.test/2.png"],
+    });
   });
 
   it("mirrors location-only replies without exposing untrusted place labels", () => {
@@ -905,6 +906,9 @@ describe("OutboundPayloadPlan projections", () => {
       extractMarkdownImages: true,
     },
   ])("preserves formatted reply text when extracting $name", (testCase) => {
+    const attachments = [
+      { name: "Quarterly chart.png", mimeType: "image/png", width: 640, height: 480 },
+    ];
     const visibleText = [
       "Here is the config.",
       "",
@@ -918,12 +922,13 @@ describe("OutboundPayloadPlan projections", () => {
       "The service is ready.",
     ].join("\n");
     const [planned] = createOutboundPayloadPlan(
-      [{ text: `${visibleText}\n\n${testCase.attachment}` }],
+      [{ text: `${visibleText}\n\n${testCase.attachment}`, attachments }],
       { extractMarkdownImages: testCase.extractMarkdownImages },
     );
 
     expect(planned?.payload.text).toBe(visibleText);
     expect(planned?.payload.mediaUrls).toEqual(["https://example.com/config.png"]);
+    expect(planned?.payload.attachments).toEqual(attachments);
   });
 
   it("preserves canonical code fences when reply directives and media share a payload", () => {

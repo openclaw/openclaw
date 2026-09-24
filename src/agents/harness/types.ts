@@ -38,6 +38,8 @@ export type AgentHarnessSupportContext = {
     azureApiVersion?: string;
     /** Secret-free projection of request behavior a native harness must reproduce. */
     requestTransportOverrides?: ProviderRouteOverridePresence;
+    /** Authored endpoints that a native runtime must reproduce. */
+    endpointOverrides?: ProviderRouteOverridePresence;
     /** Provider-owned native-runtime compatibility for the prepared route. */
     runtimePolicy?: ProviderModelRouteRuntimePolicy;
     /** Secret-free auth source the native runtime must reproduce for this attempt. */
@@ -86,31 +88,24 @@ type AgentHarnessCanonicalAttemptResult = Omit<
   AgentHarnessDeprecatedAttemptTerminalFields;
 
 /** @deprecated Return `terminal` instead. Remove no earlier than the 2026.9 stable release. */
-type AgentHarnessLegacyAttemptResult = Omit<
-  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult,
-  "contextEngineTerminalAnchor" | "terminal"
-> &
-  AgentHarnessDeprecatedAttemptTerminalFields & {
-    aborted: boolean;
-    externalAbort: boolean;
-    timedOut: boolean;
-    idleTimedOut: boolean;
-    timedOutDuringCompaction: boolean;
-    timedOutDuringToolExecution?: boolean;
-    timedOutByRunBudget?: boolean;
-    promptError: unknown;
-    promptErrorSource:
-      | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource
-      | null;
-  };
+type AgentHarnessLegacyAttemptResult = Omit<AgentHarnessCanonicalAttemptResult, "terminal"> &
+  Required<
+    Omit<
+      AgentHarnessDeprecatedAttemptTerminalFields,
+      "timedOutDuringToolExecution" | "timedOutByRunBudget"
+    >
+  >;
 
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "admittedRunContext"
+  | "disableToolSearch"
+  | "sessionReadScopeKey"
   | "assistantErrorTranscript"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
+  | "inputAttachmentMedia"
 >;
 /**
  * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps
@@ -238,6 +233,7 @@ export type AgentHarnessSideQuestionParams = {
     resolvedApiKey?: string;
   };
   question: string;
+  images?: import("../../llm/types.js").ImageContent[];
   sessionEntry: import("../../config/sessions.js").SessionEntry;
   sessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;
   sessionKey?: string;
@@ -337,6 +333,12 @@ export type AgentHarnessSessionForkParams = {
   };
 };
 
+/** Current fork contract for harnesses that can fence native side effects. */
+type AgentHarnessSessionForkParamsV2 = AgentHarnessSessionForkParams & {
+  /** Revalidate immediately before native side effects; this authority closes when fork settles. */
+  assertCurrent: () => void;
+};
+
 export type AgentHarnessSessionForkResult =
   | {
       status: "created";
@@ -393,8 +395,12 @@ type AgentHarnessRunCapability<
    */
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
+  /** Core must reject containment this runtime cannot implement before invoking it. */
+  executionEnvironment?: "host-only";
   /** Certifies exact runAttempt enforcement; direct-policy-restricted channel side questions fail in core. */
   conversationToolPolicySupport?: "exact";
+  /** Certifies binding the actual native model through the host before every inference dispatch. */
+  nativeModelPolicySupport?: "exact";
   /**
    * Canonical OpenClaw tool names whose exact denies the harness can also enforce
    * against native equivalents. Every other deny remains fail-closed.
@@ -474,8 +480,22 @@ export type AgentHarnessSessionDeletionMutation = {
   rollback: () => void;
 };
 
+type AgentHarnessSessionContextResetParams = Omit<
+  AgentHarnessSessionDeletionParams,
+  "initialization"
+> & {
+  /** Exact recorded predecessor may still own native context after interrupted compaction. */
+  previousSessionId?: string;
+};
+
 type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
+  /** Invalidate native context only when a same-key history cut commits; preserve compaction. */
+  withSessionContextReset?<T>(
+    this: void,
+    params: AgentHarnessSessionContextResetParams,
+    run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
+  ): Promise<T>;
   /** Prepare outside the session writer; release native resources after its commit completes. */
   withSessionDeletion?<T>(
     this: void,
@@ -486,9 +506,19 @@ type AgentHarnessSessionLifecycleCapability = {
 };
 
 type AgentHarnessSessionForkCapability = {
+  /**
+   * @deprecated Use sessionForkV2. This legacy fork contract remains
+   * source-compatible through 2026-10-12.
+   */
   sessionFork?: {
     upstreamKinds: readonly import("../../plugins/session-catalog.js").SessionUpstreamKind[];
     fork(params: AgentHarnessSessionForkParams): Promise<AgentHarnessSessionForkResult>;
+  };
+  sessionForkV2?: {
+    /** Declares fork initialization that can execute work on the Gateway host. */
+    executionEnvironment?: "host-only";
+    upstreamKinds: readonly import("../../plugins/session-catalog.js").SessionUpstreamKind[];
+    fork(params: AgentHarnessSessionForkParamsV2): Promise<AgentHarnessSessionForkResult>;
   };
 };
 
@@ -546,11 +576,18 @@ export type AgentHarnessModelCatalogParams = {
   configuredModelRefs?: readonly ModelRef[];
 };
 
+export type AgentHarnessModelCatalogResult =
+  | readonly import("../model-catalog.types.js").ModelCatalogEntry[]
+  | {
+      entries: readonly import("../model-catalog.types.js").ModelCatalogEntry[];
+      outcomes?: readonly import("../../plugins/provider-catalog-outcome.js").ProviderCatalogOutcome[];
+    };
+
 type AgentHarnessModelCatalogCapability = {
   /** Lists account-scoped models owned by this native runtime. */
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,
-  ): Promise<readonly import("../model-catalog.types.js").ModelCatalogEntry[]>;
+  ): Promise<AgentHarnessModelCatalogResult>;
   /**
    * Reads current, secret-free native account evidence for this exact catalog scope/model.
    * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is

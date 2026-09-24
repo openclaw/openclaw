@@ -21,6 +21,9 @@ prefix and the installed OpenClaw launcher. A prefix configured in `~/.npmrc`
 does not need a matching `NPM_CONFIG_PREFIX` environment variable. If no owner
 can be identified, the CLI includes the inspected package, prefix, and launcher
 paths and the package-manager probe results in its guidance.
+Installation inspection also reports the root, Git metadata, `node_modules`
+layout, and service unit target (or why it was not inspected). An unrecognized
+root skips target preflight and gives commands to locate the owning installation.
 
 An older updater that stops before staging cannot use this repair. For a known
 npm installation, supply its configured prefix explicitly for that update:
@@ -60,6 +63,22 @@ openclaw --update
 `openclaw --update` rewrites to `openclaw update` (useful for shells and
 launcher scripts).
 
+Invalid or unreadable configuration reports `invalid-config` before database
+schema inspection. The diagnostic identifies invalid fields and recommends
+`openclaw doctor --fix`, followed by correcting any remaining errors. A dry run
+keeps this guidance in its JSON `notes` without changing the configuration.
+Guided recovery recognizes the saved config failure after a later successful
+update and still verifies the installed runtime and Gateway readiness.
+
+The 2026.9.4 updater reports this condition as `database-schema-preflight` and
+can show `mode: unknown` even after resolving an npm target. Before another
+update or dry run replaces the latest history, run `openclaw update status --json`
+and inspect `lastRun.origin.nextAction` and `lastRun.target` for the recorded
+reason and target. A candidate release cannot repair an installed updater that
+refuses before staging it; correct the configuration before retrying.
+
+Updaters without the admission fix first shipped in 2026.7.2-beta.5 (including 2026.6.34–2026.6.35 and the 2026.7.33–2026.7.35 extended-stable line) also refuse before staging with `plugins.load.paths: plugin path not found`; restore a missing custom plugin directory or remove its configured path before retrying. `openclaw doctor --fix` can repair recognized bundled-path aliases and preserves unrelated custom paths.
+
 Update admission recognizes orphan `task_delivery_state` rows whose parent tasks
 are missing as repairable. When it can acquire Doctor's ownership fences, it runs
 the same [preservation-first recovery](/reference/database-schemas/integrity-and-recovery#doctor-reports-orphan-task-delivery-rows)
@@ -76,13 +95,19 @@ If it refuses with a database integrity error, install the corrective release
 manually and run `openclaw doctor --fix`.
 
 Failed update and repair attempts enter [recovery triage](/cli/update#recover-a-failed-update)
-after service recovery and cleanup finish.
+after service recovery and cleanup finish. Preflight and finalization join admitted
+command cleanup before handing off ownership or reporting completion. If cleanup
+cannot confirm that work stopped, the updater retains any acquired ownership and
+recovery artifacts and skips automatic service compensation and repair. Inspect
+`openclaw update status` and resolve the pending execution before retrying.
 A verified rollback does not automatically start triage: the previous generation
 is running again, and the report keeps the failing check as the reason.
 An interactive update offers the diagnose/report menu with **Exit** selected by
 default. Declining or cancelling preserves the failed update's nonzero exit
 status. JSON, non-interactive, `--yes`, and managed-service handoff invocations do
 not prompt after rollback.
+
+Update completion prints the terminal outcome and a local Markdown report path before exiting, including unexpected failures. Failed runs keep rollback-facing diagnostic JSON within the released 8 KiB limit. That file links a separate artifact containing every individually bounded Doctor finding; the Markdown report also retains the complete inventory. JSON output includes `reportPath`; a report-write failure prints a warning and preserves the update outcome.
 
 After a final interactive update failure, **Diagnose update failure** and
 **Report update failure** are separate choices. Reporting first shows the exact
@@ -104,6 +129,29 @@ available, the report stays pending with no replay link because an issue may
 already exist.
 `--yes`, `--json`, non-interactive runs, and managed-service handoffs never
 submit a report.
+
+For admitted updates, unexpected exceptions retain a bounded, redacted error identity and source location
+in update history, along with the operation reached and the installation and target
+facts resolved so far. Failure reports include the initiating action and the owner's
+recorded rollback outcome. Failed steps use stable identifiers such as
+`candidate-state-snapshot`, `candidate-doctor-lint`, and `post-install-verify` in
+the report body and issue title; command arguments and private paths remain redacted.
+A failure during installation or target resolution keeps
+that resolution step visible. Older updater processes cannot recover details they
+already discarded; a report generated by newer code only includes facts that were
+recorded by the updater that handled the failure.
+
+Npm install failures record a recognized error code (or `unknown`) and a sanitized
+excerpt of `npm ERR!` / `npm error` lines in update history and the reviewed report.
+The existing history format retains at most five lines of 200 UTF-8 bytes each;
+permission guidance reserves one of those entries. Home paths, credentials, and
+authenticated registry URLs are redacted before the excerpt is recorded.
+For `EACCES` or `EPERM`, check `npm prefix -g` and run the update as the installing
+account with write access to that prefix. For `ENOSPC`, free space on the prefix
+and npm cache volumes. For `E404` or `ETARGET`, check the configured registry and
+the requested version or tag. The generated report includes the applicable next
+step. An already-running older updater cannot gain this diagnostic capture from
+its candidate package.
 
 ## Automation and SSH
 
@@ -155,23 +203,30 @@ A different observed identity still refuses the
 handoff. Scheduled Tasks using `InteractiveToken` remain supported; this does not
 require storing a task password.
 
-This target-CLI protection does not cover every Doctor or plugin child, the
-in-process service preparation before package mutation, or the separate
-deferred-install activation checks.
+This target-CLI protection does not cover every Doctor or plugin child or the
+in-process service preparation before package mutation.
 
 ## Options
 
-Updater-managed `openclaw update finalize` runs repair Doctor without a separate
-per-Doctor deadline, including post-plugin repair. The enclosing activation deadline
-still applies. An explicit `--timeout <seconds>` limits each finalization phase and
-its child commands. Admission and config phases scale with shared SQLite state.
+Post-core repair Doctor and `openclaw update finalize` run without a separate
+per-Doctor deadline unless the operator supplies `--timeout`. A fresh post-core
+process receives the operator choice separately from its internal step allowance.
+Older targets retain their existing allowance and deadline behavior.
+
+When `--timeout` is omitted, current CLI and RPC finalization do not add an aggregate
+activation deadline. Explicit operator limits and inherited activation allowances
+still apply; older or unrecognized handoffs retain their existing finite-deadline
+behavior. Independent install, build, plugin-operation, readiness, and cleanup
+bounds still apply. An explicit `--timeout <seconds>` limits each finalization phase
+and its child commands. Admission and config phases scale with shared SQLite state.
+
 Post-plugin config validation and readiness checks use the measured shared and
 agent database sizes after Doctor finishes, including WAL files. Serial plugin
-operations retain individual deadlines within the enclosing activation budget. That
-budget uses the measured database sizes, observed candidate startup, plugin count,
-and the caller's step allowance. Migrated finalization receives the same allowance;
-it does not choose a separate default. Expiry reports `update-activation-timeout`
-and retains ownership until writers settle; it does not authorize rollback or restart.
+operations retain individual deadlines. When an aggregate activation budget is
+present, it uses the measured database sizes, observed candidate startup, plugin
+count, and the caller's step allowance. Migrated finalization preserves explicit or
+inherited allowances. Aggregate expiry reports `update-activation-timeout` and
+retains ownership until writers settle; it does not authorize rollback or restart.
 Use `openclaw update status` and Doctor for recovery guidance.
 
 | Flag                                             | Description                                                                                                                                                                                                                                                                                                                                   |
@@ -193,12 +248,13 @@ file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 [Gateway logging](/gateway/logging).
 
 Interactive updates show phase transitions, the current step, and elapsed time.
-The phases match the Control UI: requested, staging, validating, optional
-repairing, activating, restarting, verifying, and finished. When output is
-piped or captured in a log, progress prints without animation. `repairing` can
-follow failed candidate validation or failed post-activation verification when
-rollback is unsafe or has failed; successful repair returns to validation or
-verification. The Control UI shows this optional phase only after it starts.
+The phases match the Control UI: requested, staging, validating, activating,
+restarting, verifying, and finished. When output is piped or captured in a log,
+progress prints without animation. Updates, verification, and rollback do not
+require inference or model authentication. Model-auth findings remain warnings.
+Automatic inference repair belongs to triage after an update has finished with
+a failed outcome and released its update ownership; it does not change that
+recorded outcome. Reports from older updaters can still contain a `repairing` phase.
 Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
@@ -227,8 +283,26 @@ declared schema support are refused without creating the profile's runtime datab
 Preparation uses the original package spec and owning package manager.
 
 A fresh-profile `--dry-run` leaves the database absent and does not record a run.
+For package targets, it checks the exact target's Node requirements using the same
+runtime planner as a real update. Text output and JSON `notes` report `Would refuse
+update` when no usable runtime is available, or `Would replace` when the updater can
+refresh its owned managed service to a compatible Node. The preview still exits
+successfully and does not install a package or change the service.
 If package metadata cannot be resolved, retry with an exact published `--tag`;
 failed target selection does not initialize the profile with the updater's schema.
+Metadata failures retain the detected update mode and a specific failure fact for
+registry lookup, dist-tag resolution, version mismatch, schema declarations, or
+Git target inspection. The summary and `openclaw update status --json` include
+the reason and next step; the bounded failure report includes the same public
+description without publishing local paths or registry response text. Existing
+updaters cannot gain these diagnostics until the candidate has been installed.
+
+`--dry-run --json` reports the known installed version in `currentVersion` for
+package and Git installs, including a saved dev channel that selects conversion
+to Git. If the target version is unresolved, `targetVersion` remains `null` and
+the additive `targetVersionReason` field explains why. Resolved targets omit this
+field. The text preview also shows the installed version and explains unresolved
+targets.
 
 `--yes` also skips the optional shell-completion setup prompt. Existing
 completion profiles and caches are still repaired when needed; installing

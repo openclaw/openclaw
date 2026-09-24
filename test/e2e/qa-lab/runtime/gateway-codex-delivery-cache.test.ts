@@ -69,7 +69,7 @@ describe("Codex delivery-mode prompt caching", () => {
             return (await response.json()) as MockOpenAiRequestSnapshot[];
           };
           const conversation = { id: "delivery-cache", kind: "direct" as const };
-          const initialRequests: MockOpenAiRequestSnapshot[] = [];
+          const deliveryRequestsByTurn: MockOpenAiRequestSnapshot[] = [];
           const fragmentBytes: number[] = [];
           for (const [index, mode] of ["automatic", "message_tool_only", undefined].entries()) {
             const cursor = (await readRequests()).at(-1)?.cursor ?? 0;
@@ -111,13 +111,16 @@ describe("Codex delivery-mode prompt caching", () => {
                 sinceIndex,
             ).toBe(1);
             const requests = (await readRequests()).filter((request) => request.cursor > cursor);
-            expect(
-              requests.filter((request) => request.plannedToolName === "message"),
-            ).toHaveLength(1);
-            const first = requests[0]!;
-            expect(first).toBeDefined();
-            initialRequests.push(first);
-            const input = first.body.input as Array<{ role?: string; content?: unknown }>;
+            const deliveryRequests = requests.filter(
+              (request) => request.plannedToolName === "message",
+            );
+            expect(deliveryRequests).toHaveLength(1);
+            const deliveryRequest = deliveryRequests[0]!;
+            deliveryRequestsByTurn.push(deliveryRequest);
+            const input = deliveryRequest.body.input as Array<{
+              role?: string;
+              content?: unknown;
+            }>;
             expect(Array.isArray(input)).toBe(true);
             const currentUser = input.findLastIndex(
               (item) => item.role === "user" && JSON.stringify(item.content).includes(message),
@@ -149,30 +152,34 @@ describe("Codex delivery-mode prompt caching", () => {
                       JSON.stringify(item.content).includes(`cache turn ${index - 1}`),
                   ),
               ).toBe(true);
-              // Codex 0.153.4 binds ordinary Responses prompt_cache_key to its native session ID.
-              expect(first.body.prompt_cache_key).toBe(initialRequests[0]!.body.prompt_cache_key);
-              expect(first.body.instructions).toBe(initialRequests[0]!.body.instructions);
-              expect(JSON.stringify(first.body.tools)).toBe(
-                JSON.stringify(initialRequests[0]!.body.tools),
+              // The prompt cache key remains stable across the reused native session.
+              expect(deliveryRequest.body.prompt_cache_key).toBe(
+                deliveryRequestsByTurn[0]!.body.prompt_cache_key,
+              );
+              expect(deliveryRequest.body.instructions).toBe(
+                deliveryRequestsByTurn[0]!.body.instructions,
+              );
+              expect(JSON.stringify(deliveryRequest.body.tools)).toBe(
+                JSON.stringify(deliveryRequestsByTurn[0]!.body.tools),
               );
             }
-            expect(first.body.prompt_cache_key).toEqual(expect.any(String));
-            expect(first.body.instructions).toEqual(expect.any(String));
-            expect(first.body.tools).toEqual(expect.any(Array));
+            expect(deliveryRequest.body.prompt_cache_key).toEqual(expect.any(String));
+            expect(deliveryRequest.body.instructions).toEqual(expect.any(String));
+            expect(deliveryRequest.body.tools).toEqual(expect.any(Array));
           }
           console.info(
             "[codex-delivery-cache-runtime-proof]",
             JSON.stringify({
               head,
-              turns: initialRequests.length,
+              turns: deliveryRequestsByTurn.length,
               nativeSessions: new Set(
-                initialRequests.map((request) => request.body.prompt_cache_key),
+                deliveryRequestsByTurn.map((request) => request.body.prompt_cache_key),
               ).size,
               instructionsSha256: createHash("sha256")
-                .update(String(initialRequests[0]!.body.instructions))
+                .update(String(deliveryRequestsByTurn[0]!.body.instructions))
                 .digest("hex"),
               toolsSha256: createHash("sha256")
-                .update(JSON.stringify(initialRequests[0]!.body.tools))
+                .update(JSON.stringify(deliveryRequestsByTurn[0]!.body.tools))
                 .digest("hex"),
               fragmentBytes,
               deliveredMessages: state

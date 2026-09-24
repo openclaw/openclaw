@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   resolveCliAuthBindingFingerprint,
   resolveCliRuntimeArtifactFingerprint,
@@ -139,7 +140,6 @@ export type SystemAgentVerifiedInferenceBinding = Readonly<{
 }>;
 
 export type SystemAgentVerifiedInferenceDeps = SystemAgentConfiguredRouteDeps & {
-  ensureAuthProfileStore?: typeof ensureAuthProfileStore;
   resolveCliAuthBindingFingerprint?: typeof resolveCliAuthBindingFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof resolveCliRuntimeOwnerFingerprint;
   resolveCliRuntimeArtifactFingerprint?: typeof resolveCliRuntimeArtifactFingerprint;
@@ -259,9 +259,10 @@ async function resolveCurrentRuntimeOwnerFingerprint(params: {
   }
   let authProfileOwnerFingerprint: string | undefined;
   if (params.authProfileId) {
-    const ensureStore = params.deps.ensureAuthProfileStore ?? ensureAuthProfileStore;
-    const store = ensureStore(params.route.agentDir, {
+    const loadStore = params.deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+    const store = loadStore(params.route.agentDir, {
       readOnly: true,
+      migrationProvider: params.route.provider,
       allowKeychainPrompt: false,
       config: params.route.runConfig,
       externalCliProviderIds: [params.route.provider],
@@ -422,14 +423,13 @@ async function projectVerifiedExecutionFingerprint(
   ownerPluginIds: readonly string[],
   deps: SystemAgentVerifiedInferenceDeps,
 ): Promise<SystemAgentVerifiedExecutionFingerprint> {
-  const projection = await projectInferenceRoute(config, route.agentId, deps);
+  const projection = await projectInferenceRoute(config, route.agentId, {
+    ...deps,
+    modelTarget: route.modelTarget,
+  });
+  const { authProfileId: _authProfileId, ...routeIdentity } = projection.route ?? {};
   return {
-    route: projection.route
-      ? (() => {
-          const { authProfileId: _authProfileId, ...routeWithoutAuthProfile } = projection.route;
-          return routeWithoutAuthProfile;
-        })()
-      : null,
+    route: projection.route ? routeIdentity : null,
     defaultSelection: projection.defaultSelection,
     auth: projection.auth,
     models: projection.models,
@@ -521,9 +521,11 @@ async function resolveCurrentAuthFingerprint(params: {
       params.deps.resolveCliAuthBindingFingerprint ?? resolveCliAuthBindingFingerprint;
     let resolvedAuth: ResolvedProviderAuth | undefined;
     if (params.authProfileId) {
-      const ensureStore = params.deps.ensureAuthProfileStore ?? ensureAuthProfileStore;
-      const store = ensureStore(params.route.agentDir, {
+      const loadStore =
+        params.deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+      const store = loadStore(params.route.agentDir, {
         readOnly: true,
+        migrationProvider: params.route.provider,
         allowKeychainPrompt: false,
         config: params.route.runConfig,
         externalCliProviderIds: [params.route.provider],
@@ -535,6 +537,7 @@ async function resolveCurrentAuthFingerprint(params: {
       if (needsMaterializedSecret) {
         const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
         resolvedAuth = await resolveAuth({
+          store,
           provider: params.route.provider,
           cfg: params.route.runConfig,
           agentDir: params.route.agentDir,
@@ -567,10 +570,12 @@ async function resolveCurrentAuthFingerprint(params: {
       ...(params.skipLocalCredential ? { skipLocalCredential: true } : {}),
     });
   }
+  let store: AuthProfileStore | undefined;
   if (params.authProfileId) {
-    const ensureStore = params.deps.ensureAuthProfileStore ?? ensureAuthProfileStore;
-    const store = ensureStore(params.route.agentDir, {
+    const loadStore = params.deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+    store = loadStore(params.route.agentDir, {
       readOnly: true,
+      migrationProvider: params.route.provider,
       allowKeychainPrompt: false,
       config: params.route.runConfig,
       externalCliProviderIds: [params.route.provider],
@@ -607,6 +612,7 @@ async function resolveCurrentAuthFingerprint(params: {
       }
       const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
       const auth = await resolveAuth({
+        store,
         provider: params.route.provider,
         cfg: params.route.runConfig,
         agentDir: params.route.agentDir,
@@ -638,6 +644,7 @@ async function resolveCurrentAuthFingerprint(params: {
   }
   const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
   const auth = await resolveAuth({
+    store,
     provider: params.route.provider,
     cfg: params.route.runConfig,
     agentDir: params.route.agentDir,
@@ -758,6 +765,8 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
     }
     currentRuntimeArtifactFingerprint = artifact.fingerprint;
   }
+  // The operation owner supplies the refreshed live or staged route. Do not
+  // substitute on-disk credentials for an unsaved candidate here.
   const currentAuthFingerprint = await (proofKind === "runtime-owner"
     ? resolveCurrentRuntimeOwnerFingerprint({
         route: execution,

@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { connect, type AddressInfo } from "node:net";
 import { withEnvAsync, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { WEBM_VIDEO } from "./video-generation.test-support.js";
 
 const resolveApiKeyForProviderMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -50,7 +51,7 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function createDeepInfraHandler(requests: CapturedRequest[]) {
+function createDeepInfraHandler(requests: CapturedRequest[], buffer = WEBM_VIDEO) {
   return (request: IncomingMessage, response: ServerResponse) => {
     void (async () => {
       requests.push({
@@ -66,7 +67,7 @@ function createDeepInfraHandler(requests: CapturedRequest[]) {
           status: "succeeded",
           data: [
             {
-              url: `data:video/webm;base64,${Buffer.from("local-video").toString("base64")}`,
+              url: `data:video/webm;base64,${buffer.toString("base64")}`,
             },
           ],
         }),
@@ -183,7 +184,7 @@ describe("deepinfra video generation provider transport", () => {
 
       expect(result.videos).toEqual([
         {
-          buffer: Buffer.from("local-video"),
+          buffer: WEBM_VIDEO,
           mimeType: "video/webm",
           fileName: "video-1.webm",
         },
@@ -198,6 +199,22 @@ describe("deepinfra video generation provider transport", () => {
         prompt: "transport proof",
       });
     });
+  });
+
+  it("rejects non-video bytes received through the real local transport", async () => {
+    const requests: CapturedRequest[] = [];
+    await withServer(
+      createDeepInfraHandler(requests, Buffer.from("not a video")),
+      async (baseUrl) => {
+        await expect(
+          generateLocalVideo({
+            baseUrl: `${baseUrl}/v1/openai`,
+            request: { allowPrivateNetwork: true },
+          }),
+        ).rejects.toThrow("DeepInfra video response: malformed video response");
+        expect(requests).toHaveLength(1);
+      },
+    );
   });
 
   it("routes configured env proxy policy through a real CONNECT tunnel", async () => {

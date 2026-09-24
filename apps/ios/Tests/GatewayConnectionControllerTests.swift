@@ -315,6 +315,7 @@ private func waitUntil(
             #expect(!caps.contains(OpenClawCapability.canvas.rawValue))
             #expect(caps.contains(OpenClawCapability.screen.rawValue))
             #expect(!caps.contains(OpenClawGatewayClientCapability.inlineWidgets))
+            #expect(!caps.contains(OpenClawGatewayClientCapability.modelSelectionPolicy))
             #expect(caps.contains(OpenClawCapability.camera.rawValue))
             #expect(caps.contains(OpenClawCapability.location.rawValue))
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
@@ -413,6 +414,7 @@ private func waitUntil(
         #expect(withoutApprovalScope.caps == [
             OpenClawGatewayClientCapability.agentKind,
             OpenClawGatewayClientCapability.inlineWidgets,
+            OpenClawGatewayClientCapability.modelSelectionPolicy,
         ])
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))

@@ -13,6 +13,14 @@ whole release. Run release preparation before freezing the Code SHA; it
 refreshes Control UI locale output when the background bot has not landed it
 yet, then enforces the same strict zero-fallback check used by release CI.
 
+Generated-locale drift is a warning before dispatch, not a reason to refuse
+validation. Source PRs and the serialized locale-refresh workflows land
+separately, so generated output can temporarily lag. Record any preflight drift
+against the frozen target SHA and continue dispatch. The normal-CI child still
+runs strict `control-ui-i18n` and `native-i18n` jobs; their failures remain visible
+in the run summary and fail validation. PR-side locale checks, release preparation,
+and publication requirements are unchanged.
+
 Linux (`ubuntu`) cross-OS fresh-install and upgrade lanes gate publication in
 the beta, stable, and full profiles. Windows and macOS cross-OS lanes run in
 parallel as **advisory** coverage: their pass/fail conclusions remain in the
@@ -85,6 +93,36 @@ Record the candidate SHA/ref and Tooling SHA/ref once for the release and reuse
 them for later Code-SHA, Release-SHA, and focused reruns. Main lineage
 authorizes the initial Tooling SHA selection; it does not authorize refreshing
 the tooling from moving `main`.
+
+## Exact frozen-target test omissions
+
+Declare narrowly justified omissions before dispatch with JSON arrays of exact
+repository-relative test paths. `plugin_prerelease_node_exclude_patterns_json`
+applies to the Plugin Prerelease Node lane, for example
+`["src/plugins/manifest-registry.test.ts"]`.
+`extension_test_exclude_patterns_json` applies to the Plugin Prerelease extension
+shards, for example
+`["extensions/codex/src/app-server/run-attempt.test.ts"]`. Both default to `[]`;
+there is no implicit Codex test omission. Normal CI keeps its own core lanes;
+Plugin Prerelease owns the full extension sweep.
+
+Pass them through the SHA-pinned helper as `-f name='["exact/path.test.ts"]'`.
+The helper packs the extension input into the existing trusted dispatch envelope
+to stay within GitHub's 25-input limit, and refuses tooling without the matching
+lane-input capability before creating remote refs or dispatching.
+
+Preflight rejects malformed, duplicate, nonexistent, and out-of-lane paths using
+the selected target's actual Vitest discovery. Globs and basenames are not
+accepted. Pinned tooling applies each exact omission to the executing config's
+inline projects, preserves the candidate's normal test runner and setup, and
+restores the original config bytes after the command. It does not depend on a
+new exclusion environment variable being supported by the frozen candidate.
+
+The immutable request, coverage identity, evidence reuse comparison, and final
+manifest retain both input values. Changing them requires a new validation
+request; continuation cannot widen an existing omission. Record the reason and
+owning fix for each omitted test in release evidence. An omission is untested
+coverage, not passing evidence.
 
 ## Retain and reconcile the root request
 
@@ -159,6 +197,25 @@ attempts, recheck their source and Tooling SHAs, and reuse the successful builds
 Historical parents that produced their own candidate or publication artifacts
 cannot continue: keep both SHAs frozen and start a fresh all-group validation.
 
+For a diagnosed intermittent failure, declare an exact child key and GitHub job
+name before dispatch with `known_flaky_jobs_json`, for example:
+
+```bash
+-f known_flaky_jobs_json='["normalCi:checks-node-agentic-control-plane-agent-chat"]'
+```
+
+The helper carries this semantic input in the `laneInputs` field of the existing
+`trusted_workflow_json` envelope. Direct dispatch supplies the JSON string value
+as `laneInputs.known_flaky_jobs_json`. The default is `[]`. The immutable execution
+plan binds the declaration; adding or changing an allowance after dispatch is not
+supported. The frozen Tooling SHA must support declared flake retries; the helper
+rejects older tooling with only exclusion support before creating refs or a run.
+Each selected child
+gets at most one automatic retry wave from its original attempt, with no more
+than two executions of a declared job. A repeated failure remains a blocker.
+See [Automatic retries for declared flakes](/reference/full-release-validation/continuation#automatic-retries-for-declared-flakes)
+for mutation, recovery, and evidence rules.
+
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
 an exact run-ID Actions cache. It records selected and
@@ -166,12 +223,15 @@ required coverage, gate results, reuse identity, the original parent attempt,
 the fresh candidate request plus producer and publisher evidence when preparation ran, and
 every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
 Decision, Drain, manifest generation, evidence verification, and the final
-verifier consume the artifact for their current attempt. Collector retries
-use the exact run-ID cache as an acceleration. If that cache is unavailable,
-they restore the same immutable plan from the parent-run artifact, validate it,
-and upload the artifact again for the retry; they never rebuild the plan or
-redispatch tests. A missing or invalid artifact fails closed, so start a new
-validation instead of retrying that stale parent.
+verifier consume the artifact for their current attempt. After the original
+guarded upload succeeds, the sealer records the plan digest in its job log.
+Collector retries restore the exact run-ID cache before publication admission,
+authenticate its bytes against that original upload and digest, and re-upload
+the unchanged plan and admission for the current attempt. GitHub removes prior
+parent artifacts on a full rerun, so retain the cache and original job logs.
+If the cache is unavailable, an accessible plan artifact can supply the same
+authenticated bytes. Missing or invalid evidence fails closed; retries never
+rebuild the plan, recollect registry observations, or redispatch tests.
 Release Decision also repeats canonical reuse-chain validation before a reused
 run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
 selected run, root run, source manifest, trusted tooling identity, and child

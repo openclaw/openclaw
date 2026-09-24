@@ -22,7 +22,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import { MODELS_JSON_STATE, type ModelKeyNormalizer } from "../agents/models-config-state.js";
 import { normalizeProviderMapKeys } from "../agents/models-config.merge.js";
-import type { NormalizedUsage } from "../agents/usage.js";
+import { hasRecordedUsageCost, type NormalizedUsage } from "../agents/usage.js";
 import { mergeModelCost } from "../config/model-cost.js";
 import { resolveStateDir } from "../config/paths.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
@@ -88,6 +88,19 @@ function normalizeRawModelKey(provider: string, model: string): string {
 
 function isRawModelCostConfig(value: unknown): value is RawModelCostConfig {
   return value !== null && typeof value === "object";
+}
+
+function hasModelCostRates(
+  cost: Partial<RawModelCostConfig> | undefined,
+): cost is Partial<RawModelCostConfig> {
+  return (
+    cost !== undefined &&
+    (cost.input !== undefined ||
+      cost.output !== undefined ||
+      cost.cacheRead !== undefined ||
+      cost.cacheWrite !== undefined ||
+      Boolean(cost.tieredPricing?.length))
+  );
 }
 
 function collectProviderCostSources(
@@ -296,7 +309,7 @@ export function resolveModelCostConfig(params: {
   // Favor direct configured keys first so local pricing/status lookups stay
   // synchronous and do not drag plugin/provider discovery into the hot path.
   const rawModelsJsonCost = loadModelsJsonCostIndex({ agentDir }).get(rawKey);
-  if (rawModelsJsonCost) {
+  if (hasModelCostRates(rawModelsJsonCost)) {
     return normalizeModelCostConfig(rawModelsJsonCost);
   }
 
@@ -316,7 +329,7 @@ export function resolveModelCostConfig(params: {
       agentDir,
       normalizeKey: pricingContext.normalizeKey,
     }).get(key);
-    if (modelsJsonCost) {
+    if (hasModelCostRates(modelsJsonCost)) {
       return normalizeModelCostConfig(modelsJsonCost);
     }
     configuredCost = getProviderCostIndex(
@@ -344,10 +357,10 @@ export function resolveModelCostConfig(params: {
     ? resolveModelPricing(pricingContext, pricingContext.normalizeKey(provider, model))
     : getProviderCostIndex(params.config?.models?.providers, undefined, rawKey).get(rawKey);
   const merged = mergeModelCost(
-    inheritedCost ? normalizeResolvedPricing(inheritedCost) : undefined,
+    hasModelCostRates(inheritedCost) ? normalizeResolvedPricing(inheritedCost) : undefined,
     configuredCost,
   );
-  return merged ? normalizeResolvedPricing(merged) : undefined;
+  return hasModelCostRates(merged) ? normalizeResolvedPricing(merged) : undefined;
 }
 
 /** Estimates one call's USD cost; tier selection includes cached prompt tokens. */
@@ -372,7 +385,7 @@ export function estimateAggregateUsageCost(
   },
 ): number | undefined {
   const usage = params.usage;
-  if (usage?.cost !== undefined) {
+  if (usage?.cost && hasRecordedUsageCost(usage.cost)) {
     return usage.cost.total;
   }
   const hasBillableBuckets =
@@ -380,11 +393,15 @@ export function estimateAggregateUsageCost(
     [usage.input, usage.output, usage.cacheRead, usage.cacheWrite].some(
       (value) => value !== undefined,
     );
+  // Legacy run summaries can report billing without any token buckets.
   if (!hasBillableBuckets) {
-    return undefined;
+    return usage?.cost?.total;
   }
   // Recorded totals own billing; discover fallback prices only for unpriced usage.
   const cost = params.cost ?? resolveModelCostConfig(params);
+  if (usage?.cost && cost) {
+    return usage.cost.total;
+  }
   return cost?.tieredPricing?.length ? undefined : estimateUsageCost({ usage, cost });
 }
 

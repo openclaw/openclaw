@@ -157,8 +157,8 @@ function expectedWorkflowPath() {
 }
 
 function validateTrustedWorkflow() {
-  if (!["authorize", "revalidate", "record"].includes(operation)) {
-    fail("operation must be authorize, revalidate, or record.");
+  if (!["authorize", "revalidate", "record", "inspect"].includes(operation)) {
+    fail("operation must be authorize, revalidate, record, or inspect.");
   }
   const expectedPath = expectedWorkflowPath();
   const expectedFullRef = `${repository}/${expectedPath}@refs/heads/main`;
@@ -909,8 +909,7 @@ function validateCandidateAgainstReceipt(candidate, receipt) {
   }
 }
 
-function validateTargetCheckout() {
-  const workspace = process.env.GITHUB_WORKSPACE;
+function validateTargetCheckout(workspace = process.env.GITHUB_WORKSPACE) {
   if (!workspace || git(workspace, "rev-parse", "HEAD") !== targetSha) {
     fail("Mobile beta release checkout does not match target-sha.");
   }
@@ -970,6 +969,29 @@ async function authorize() {
     target_sha: targetSha,
     triggering_actor: triggeringActor,
   });
+}
+
+// Inspection has live candidate authority, but deliberately emits no receipt
+// that upload or recording can consume. Its caller is a fresh protected job.
+async function inspect() {
+  validateTargetInputs();
+  if (
+    git(trustedRoot, "diff", "--name-only") ||
+    git(trustedRoot, "diff", "--cached", "--name-only")
+  ) {
+    fail("Trusted inspection tooling has tracked changes.");
+  }
+  const current = validateCurrentDispatchEnvironment();
+  validateCurrentDispatchLifecycle(current);
+  if (platform !== "ios" || authorityRunId !== current.runId || releaseRefToken) {
+    fail("Read-only iOS inspection must remain in its own run without a release-ref token.");
+  }
+  collaboratorPermission(current.actor);
+  const candidate = await validateStableReleaseCandidate(workflowSha, true);
+  validateTargetCheckout(path.join(trustedRoot, ".ios-inspection-candidate"));
+  collaboratorPermission(current.actor);
+  validateCurrentDispatchLifecycle(current);
+  output({ inspection_validated: "true", ios_app_store_version: candidate.iosAppStoreVersion });
 }
 
 async function revalidateUpload() {
@@ -1124,6 +1146,12 @@ async function recordReleaseRef() {
 
 validateTrustedWorkflow();
 switch (process.argv[2]) {
+  case "inspect":
+    if (operation !== "inspect") {
+      fail("inspect phase requires inspect operation.");
+    }
+    await inspect();
+    break;
   case "resolve-artifacts":
     resolveArtifacts();
     break;

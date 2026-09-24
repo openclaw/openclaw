@@ -31,7 +31,7 @@ export function handleHotSandboxConfigMismatch(params: {
   const hint = formatSandboxRecreateHint(params);
   if (params.mountsChanged) {
     throw new Error(
-      `Sandbox mounts changed for ${params.containerName}; the running container was preserved but cannot be reused with different workspace or skill sources. Recreate first: ${hint}`,
+      `Sandbox mounts changed for ${params.containerName}; the running container was preserved but cannot be reused with different filesystem sources or access modes. Recreate first: ${hint}`,
     );
   }
   if (params.requireCurrentConfig) {

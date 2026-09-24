@@ -14,9 +14,9 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { isAssistantTextContentType } from "./chat-display-projection.helpers.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
-import { projectSessionCatalogSourceParticipant } from "./session-catalog-identity.js";
+import { createSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
-import { projectTranscriptEntryMessage } from "./session-transcript-message.js";
+import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
 export type SessionTranscriptCatalogPage = {
@@ -118,13 +118,14 @@ function projectContentItem(
 function projectMessageItems(
   message: Record<string, unknown>,
   params: CatalogReadParams,
+  projectSender: ReturnType<typeof createSessionCatalogSourceParticipantProjector>,
 ): SessionCatalogTranscriptItem[] {
   const metadata = asOptionalRecord(message["__openclaw"]);
   const identity =
     message.role === "user" ? readTranscriptSenderIdentity(metadata?.senderIdentity) : undefined;
   const senderName = metadata?.senderName ?? message.senderLabel;
   const sender = identity
-    ? projectSessionCatalogSourceParticipant({
+    ? projectSender({
         ...params,
         identity,
         label: typeof senderName === "string" ? senderName : undefined,
@@ -230,6 +231,7 @@ export async function readSessionTranscriptCatalogPage(
   let skip = cursor?.skip ?? 0;
   let scanned = 0;
   const items: SessionCatalogTranscriptItem[] = [];
+  const projectSender = createSessionCatalogSourceParticipantProjector();
   while (before > 0 && items.length < limit && scanned < MAX_CATALOG_SCAN_MESSAGES) {
     const page = readCatalogHistoryPage(scope, {
       offset: snapshot.totalMessages - before,
@@ -253,7 +255,7 @@ export async function readSessionTranscriptCatalogPage(
     for (const message of projected.toReversed()) {
       const seq = asOptionalRecord(message["__openclaw"])?.seq;
       const previous = bySequence.get(seq) ?? [];
-      previous.push(...projectMessageItems(message, params));
+      previous.push(...projectMessageItems(message, params, projectSender));
       bySequence.set(seq, previous);
     }
     for (const event of page.events.toReversed()) {

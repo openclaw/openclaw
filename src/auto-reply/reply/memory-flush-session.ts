@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
@@ -21,8 +24,9 @@ export async function prepareMemoryFlushSession(params: {
   params.signal?.throwIfAborted();
   await waitForSessionTranscriptProjection(params.source, params.signal);
   params.signal?.throwIfAborted();
-  const sessionManager = withSessionContextAdmission(params.source, params.admission, () =>
-    SessionManager.openDetachedBounded(params.source, {
+  const sessionManager = await withSessionContextAdmission(params.source, params.admission, () =>
+    SessionManager.openDetachedBoundedAsync(params.source, {
+      signal: params.signal,
       cwd: params.workspaceDir,
       maxBytes: MAX_VISIBLE_MESSAGE_MAX_BYTES,
       maxEvents: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
@@ -45,8 +49,45 @@ export async function prepareMemoryFlushSession(params: {
     },
     sessionManager,
     sessionPersistence: "detached",
+    cleanupBundleMcpOnRunEnd: true,
   } satisfies Pick<
     RunEmbeddedAgentParams,
-    "sessionId" | "sessionKey" | "sessionTarget" | "sessionManager" | "sessionPersistence"
+    | "cleanupBundleMcpOnRunEnd"
+    | "sessionId"
+    | "sessionKey"
+    | "sessionTarget"
+    | "sessionManager"
+    | "sessionPersistence"
   > & { sessionFile: string };
+}
+
+export async function ensureMemoryFlushTargetFile(params: {
+  workspaceDir: string;
+  relativePath: string;
+  assertCurrent: () => void;
+}): Promise<void> {
+  const workspaceDir = normalizeOptionalString(params.workspaceDir);
+  const relativePath = normalizeOptionalString(params.relativePath);
+  if (!workspaceDir || !relativePath || path.isAbsolute(relativePath)) {
+    throw new Error("Invalid memory flush target path");
+  }
+  const workspaceRoot = path.resolve(workspaceDir);
+  const targetPath = path.resolve(workspaceRoot, relativePath);
+  const targetRelativePath = path.relative(workspaceRoot, targetPath);
+  if (
+    !targetRelativePath ||
+    targetRelativePath.startsWith("..") ||
+    path.isAbsolute(targetRelativePath)
+  ) {
+    throw new Error("Memory flush target path must stay inside the workspace");
+  }
+  params.assertCurrent();
+  await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+  params.assertCurrent();
+  const handle = await fs.promises.open(targetPath, "a");
+  try {
+    params.assertCurrent();
+  } finally {
+    await handle.close();
+  }
 }

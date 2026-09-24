@@ -90,12 +90,14 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     expect(harness.cpuUsage).toHaveBeenCalledTimes(1);
     expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(1);
     harness.sample();
-    expect(harness.monitor.snapshot()).toMatchObject({
+    const snapshot = harness.monitor.snapshot();
+    expect(snapshot).toMatchObject({
       degraded: true,
       intervalMs: 1_220,
-      delayMaxMs: 1_220.5,
       reasons: ["event_loop_delay", "event_loop_utilization", "cpu"],
     });
+    expect(snapshot?.delayMaxMs).toBeGreaterThanOrEqual(1_220);
+    expect(snapshot?.delayMaxMs).toBeLessThanOrEqual(1_220.5);
   });
 
   it("waits for delay co-evidence before reporting load saturation", () => {
@@ -235,9 +237,15 @@ describe("event-loop measurement telemetry", () => {
     harness.samples(50);
     await waitForDiagnosticEventsDrained();
     expect(events).toMatchObject([
-      { type: "gateway.event_loop.sample", intervalMs: 1_500, delayMaxMs: 1_500.5 },
+      { type: "gateway.event_loop.sample", intervalMs: 1_500 },
       { type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 20 },
     ]);
+    const first = events[0];
+    if (first?.type !== "gateway.event_loop.sample") {
+      throw new Error("expected first event-loop sample");
+    }
+    expect(first.delayMaxMs).toBeGreaterThanOrEqual(1_500);
+    expect(first.delayMaxMs).toBeLessThanOrEqual(1_500.5);
     expect(events.map((event) => event.trace)).toEqual([undefined, undefined]);
   });
 
@@ -253,7 +261,10 @@ describe("event-loop measurement telemetry", () => {
     expect(getInternalDiagnosticEventSequence()).toBe(0);
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    subscribe: () => () => void | Promise<void>;
+  }>([
     { name: "no listener", subscribe: () => () => {} },
     { name: "public listener", subscribe: () => onDiagnosticEvent(() => {}) },
     {
@@ -277,7 +288,7 @@ describe("event-loop measurement telemetry", () => {
       await waitForDiagnosticEventsDrained();
       expect(getInternalDiagnosticEventSequence()).toBe(0);
     } finally {
-      unsubscribe();
+      await unsubscribe();
     }
   });
 

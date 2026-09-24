@@ -1,6 +1,10 @@
 // Lmstudio tests cover runtime plugin behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { createTempHomeEnv } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER } from "./defaults.js";
 import {
@@ -334,7 +338,7 @@ describe("lmstudio-runtime", () => {
     };
 
     await expect(resolveLmstudioConfiguredApiKey(options)).rejects.toThrow(
-      /models\.providers\.lmstudio\.apiKey/i,
+      'models.providers["lmstudio"].apiKey',
     );
     await expect(
       resolveLmstudioConfiguredApiKey({ ...options, allowUnresolved: true }),
@@ -356,6 +360,54 @@ describe("lmstudio-runtime", () => {
         headers: headerRef,
       }),
     ).rejects.toThrow(/models\.providers\.lmstudio\.headers\.X-Proxy-Auth/i);
+  });
+
+  describe.each(["constructor", "prototype"])("loaded %s header", (headerName) => {
+    it.each([
+      { name: "missing reference", input: "${LMSTUDIO_HEADER_TEST_TOKEN}", expected: undefined },
+      {
+        name: "escaped literal",
+        input: "$${LMSTUDIO_HEADER_TEST_TOKEN}",
+        expected: "${LMSTUDIO_HEADER_TEST_TOKEN}",
+      },
+      {
+        name: "resolved reference",
+        input: "${LMSTUDIO_HEADER_TEST_TOKEN}",
+        token: "resolved-header-token",
+        expected: "resolved-header-token",
+      },
+    ])("preserves $name semantics in request headers", async ({ input, token, expected }) => {
+      const home = await createTempHomeEnv("openclaw-lmstudio-header-");
+      try {
+        const configPath = path.join(home.home, ".openclaw", "openclaw.json");
+        vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+        vi.stubEnv("LMSTUDIO_HEADER_TEST_TOKEN", token);
+        await fs.writeFile(
+          configPath,
+          JSON.stringify(buildLmstudioConfig({ headers: { [headerName]: input } })),
+        );
+        const config = getRuntimeConfig({
+          pin: false,
+          skipPluginValidation: true,
+          skipShellEnvFallback: true,
+        });
+        const headers = resolveLmstudioProviderHeaders({
+          config,
+          env: {},
+          headers: config.models?.providers?.lmstudio?.headers,
+        });
+        if (expected === undefined) {
+          await expect(headers).rejects.toThrow(`models.providers.lmstudio.headers.${headerName}`);
+        } else {
+          expect(buildLmstudioAuthHeaders({ headers: await headers })).toEqual({
+            [headerName]: expected,
+          });
+        }
+      } finally {
+        vi.unstubAllEnvs();
+        await home.restore();
+      }
+    });
   });
 
   it("builds auth headers with key precedence and json support", () => {

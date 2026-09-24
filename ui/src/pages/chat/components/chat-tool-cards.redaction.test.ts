@@ -140,7 +140,7 @@ describe("tool-card redaction", () => {
       const container = document.createElement("div");
       render(
         renderToolCard(
-          { id: "msg:redaction", name: "message", args: { message: input } },
+          { id: "msg:redaction", name: "custom_tool", args: { message: input } },
           { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
         ),
         container,

@@ -29,10 +29,8 @@ import {
   releaseOpenAIQuicksilverSession,
   reserveOpenAIQuicksilverSession,
 } from "./realtime-quicksilver-session-limit.js";
-import {
-  connectOpenAIQuicksilverSideband,
-  type OpenAIQuicksilverSocketFactory,
-} from "./realtime-quicksilver-sideband.js";
+import { connectOpenAIQuicksilverSideband } from "./realtime-quicksilver-sideband.js";
+import type { OpenAIQuicksilverSocketFactory } from "./realtime-quicksilver-socket.shared.js";
 import {
   buildOpenAIQuicksilverSession,
   createOpenAIQuicksilverCall,
@@ -627,8 +625,9 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
       if (activeSessions.get(token) !== session) {
         throw new Error("OpenAI GPT-Live sideband failed during startup");
       }
-      // The call was configured at creation; attaching its sideband needs no new session.started.
-      nativeControl?.onReady?.();
+      // Lifecycle-only hosts need readiness too. The call was configured at creation,
+      // so attaching its sideband needs no new session.started.
+      offer.request.gatewayControl?.onReady?.();
       if (lifecycleSignal.aborted || activeSessions.get(token) !== session) {
         throw new Error("OpenAI GPT-Live session closed during readiness notification");
       }

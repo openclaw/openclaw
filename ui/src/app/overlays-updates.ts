@@ -1,7 +1,10 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayUpdateAvailableEventPayload } from "../../../src/gateway/events.js";
-import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+} from "../../../src/infra/update-run-record.js";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { UpdateHoldResult } from "../api/types.ts";
@@ -22,6 +25,7 @@ import {
   createUpdateStatusRefresher,
   projectUpdateSentinel,
   projectUpdateStatusResponse,
+  projectUpdateCheckoutResponse,
   projectUpdateRunFailure,
   resolveUnknownUpdateOutcomeBanner,
   resolveUpdateStatusBanner,
@@ -190,7 +194,8 @@ export function createApplicationUpdateOverlays(
         snapshot.updateRunning || snapshot.updateReconciliationPending
           ? null
           : snapshot.updateRun
-            ? isReportableUpdateRun(snapshot.updateRun)
+            ? !isAcknowledgedAbandonedUpdateRun(snapshot.updateRun) &&
+              isReportableUpdateRun(snapshot.updateRun)
               ? snapshot.updateRun.runId
               : null
             : currentFailure?.outcome === "failed" && currentFailure.attempt
@@ -216,6 +221,8 @@ export function createApplicationUpdateOverlays(
   const applyRun = (run: UpdateRunRecord) => {
     const current = snapshot.updateRun;
     if (current?.runId === run.runId && current.updatedAtMs > run.updatedAtMs) {
+      // A status read can still carry independently newer schedule fields.
+      publish();
       return;
     }
     // Ledger writes monotonically advance this revision. Keep identical
@@ -230,7 +237,9 @@ export function createApplicationUpdateOverlays(
     snapshot = {
       ...snapshot,
       updateRun: run,
-      updateRunAcknowledged: receipts.acknowledged(updateGatewayScope, profileId, run.runId),
+      updateRunAcknowledged:
+        isAcknowledgedAbandonedUpdateRun(run) ||
+        receipts.acknowledged(updateGatewayScope, profileId, run.runId),
       recordedUpdateAttempt: failure?.attempt ?? null,
       updateStatusBanner: failure?.banner ?? null,
     };
@@ -282,9 +291,12 @@ export function createApplicationUpdateOverlays(
     }
   };
 
-  const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
+  const applyUpdateStatusResponse = (
+    response: UpdateRestartStatusResponse,
+    preserveInstall = false,
+  ) => {
     const { failure, updateStatusBanner, recordedUpdateAttempt, ...status } =
-      projectUpdateStatusResponse(response, snapshot);
+      projectUpdateStatusResponse(response, snapshot, preserveInstall);
     const run = response.activeRun ?? response.lastRun;
     const history = updateAttempt?.history;
     // A failed history read is not an empty baseline. Until a current identity
@@ -301,7 +313,6 @@ export function createApplicationUpdateOverlays(
       ...snapshot,
       ...status,
       updateCampaignStatusHydrated: true,
-      updateStatusCheckBanner: null,
     };
     if (
       run &&
@@ -318,6 +329,7 @@ export function createApplicationUpdateOverlays(
       }
       publish();
     }
+    updateCampaignPoller.sync();
   };
   const refreshUpdateStatus = createUpdateStatusRefresher({
     getClient: () => activeClient,
@@ -330,8 +342,31 @@ export function createApplicationUpdateOverlays(
       publish();
     },
     onStatus: applyUpdateStatusResponse,
-    onError: (error) => {
-      snapshot = { ...snapshot, updateStatusCheckBanner: resolveUpdateStatusCheckBanner(error) };
+    onCheckout: (response, preserveSchedule) => {
+      snapshot = {
+        ...snapshot,
+        ...projectUpdateCheckoutResponse(
+          response,
+          snapshot,
+          preserveSchedule ? "schedule" : undefined,
+        ),
+        updateStatusCheckBanner: null,
+      };
+      publish();
+      updateCampaignPoller.sync();
+    },
+    onError: (error, mode) => {
+      if (mode === "completion" && snapshot.updateStatusCheckBanner?.mode === "manual") {
+        return;
+      }
+      if (error === null && snapshot.updateStatusCheckBanner === null) {
+        return;
+      }
+      snapshot = {
+        ...snapshot,
+        updateStatusCheckBanner:
+          error === null ? null : { ...resolveUpdateStatusCheckBanner(error), mode },
+      };
       publish();
     },
   });
@@ -615,10 +650,7 @@ export function createApplicationUpdateOverlays(
       }
       const generation = updateRunGeneration;
       const revision = updateStatusRevision;
-      const isCurrent = () =>
-        generation === updateRunGeneration &&
-        isCurrentClient(client) &&
-        readGatewayOperatorAccess(gateway.snapshot).canAdmin;
+      const isCurrent = () => generation === updateRunGeneration && isCurrentClient(client);
       updateHoldInFlight = true;
       try {
         const response = await client.request<UpdateHoldResult>("update.hold", {});
@@ -645,8 +677,7 @@ export function createApplicationUpdateOverlays(
         return response.ok;
       } catch (error) {
         if (isCurrent() && revision === updateStatusRevision) {
-          const message = formatUiError(error);
-          publishError(message);
+          publishError(error);
         }
         return false;
       } finally {

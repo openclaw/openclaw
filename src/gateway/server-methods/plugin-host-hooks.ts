@@ -24,6 +24,7 @@ import {
 } from "../../plugins/schema-validator.js";
 import {
   listControlUiPluginDescriptors,
+  listControlUiLinkReaders,
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
 } from "../control-ui-plugin-tabs.js";
@@ -87,6 +88,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         requireGatewayAuthGrant: context.getRuntimeConfig().gateway?.auth?.mode !== "none",
       }),
       controlUiWidgetKinds: listControlUiPluginWidgetKinds(scopes),
+      controlUiLinkReaders: listControlUiLinkReaders(scopes, methods),
       pluginSurfaceUrls: client?.pluginSurfaceUrls ?? {},
     };
     if (!validatePluginsUiDescriptorsResult(result)) {

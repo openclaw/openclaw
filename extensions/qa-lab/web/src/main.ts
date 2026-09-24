@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements main behavior.
 import "./styles.css";
 import { createQaLabApp } from "./app.js";
 

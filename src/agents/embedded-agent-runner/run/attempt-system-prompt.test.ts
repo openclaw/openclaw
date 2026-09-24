@@ -7,6 +7,7 @@ import {
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
@@ -33,6 +34,21 @@ vi.mock("../../../plugins/providers.runtime-core.js", () => ({
 let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
+
+async function admitPrompt(
+  config: NonNullable<EmbeddedRunAttemptParams["config"]>,
+  agentId = "main",
+) {
+  const admission = prepareSystemAgentRunAdmission(
+    config,
+    `prompt-fixture-${admissions.length}`,
+    agentId,
+    "system-prompt-test",
+  );
+  admissions.push(admission);
+  return admission.admit("embedded");
+}
 
 beforeAll(async () => {
   ({ buildAttemptSystemPrompt } = await import("./attempt-system-prompt.js"));
@@ -40,6 +56,9 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  for (const admission of admissions.splice(0)) {
+    admission.close();
+  }
   vi.restoreAllMocks();
   providerRegistryMocks.isPluginProvidersLoadInFlight.mockClear();
   providerRegistryMocks.resolvePluginProvidersCore.mockClear();
@@ -98,6 +117,7 @@ async function preparePermissionPrompt(
     ...session,
     workspaceDir: "/tmp/openclaw",
     config: {},
+    admittedRunContext: await admitPrompt({}),
     thinkLevel,
     sourceReplyDeliveryMode:
       requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
@@ -133,7 +153,7 @@ async function preparePermissionPrompt(
     toolSearchDirectoryEnabled: false,
     toolSearchRuntimeConfig: attempt.config,
   });
-  if (!prepared.preparePermissionPrompt) {
+  if (!prepared.prepareToolPrompt) {
     throw new Error("Expected a refreshable attempt prompt");
   }
   return {
@@ -142,7 +162,7 @@ async function preparePermissionPrompt(
     prepared,
     read,
     refreshSystemPrompt: async (prompt: string, refreshedTools: AgentTool[]) =>
-      (await prepared.preparePermissionPrompt!(refreshedTools))(prompt),
+      (await prepared.prepareToolPrompt!(refreshedTools, { permissionChanged: true }))(prompt),
     write,
   };
 }
@@ -204,6 +224,7 @@ describe("buildAttemptSystemPrompt", () => {
       };
       const attempt = {
         config,
+        admittedRunContext: await admitPrompt(config, "marketing"),
         agentId: "marketing",
         sessionId: "global-system-prompt",
         sessionKey: "global",
@@ -259,8 +280,10 @@ describe("buildAttemptSystemPrompt", () => {
     attempt.permissionMode = "workspace";
     capabilityToolNames.delete("exec");
     const currentTools = [read, write];
-    const preparation = prepared.preparePermissionPrompt!(currentTools);
-    expect(prepared.preparePermissionPrompt!(currentTools)).toBe(preparation);
+    const preparation = prepared.prepareToolPrompt!(currentTools, { permissionChanged: true });
+    expect(prepared.prepareToolPrompt!(currentTools, { permissionChanged: true })).toBe(
+      preparation,
+    );
     const intermediatePrompt = (await preparation)(initialPrompt);
     expect(intermediatePrompt).toContain("- write:");
     expect(intermediatePrompt).not.toContain("- exec:");

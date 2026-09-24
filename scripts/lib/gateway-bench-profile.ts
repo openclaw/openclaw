@@ -19,14 +19,27 @@ export type GatewayProfileCommand = {
 
 export type GatewayCpuUsageSnapshot = {
   pid: number;
+  cpuEnvironment?: { availableParallelism: number; affinity?: string };
   atMonotonicMicros: number;
   process: NodeJS.CpuUsage;
   mainThread: NodeJS.CpuUsage;
 };
 
+export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
+  memory: NodeJS.MemoryUsage;
+  activeResources: Record<string, number>;
+  runtime: { node: string; platform: string; arch: string };
+};
+
 export type GatewayBenchCommand =
   | GatewayProfileCommand
-  | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "cpu-usage"; action: "sample" };
+  | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "cpu-usage"; action: "sample" }
+  | {
+      channel: typeof GATEWAY_PROFILE_CHANNEL;
+      kind: "resource-usage";
+      action: "sample";
+      initial?: boolean;
+    };
 
 type GatewayProfileReply = {
   channel: typeof GATEWAY_PROFILE_CHANNEL;
@@ -34,12 +47,14 @@ type GatewayProfileReply = {
   action: GatewayBenchCommand["action"];
   error?: string;
   cpuUsage?: GatewayCpuUsageSnapshot;
+  resources?: GatewayResourceSnapshot;
 };
 
 type CpuUsageMilliseconds = { userMs: number; systemMs: number; totalMs: number };
 
 export type GatewayCpuUsage = {
   pid: number;
+  cpuEnvironment?: { availableParallelism: number; affinity?: string };
   startMonotonicMicros: number;
   endMonotonicMicros: number;
   wallMs: number;
@@ -105,12 +120,35 @@ export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayC
   return reply.cpuUsage;
 }
 
+/** Samples the Gateway itself, not the controller or its descendants. */
+export async function readGatewayResources(
+  child: ChildProcess,
+  options: { initial?: boolean } = {},
+): Promise<GatewayResourceSnapshot> {
+  const reply = await sendGatewayBenchCommand(child, {
+    channel: GATEWAY_PROFILE_CHANNEL,
+    kind: "resource-usage",
+    action: "sample",
+    ...options,
+  });
+  if (!reply.resources || reply.resources.pid !== child.pid) {
+    throw new Error("Gateway did not report resources for the owned child PID");
+  }
+  return reply.resources;
+}
+
 export function measureGatewayCpuUsage(
   before: GatewayCpuUsageSnapshot,
   after: GatewayCpuUsageSnapshot,
 ): GatewayCpuUsage {
   if (before.pid !== after.pid || after.atMonotonicMicros <= before.atMonotonicMicros) {
     throw new Error("Gateway CPU samples must span one process and a positive interval");
+  }
+  if (
+    before.cpuEnvironment?.availableParallelism !== after.cpuEnvironment?.availableParallelism ||
+    before.cpuEnvironment?.affinity !== after.cpuEnvironment?.affinity
+  ) {
+    throw new Error("Gateway CPU affinity or available parallelism changed during measurement");
   }
   const delta = (start: NodeJS.CpuUsage, end: NodeJS.CpuUsage): CpuUsageMilliseconds => {
     const userMs = (end.user - start.user) / 1_000;
@@ -122,6 +160,7 @@ export function measureGatewayCpuUsage(
   };
   return {
     pid: after.pid,
+    cpuEnvironment: before.cpuEnvironment,
     startMonotonicMicros: before.atMonotonicMicros,
     endMonotonicMicros: after.atMonotonicMicros,
     wallMs: (after.atMonotonicMicros - before.atMonotonicMicros) / 1_000,

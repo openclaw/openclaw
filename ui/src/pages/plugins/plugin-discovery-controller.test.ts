@@ -51,17 +51,87 @@ function setup(
     }
     return response;
   });
-  const onEntriesChanged = vi.fn();
   const controller = new PluginDiscoveryController(host, {
     getClient: () => client,
     isConnected: () => true,
-    onEntriesChanged,
   });
-  return { controller, onEntriesChanged, request };
+  return { controller, request };
 }
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+it("loads category navigation without waiting for catalog cards", async () => {
+  const browse = createDeferred<PluginDiscoveryResult>();
+  const categories = [
+    { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
+  ];
+  const { controller, request } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? { categories } : browse.promise,
+  );
+  const loading = controller.refresh();
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledWith("plugins.catalog.categories", {}, expect.anything());
+  expect(controller.categories).toEqual(categories);
+  expect(controller.loading).toBe(true);
+  browse.resolve({ items: [] });
+  await loading;
+  expect(controller.categories).toEqual(categories);
+});
+
+it("settles empty categories, deduplicates warm loads, and retries errors explicitly", async () => {
+  let fail = true;
+  const { controller, request } = setup([], async () => {
+    if (fail) {
+      throw new Error("Categories unavailable");
+    }
+    return { categories: [] };
+  });
+  await controller.ensureCategories();
+  expect(controller.categoriesLoading).toBe(false);
+  expect(controller.categoriesError).toContain("Categories unavailable");
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledOnce();
+  fail = false;
+  await controller.ensureCategories(true);
+  expect(controller.categoriesError).toBeNull();
+  expect(controller.categoriesLoading).toBe(false);
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("uses overview categories when they arrive first without accepting a late category reply", async () => {
+  const pending = createDeferred<{ categories: never[] }>();
+  const categories = [
+    { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
+  ];
+  const { controller } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? pending.promise : { items: [], categories },
+  );
+  const loading = controller.ensureCategories();
+  expect(controller.categoriesLoading).toBe(true);
+  await controller.refresh();
+  expect(controller.categoriesLoading).toBe(false);
+  expect(controller.categories).toEqual(categories);
+  pending.resolve({ categories: [] });
+  await loading;
+  expect(controller.categories).toEqual(categories);
+});
+
+it("discards category navigation and late responses across connection invalidation", async () => {
+  const pending = createDeferred<{
+    categories: { slug: string; label: string; description: string; icon: string; order: number }[];
+  }>();
+  const { controller } = setup([], async () => pending.promise);
+  const loading = controller.ensureCategories();
+  controller.invalidate();
+  pending.resolve({
+    categories: [{ slug: "old", label: "Old", description: "Old", icon: "brain", order: 0 }],
+  });
+  await loading;
+  expect(controller.categories).toEqual([]);
+  expect(controller.categoriesLoading).toBe(false);
 });
 
 it("populates the grouped home page from one overview response", async () => {
@@ -102,7 +172,11 @@ it("switches filtered tabs to All when starting a unified search", async () => {
   expect(controller.intent).toBe("all");
   expect(request).toHaveBeenCalledWith(
     "plugins.catalog.browse",
-    expect.objectContaining({ intent: "all", query: "memory" }),
+    expect.objectContaining({
+      intent: "all",
+      query: "memory",
+      searchSource: "openclaw-control-ui",
+    }),
     expect.anything(),
   );
 });
@@ -153,6 +227,64 @@ it("does not expose continuation for search results", async () => {
   await vi.runAllTimersAsync();
 
   expect(controller.result).toEqual({ items: [entry(1)] });
+});
+
+it("counts only settled manual searches across refresh, filters and connection invalidation", async () => {
+  vi.useFakeTimers();
+  const { controller, request } = setup([], async () => ({ items: [entry(1)] }));
+  controller.updateQuery("m");
+  await vi.advanceTimersByTimeAsync(250);
+  expect(request.mock.lastCall?.[1]).not.toHaveProperty("searchSource");
+  request.mockClear();
+
+  controller.updateQuery("mem");
+  await vi.advanceTimersByTimeAsync(200);
+  controller.updateQuery("memory");
+  await vi.advanceTimersByTimeAsync(249);
+  expect(request).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(request).toHaveBeenCalledOnce();
+  expect(request.mock.lastCall?.[1]).toEqual({
+    intent: "all",
+    query: "memory",
+    pageSize: 100,
+    searchSource: "openclaw-control-ui",
+  });
+  expect(controller.result?.items).toEqual([entry(1)]);
+
+  for (const query of ["memory ", " memory", "memory"]) {
+    request.mockClear();
+    controller.updateQuery(query);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", query: "memory", pageSize: 100 });
+    expect(controller.result?.items).toEqual([entry(1)]);
+  }
+
+  request.mockClear();
+  await controller.refresh();
+  controller.selectCategory("memory");
+  await vi.advanceTimersByTimeAsync(0);
+  controller.selectIntent("official");
+  await vi.advanceTimersByTimeAsync(0);
+  controller.updateQuery("");
+  await vi.advanceTimersByTimeAsync(250);
+  for (const [, params] of request.mock.calls) {
+    expect(params).not.toHaveProperty("searchSource");
+  }
+
+  request.mockClear();
+  controller.updateQuery("calendar");
+  controller.invalidate();
+  await vi.advanceTimersByTimeAsync(250);
+  expect(request).not.toHaveBeenCalled();
+  await controller.refresh();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", query: "calendar", pageSize: 100 });
+  request.mockClear();
+  controller.updateQuery("notion");
+  controller.disconnect();
+  await vi.advanceTimersByTimeAsync(250);
+  expect(request).not.toHaveBeenCalled();
 });
 
 it("loads one bounded page initially and continues only after explicit expansion", async () => {
@@ -268,11 +400,15 @@ it("preserves category navigation when a filtered view reconnects", async () => 
       order: 0,
     },
   ];
-  const { controller } = setup([{ items: [entry(1)], categories }, { items: [entry(2)] }]);
+  const { controller } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? { categories } : { items: [entry(1)], categories },
+  );
 
   await controller.refresh();
   controller.category = "channels";
   controller.invalidate();
+  expect(controller.categories).toEqual([]);
+  await controller.ensureCategories();
   await controller.refresh();
 
   expect(controller.categories).toEqual(categories);

@@ -4,6 +4,7 @@ import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
 } from "./chat-composer-dom.ts";
+import { ComposerEmojiMenu } from "./chat-composer-emoji.ts";
 import { clearGoalElapsedTimers } from "./chat-composer-goal.ts";
 import { HumanMentionMenu } from "./chat-composer-mention-menu.ts";
 import { createSkillMenuState } from "./chat-composer-skill-menu.ts";
@@ -17,13 +18,16 @@ function createChatComposerState(): ChatComposerState {
     composerComposing: false,
     editRevision: 0,
     mentionMenu: new HumanMentionMenu(),
+    emojiMenu: new ComposerEmojiMenu(),
     composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
     goalExpandedId: null,
     goalComposer: null,
-    activeGatewayQuestionId: null,
-    gatewayQuestionCollapsed: false,
+    activeQuestionKey: null,
+    gatewayQuestionIds: new Set(),
+    asyncQuestionIds: new Set(),
+    questionCollapsed: false,
     questionTakeoverActive: false,
     restoreComposerFocus: false,
     composerInput: null,
@@ -64,7 +68,9 @@ export function isCurrentSessionSubmittedProgress(
   return (
     item.sessionKey === sessionKey &&
     !item.pendingRunId &&
-    (item.sendState === "sending" || item.sendState === "waiting-model") &&
+    (item.sendState === "submitting" ||
+      item.sendState === "sending" ||
+      item.sendState === "waiting-model") &&
     (status == null || item.sendRunId !== status.runId)
   );
 }
@@ -97,10 +103,21 @@ export function commitComposerDraft(
   if (currentDraft === value && mentions === undefined) {
     return;
   }
-  const hadMentions = (props.getMentions?.() ?? props.mentions ?? []).length > 0;
+  const previousMentions = props.getMentions?.() ?? props.mentions ?? [];
   getChatComposerState(props.paneId).editRevision += 1;
   props.onDraftChange(value, mentions);
-  if (hadMentions || mentions?.length) {
+  const nextMentions = props.getMentions?.() ?? mentions ?? props.mentions ?? [];
+  // Moving a token while typing prose changes its span, not the recipient strip.
+  if (
+    previousMentions.length !== nextMentions.length ||
+    previousMentions.some((previous, index) => {
+      const next = nextMentions[index]!;
+      return (
+        previous.profileId !== next.profileId ||
+        currentDraft.slice(previous.start, previous.end) !== value.slice(next.start, next.end)
+      );
+    })
+  ) {
     props.onRequestUpdate?.();
   }
 }
@@ -149,6 +166,7 @@ export function suppressStaleSubmittedDraftReplay(
 }
 
 function disposeChatComposerState(state: ChatComposerState) {
+  state.emojiMenu.close();
   state.mentionMenu.dispose();
   state.composerDraftScopeKey = null;
   state.dictation?.dispose();

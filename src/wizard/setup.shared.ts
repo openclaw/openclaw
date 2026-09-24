@@ -140,6 +140,7 @@ export function createWizardInferenceConfigTarget(
   ) => {
     const result = await commit(config, {
       baseSnapshot,
+      writeOptions: options.writeOptions,
       onPreparedCommit: (snapshot, next) =>
         options.captureUndo(
           captureSetupInferenceFileUndo(
@@ -169,7 +170,9 @@ export async function readSetupConfigFileSnapshot() {
 export async function readValidSetupConfigFile(): Promise<OpenClawConfig> {
   const snapshot = await readSetupConfigFileSnapshot();
   if (!snapshot.valid) {
-    throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+    throw new Error(
+      "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
+    );
   }
   return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
 }

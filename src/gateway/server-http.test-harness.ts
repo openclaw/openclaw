@@ -215,8 +215,9 @@ export function createHooksHandler(
       },
 ) {
   const options = typeof params === "string" ? { bindHost: params } : params;
+  const hooksConfig = createHooksConfig();
   return createHooksRequestHandler({
-    getHooksConfig: () => createHooksConfig(),
+    getHooksConfig: () => hooksConfig,
     bindHost: options.bindHost ?? "127.0.0.1",
     port: 18789,
     logHooks: {

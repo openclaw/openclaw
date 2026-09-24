@@ -197,7 +197,7 @@ extension OpenClawChatMessage {
         return explicit.count == 1 ? explicit.first : nil
     }
 
-    fileprivate var isCompletedReply: Bool {
+    var isCompletedReply: Bool {
         self.role.lowercased() == "assistant" && !self.isForwardedTurnBoundary &&
             self.hasWorkReplyContent && self.workPhase != "commentary" && !self.hasUnresolvedWork
     }

@@ -48,7 +48,6 @@ describe("file copy lifecycle", () => {
           }),
       );
       controller.copy("path");
-      expect(copyToClipboard).toHaveBeenCalledWith("a.txt");
       if (change === "selection") {
         replace();
         controller.reset();

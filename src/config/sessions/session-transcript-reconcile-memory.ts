@@ -8,6 +8,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { PreparedSessionTranscriptProjectionMetadata } from "./session-transcript-projection-rebuild.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 const SOURCE_FRAME_BYTES = 256 * 1024;
 
@@ -67,9 +68,12 @@ function readSnapshot(database: OpenClawAgentDatabase, sessionId: string) {
 export function createMemoryTranscriptProjectionSource(
   database: OpenClawAgentDatabase,
   options: OpenClawAgentDatabaseOptions,
+  range?: { afterSeq: number; throughSeq: number },
 ) {
+  const startAfterSeq = range?.afterSeq ?? -1;
+  const throughSeq = range?.throughSeq;
   let snapshot: MemoryTranscriptSnapshot | undefined;
-  let afterSeq = -1;
+  let afterSeq = startAfterSeq;
   let offset = 0;
   let row: { seq: number; created_at: number; bytes: Uint8Array } | undefined;
   const assertCurrentOwner = () => {
@@ -77,15 +81,21 @@ export function createMemoryTranscriptProjectionSource(
       throw new Error("Incognito transcript database was disposed during reconciliation");
     }
   };
-  const snapshotMatches = () => {
+  const snapshotMatches = (allowAppend = false) => {
     if (!snapshot) {
       return false;
     }
     const current = readSnapshot(database, snapshot.sessionId);
+    if (!current || current.generation !== snapshot.generation) {
+      return false;
+    }
+    if (allowAppend) {
+      // Later appends preserve a captured usage prefix; reconciliation still requires equality.
+      return current.maxSeq >= snapshot.maxSeq;
+    }
     return (
-      current?.generation === snapshot.generation &&
-      current?.maxSeq === snapshot.maxSeq &&
-      current?.transcriptUpdatedAt === snapshot.transcriptUpdatedAt
+      current.maxSeq === snapshot.maxSeq &&
+      current.transcriptUpdatedAt === snapshot.transcriptUpdatedAt
     );
   };
   return {
@@ -97,6 +107,7 @@ export function createMemoryTranscriptProjectionSource(
     isCurrentPlan(plan: PreparedSessionTranscriptProjectionMetadata) {
       return (
         snapshot?.sessionId === plan.sessionId &&
+        snapshot.generation === plan.sourceTranscriptGeneration &&
         snapshot.maxSeq === plan.sourceIndexedSeq &&
         snapshot.transcriptUpdatedAt === plan.sourceTranscriptUpdatedAt &&
         snapshotMatches()
@@ -109,30 +120,35 @@ export function createMemoryTranscriptProjectionSource(
         () => {
           if (snapshot?.sessionId !== sessionId) {
             snapshot = readSnapshot(database, sessionId);
+            if (snapshot && throughSeq !== undefined) {
+              snapshot.maxSeq = throughSeq;
+            }
             row = undefined;
-            afterSeq = -1;
+            afterSeq = startAfterSeq;
             offset = 0;
           }
-          if (!snapshotMatches()) {
+          if (!snapshotMatches(throughSeq !== undefined)) {
             row = undefined;
             snapshot = undefined;
             return { type: "source-unavailable" };
           }
           if (!row) {
+            let query = getSessionKysely(database.db)
+              .selectFrom("transcript_events")
+              .select([
+                "seq",
+                "created_at",
+                /* kysely-allow-raw: acquire canonical event bytes once; framing does not decode JSON. */
+                sql<Uint8Array>`CAST(${transcriptEventJsonSql(database.db)} AS BLOB)`.as("bytes"),
+              ])
+              .where("session_id", "=", sessionId)
+              .where("seq", ">", afterSeq);
+            if (throughSeq !== undefined) {
+              query = query.where("seq", "<=", throughSeq);
+            }
             row = executeSqliteQueryTakeFirstSync(
               database.db,
-              getSessionKysely(database.db)
-                .selectFrom("transcript_events")
-                .select([
-                  "seq",
-                  "created_at",
-                  /* kysely-allow-raw: acquire UTF-8 once without main-thread decoding or parsing. */
-                  sql<Uint8Array>`CAST(event_json AS BLOB)`.as("bytes"),
-                ])
-                .where("session_id", "=", sessionId)
-                .where("seq", ">", afterSeq)
-                .orderBy("seq", "asc")
-                .limit(1),
+              query.orderBy("seq", "asc").limit(1),
             );
             offset = 0;
           }

@@ -191,7 +191,7 @@ struct GatewayDiscoveryProbeTests {
     }
 
     @Test func `discovery keeps system certificate verification without creating trust`() async throws {
-        let tls = try DashboardTLSFixture()
+        let tls = try await DashboardTLSFixture()
         var requests = 0
         let server = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity, requestHandler: { _ in
             requests += 1

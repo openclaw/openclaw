@@ -20,6 +20,33 @@ This directory owns Control UI-specific guidance that should not live in the rep
 - Background updates may refresh their own scoped cache; they must not replace
   the foreground selection or publish another context's state into its view.
 
+## Session Roster Refresh
+
+- Session rosters apply nested Gateway row snapshots through the shared reconciler.
+  `lib/sessions/session-list-query.ts` owns whether a snapshot preserves a held
+  window: lifecycle, patch/send/steer, run-start/settlement/capacity, and title
+  updates can avoid list reads when membership, lineage, and pin/owner/archive
+  facts stay unchanged and recency does not move backwards. Tree events require
+  the Gateway's complete, access-scoped `ancestorSessions` snapshots; each row
+  retains its own generation and field receipts. Certified nested rows own their
+  facts; only explicit null clearing receipts may fill omissions from the event
+  envelope. Unknown rows, incomplete ancestor coverage, broad changes, catalog
+  changes, Gateway-owned filters, failed reads,
+  owner-prefix boundary uncertainty, and overlapping reads retain an authoritative
+  refresh. Events never create list membership.
+- Re-adopting cached lineage rows changes presentation without invalidating
+  managed list membership. Fresh descriptor reads and Gateway events retain
+  their authoritative invalidation paths.
+- `lib/sessions/event-refresh-coordinator.ts` owns automatic refresh pacing:
+  collect events in a fixed five-second window that subsequent events cannot
+  postpone, and after each automatic refresh wait three times its duration
+  (at least five seconds, at most 15 seconds) before the next automatic read.
+  Trailing invalidation stays with that owner, including while a request is pending.
+- Explicit refreshes, filter/agent changes, reconnects, and foreground replacements
+  bypass event backoff and absorb pending invalidation. Recheck visibility and
+  current intent after background admission; hidden pages retain one catch-up
+  refresh until visible.
+
 ## i18n Rules
 
 - Foreign-language files in `ui/src/i18n/locales/*.ts` are stable, source-owned lazy-module adapters; their translations are generated from canonical grouped memory in `ui/src/i18n/.i18n/*.tm.jsonl`.

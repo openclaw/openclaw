@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  browserFallbackResult,
   submitGithubIssue,
   type GithubIssueSubmitHooks,
   type GithubIssueSubmitResult,
@@ -213,6 +214,8 @@ export async function submitUpdateFailureReport(
       hooks: GithubIssueSubmitHooks,
     ) => GithubIssueSubmitResult | Promise<GithubIssueSubmitResult>;
     env?: NodeJS.ProcessEnv;
+    /** Browser-only callers must never use the host account, even for reconciliation. */
+    publicationMode?: "host" | "browser";
     artifactSweepHooks?: UpdateFailureReportSweepHooks;
     finalizeReceipt?: typeof finalizeUpdateFailureReportReceipt;
     hasCurrentAuthority?: () => boolean;
@@ -258,6 +261,7 @@ export async function submitUpdateFailureReport(
   }
   if (
     existingReceipt?.status === "pending" &&
+    options.publicationMode !== "browser" &&
     existingReceipt.previewDigest === prepared.previewDigest
   ) {
     const ensureCurrentAuthority = () => {
@@ -537,15 +541,29 @@ export async function submitUpdateFailureReport(
       submitGithubIssue(issue, undefined, hooks));
   let created: GithubIssueSubmitResult;
   try {
-    created = await createIssue(prepared, {
-      afterAuthPreflight,
-      beforeIssueCreate,
-      beforeIssueLookup: () => {
-        if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-          throw new Error("Update report reconciliation requires a current authenticated client.");
-        }
-      },
-    });
+    // Publication yields; fence host authentication as well as issue creation.
+    if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
+      throw new UpdateReportPreCreateGuardError(
+        "Update report submission requires a current authenticated client.",
+        "authority",
+      );
+    }
+    if (options.publicationMode === "browser") {
+      await assertCurrentPreCreateState();
+      created = browserFallbackResult(prepared, "browser-requested");
+    } else {
+      created = await createIssue(prepared, {
+        afterAuthPreflight,
+        beforeIssueCreate,
+        beforeIssueLookup: () => {
+          if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
+            throw new Error(
+              "Update report reconciliation requires a current authenticated client.",
+            );
+          }
+        },
+      });
+    }
   } catch (error) {
     if (!(error instanceof UpdateReportPreCreateGuardError)) {
       throw error;
@@ -634,9 +652,11 @@ export async function submitUpdateFailureReport(
     };
   }
   const message =
-    created.reason === "authentication-unavailable"
-      ? "GitHub authentication is unavailable. Review and submit the prefilled issue in your browser."
-      : "GitHub submission is unavailable. Review and submit the prefilled issue in your browser.";
+    created.reason === "browser-requested"
+      ? "Review and submit the prefilled issue using your own GitHub account in your browser. No issue has been submitted by the Gateway."
+      : created.reason === "authentication-unavailable"
+        ? "GitHub authentication is unavailable. Review and submit the prefilled issue in your browser."
+        : "GitHub submission is unavailable. Review and submit the prefilled issue in your browser.";
   const preparationRefreshed = retryUpdateReportStateWrite(() =>
     (options.refreshPreparation ?? refreshUpdateFailureReportReceiptPreparation)(
       prepared.attemptId,
@@ -674,6 +694,20 @@ export async function submitUpdateFailureReport(
       savedReportPath: ownedPrepared.savedReportPath,
       status: "retryable",
     };
+  }
+  // Persistence may wait on contention. Retain its receipt, but never expose a
+  // handoff for an attempt or authority that retired during those waits.
+  try {
+    await assertCurrentPreCreateState();
+  } catch (error) {
+    if (error instanceof UpdateReportPreCreateGuardError && error.reason === "stale") {
+      return {
+        message: error.message,
+        savedReportPath: ownedPrepared.savedReportPath,
+        status: "stale",
+      };
+    }
+    throw error;
   }
   return {
     fallbackUrl: created.url,

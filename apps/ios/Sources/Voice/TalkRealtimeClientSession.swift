@@ -9,6 +9,7 @@ struct TalkRealtimeClientCreateParams: Encodable {
     var brain = "agent-consult"
     var model: String?
     var voice: String?
+    var voiceChangeId: String?
     var capabilities: [String]
 }
 
@@ -50,6 +51,10 @@ struct TalkRealtimeTranscriptParams: Encodable {
 struct TalkRealtimeClientCloseParams: Encodable {
     let sessionKey: String
     let voiceSessionId: String
+}
+
+struct TalkVoiceCompletionResult: Decodable {
+    let ok: Bool
 }
 
 struct TalkRealtimeToolCallResponse: Decodable {

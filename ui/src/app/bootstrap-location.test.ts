@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RouteId } from "../app-routes.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -19,7 +18,7 @@ describe("resolveInitialApplicationLocation", () => {
         gateway: {
           snapshot: { phase: "connected", client: {}, hello: null },
           subscribe: vi.fn(() => () => undefined),
-        } as unknown as ApplicationContext<RouteId>["gateway"],
+        } as unknown as ApplicationContext["gateway"],
         agentsList: () => null,
         signal: new AbortController().signal,
       });
@@ -34,13 +33,13 @@ describe("resolveInitialApplicationLocation", () => {
   ])(
     "waits for gateway defaults before normalizing '$persistedSessionKey'",
     async ({ persistedSessionKey, connectedSessionKey }) => {
-      type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+      type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
       let listener: GatewayListener | null = null;
       let snapshot = {
         phase: "connecting",
         client: null,
         hello: null,
-      } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+      } as unknown as ApplicationContext["gateway"]["snapshot"];
       const gateway = {
         get snapshot() {
           return snapshot;
@@ -74,7 +73,7 @@ describe("resolveInitialApplicationLocation", () => {
             sessionDefaults: { defaultAgentId: "research", mainKey: "workspace" },
           },
         },
-      } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+      } as unknown as ApplicationContext["gateway"]["snapshot"];
       const connectedListener = listener as GatewayListener | null;
       if (!connectedListener) {
         throw new Error("expected gateway readiness subscription");
@@ -103,7 +102,7 @@ describe("resolveInitialApplicationLocation", () => {
           gateway: {
             snapshot: { phase: "connecting", client: null, hello: null },
             subscribe,
-          } as unknown as ApplicationContext<RouteId>["gateway"],
+          } as unknown as ApplicationContext["gateway"],
           agentsList: () => null,
           signal: new AbortController().signal,
         }),
@@ -127,7 +126,7 @@ describe("resolveInitialApplicationLocation", () => {
             hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } },
           },
           subscribe,
-        } as unknown as ApplicationContext<RouteId>["gateway"],
+        } as unknown as ApplicationContext["gateway"],
         agentsList: () => null,
         signal: new AbortController().signal,
       }),
@@ -175,7 +174,7 @@ describe("resolveInitialApplicationLocation", () => {
       gateway: {
         snapshot: { phase: "connecting", client: null, hello: null },
         subscribe,
-      } as unknown as ApplicationContext<RouteId>["gateway"],
+      } as unknown as ApplicationContext["gateway"],
       agentsList: () => ({ defaultId: "main", mainKey: "main", scope: "global", agents: [] }),
       signal: new AbortController().signal,
     });
@@ -189,6 +188,30 @@ describe("resolveInitialApplicationLocation", () => {
     expect(subscribe).not.toHaveBeenCalled();
   });
 
+  it("preserves the UUID when rewriting a released session query", async () => {
+    const resolved = await resolveInitialApplicationLocation({
+      location: {
+        pathname: "/chat",
+        search:
+          "?session=agent%3Aresearch%3Athread%3A12345678-aaaa-4000-8000-000000000001&draft=continue",
+        hash: "",
+      },
+      basePath: "",
+      sessionKey: "agent:main:main",
+      gateway: {
+        snapshot: { phase: "connected", client: {}, hello: null },
+        subscribe: vi.fn(() => () => undefined),
+      } as unknown as ApplicationContext["gateway"],
+      agentsList: () => ({ defaultId: "main", mainKey: "main", scope: "global", agents: [] }),
+      signal: new AbortController().signal,
+    });
+    expect(resolved).toEqual({
+      pathname: "/chat/research/12345678aaaa40008000000000000001",
+      search: "?draft=continue",
+      hash: "",
+    });
+  });
+
   it("does not consume Sessions list row-expansion state", async () => {
     const location = { pathname: "/sessions", search: "?session=agent%3Amain%3Amain", hash: "" };
     const subscribe = vi.fn(() => () => undefined);
@@ -200,7 +223,7 @@ describe("resolveInitialApplicationLocation", () => {
         gateway: {
           snapshot: { phase: "connecting", client: null, hello: null },
           subscribe,
-        } as unknown as ApplicationContext<RouteId>["gateway"],
+        } as unknown as ApplicationContext["gateway"],
         agentsList: () => null,
         signal: new AbortController().signal,
       }),
@@ -209,13 +232,13 @@ describe("resolveInitialApplicationLocation", () => {
   });
 
   it("waits for cold custom-main defaults before rewriting a released query link", async () => {
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
     let listener: GatewayListener | null = null;
     let snapshot = {
       phase: "connecting",
       client: null,
       hello: null,
-    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+    } as unknown as ApplicationContext["gateway"]["snapshot"];
     const pending = resolveInitialApplicationLocation({
       location: {
         pathname: "/chat",
@@ -247,7 +270,7 @@ describe("resolveInitialApplicationLocation", () => {
       phase: "connected",
       client: {},
       hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } },
-    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+    } as unknown as ApplicationContext["gateway"]["snapshot"];
     const connectedListener = listener as GatewayListener | null;
     if (!connectedListener) {
       throw new Error("expected gateway readiness subscription");

@@ -1,7 +1,9 @@
 import { html, nothing } from "lit";
+import type { ThemeMascot } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import "../../../components/elapsed-time.ts";
 import "../../../components/working-phrase.ts";
 import { icons } from "../../../components/icons.ts";
+import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
@@ -49,6 +51,8 @@ function outputTokensLabel(outputTokens: number): string {
 export function renderChatWorkingIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,
   options: {
+    mascot?: ThemeMascot;
+    workingPhrases?: readonly string[];
     waitingApproval?: boolean;
     startupLabel?: string;
     outputTokens?: number | null;
@@ -56,10 +60,12 @@ export function renderChatWorkingIndicator(
   } = {},
 ) {
   const waitingApproval = options.waitingApproval === true;
+  const neutral = (options.mascot ?? currentThemeBranding().mascot) === "none";
   const continuation = options.presentation === "continuation";
+  const preamble = !waitingApproval && !options.startupLabel ? part.preamble : undefined;
   const statusLabel = waitingApproval
     ? t("chat.waitingForApproval")
-    : options.startupLabel || t("common.working");
+    : options.startupLabel || preamble || t("common.working");
   const working = !waitingApproval && !options.startupLabel;
   // Providers report exact usage at response boundaries, not per text delta.
   // Keep the latest count visible while the run continues through tools.
@@ -77,17 +83,31 @@ export function renderChatWorkingIndicator(
           ? nothing
           : html`
               <div
-                class="chat-bubble chat-reading-indicator ${selectWorkingClawSurprise(part.key, {
-                  eligible: !waitingApproval,
-                })}"
+                class="chat-bubble chat-reading-indicator ${
+                  neutral
+                    ? "chat-reading-indicator--neutral"
+                    : selectWorkingClawSurprise(part.key, {
+                        eligible: !waitingApproval,
+                      })
+                }"
                 aria-hidden="true"
               >
-                ${icons.claw}
+                ${neutral ? html`<span></span><span></span><span></span>` : icons.claw}
               </div>
             `
       }
       <span class="chat-working-indicator__status">
-        <span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>
+        <span
+          title=${preamble ?? nothing}
+          class=${
+            preamble
+              ? "chat-working-indicator__preamble"
+              : working && !continuation
+                ? "sr-only"
+                : ""
+          }
+          >${statusLabel}</span
+        >
         ${
           waitingApproval
             ? nothing
@@ -106,12 +126,13 @@ export function renderChatWorkingIndicator(
                   >${outputTokensLabel(outputTokens)}</span
                 >
               `
-            : working
+            : working && !preamble
               ? html`
                   <openclaw-working-phrase
                     aria-hidden="true"
                     .startMs=${part.startedAt}
                     .seed=${part.key}
+                    .phrases=${options.workingPhrases}
                   ></openclaw-working-phrase>
                 `
               : nothing
@@ -143,7 +164,9 @@ export function renderTurnRecapRow(
       ${
         continuation
           ? nothing
-          : html`<span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>`
+          : html`<span class="chat-tasks-status__claw" aria-hidden="true"
+              >${currentThemeBranding().mascot === "none" ? icons.mark : icons.claw}</span
+            >`
       }
       <span>${t("chat.turnRecap.doneIn", { duration })}</span>
       ${

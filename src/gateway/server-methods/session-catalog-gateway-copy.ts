@@ -57,7 +57,7 @@ async function resolveGatewayCopyModel(params: {
       catalog,
       ref: source,
       defaultProvider: defaultModel.provider,
-      defaultModel: defaultModel.model,
+      defaultModel,
       agentId: params.agentId,
     });
     return {

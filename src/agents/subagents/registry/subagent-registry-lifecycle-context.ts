@@ -65,10 +65,12 @@ export type SubagentLifecycleOptions = {
 export interface SubagentLifecycleCommonContext {
   readonly options: SubagentLifecycleOptions;
   newerGenerationOwnsSession(entry: SubagentRunRecord): boolean;
+  shouldSuppressSessionEffects(entry: SubagentRunRecord): boolean;
 }
 
 export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCommonContext {
   acquireTerminalCompletionLock(runId: string): Promise<() => void>;
+  bindTerminalSessionEffects(entry: SubagentRunRecord, isCurrent?: () => boolean): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
   bumpTerminalGeneration(entry: SubagentRunRecord): number;
   hasProgressEnded(entry: SubagentRunRecord): boolean;
@@ -96,7 +98,19 @@ export interface SubagentLifecycleAnnounceCleanupContext
   completeCleanupBookkeeping(args: CleanupBookkeepingParams): void;
 }
 
+export type PendingRequesterSettleWakeCommit = {
+  entries: readonly SubagentRunRecord[];
+  isCurrent(entry: SubagentRunRecord): boolean;
+  commit(entries: readonly SubagentRunRecord[]): boolean;
+  failures: number;
+  nextAttemptAt: number;
+};
+
 export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonContext {
+  readonly pendingRequesterSettleWakeCommits: WeakMap<
+    SubagentRunRecord,
+    PendingRequesterSettleWakeCommit
+  >;
   resumeAncestorCleanup(settledEntry: SubagentRunRecord): void;
   deleteRequesterSettleWakeTimer(runId: string): void;
   getRequesterSettleWakeTimer(runId: string): ScheduledRequesterSettleWake | undefined;

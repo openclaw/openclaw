@@ -86,10 +86,6 @@ type LogSourceIdentity = {
   localFallback?: boolean;
 };
 
-async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
-  return await import("./logs-cli.runtime.js");
-}
-
 type LogsCliOptions = GatewayRpcOpts & {
   limit?: string;
   maxBytes?: string;
@@ -278,7 +274,7 @@ async function readSystemdJournalFallback(params: {
   if (process.platform !== "linux") {
     return null;
   }
-  const runtime = await loadLogsCliRuntime();
+  const runtime = await import("./logs-cli.runtime.js");
   const service = await runtime.readSystemdServiceRuntime(process.env);
   if (service.status !== "running" || typeof service.pid !== "number") {
     return null;
@@ -299,7 +295,8 @@ async function readSystemdJournalFallback(params: {
   if (typeof params.cursor === "string" && params.cursor.trim().length > 0) {
     args.push(`--after-cursor=${params.cursor}`);
   } else if (params.since) {
-    args.push(`--since=${params.since}`);
+    // journalctl requires its own timestamp syntax, not the ISO poll timestamp.
+    args.push(`--since=${params.since.replace("T", " ").replace("Z", " UTC")}`);
   } else {
     args.push("-n", String(limit));
   }
@@ -419,7 +416,7 @@ function formatLogLine(
   if (!parsed) {
     return raw;
   }
-  const label = parsed.subsystem ?? parsed.module ?? "";
+  const label = parsed.subsystem ?? parsed.module ?? parsed.plugin ?? "";
   const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime);
   const level = parsed.level ?? "";
   const levelLabel = level.padEnd(5).trim();
@@ -567,8 +564,10 @@ export function registerLogsCli(program: Command) {
     let first = true;
     let lastSourceIdentity: string | undefined;
     const jsonMode = Boolean(opts.json);
+    const emitNotice = (message: string) =>
+      jsonMode ? emitJsonLine({ type: "notice", message }) : errorLine(message);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
-    const rich = isRich() && opts.color !== false;
+    const rich = isRich() && opts.color !== false && !opts.plain;
     const localTime = !opts.utc;
 
     const startGatewayRecoveryProbe = () => {
@@ -705,31 +704,7 @@ export function registerLogsCli(program: Command) {
         }
         for (const line of lines) {
           const parsed = parseLogLine(line);
-          if (parsed) {
-            if (!emitJsonLine({ type: "log", ...parsed })) {
-              return;
-            }
-          } else if (!emitJsonLine({ type: "raw", raw: line })) {
-            return;
-          }
-        }
-        if (payload.truncated) {
-          if (
-            !emitJsonLine({
-              type: "notice",
-              message: "Log tail truncated (increase --limit or --max-bytes).",
-            })
-          ) {
-            return;
-          }
-        }
-        if (payload.reset) {
-          if (
-            !emitJsonLine({
-              type: "notice",
-              message: formatLogResetNotice(payload.skippedBytes),
-            })
-          ) {
+          if (!emitJsonLine(parsed ? { type: "log", ...parsed } : { type: "raw", raw: line })) {
             return;
           }
         }
@@ -776,16 +751,15 @@ export function registerLogsCli(program: Command) {
             return;
           }
         }
-        if (payload.truncated) {
-          if (!errorLine("Log tail truncated (increase --limit or --max-bytes).")) {
-            return;
-          }
-        }
-        if (payload.reset) {
-          if (!errorLine(formatLogResetNotice(payload.skippedBytes))) {
-            return;
-          }
-        }
+      }
+      if (
+        payload.truncated &&
+        !emitNotice("Log tail truncated (increase --limit or --max-bytes).")
+      ) {
+        return;
+      }
+      if (payload.reset && !emitNotice(formatLogResetNotice(payload.skippedBytes))) {
+        return;
       }
       if (payload.sourceKind === "journal") {
         // The journal is an at-least-once bridge: retain its cursor, leave the

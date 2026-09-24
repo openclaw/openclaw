@@ -71,6 +71,10 @@ class MxcFsBridge implements SandboxFsBridge {
     };
   }
 
+  get pathMappings(): NonNullable<SandboxFsBridge["pathMappings"]> {
+    return [...this.protectedSkillMounts, ...this.workspaceMounts];
+  }
+
   async readFile(params: { filePath: string; cwd?: string; maxBytes?: number }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     return (await (

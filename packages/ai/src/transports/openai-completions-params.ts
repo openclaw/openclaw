@@ -7,9 +7,11 @@ import {
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
   isOpenAIGpt56Model,
-  resolveOpenAIReasoningEffortForModel,
-  type OpenAIReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import {
+  resolveOpenAIRequestReasoning,
+  resolveOpenAISimpleReasoningEffort,
+} from "../providers/openai-request-reasoning.js";
 import {
   resolveOpenAICompletionsResponseFormat,
   shouldOmitOllamaCompatResponseFormat,
@@ -30,6 +32,7 @@ import {
 } from "./openai-completions-cache-control.js";
 import {
   detectOpenAICompletionsCompat,
+  isNativeOpenAIEndpoint,
   type ResolvedOpenAICompletionsCompat,
 } from "./openai-completions-compat.js";
 import { applyDirectCompletionsReasoningAndRouting } from "./openai-completions-direct-policy.js";
@@ -47,7 +50,6 @@ import {
   resolveOpenAIStrictToolFlagWithDiagnostics,
 } from "./openai-transport-params.js";
 import {
-  isOpenAICompletionsThinkingEnabled,
   log,
   resolvePromptCacheKey,
   sortTransportToolsByName,
@@ -60,7 +62,7 @@ import {
 } from "./transport-utils.js";
 
 function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
-  if (!model.baseUrl.trim()) {
+  if (!model.baseUrl.trim() || isNativeOpenAIEndpoint(model)) {
     return true;
   }
   const endpointClass = resolveProviderEndpoint(model).endpointClass;
@@ -72,10 +74,6 @@ function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolea
   } catch {
     return false;
   }
-}
-
-function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
-  return options?.reasoningEffort ?? options?.reasoning ?? "high";
 }
 
 function resolveOpenAICompletionsMaxTokens(
@@ -208,10 +206,6 @@ function resolveOpenAICompletionsEffectiveContextTokens(
     : undefined;
 }
 
-function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
-  return format === "qwen" || format === "qwen-chat-template";
-}
-
 function setQwenChatTemplateThinking(params: Record<string, unknown>, enabled: boolean): void {
   const existing = params.chat_template_kwargs;
   params.chat_template_kwargs =
@@ -220,39 +214,30 @@ function setQwenChatTemplateThinking(params: Record<string, unknown>, enabled: b
       : { enable_thinking: enabled };
 }
 
-function applyQwenOpenAICompletionsThinkingParams(params: {
+/** Return whether the binary control replaces scalar reasoning effort. */
+function applyBinaryCompletionsThinkingParams(params: {
   compatThinkingFormat: string;
   modelReasoning: boolean;
   payload: Record<string, unknown>;
-  requestedEffort: OpenAIReasoningEffort;
+  thinkingEnabled: boolean;
 }): boolean {
-  if (
-    !params.modelReasoning ||
-    !isQwenOpenAICompletionsThinkingFormat(params.compatThinkingFormat)
-  ) {
+  if (!params.modelReasoning) {
     return false;
   }
-  const enabled = isOpenAICompletionsThinkingEnabled(params.requestedEffort);
-  if (params.compatThinkingFormat === "qwen-chat-template") {
-    setQwenChatTemplateThinking(params.payload, enabled);
-  } else {
-    params.payload.enable_thinking = enabled;
+  const enabled = params.thinkingEnabled;
+  switch (params.compatThinkingFormat) {
+    case "qwen-chat-template":
+      setQwenChatTemplateThinking(params.payload, enabled);
+      return true;
+    case "qwen":
+      params.payload.enable_thinking = enabled;
+      return true;
+    case "together":
+      params.payload.reasoning = { enabled };
+      return !enabled;
+    default:
+      return false;
   }
-  return true;
-}
-
-function applyTogetherOpenAICompletionsThinkingParams(params: {
-  compatThinkingFormat: string;
-  modelReasoning: boolean;
-  payload: Record<string, unknown>;
-  requestedEffort: OpenAIReasoningEffort;
-}): void {
-  if (!params.modelReasoning || params.compatThinkingFormat !== "together") {
-    return;
-  }
-  params.payload.reasoning = {
-    enabled: isOpenAICompletionsThinkingEnabled(params.requestedEffort),
-  };
 }
 
 function convertTools(
@@ -542,69 +527,69 @@ export function buildOpenAICompletionsRequest(
       }
     }
   }
+  const isOpenRouter = compat.thinkingFormat === "openrouter";
+  // Only model metadata can declare a missing effort selector; endpoint defaults cannot.
+  const usesBinaryOpenRouterThinking =
+    isOpenRouter &&
+    (model.compat?.supportsReasoningEffort === false ||
+      model.compat?.supportedReasoningEfforts?.length === 0);
+  const simpleReasoning = options?.reasoning;
+  const requestedEffort =
+    policy.mode === "direct"
+      ? options?.reasoningEffort
+      : (options?.reasoningEffort ??
+        (simpleReasoning === "none"
+          ? "none"
+          : resolveOpenAISimpleReasoningEffort(
+              { ...model, compat: model.compat ?? undefined },
+              simpleReasoning,
+            )) ??
+        (usesBinaryOpenRouterThinking ? undefined : "high"));
+  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
+  const { effort, thinkingEnabled } = reasoning;
+  if (isOpenRouter && model.reasoning) {
+    if (usesBinaryOpenRouterThinking && thinkingEnabled !== undefined) {
+      params.reasoning = { enabled: thinkingEnabled };
+    } else if (effort !== undefined) {
+      params.reasoning = { effort };
+    }
+  }
   if (policy.mode === "direct") {
-    applyDirectCompletionsReasoningAndRouting(params, model, options, compat);
-    return params;
+    applyDirectCompletionsReasoningAndRouting(params, model, reasoning, compat);
+  } else {
+    const suppressScalarEffort = applyBinaryCompletionsThinkingParams({
+      compatThinkingFormat: compat.thinkingFormat,
+      modelReasoning: model.reasoning,
+      payload: params,
+      thinkingEnabled: thinkingEnabled ?? false,
+    });
+    if (
+      !isOpenRouter &&
+      effort &&
+      model.reasoning &&
+      compat.supportsReasoningEffort &&
+      !suppressScalarEffort
+    ) {
+      params.reasoning_effort = effort;
+    }
+    if (compat.cacheControlFormat === "anthropic") {
+      applyCompletionsAnthropicCacheControl(
+        params,
+        cacheControl ?? null,
+        cacheOptOutIndexes,
+        markTools,
+        !managedCompat?.requiresStringContent,
+      );
+    }
   }
-  const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
-  const resolvedCompletionsReasoningEffort = completionsReasoningEffort
-    ? resolveOpenAIReasoningEffortForModel({
-        model,
-        effort: completionsReasoningEffort,
-        fallbackMap: managedCompat?.reasoningEffortMap,
-      })
-    : undefined;
-  const omitChatCompletionsToolReasoningEffort =
-    Array.isArray(params.tools) &&
-    params.tools.length > 0 &&
-    (isOpenAIGpt54MiniModel(model) ||
-      (isOpenAIGpt55Model(model) && isKnownOpenAICompletionsEndpoint(model)));
-  const disableChatCompletionsToolReasoning =
-    Array.isArray(params.tools) &&
-    params.tools.length > 0 &&
-    isOpenAIGpt56Model(model) &&
-    isKnownOpenAICompletionsEndpoint(model);
-  const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
-    compatThinkingFormat: compat.thinkingFormat,
-    modelReasoning: model.reasoning,
-    payload: params,
-    requestedEffort: completionsReasoningEffort,
-  });
-  applyTogetherOpenAICompletionsThinkingParams({
-    compatThinkingFormat: compat.thinkingFormat,
-    modelReasoning: model.reasoning,
-    payload: params,
-    requestedEffort: completionsReasoningEffort,
-  });
-  if (disableChatCompletionsToolReasoning) {
-    // GPT-5.6 Chat Completions defaults reasoning on, but rejects function
-    // tools unless reasoning is explicitly disabled.
-    params.reasoning_effort = "none";
-  } else if (
-    compat.thinkingFormat === "openrouter" &&
-    model.reasoning &&
-    resolvedCompletionsReasoningEffort
-  ) {
-    params.reasoning = {
-      effort: resolvedCompletionsReasoningEffort,
-    };
-  } else if (
-    resolvedCompletionsReasoningEffort &&
-    model.reasoning &&
-    compat.supportsReasoningEffort &&
-    !handledQwenThinkingFormat &&
-    !omitChatCompletionsToolReasoningEffort
-  ) {
-    params.reasoning_effort = resolvedCompletionsReasoningEffort;
-  }
-  if (compat.cacheControlFormat === "anthropic") {
-    applyCompletionsAnthropicCacheControl(
-      params,
-      cacheControl ?? null,
-      cacheOptOutIndexes,
-      markTools,
-      !managedCompat?.requiresStringContent,
-    );
+  if (params.tools?.length && isKnownOpenAICompletionsEndpoint(model)) {
+    // Native Chat Completions rejects tools with enabled GPT-5.6 reasoning,
+    // and rejects the effort field entirely for GPT-5.4 Mini and GPT-5.5 tools.
+    if (isOpenAIGpt56Model(model)) {
+      params.reasoning_effort = "none";
+    } else if (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) {
+      delete params.reasoning_effort;
+    }
   }
   return params;
 }

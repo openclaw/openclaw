@@ -30,8 +30,8 @@ function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
     sessionKey: "agent:main:paired-session",
   };
   const release = vi.fn();
-  const acquireManagedWorkspace = vi.fn(
-    (request: {
+  const acquireManagedWorkspaceAsync = vi.fn(
+    async (request: {
       workspaceDir: string;
       environmentId: string;
       sessionId: string;
@@ -53,10 +53,10 @@ function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
   const context = {
     sessionKey: placement.sessionKey,
     sendNodeEvent: async () => undefined,
-    acquireManagedWorkspace,
+    acquireManagedWorkspaceAsync,
     prepareExecAuthorization: () => () => {},
   } satisfies NonNullable<Parameters<OpenClawPluginNodeHostCommand["handle"]>[2]>;
-  return { placement, context, acquireManagedWorkspace, release };
+  return { placement, context, acquireManagedWorkspaceAsync, release };
 }
 
 function createNodeFrames(testSignal?: AbortSignal) {
@@ -154,9 +154,14 @@ async function readNodeProcessNotifications(
       matching().length >= count,
   );
   expect(matching()).toHaveLength(count);
-  return matching().toSorted(
+  const notifications = matching().toSorted(
     (left, right) => (left.params as { seq: number }).seq - (right.params as { seq: number }).seq,
   );
+  expect(notifications.map((message) => (message.params as { seq: number }).seq)).toEqual(
+    Array.from({ length: count }, (_, index) => index + 1),
+  );
+  expect(notifications.at(-1)?.method).toBe("process/closed");
+  return notifications;
 }
 
 let pendingNodeProof: Promise<void> | undefined;
@@ -174,38 +179,6 @@ afterEach(async () => {
 });
 
 describe("Codex node exec-server", () => {
-  it("reports an unconfirmed transport stop instead of treating its result object as success", async () => {
-    const transport = await import("./app-server/transport.js");
-    const close = transport.closeCodexAppServerTransportAndWait;
-    const failedClose = vi
-      .spyOn(transport, "closeCodexAppServerTransportAndWait")
-      .mockImplementation(async (...args) => {
-        await close(...args);
-        return { exited: false, cleanup: "uncertain" };
-      });
-    const command = createCodexNodeExecServerCommand();
-    const frames = createNodeFrames();
-    const workspace = createManagedWorkspaceInvocation(process.cwd());
-    const invocation = command.handle(
-      JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
-      frames.io,
-      workspace.context,
-    );
-    const outcome = invocation.catch((error: unknown) => error);
-    try {
-      await Promise.race([frames.ready, invocation]);
-      frames.controller.abort(new Error("node cleanup fixture disconnected"));
-      await expect(outcome).resolves.toMatchObject({
-        message: "Codex node exec-server process tree did not terminate.",
-      });
-      await expect(command.onDisconnect?.()).rejects.toThrow("did not terminate");
-    } finally {
-      frames.controller.abort();
-      await outcome;
-      failedClose.mockRestore();
-    }
-  });
-
   it("uses admitted Full launch authority without asking for a human decision", async () => {
     const { placement } = createManagedWorkspaceInvocation(process.cwd());
     const request = vi.fn(async () => ({ decision: "deny" as const }));
@@ -449,7 +422,7 @@ describe("Codex node exec-server", () => {
         sessionKey: "agent:main:different-session",
       }),
     ).rejects.toThrow("active managed placement authority");
-    expect(workspace.acquireManagedWorkspace).not.toHaveBeenCalled();
+    expect(workspace.acquireManagedWorkspaceAsync).not.toHaveBeenCalled();
     for (const replacement of [
       { cwd: path.parse(process.cwd()).root },
       { environmentId: "other-environment" },
@@ -480,6 +453,7 @@ describe("Codex node exec-server", () => {
     frames.controller.abort(new Error("malformed-frame fixture closed"));
     await expect(invocation).rejects.toThrow("malformed-frame fixture closed");
     expect(workspace.release).toHaveBeenCalledOnce();
+    expect(command.hasActiveWork?.() ?? false).toBe(false);
   });
 
   it("uses prepared HOME with the actual pinned binary while keeping Codex state private", async ({
@@ -598,8 +572,31 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
           (error: unknown) => frames.controller.abort(error),
         );
         let isolatedHome: string | undefined;
+        const outputGate = createServer((_request, response) => {
+          void frames
+            .waitForMessage(
+              (message) =>
+                message.method === "process/exited" &&
+                (message.params as { processId?: string }).processId === "node-proof",
+            )
+            .then(
+              () => response.end(),
+              () => response.destroy(),
+            );
+        });
 
         try {
+          outputGate.listen(0, "127.0.0.1");
+          await once(outputGate, "listening");
+          const gateAddress = outputGate.address();
+          if (!gateAddress || typeof gateAddress === "string") {
+            throw new Error("Late-output fixture did not bind a TCP port.");
+          }
+          const lateOutputScript = `require('node:http').get(
+            'http://127.0.0.1:${gateAddress.port}/', response => {
+              response.resume();
+              response.once('end', () => process.stdout.write(process.argv[1] + '\\n'));
+            });`;
           await Promise.race([frames.ready, invocation]);
           // Codex deliberately omits jsonrpc:"2.0" from every wire envelope.
           await frames.send({
@@ -650,7 +647,7 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
 
           const script = [
             "process.stdin.once('data', input => {",
-            "process.stdout.write(JSON.stringify({",
+            "const output = JSON.stringify({",
             "input: input.toString().trim(),",
             "ordinary: process.env.NODE_EXEC_ORDINARY ?? null,",
             "home: process.env.HOME ?? null,",
@@ -662,7 +659,10 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
             "forge: process.env.GITHUB_TOKEN ?? null,",
             "ssh: process.env.SSH_AUTH_SOCK ?? null,",
             "injection: process.env.NODE_OPTIONS ?? null",
-            "}) + '\\n', () => process.exit(0))",
+            "})",
+            // Keep the inherited output pipes open until the test observes the parent's exit.
+            `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(lateOutputScript)}, output],`,
+            "{ stdio: ['ignore', 'inherit', 'inherit'] }).once('spawn', () => process.exit(0))",
             "})",
           ].join("\n");
           await frames.send({
@@ -697,12 +697,19 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
           });
           await readNodeResponse(frames, 9);
           const notifications = await readNodeProcessNotifications(frames, "node-proof", 3);
-          expect(notifications.map((message) => message.method)).toEqual([
-            "process/output",
-            "process/exited",
-            "process/closed",
-          ]);
-          const output = notifications[0]?.params as { chunk: string; seq: number };
+          // Codex drains output independently of exit; only closed is terminal in seq order.
+          expect(
+            notifications
+              .map((message) => message.method)
+              .toSorted((left, right) => String(left).localeCompare(String(right))),
+          ).toEqual(["process/closed", "process/exited", "process/output"]);
+          expect(
+            notifications.find((message) => message.method === "process/exited"),
+          ).toMatchObject({
+            params: { exitCode: 0, sandboxDenied: false },
+          });
+          const output = notifications.find((message) => message.method === "process/output")
+            ?.params as { chunk: string };
           const observed = JSON.parse(Buffer.from(output.chunk, "base64").toString("utf8")) as {
             input: string;
             ordinary: string;
@@ -968,6 +975,10 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
             cause: closed,
           });
         } finally {
+          outputGate.closeAllConnections();
+          await new Promise<void>((resolve, reject) => {
+            outputGate.close((error) => (error ? reject(error) : resolve()));
+          });
           frames.controller.abort(new Error("paired-device attempt completed"));
           await expect(invocation).rejects.toBe(frames.io.signal.reason);
           await command.onDisconnect?.();

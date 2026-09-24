@@ -400,7 +400,7 @@ export class ReefInboxEntryParkedError extends Error {
 
 interface ReefInboxConnectionOptions {
   initialCursor?: number;
-  persistCursor?: (cursor: number) => void;
+  persistCursor?: ((cursor: number) => void) | ((cursor: number) => Promise<void>);
   onState?: (state: "connected" | "disconnected") => void;
   onError?: (error: Error) => void;
 }
@@ -552,7 +552,7 @@ export class ReefInboxConnection {
       if (parked) {
         this.processedAboveCursor.add(entry.seq);
       } else {
-        this.advanceCursor(entry.seq);
+        await this.advanceCursor(entry.seq);
       }
     }
     if (cursor !== undefined) {
@@ -566,7 +566,7 @@ export class ReefInboxConnection {
       }
       if (fresh.length === 0) {
         // Empty pages may echo the old cursor after expiry/acknowledgment.
-        this.advanceCursor(this.reconciledThrough);
+        await this.advanceCursor(this.reconciledThrough);
       }
     }
     return parked;
@@ -584,11 +584,15 @@ export class ReefInboxConnection {
     await this.serialize(() => this.drain(signal));
   }
 
-  private advanceCursor(cursor: number): void {
+  private async advanceCursor(cursor: number): Promise<void> {
     if (cursor <= this.cursor) {
       return;
     }
-    this.options.persistCursor?.(cursor);
+    await this.options.persistCursor?.(cursor);
+    // A direct drain may publish a newer cursor while this persistence waits.
+    if (cursor <= this.cursor) {
+      return;
+    }
     this.cursor = cursor;
     for (const seq of this.processedAboveCursor) {
       if (seq <= cursor) {

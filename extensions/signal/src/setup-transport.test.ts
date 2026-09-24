@@ -8,6 +8,25 @@ import {
   writeSignalAccountTransport,
 } from "./setup-transport.js";
 
+describe("socket transport setup", () => {
+  it("preserves sockets and does not reserve HTTP ports during setup", () => {
+    const transport = {
+      kind: "managed-native",
+      socketPath: "/tmp/signal-private/daemon.sock",
+    } as const;
+    const cfg = { channels: { signal: { transport } } };
+    expect(prepareSignalManagedNativeTransport({ cfg, accountId: "default" })).toEqual(transport);
+    expect(prepareSignalManagedNativeTransport({ cfg, accountId: "work" }).httpPort).toBe(8080);
+    expect(
+      writeSignalAccountTransport({
+        cfg,
+        accountId: "http",
+        transport: { kind: "external-native", url: "http://127.0.0.1:8080" },
+      }).channels?.signal?.accounts?.http?.transport,
+    ).toEqual({ kind: "external-native", url: "http://127.0.0.1:8080" });
+  });
+});
+
 describe("detectSignalTransport", () => {
   it("prefers native deterministically when both endpoints are healthy", async () => {
     const transport = await detectSignalTransport({
@@ -236,6 +255,36 @@ describe("prepareSignalManagedNativeTransport", () => {
     expect(
       prepareSignalManagedNativeTransport({ cfg: cfg as never, accountId: "work" }).httpPort,
     ).toBe(8081);
+  });
+
+  it("keeps runtime and setup reservations distinct for mixed transports", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            dormant: {
+              enabled: false,
+              transport: { kind: "managed-native", httpPort: 8080 },
+            },
+            external: {
+              transport: { kind: "external-native", url: "http://127.0.0.1:8081" },
+            },
+            socket: {
+              transport: {
+                kind: "managed-native",
+                socketPath: "/tmp/signal-reservation-test.sock",
+              },
+            },
+            work: { transport: { kind: "managed-native" } },
+          },
+        },
+      },
+    } as const;
+
+    expect(resolveSignalAccount({ cfg, accountId: "work" }).transport).toMatchObject({
+      httpPort: 8080,
+    });
+    expect(prepareSignalManagedNativeTransport({ cfg, accountId: "work" }).httpPort).toBe(8082);
   });
 
   it("preserves a selected account's collision-free managed port and options", () => {

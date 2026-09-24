@@ -39,22 +39,12 @@ export function formatPluginSourceForTable(
 ): { value: string; rootKey?: keyof PluginSourceRoots } {
   const raw = plugin.source;
 
-  if (plugin.origin === "bundled" && roots.stock) {
-    const rel = tryRelative(roots.stock, raw);
+  const rootKey = plugin.origin === "bundled" ? "stock" : plugin.origin;
+  if (rootKey !== "config") {
+    const root = roots[rootKey];
+    const rel = root ? tryRelative(root, raw) : null;
     if (rel) {
-      return { value: `stock:${rel}`, rootKey: "stock" };
-    }
-  }
-  if (plugin.origin === "workspace" && roots.workspace) {
-    const rel = tryRelative(roots.workspace, raw);
-    if (rel) {
-      return { value: `workspace:${rel}`, rootKey: "workspace" };
-    }
-  }
-  if (plugin.origin === "global" && roots.global) {
-    const rel = tryRelative(roots.global, raw);
-    if (rel) {
-      return { value: `global:${rel}`, rootKey: "global" };
+      return { value: `${rootKey}:${rel}`, rootKey };
     }
   }
 

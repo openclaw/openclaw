@@ -364,6 +364,11 @@ provider. This is not the separate Cloud Text-to-Speech API path.
 The bundled `google` plugin registers a realtime voice provider backed by the
 Gemini Live API for backend audio bridges such as Voice Call and Google Meet.
 
+Talk and Discord expose Google's prebuilt voices in their voice catalogs. During
+an active Talk or Discord call, use `talk_voice` to select a new voice. OpenClaw
+reconnects with that voice while preserving the conversation and unfinished agent
+work; saved voice defaults stay unchanged. See [Discord voice changes](/channels/discord/voice-follow).
+
 | Setting               | Config path                                                         | Default                                                                               |
 | --------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Model                 | `plugins.entries.voice-call.config.realtime.providers.google.model` | `gemini-3.1-flash-live-preview`                                                       |
@@ -424,6 +429,26 @@ response scheduling, and affective-dialog fields for this model. Prefer
 `thinkingLevel`; configured positive `thinkingBudget` values are mapped to the
 nearest supported level, while `-1` leaves Google's default in place. See the
 [Gemini Live capability comparison](https://ai.google.dev/gemini-api/docs/live-api/capabilities).
+</Note>
+
+<Note>
+Gemini 3.8 Live (`gemini-3.8-live`) keeps the async function-calling contract and
+rejects any thinking config, so OpenClaw sends none for it. Gemini 3.8 Live Extended
+Thinking (`gemini-3.8-live-extended-thinking`) requires `NON_BLOCKING` tools, rejects
+function response scheduling, and abandons a call after an interim response, so OpenClaw
+sends one final result per agent consult without a "working" interim. Configure its
+reasoning depth with `thinkingLevel` (`low`, `medium`, or `high`; `minimal` maps to
+`low`), or a positive `thinkingBudget` mapped to the nearest level. Spoken filler has its
+own utterance boundary while the interaction remains in progress; OpenClaw finalizes that
+transcript and audio but keeps the response active until Google reports the interaction
+as idle. On this model an explicit stop or barge-in interrupts generation through a short
+client-content turn that
+tells the model it was interrupted (an empty turn makes it resume). Cancelling the current
+generation is reliable, but the silence that follows is best effort: the model may still
+resume or start another response, so treat a stop as "stop this reply", not a guarantee of
+silence. Other Gemini Live models interrupt only through server-side voice activity
+detection. See the
+[Gemini 3.8 Live thinking guide](https://ai.google.dev/gemini-api/docs/live-api/thinking).
 </Note>
 
 <Note>

@@ -312,7 +312,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       {
         deliverDespiteSourceReplySuppression: true,
         sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main",
+          sessionKey: "agent:main:main",
           agentId: "main",
           text: "message tool reply",
           idempotencyKey: "run-1:internal-source-reply:0",
@@ -323,7 +323,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main" }),
+      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main:main" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
@@ -336,7 +336,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.queuedFinal).toBe(true);
     expect(deliver).toHaveBeenCalledWith(sourceReply, { kind: "final" });
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       agentId: "main",
       text: "message tool reply",
       mediaUrls: undefined,
@@ -377,7 +377,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       {
         deliverDespiteSourceReplySuppression: true,
         sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main",
+          sessionKey: "agent:main:main",
           agentId: "main",
           text: "secret message tool reply",
           mediaUrls: ["https://example.com/secret.png"],
@@ -389,7 +389,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main" }),
+      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main:main" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
@@ -404,7 +404,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       kind: "final",
     });
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       agentId: "main",
       text: "redacted hook reply",
       mediaUrls: ["https://example.com/redacted.png"],
@@ -421,7 +421,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       updatedAt: 0,
       sendPolicy: "allow",
     };
@@ -441,7 +441,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       {
         deliverDespiteSourceReplySuppression: true,
         sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main",
+          sessionKey: "agent:main:main",
           agentId: "main",
           text: "first reply",
           idempotencyKey: "run-1:internal-source-reply:queued",
@@ -455,7 +455,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         target: {
           agentId: "main",
           sessionId: "test-session",
-          sessionKey: "agent:main",
+          sessionKey: "agent:main:main",
           storePath: "/tmp/sessions.json",
         },
         messageId: "message-1",
@@ -467,7 +467,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         MessageSid: "first-message",
         Provider: "webchat",
         Surface: "webchat",
-        SessionKey: "agent:main",
+        SessionKey: "agent:main:main",
       }),
       cfg: emptyConfig,
       dispatcher: firstDispatcher,
@@ -479,7 +479,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
             MessageSid: "followup-message",
             Provider: "webchat",
             Surface: "webchat",
-            SessionKey: "agent:main",
+            SessionKey: "agent:main:main",
           }),
           cfg: emptyConfig,
           dispatcher: createDispatcher(),
@@ -518,7 +518,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       {
         deliverDespiteSourceReplySuppression: true,
         sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main",
+          sessionKey: "agent:main:main",
           agentId: "main",
           text: "message tool reply",
           idempotencyKey: "run-1:internal-source-reply:0",
@@ -529,7 +529,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main" }),
+      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main:main" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
@@ -559,7 +559,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       {
         deliverDespiteSourceReplySuppression: true,
         sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main",
+          sessionKey: "agent:main:main",
           agentId: "main",
           text: "message tool reply",
           idempotencyKey: "run-tts:internal-source-reply:0",
@@ -569,7 +569,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const replyResolver = vi.fn(async () => sourceReply satisfies ReplyPayload);
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main" }),
+      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main:main" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
@@ -587,7 +587,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       audioAsVoice: true,
     });
     expect(getReplyPayloadMetadata(queuedPayload)?.sourceReplyTranscriptMirror).toMatchObject({
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       idempotencyKey: "run-tts:internal-source-reply:0",
     });
   });

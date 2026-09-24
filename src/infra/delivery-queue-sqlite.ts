@@ -1,5 +1,5 @@
 // Stores durable delivery queue entries through their connection-bound owner.
-import { resolveStateDir } from "../config/state-dir.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -7,73 +7,43 @@ import {
 import {
   loadDeliveryQueueEntryInDatabase,
   type DeliveryQueueReadMode,
-  type UpsertDeliveryQueueEntryParams,
 } from "./delivery-queue-sqlite-bound.js";
 import {
-  countFailedDeliveryQueueEntriesInDatabase,
   countPendingDeliveryQueueEntriesInDatabase,
   deleteDeliveryQueueEntryInDatabase,
   getDeliveryQueueEntryOwnersInDatabase,
   loadDeliveryQueueEntriesInDatabase,
   prepareDeliveryQueueTerminalEntry,
-  pruneExpiredDeliveryQueueTombstonesInDatabase,
   reserveDeliveryQueueEntryAttemptInDatabase,
   terminalizePendingDeliveryQueueEntryInDatabase,
   updateDeliveryQueueEntryInDatabase,
-  upsertDeliveryQueueEntryInDatabase,
   type DeliveryQueueStoredStatus,
   type ReserveDeliveryQueueAttemptResult,
   type TerminalizePendingDeliveryQueueEntryParams,
   type TerminalizePendingDeliveryQueueEntryResult,
 } from "./delivery-queue-sqlite.kernel.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
-import { isGatewayExternallySupervised } from "./gateway-supervision.js";
+import {
+  resolveDeliveryQueueStateEnv,
+  type DeliveryQueueStateContext,
+} from "./delivery-queue-state-context.js";
+import { executeDeliveryQueueOperation } from "./delivery-queue-worker-store.js";
 
 export type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.types.js";
 
-export type DeliveryQueueStateContext = {
-  stateDir: string;
-  supervisorMode?: "external";
-};
-
-export function captureDeliveryQueueStateContext(stateDir?: string): DeliveryQueueStateContext {
-  return {
-    stateDir: resolveStateDir(resolveDeliveryQueueStateEnv(stateDir)),
-    ...(isGatewayExternallySupervised(process.env) ? { supervisorMode: "external" as const } : {}),
-  };
-}
-
-export function resolveDeliveryQueueStateEnv(
-  stateDir?: string,
-  context?: DeliveryQueueStateContext,
-): NodeJS.ProcessEnv {
-  return context
-    ? {
-        ...process.env,
-        OPENCLAW_STATE_DIR: context.stateDir,
-        // Captured absence must not inherit a later ambient supervisor mode.
-        OPENCLAW_SUPERVISOR_MODE: context.supervisorMode,
-      }
-    : stateDir
-      ? { ...process.env, OPENCLAW_STATE_DIR: stateDir }
-      : process.env;
-}
+export {
+  captureDeliveryQueueStateContext,
+  resolveDeliveryQueueStateEnv,
+  type DeliveryQueueStateContext,
+} from "./delivery-queue-state-context.js";
 
 function openStateDatabase(stateDir?: string, context?: DeliveryQueueStateContext) {
   return openOpenClawStateDatabase({
     env: resolveDeliveryQueueStateEnv(stateDir, context),
   });
-}
-
-/** Insert or replace a delivery queue entry under a queue namespace. */
-export function upsertDeliveryQueueEntry(
-  params: UpsertDeliveryQueueEntryParams,
-  context?: DeliveryQueueStateContext,
-): boolean {
-  return upsertDeliveryQueueEntryInDatabase(params, openStateDatabase(params.stateDir, context));
 }
 
 /** Load a single pending delivery queue entry. */
@@ -98,24 +68,9 @@ export function getDeliveryQueueEntryStatus(
   id: string,
   stateDir?: string,
 ): DeliveryQueueStoredStatus | undefined {
-  return getDeliveryQueueEntryOwners([queueName], id, stateDir).get(queueName)?.status;
-}
-
-/** Read one exact ID across physical namespaces from a single ownership snapshot. */
-export function getDeliveryQueueEntryOwners(
-  queueNames: readonly string[],
-  id: string,
-  stateDir?: string,
-  context?: DeliveryQueueStateContext,
-): Map<string, { status: DeliveryQueueStoredStatus; settlementPending?: true }> {
-  if (queueNames.length === 0) {
-    return new Map();
-  }
-  return getDeliveryQueueEntryOwnersInDatabase(
-    openStateDatabase(stateDir, context),
-    queueNames,
-    id,
-  );
+  return getDeliveryQueueEntryOwnersInDatabase(openStateDatabase(stateDir), [queueName], id).get(
+    queueName,
+  )?.status;
 }
 
 /** Load all pending entries for a queue namespace in database order. */
@@ -175,28 +130,53 @@ export function reserveDeliveryQueueEntryAttempt(
 }
 
 /** Count dead-lettered entries per queue namespace for coarse health reporting. */
-export function countFailedDeliveryQueueEntries(stateDir?: string): Array<{
-  queueName: string;
-  count: number;
-  oldestFailedAt?: number;
-}> {
-  return countFailedDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir));
+export async function countFailedDeliveryQueueEntries(
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<Array<{ queueName: string; count: number; oldestFailedAt?: number }>> {
+  return executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.countFailed",
+    input: undefined,
+  });
 }
 
 /** Count pending entries across an exact set of queue namespaces. */
 export function countPendingDeliveryQueueEntries(
   queueNames: readonly string[],
   stateDir?: string,
+  context?: DeliveryQueueStateContext,
 ): number {
   if (queueNames.length === 0) {
     return 0;
   }
-  return countPendingDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir), queueNames);
+  return countPendingDeliveryQueueEntriesInDatabase(
+    openStateDatabase(stateDir, context),
+    queueNames,
+  );
+}
+
+/** Inventory retired custody without opening a writer or creating state. */
+export async function countPendingDeliveryQueueEntriesReadOnly(
+  queueNames: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number> {
+  return (
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      (database) => countPendingDeliveryQueueEntriesInDatabase(database, queueNames),
+      { env },
+    )) ?? 0
+  );
 }
 
 /** Physically expire age-bounded delivery queue tombstones. */
-export function pruneExpiredDeliveryQueueTombstones(stateDir?: string): void {
-  pruneExpiredDeliveryQueueTombstonesInDatabase(openStateDatabase(stateDir));
+export async function pruneExpiredDeliveryQueueTombstones(
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<void> {
+  await executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.pruneTombstones",
+    input: undefined,
+  });
 }
 
 /** Atomically delete or tombstone a pending row only while its value is unchanged. */

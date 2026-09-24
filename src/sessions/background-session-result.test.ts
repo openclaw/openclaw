@@ -2,10 +2,18 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import { sessionMutationHandlers } from "../gateway/server-methods/sessions-mutations.js";
 import { callGatewayHandler } from "../gateway/server-methods/skills.test-helpers.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { commitBackgroundResultToSession } from "./background-session-result.js";
 import {
@@ -233,43 +241,73 @@ describe("commitBackgroundResultToSession", () => {
     });
   });
 
-  it("keeps canonical model text separate from structured display content", async () => {
-    const target = await createTarget();
-    const content = [
-      { type: "text", text: "Example report" },
-      {
-        type: "image",
-        url: "/api/chat/media/outgoing/source-session/attachment-1/full",
-        alt: "report.png",
-      },
-    ];
-    const commit = await commitBackgroundResultToSession({
-      agentId: "main",
-      sessionKey: target.sessionKey,
-      expectedGeneration: target.generation,
-      text: "Example report\nreport.png",
-      prepareDisplayContent: async () => content,
-      idempotencyKey: "cron-current-completion:cron:job-media:4000",
-      provenance: { kind: "cron", jobId: "job-media", runId: "cron:job-media:4000" },
-      config: target.config,
-    });
-    expect(commit).toMatchObject({ ok: true });
+  it.each([false, true])(
+    "settles accepted display content with provider review paused=%s",
+    async (paused) => {
+      const target = await createTarget();
+      if (paused) {
+        const scope = {
+          agentId: "main",
+          storePath: target.storePath,
+          sessionKey: target.sessionKey,
+        };
+        const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+        writeSessionEntry(
+          database,
+          target.sessionKey,
+          {
+            sessionId: target.sessionId,
+            lifecycleRevision: target.generation.lifecycleRevision,
+            updatedAt: 1,
+            providerReview: {
+              id: "review",
+              sessionId: target.sessionId,
+              runId: "refused-run",
+              provider: "openai",
+              model: "gpt-5.6-sol",
+              runtimeId: "openclaw",
+              api: "openai-responses",
+            },
+          },
+          { providerReviewMutation: true },
+        );
+      }
+      const content = [
+        { type: "text", text: "Example report" },
+        {
+          type: "image",
+          url: "/api/chat/media/outgoing/source-session/attachment-1/full",
+          alt: "report.png",
+        },
+      ];
+      const commit = await commitBackgroundResultToSession({
+        agentId: "main",
+        sessionKey: target.sessionKey,
+        expectedGeneration: target.generation,
+        text: "Example report\nreport.png",
+        prepareDisplayContent: async () => content,
+        idempotencyKey: "cron-current-completion:cron:job-media:4000",
+        provenance: { kind: "cron", jobId: "job-media", runId: "cron:job-media:4000" },
+        config: target.config,
+      });
+      expect(commit).toMatchObject({ ok: true });
 
-    const events = await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      storePath: target.storePath,
-    });
-    const messageEvent = events.find(
-      (event) =>
-        readTranscriptEventMessage(event)?.idempotencyKey ===
-        "cron-current-completion:cron:job-media:4000",
-    );
-    const message = readTranscriptEventMessage(messageEvent);
-    expect(message?.content).toEqual([{ type: "text", text: "Example report\nreport.png" }]);
-    expect(message?.openclawDisplayContent).toEqual(content);
-  });
+      const events = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      });
+      const messageEvent = events.find(
+        (event) =>
+          readTranscriptEventMessage(event)?.idempotencyKey ===
+          "cron-current-completion:cron:job-media:4000",
+      );
+      const message = readTranscriptEventMessage(messageEvent);
+      expect(message?.content).toEqual([{ type: "text", text: "Example report\nreport.png" }]);
+      expect(message?.openclawDisplayContent).toEqual(content);
+    },
+  );
 
   it("refuses an archived target conversation", async () => {
     const target = await createTarget();

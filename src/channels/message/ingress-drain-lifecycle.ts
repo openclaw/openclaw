@@ -12,7 +12,7 @@ export type ChannelIngressDispatchLifecycle = {
    * Claim remains held until adopted or abandoned.
    */
   onDeferred: () => void;
-  /** Deferred reply-lane admission is still waiting behind an active turn. */
+  /** Pre-adoption liveness while waiting for reply-lane admission or preflight compaction. */
   onDeferredHeartbeat?: () => void;
   deferredHeartbeatIntervalMs?: number;
   /**

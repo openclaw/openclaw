@@ -12,11 +12,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 const { readAcpSessionMeta, readAcpSessionMetaForEntry } = vi.hoisted(() => ({
   readAcpSessionMeta: vi.fn<typeof import("../acp/runtime/session-meta.js").readAcpSessionMeta>(),
   readAcpSessionMetaForEntry:
-    vi.fn<typeof import("../acp/runtime/session-meta.js").readAcpSessionMetaForEntry>(),
+    vi.fn<typeof import("../acp/runtime/session-meta-readonly.js").readAcpSessionMetaForEntry>(),
 }));
 
 vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionMeta,
+}));
+
+vi.mock("../acp/runtime/session-meta-readonly.js", () => ({
   readAcpSessionMetaForEntry,
 }));
 

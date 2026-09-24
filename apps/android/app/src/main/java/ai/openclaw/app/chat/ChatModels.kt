@@ -17,7 +17,18 @@ internal fun normalizeVisibleChatMessageRole(role: String?): String? =
   role
     ?.trim()
     ?.lowercase(Locale.US)
+    ?.let { if (it == "tool" || it == "tool_result") "toolresult" else it }
     ?.takeIf(visibleChatMessageRoles::contains)
+
+/** Shares the transcript tool error contract across activity display and source evidence. */
+internal fun isChatToolError(value: JsonObject): Boolean = (value["isError"]?.takeUnless { it is JsonNull } ?: value["is_error"]) == JsonPrimitive(true)
+
+internal fun normalizeChatToolContentType(type: String?): String? =
+  when (type?.lowercase(Locale.US)) {
+    "toolcall", "tool_call", "tooluse", "tool_use" -> "toolCall"
+    "toolresult", "tool_result", "tool_result_block" -> "toolResult"
+    else -> null
+  }
 
 /**
  * Chat transcript item as delivered by gateway chat history and live chat events.
@@ -47,6 +58,9 @@ data class ChatMessage(
   /** Display phase supplied by the Gateway, including signed text blocks. */
   val phase: String? = null,
   val isError: Boolean = false,
+  /** Derived from current history; not retained by the offline transcript cache. */
+  val sourceTools: List<ChatSourceTool> = emptyList(),
+  @kotlinx.serialization.Transient val activity: List<ChatAgentActivity>? = null,
 ) {
   // Synthetic mirrors and commentary borrow a transcript ID, not its canonical text.
   // Keep the ID for timeline actions, but never use it to recover or retain full text.
@@ -79,6 +93,7 @@ data class ChatMessageUsage(
   val input: Long? = null,
   val output: Long? = null,
   val cacheRead: Long? = null,
+  val cacheWrite: Long? = null,
 )
 
 @Serializable
@@ -188,6 +203,29 @@ data class ChatToolActivity(
   val result: String?,
   val isError: Boolean,
   val arguments: kotlinx.serialization.json.JsonObject? = null,
+  @kotlinx.serialization.Transient val activity: ChatAgentActivity? = null,
+  @kotlinx.serialization.Transient val activityPrepared: Boolean = false,
+)
+
+@Serializable
+data class ChatAgentActivity(
+  val itemId: String,
+  val kind: String,
+  val phase: String,
+  val title: String,
+  val toolCallId: String? = null,
+  val name: String? = null,
+  val status: String? = null,
+  val hideFromChannelProgress: Boolean = false,
+  val suppressChannelProgress: Boolean = false,
+) {
+  val isVisible: Boolean get() = !hideFromChannelProgress && !suppressChannelProgress
+}
+
+@Serializable
+data class ChatHistoryActivity(
+  val messageId: String,
+  val items: List<ChatAgentActivity>,
 )
 
 data class ChatWidgetPreview(
@@ -210,6 +248,11 @@ data class ChatPendingToolCall(
   val startedAtMs: Long,
   val isError: Boolean? = null,
   val liveDiff: ChatDiffStat? = null,
+  val activity: ChatAgentActivity? = null,
+  val isComplete: Boolean = false,
+  val runId: String? = null,
+  /** Stable across provisional-to-canonical run ownership changes. */
+  val presentationId: String? = null,
 )
 
 data class ChatDiffStat(

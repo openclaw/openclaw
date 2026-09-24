@@ -1,5 +1,7 @@
+import { isMainThread } from "node:worker_threads";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
@@ -39,6 +41,8 @@ type ConfigLoadEffect = {
 
 type ConfigLoadOperation<T> = Generator<ConfigLoadEffect, T, void>;
 
+type ConfigLoadOptions = { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void };
+
 function* resolveConfigLoadEffect<T>(effect: {
   sync: () => T;
   async: () => Promise<T>;
@@ -58,13 +62,15 @@ function* resolveConfigLoadEffect<T>(effect: {
 
 export function loadConfigFromContext(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean } = {},
+  options: ConfigLoadOptions = {},
 ): OpenClawConfig {
   const operation = loadConfigWithEffects(context, options);
   let step = operation.next();
   while (!step.done) {
     try {
+      options.assertCurrent?.();
       step.value.sync();
+      options.assertCurrent?.();
       step = operation.next();
     } catch (error) {
       step = operation.throw(error);
@@ -75,8 +81,12 @@ export function loadConfigFromContext(
 
 export async function loadConfigFromContextAsync(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void } = {},
+  options: ConfigLoadOptions = {},
 ): Promise<OpenClawConfig> {
+  // SDK callers already inside a worker use the same effects without a host broker.
+  if (!isMainThread) {
+    return loadConfigFromContext(context, options);
+  }
   const operation = loadConfigWithEffects(context, options);
   let step = operation.next();
   while (!step.done) {
@@ -94,7 +104,7 @@ export async function loadConfigFromContextAsync(
 
 function* loadConfigWithEffects(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void },
+  options: ConfigLoadOptions,
 ): ConfigLoadOperation<OpenClawConfig> {
   const { deps, configPath, pathResolution } = context;
   let envBeforeRead: Record<string, string | undefined> | undefined;
@@ -206,17 +216,30 @@ function* loadConfigWithEffects(
       sourceRaw: snapshotParsed,
       preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
     };
-    const validated = yield* resolveConfigLoadEffect({
+    const { deferredPluginMigrations, validated } = yield* resolveConfigLoadEffect({
       sync: () =>
-        validateConfigObjectWithPlugins(validationConfigRaw, {
-          ...validationParams,
-          loadPluginMetadataSnapshot: pluginMetadata.load,
+        withSynchronousArtifactPreservingStateSnapshot(() => {
+          const pending = context.resolveDeferredPluginMigrations();
+          return {
+            deferredPluginMigrations: pending,
+            validated: validateConfigObjectWithPlugins(validationConfigRaw, {
+              ...validationParams,
+              deferredPluginMigrations: pending,
+              loadPluginMetadataSnapshot: pluginMetadata.load,
+            }),
+          };
         }),
-      async: () =>
-        validateConfigObjectWithPluginsAsync(validationConfigRaw, {
-          ...validationParams,
-          loadPluginMetadataSnapshotAsync: pluginMetadata.loadAsync,
-        }),
+      async: async () => {
+        const pending = await context.resolveDeferredPluginMigrationsAsync();
+        return {
+          deferredPluginMigrations: pending,
+          validated: await validateConfigObjectWithPluginsAsync(validationConfigRaw, {
+            ...validationParams,
+            deferredPluginMigrations: pending,
+            loadPluginMetadataSnapshotAsync: pluginMetadata.loadAsync,
+          }),
+        };
+      },
     });
     if (!validated.ok) {
       const invalidSnapshot = createConfigFileSnapshot({
@@ -229,6 +252,7 @@ function* loadConfigWithEffects(
         runtimeConfig: coerceConfig(effectiveConfigRaw),
         hash,
         issues: validated.issues,
+        deferredPluginMigrations,
         warnings: validated.warnings,
         resolutionFacts: readResolution.resolutionFacts,
         legacyIssues: [],
@@ -295,6 +319,7 @@ function* loadConfigWithEffects(
       sourceConfig: coerceConfig(effectiveConfigRaw),
       valid: true,
       runtimeConfig: cfg,
+      deferredPluginMigrations,
       hash,
       issues: [],
       warnings: validated.warnings,

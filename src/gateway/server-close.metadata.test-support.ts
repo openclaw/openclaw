@@ -1,4 +1,4 @@
-// Shared real Gateway metadata/cache fixture; spies live only during acquisition.
+// Shared real Gateway metadata/cache fixture; startup joins owned audit maintenance.
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +18,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { reserveGatewayTestListener } from "./test-helpers.listener.js";
 
 export async function createGatewayMetadataCloseFixture(label: string) {
   const original = captureActivePluginRegistrySnapshot();
@@ -89,7 +90,34 @@ export async function createGatewayMetadataCloseFixture(label: string) {
   };
   const kernels = new Map<number, Awaited<ReturnType<typeof createGatewayKernel>>>();
   const servers: GatewayServer[] = [];
+  const reservedListeners = new Map<
+    number,
+    Awaited<ReturnType<typeof reserveGatewayTestListener>>
+  >();
+  const reservePort = async (port = 0) => {
+    const reservation = await reserveGatewayTestListener(port);
+    reservedListeners.set(reservation.port, reservation);
+    return reservation.port;
+  };
   const create = createGatewayKernel;
+  const audit = await import("../audit/audit-event-writer.js");
+  const createAuditWriter = audit.createAuditEventWriter;
+  const auditReadiness = new Set<Promise<void>>();
+  const auditFactory = vi.spyOn(audit, "createAuditEventWriter").mockImplementation((options) => {
+    const writer = createAuditWriter(options);
+    auditReadiness.add(writer.ready);
+    return writer;
+  });
+  const health = await import("./server/event-loop-health.js");
+  const createHealthMonitor = health.createGatewayEventLoopHealthMonitor;
+  const healthFactory = vi
+    .spyOn(health, "createGatewayEventLoopHealthMonitor")
+    .mockImplementation((...args) => {
+      const monitor = createHealthMonitor(...args);
+      // Real CPU sampling can arm timeouts after callers install a controlled clock.
+      monitor.stop();
+      return monitor;
+    });
   setActivePluginRegistry(createEmptyPluginRegistry());
   return {
     state,
@@ -101,6 +129,7 @@ export async function createGatewayMetadataCloseFixture(label: string) {
     event,
     listeners,
     writeCallback,
+    reservePort: () => reservePort(),
     loadCallback(metadata: PluginMetadataSnapshot) {
       const record = metadata.manifestRegistry.plugins.find((entry) => entry.id === pluginId);
       assert(record);
@@ -116,6 +145,13 @@ export async function createGatewayMetadataCloseFixture(label: string) {
       });
     },
     async start(port: number, options?: GatewayServerOptions) {
+      let listener = reservedListeners.get(port);
+      assert(listener, "Reserve the Gateway listener before starting it");
+      // Explicit same-endpoint restarts bind anew after the prior Gateway closes.
+      if (!listener.listener.listening) {
+        await reservePort(port);
+        listener = reservedListeners.get(port)!;
+      }
       const token = `metadata-close-token-${port}`;
       await state.writeConfig({
         ...config,
@@ -135,26 +171,42 @@ export async function createGatewayMetadataCloseFixture(label: string) {
         });
       let server: GatewayServer;
       try {
-        server = await startGatewayServerCore(port, {
-          auth: { mode: "token", token },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-          ...options,
-        });
+        server = await listener.start(() =>
+          startGatewayServerCore(port, {
+            auth: { mode: "token", token },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+            ...options,
+          }),
+        );
         servers.push(server);
+      } catch (error) {
+        await listener.closeUnadopted();
+        throw error;
       } finally {
         factory.mockRestore();
       }
       await server.startupSettled;
+      // Initial audit pruning admits a worker and arms its idle timer. Finish
+      // that real-clock setup before callers install a controlled test clock.
+      await Promise.all(auditReadiness);
       return server;
     },
     async cleanup() {
-      for (const server of servers.toReversed()) {
-        await server.close().catch(() => {});
+      try {
+        for (const server of servers.toReversed()) {
+          await server.close().catch(() => {});
+        }
+        for (const listener of reservedListeners.values()) {
+          await listener.closeUnadopted();
+        }
+        restoreActivePluginRegistrySnapshot(original);
+        await state.cleanup();
+      } finally {
+        healthFactory.mockRestore();
+        auditFactory.mockRestore();
       }
-      restoreActivePluginRegistrySnapshot(original);
-      await state.cleanup();
     },
   };
 }

@@ -9,12 +9,31 @@ source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 
 OPENCLAW_TEST_STATE_SCRIPT_B64="${OPENCLAW_TEST_STATE_SCRIPT_B64:-}"
 openclaw_skill_install_owns_home=0
+openclaw_skill_install_temp_root=""
+openclaw_node_module_path=""
 cleanup_clawhub_skill_install_home() {
+  if [ -n "$openclaw_node_module_path" ]; then
+    rm -f "$openclaw_node_module_path"
+  fi
   if [ "$openclaw_skill_install_owns_home" = "1" ] && [ -n "${HOME:-}" ]; then
     rm -rf "$HOME"
   fi
+  if [ -n "$openclaw_skill_install_temp_root" ]; then
+    rm -rf "$openclaw_skill_install_temp_root"
+  fi
 }
 trap cleanup_clawhub_skill_install_home EXIT
+
+# TODO: Use Node's stdin entrypoint again after Bun accepts `--input-type=module -`.
+run_node_module() {
+  local exit_code=0
+  openclaw_node_module_path="$(mktemp "$openclaw_skill_install_temp_root/node-module.XXXXXX.mjs")"
+  cat >"$openclaw_node_module_path"
+  node "$openclaw_node_module_path" "$@" || exit_code=$?
+  rm -f "$openclaw_node_module_path"
+  openclaw_node_module_path=""
+  return "$exit_code"
+}
 
 if [ -n "$OPENCLAW_TEST_STATE_SCRIPT_B64" ]; then
   openclaw_e2e_eval_test_state_from_b64 "$OPENCLAW_TEST_STATE_SCRIPT_B64"
@@ -27,18 +46,21 @@ else
   export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
   mkdir -p "$OPENCLAW_STATE_DIR"
 fi
+openclaw_skill_install_temp_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-skill-install.XXXXXX")"
+npm_log="$openclaw_skill_install_temp_root/npm.log"
+build_log="$openclaw_skill_install_temp_root/build.log"
 
 if [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
   export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
   export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-  openclaw_e2e_install_package /tmp/openclaw-skill-install-npm.log
+  openclaw_e2e_install_package "$npm_log"
 fi
 
 if [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] && command -v openclaw >/dev/null 2>&1; then
   OPENCLAW_CMD=(openclaw)
 elif command -v pnpm >/dev/null 2>&1 && [ -f package.json ]; then
   if [ "${OPENCLAW_SKILL_INSTALL_E2E_BUILD_SOURCE:-0}" = "1" ]; then
-    pnpm build >/tmp/openclaw-skill-install-build.log 2>&1
+    pnpm build >"$build_log" 2>&1
   fi
   OPENCLAW_CMD=(pnpm --silent openclaw)
 elif command -v openclaw >/dev/null 2>&1; then
@@ -49,7 +71,7 @@ else
 fi
 
 mkdir -p "$(dirname "$OPENCLAW_CONFIG_PATH")"
-node --input-type=module - "$OPENCLAW_CONFIG_PATH" <<'NODE'
+run_node_module "$OPENCLAW_CONFIG_PATH" <<'NODE'
 import fs from "node:fs";
 const configPath = process.argv[2];
 let config = {};
@@ -65,17 +87,25 @@ NODE
 query="${OPENCLAW_SKILL_INSTALL_E2E_QUERY:-homeassistant}"
 requested_slug="${OPENCLAW_SKILL_INSTALL_E2E_SLUG:-}"
 preferred_slug="${OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG:-homeassistant-skill}"
-search_json="/tmp/openclaw-skill-install-search.json"
-resolve_json="/tmp/openclaw-skill-install-resolved.json"
-install_log="/tmp/openclaw-skill-install.log"
-info_json="/tmp/openclaw-skill-install-info.json"
+maintained_fixture=0
+if [ -z "${OPENCLAW_SKILL_INSTALL_E2E_QUERY:-}" ] &&
+  [ -z "${OPENCLAW_SKILL_INSTALL_E2E_SLUG:-}" ] &&
+  [ -z "${OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG:-}" ]; then
+  maintained_fixture=1
+  query="gifgrep"
+  requested_slug="gifgrep"
+fi
+search_json="$openclaw_skill_install_temp_root/search.json"
+resolve_json="$openclaw_skill_install_temp_root/resolved.json"
+install_log="$openclaw_skill_install_temp_root/install.log"
+info_json="$openclaw_skill_install_temp_root/info.json"
 
 echo "Searching live ClawHub skills for: $query"
 "${OPENCLAW_CMD[@]}" skills search "$query" --limit 8 --json >"$search_json"
 
-node --input-type=module - "$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" <<'NODE'
+run_node_module "$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" "$maintained_fixture" <<'NODE'
 import fs from "node:fs";
-const [searchPath, resolvePath, requestedSlug, preferredSlug] = process.argv.slice(2);
+const [searchPath, resolvePath, requestedSlug, preferredSlug, maintainedFixture] = process.argv.slice(2);
 const payload = JSON.parse(fs.readFileSync(searchPath, "utf8"));
 const results = Array.isArray(payload) ? payload : Array.isArray(payload.results) ? payload.results : [];
 const slugs = results.map((entry) => String(entry.slug ?? "")).filter(Boolean);
@@ -83,7 +113,23 @@ const hasExplicitRisk = (entry) =>
   String(entry?.trust?.clawHubVerdict ?? "").toLowerCase() === "suspicious" ||
   entry?.native?.skill?.isSuspicious === true;
 let candidates;
-if (requestedSlug) {
+if (maintainedFixture === "1") {
+  const maintained = results.find((entry) => {
+    if (hasExplicitRisk(entry)) return false;
+    if (entry?.slug !== "gifgrep" || entry.ownerHandle !== "steipete") return false;
+    const hasMappedRef = Object.hasOwn(entry, "installRef");
+    const hasRawIdentity = Object.hasOwn(entry, "source") || Object.hasOwn(entry, "install");
+    return (hasMappedRef || hasRawIdentity) &&
+      (!hasMappedRef || entry.installRef === "@steipete/gifgrep") &&
+      (!hasRawIdentity || (entry.source === "clawhub" &&
+        entry.install?.kind === "clawhub" &&
+        entry.install?.reference === "steipete/gifgrep"));
+  });
+  if (!maintained) {
+    throw new Error("Maintained ClawHub fixture @steipete/gifgrep not found with matching search identity");
+  }
+  candidates = [maintained];
+} else if (requestedSlug) {
   const requested = results.find((entry) => entry.slug === requestedSlug);
   if (!requested) {
     throw new Error(`Requested skill slug ${requestedSlug} not found. Search returned: ${slugs.join(", ") || "(none)"}`);
@@ -94,8 +140,7 @@ if (requestedSlug) {
   const preferred = safeResults.find((entry) => entry.slug === preferredSlug);
   const homeassistant = safeResults.find((entry) => String(entry.slug ?? "").includes("homeassistant"));
   candidates = [preferred, homeassistant, ...safeResults]
-    .filter((entry, index, ordered) => entry && ordered.indexOf(entry) === index)
-    .slice(0, 3);
+    .filter((entry, index, ordered) => entry && ordered.indexOf(entry) === index);
 }
 if (!candidates[0]?.slug) {
   throw new Error(`No non-suspicious skill slug found. Search returned: ${slugs.join(", ") || "(none)"}`);
@@ -103,7 +148,7 @@ if (!candidates[0]?.slug) {
 fs.writeFileSync(resolvePath, `${JSON.stringify({
   candidates: candidates.map((entry) => ({
     slug: entry.slug,
-    installRef: entry.installRef ?? entry.slug,
+    installRef: maintainedFixture === "1" ? "@steipete/gifgrep" : entry.installRef ?? entry.slug,
     version: entry.version ?? null,
     displayName: entry.displayName ?? entry.name ?? entry.slug,
   })),
@@ -114,7 +159,11 @@ slug=""
 install_ref=""
 while IFS=$'\t' read -r candidate_slug candidate_install_ref; do
   echo "Installing live ClawHub skill: $candidate_slug"
-  if "${OPENCLAW_CMD[@]}" skills install "$candidate_install_ref" --force >"$install_log" 2>&1; then
+  install_args=("$candidate_install_ref")
+  if [ "$maintained_fixture" = "1" ]; then
+    install_args=("@steipete/gifgrep" --version 1.0.1)
+  fi
+  if "${OPENCLAW_CMD[@]}" skills install "${install_args[@]}" --force >"$install_log" 2>&1; then
     slug="$candidate_slug"
     install_ref="$candidate_install_ref"
     break
@@ -128,17 +177,17 @@ while IFS=$'\t' read -r candidate_slug candidate_install_ref; do
     continue
   fi
   echo "Skill install failed" >&2
-  openclaw_e2e_dump_logs /tmp/openclaw-skill-install-npm.log "$search_json" "$resolve_json" "$install_log"
+  openclaw_e2e_dump_logs "$npm_log" "$search_json" "$resolve_json" "$install_log"
   exit 1
 done < <(node -e '
-  const payload = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const payload = JSON.parse(require("node:fs").readFileSync(process.argv.at(-1), "utf8"));
   for (const candidate of payload.candidates) {
     process.stdout.write(`${candidate.slug}\t${candidate.installRef}\n`);
   }
 ' "$resolve_json")
 if [ -z "$slug" ]; then
   echo "No live ClawHub search candidate passed current security checks" >&2
-  openclaw_e2e_dump_logs /tmp/openclaw-skill-install-npm.log "$search_json" "$resolve_json" "$install_log"
+  openclaw_e2e_dump_logs "$npm_log" "$search_json" "$resolve_json" "$install_log"
   exit 1
 fi
 
@@ -153,10 +202,11 @@ openclaw_e2e_assert_file "$lock_json"
 
 "${OPENCLAW_CMD[@]}" skills info "$slug" --json >"$info_json"
 
-node --input-type=module - "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" <<'NODE'
+run_node_module "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" "$maintained_fixture" <<'NODE'
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-const [configPath, skillDir, originPath, lockPath, infoPath, slug] = process.argv.slice(2);
+const [configPath, skillDir, originPath, lockPath, infoPath, slug, maintainedFixture] = process.argv.slice(2);
 const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 function isPathInside(parentPath, childPath) {
   const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
@@ -174,6 +224,12 @@ const lock = read(lockPath);
 if (lock.skills?.[slug]?.version !== origin.installedVersion) {
   throw new Error(`Lockfile missing ${slug}@${origin.installedVersion}`);
 }
+if (maintainedFixture === "1" && (
+  origin.ownerHandle !== "steipete" || lock.skills[slug].ownerHandle !== "steipete" ||
+  origin.installedVersion !== "1.0.1"
+)) {
+  throw new Error("Maintained ClawHub fixture origin/lock must identify @steipete/gifgrep@1.0.1");
+}
 const info = read(infoPath);
 const infoFilePath = info.filePath ?? info.skill?.filePath;
 const infoBaseDir = info.baseDir ?? info.skill?.baseDir;
@@ -186,7 +242,13 @@ if (
 if (infoBaseDir && path.resolve(infoBaseDir) !== path.resolve(skillDir)) {
   throw new Error(`skills info reported unexpected baseDir: ${infoBaseDir}`);
 }
-const skillText = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
+const skillBytes = fs.readFileSync(path.join(skillDir, "SKILL.md"));
+if (maintainedFixture === "1" &&
+  createHash("sha256").update(skillBytes).digest("hex") !==
+    "1cf64ee164ffffac317b7156d0c107cff8714abe4ae6438387cf27d4a513890c") {
+  throw new Error("Maintained ClawHub fixture SKILL.md differs from the reviewed 1.0.1 source");
+}
+const skillText = skillBytes.toString("utf8");
 if (!/^name:\s*/m.test(skillText)) {
   throw new Error("Installed SKILL.md is missing frontmatter name");
 }

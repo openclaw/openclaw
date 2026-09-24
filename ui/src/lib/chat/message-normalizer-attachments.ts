@@ -44,6 +44,9 @@ export function normalizeAttachmentContentBlock(value: unknown): MessageContentI
     kind: attachment.kind,
     label: attachment.label,
     ...(mimeType !== undefined ? { mimeType } : {}),
+    ...(attachment.origin === "paste" || attachment.origin === "file"
+      ? { origin: attachment.origin }
+      : {}),
     ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
     ...(typeof attachment.artifactId === "string" ? { artifactId: attachment.artifactId } : {}),
     ...(attachment.playback === "native" || attachment.playback === "transcode"

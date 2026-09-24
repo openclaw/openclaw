@@ -10,7 +10,16 @@ import {
 } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { validatePluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+import {
+  expandPluginSdkApiDiffSet,
+  selectPluginSdkApiReleaseEvidence,
+  validatePluginSdkApiReleaseEvidence,
+} from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withTestTimeout } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -47,7 +56,12 @@ function commit(repo: string, message: string): string {
 function runCli(repo: string, runnerTemp: string, binDir: string, args: string[]) {
   return spawnSync(
     process.execPath,
-    ["--import", import.meta.resolve("tsx"), resolve("scripts/plugin-sdk-api-diff.mts"), ...args],
+    [
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
+      ),
+      ...args,
+    ],
     {
       cwd: repo,
       encoding: "utf8",
@@ -193,9 +207,9 @@ describe("Plugin SDK API diff CLI", () => {
     const child = spawn(
       process.execPath,
       [
-        "--import",
-        import.meta.resolve("tsx"),
-        resolve("scripts/plugin-sdk-api-diff.mts"),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
+        ),
         "--base",
         baseSha,
         "--head",
@@ -270,6 +284,7 @@ describe("Plugin SDK API diff CLI", () => {
       const binDir = tempDirs.make("plugin-sdk-selector-bin-");
       const installLog = join(binDir, "installs");
       const evidencePath = join(binDir, "evidence.json");
+      const jsonPath = join(binDir, "diff.json");
       git(repo, ["init", "--quiet", "--initial-branch=main"]);
       mkdirSync(join(repo, "src/plugin-sdk"), { recursive: true });
       mkdirSync(join(repo, "scripts/lib"), { recursive: true });
@@ -315,6 +330,8 @@ describe("Plugin SDK API diff CLI", () => {
         "HEAD",
         "--evidence",
         evidencePath,
+        "--json",
+        jsonPath,
       ]);
       expect(child.status, child.stderr).toBe(0);
       const installed = existsSync(installLog)
@@ -330,9 +347,14 @@ describe("Plugin SDK API diff CLI", () => {
         ).toSorted(),
       );
       const bundle = JSON.parse(readFileSync(evidencePath, "utf8"));
-      expect(bundle.schema).toBe("openclaw.plugin-sdk-api-release-evidence-set/v1");
+      expect(bundle.schema).toBe("openclaw.plugin-sdk-api-release-evidence-set/v2");
+      const reports = expandPluginSdkApiDiffSet(JSON.parse(readFileSync(jsonPath, "utf8")));
       for (const [selector, ref] of Object.entries(bases)) {
-        const evidence = bundle.selectors[selector];
+        const evidence = selectPluginSdkApiReleaseEvidence({
+          evidence: bundle,
+          npmDistTag: selector,
+        });
+        expect(reports[selector]).toEqual(evidence.diff);
         const baseSha = git(repo, ["rev-parse", `${ref}^{commit}`]).trim();
         const changed = baseSha !== headSha;
         expect(evidence).toMatchObject({ baseRef: ref, baseSha, headSha, workflowSha: headSha });

@@ -475,6 +475,7 @@ suite.define(() => {
         "talk.catalog",
         "talk.catalog",
         "talk.client.create",
+        "talk.voice.get",
       ]);
       console.info(
         "[video-talk-e2e] describe_view=input_image+function_output+response_create,gateway_frame_requests:0",
@@ -600,6 +601,7 @@ suite.define(() => {
         "talk.catalog",
         "talk.catalog",
         "talk.client.create",
+        "talk.voice.get",
       ]);
       await captureVideoTalkProof(suite, page, "05-gemini-live-camera-preview.png");
       console.info(
@@ -768,7 +770,7 @@ suite.define(() => {
     });
   });
 
-  it("shows a visible error when relay microphone appends fall behind", async () => {
+  it("keeps the call alive while relay microphone appends stall", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const relaySessionId = "relay-e2e-input-backpressure";
       const gateway = await installMockGateway(page, {
@@ -829,18 +831,16 @@ suite.define(() => {
         }
       });
 
+      // Five 256 ms frames stay inside the 3 s in-flight budget, so every frame is
+      // sent while the deferred appends stall and the session is not torn down.
       await expect
         .poll(() =>
           gateway.getRequests("talk.session.appendAudio").then((requests) => requests.length),
         )
-        .toBe(4);
-      await expect
-        .poll(() => page.getByRole("alert").textContent())
-        .toContain("Realtime Talk audio input fell behind");
-      await expect
-        .poll(() => gateway.getRequests("talk.session.close").then((requests) => requests.length))
-        .toBe(1);
-      await captureComposerProof(suite, page, "relay-input-backpressure-error.png");
+        .toBe(5);
+      expect(await page.getByRole("alert").count()).toBe(0);
+      expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
+      await captureComposerProof(suite, page, "relay-input-backpressure-alive.png");
     });
   });
 

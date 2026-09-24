@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
+import { voiceTestMocks } from "./voice-test-mocks.test-support.js";
 
 defineDiscordVoiceTests(
   ({
@@ -16,6 +17,7 @@ defineDiscordVoiceTests(
     lastAgentCommandArgs,
     lastRealtimeBridge,
     realtimeBridgeAt,
+    logVerboseMock,
     loggerWarnMock,
     sentUserMessages,
     createClient,
@@ -33,6 +35,47 @@ defineDiscordVoiceTests(
         capabilities: { supportsActivationNameGating: false, handlesAgentConsult: true },
         providerConfig: { model: "gpt-live-1", voice: "marin" },
       });
+
+    it("keeps streaming events at debug while preserving lifecycle info logs", async () => {
+      const { loggerInfoMock } = voiceTestMocks;
+      const { manager, bridgeParams } = await createJoinedAgentProxyFixture();
+      try {
+        loggerInfoMock.mockClear();
+        logVerboseMock.mockClear();
+        for (const type of [
+          "session.output_audio.delta",
+          "session.output_audio.done",
+          "session.input_transcript.delta",
+          "session.output_transcript.delta",
+          "session.input_audio.append",
+          "session.thinking.append",
+          "session.commentary.append",
+        ]) {
+          bridgeParams.onEvent?.({ direction: "server", type, detail: "stream detail" });
+          expect(logVerboseMock).toHaveBeenCalledWith(
+            `discord voice: realtime server:${type} stream detail`,
+          );
+        }
+        expect(loggerInfoMock).not.toHaveBeenCalled();
+
+        for (const type of [
+          "session.started",
+          "session.closed",
+          "session.reconnect.scheduled",
+          "session.reconnect.ready",
+          "session.reconnect.exhausted",
+          "session.rotation.ready",
+          "session.error",
+        ]) {
+          bridgeParams.onEvent?.({ direction: "server", type, detail: "lifecycle detail" });
+          expect(loggerInfoMock).toHaveBeenCalledWith(
+            `discord voice: realtime lifecycle server:${type} lifecycle detail`,
+          );
+        }
+      } finally {
+        await manager.destroy();
+      }
+    });
 
     it("routes native Live delegations with each speaker's authority without duplicate transcript turns", async () => {
       useNativeDelegation();
@@ -69,7 +112,7 @@ defineDiscordVoiceTests(
           expect(agentCommandArgsAt(index)).toMatchObject({
             senderIsOwner: index === 1,
             sessionKey: "discord:g1:c1",
-            abortSignal: signal,
+            abortSignal: expect.any(AbortSignal),
           });
         }
         await manager.destroy();
@@ -388,14 +431,14 @@ defineDiscordVoiceTests(
       let leaving: ReturnType<typeof manager.leave> | undefined;
       try {
         pendingProvider.close.mockReturnValueOnce(pending.promise);
-        close.mockImplementationOnce(
-          function (this: InstanceType<typeof DiscordRealtimeSpeakerSession>) {
-            close.mockRestore();
-            return Promise.resolve(this.close()).then(() => {
-              throw new Error("Speaker cleanup failed");
-            });
-          },
-        );
+        close.mockImplementationOnce(function (
+          this: InstanceType<typeof DiscordRealtimeSpeakerSession>,
+        ) {
+          close.mockRestore();
+          return Promise.resolve(this.close()).then(() => {
+            throw new Error("Speaker cleanup failed");
+          });
+        });
         leaving = manager.leave({ guildId: entry.guildId });
         await vi.waitFor(() =>
           expect(loggerWarnMock).toHaveBeenCalledWith(

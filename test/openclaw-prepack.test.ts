@@ -14,9 +14,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
+import { pnpmLockfileDocuments } from "../scripts/lib/pnpm-lockfile-documents.mjs";
 import { restorePrepackArtifacts } from "../scripts/openclaw-postpack.mjs";
 import {
   collectPreparedPrepackErrors,
@@ -28,8 +29,13 @@ import {
   runPrepackCommand,
 } from "../scripts/openclaw-prepack.ts";
 import { preparePackageDocsMap } from "../scripts/package-docs-map.mjs";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
+import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -38,6 +44,12 @@ const rootPackageManager = (
     packageManager: string;
   }
 ).packageManager;
+const rootPnpmEnvironment = pnpmLockfileDocuments(
+  readFileSync("pnpm-lock.yaml", "utf8"),
+).environment;
+if (!rootPnpmEnvironment) {
+  throw new Error("pnpm-lock.yaml is missing its environment document");
+}
 
 const standaloneBundledChannelSmokeFiles = [
   "scripts/test-built-bundled-channel-entry-smoke.mts",
@@ -48,6 +60,7 @@ const standaloneBundledChannelSmokeFiles = [
   "scripts/lib/record-shared.mjs",
   "scripts/lib/root-package-bundled-plugin-excludes.mjs",
   "scripts/process-warning-filter.mts",
+  "src/shared/non-packaged-plugin-dirs.ts",
 ];
 
 function linkFixtureParent(packageRoot: string) {
@@ -173,6 +186,11 @@ function createPrepackLifecycleFixture() {
   sourceFiles["package.json"] = `${JSON.stringify(packageJson, null, 2)}\n`;
   sourceFiles["CHANGELOG.md"] += "\n## 2026.7.1\n- Previous release notes with enough detail.\n";
   writeFileSync(path.join(rootDir, "package.json"), sourceFiles["package.json"]);
+  // Without the toolchain lock, pnpm 12 resolves registry metadata before running prepack.
+  writeFileSync(
+    path.join(rootDir, "pnpm-lock.yaml"),
+    `---\n${rootPnpmEnvironment}\n---\nlockfileVersion: '9.0'\nimporters: {}\n`,
+  );
   writeFileSync(path.join(rootDir, "CHANGELOG.md"), sourceFiles["CHANGELOG.md"]);
   writeFileSync(path.join(rootDir, "docs/docs_map.md"), "Source docs-map stub.\n");
   writeFileSync(
@@ -191,10 +209,10 @@ function createPrepackLifecycleFixture() {
     path.join(rootDir, "lifecycle.mjs"),
     `import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
-const owner = process.argv[2] === "prepack"
-  ? ${JSON.stringify(path.resolve("scripts/openclaw-prepack.ts"))}
-  : ${JSON.stringify(path.resolve("scripts/openclaw-postpack.mjs"))};
-const result = spawnSync(process.execPath, ["--import", ${JSON.stringify(import.meta.resolve("tsx"))}, owner], { encoding: "utf8" });
+const ownerArgs = process.argv[2] === "prepack"
+  ? ${JSON.stringify(resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(toolingTsEntrypoints.prepack), testNodeExecPath))}
+  : [${JSON.stringify(path.resolve("scripts/openclaw-postpack.mjs"))}];
+const result = spawnSync(process.execPath, ownerArgs, { encoding: "utf8" });
 writeFileSync(process.argv[2] + "-result.json", JSON.stringify({ status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr }));
 process.stdout.write(result.stdout ?? "");
 process.stderr.write(result.stderr ?? "");
@@ -403,15 +421,14 @@ describe("prepared prepack ownership", () => {
       }
       const receiptPath = path.join(rootDir, ".artifacts/package-docs-map/receipt.json");
       const receipt = incumbent ? readFileSync(receiptPath, "utf8") : undefined;
-      const ownerUrl = pathToFileURL(path.resolve("scripts/openclaw-prepack.ts")).href;
+      const ownerUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.prepack);
       const result = spawnSync(
         testNodeExecPath,
         [
-          "--import",
-          import.meta.resolve("tsx"),
+          ...resolveRuntimeWorkerArgv(ownerUrl, testNodeExecPath).slice(0, -1),
           "--input-type=module",
           "--eval",
-          `import { preparePrepackArtifacts } from ${JSON.stringify(ownerUrl)}; await preparePrepackArtifacts();`,
+          `import { preparePrepackArtifacts } from ${JSON.stringify(ownerUrl.href)}; await preparePrepackArtifacts();`,
         ],
         {
           cwd: rootDir,
@@ -420,7 +437,7 @@ describe("prepared prepack ownership", () => {
           stdio: ["ignore", "pipe", "pipe"],
           env: {
             ...process.env,
-            // The package fixture still imports the real owner's workspace source.
+            // The source smoke fixture retains the package's standalone loader contract.
             TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
           },
         },

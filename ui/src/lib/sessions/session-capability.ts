@@ -4,6 +4,8 @@ import type {
   SessionOwner,
   SessionsAssignOwnerParams,
   SessionsDeleteResult,
+  SessionsPatchManyParams,
+  SessionsPatchManyResult,
   SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
@@ -11,10 +13,7 @@ import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "..
 import type {
   GatewaySessionRow,
   SessionBranch,
-  SessionCompactionCheckpoint,
   SessionsBranchesSwitchResult,
-  SessionsCompactionBranchResult,
-  SessionsCompactionRestoreResult,
   SessionsForkResult,
   SessionsListResult,
   SessionsRewindResult,
@@ -33,7 +32,8 @@ import type {
 } from "./github-publication-controller.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
-import type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
+import type { SessionReconcileOptions } from "./reconcile.ts";
+import type { SessionChangedRowResult } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
 export type SessionState = {
@@ -76,6 +76,9 @@ export type SessionListOptions = {
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
+  excludeSubagents?: boolean;
+  excludeCron?: boolean;
+  excludeSystem?: boolean;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   archivedFilter?: SessionArchivedFilter;
@@ -87,6 +90,10 @@ export type SessionRefreshOptions = SessionListOptions & {
   // Sidebar startup hydration must not block session creation or drop the open session.
   backgroundHydrate?: boolean;
 };
+
+export type SessionRefreshOutcome =
+  | { status: "refreshed" | "stale" }
+  | { status: "failed"; error: string };
 
 export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "append">>;
 
@@ -101,10 +108,25 @@ type SessionRowReadOutcome =
 
 export type SessionRowObservation = {
   readonly row: GatewaySessionRow | null;
+  readonly sessionId: string | null;
+  /** False until this owner accepts a row or confirms its absence. */
+  readonly hasObserved: boolean;
   isCurrent: () => boolean;
   captureReconcile: () => (row: GatewaySessionRow | undefined) => SessionRowReadOutcome;
   dispose: () => void;
 };
+
+export type SessionRowEventListener = (
+  event: GatewayEventFrame,
+  /** Rejected generations can wake recovery but cannot mutate transcript or lifecycle state. */
+  result: SessionChangedRowResult & { generationRejected?: true },
+) => void;
+
+export type SessionRowListener = (
+  row: GatewaySessionRow | null,
+  /** This retiring registration still owns delivery of the captured frame. */
+  notification?: { eventPending: true },
+) => void;
 
 export type SessionDeleteOptions = {
   agentId?: string;
@@ -183,6 +205,8 @@ export type SessionCapability = {
     ) => GitHubPublicationBinding | null;
   };
   readonly state: SessionState;
+  /** Memory-only roster presentation; never authority for mutations or live row observations. */
+  readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
   whenCachedRosterSettled: () => Promise<void>;
@@ -202,7 +226,7 @@ export type SessionCapability = {
     listener: (snapshot: SessionListSnapshot) => void,
   ) => { refresh: () => Promise<void>; dispose: () => void };
   refreshList: (options?: SessionRefreshOptions) => Promise<void>;
-  /** Admits history through the deletion fence, even when outside the shared roster. */
+  /** Admits history through lifecycle fences; defaults-only never authorizes row publication. */
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
@@ -210,15 +234,19 @@ export type SessionCapability = {
       sourceCanonicalListRevision?: number;
       sourceListScope?: SessionListScope;
     },
-  ) => boolean;
+  ) => boolean | "defaults-only";
   /** Captures request ordering before a supplemental row read begins. */
   captureReconcile: () => SessionCapability["reconcile"];
   /** Owns a routed descriptor through reads and events until its consumer retires. */
   observeRow: (
     target: SessionRowTarget,
-    listener: (row: GatewaySessionRow | null) => void,
+    listener: SessionRowListener,
     /** Matching events can omit descriptor-only fields; re-read those without watching roster revisions. */
-    options?: { onInvalidate?: (reason?: string) => void },
+    options?: {
+      onInvalidate?: (reason?: string) => void;
+      /** Receives the frame after shared reconciliation, even without an admitted row. */
+      onEvent?: SessionRowEventListener;
+    },
   ) => SessionRowObservation;
   /** Preserve an existing row observation through a local presentation copy. */
   inheritRow: (
@@ -228,13 +256,16 @@ export type SessionCapability = {
   ) => GatewaySessionRow;
   /** Projects held field observations without changing the input rows' keys or membership. */
   projectRows: (rows: readonly GatewaySessionRow[]) => GatewaySessionRow[];
-  reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   /** Schedules background list refreshes without replacing queued foreground queries. */
   invalidate: () => void;
-  /** Forces the remembered roster query; null means the attempt retired or failed. */
-  refreshReplacement: (agentId?: string | null) => Promise<SessionsListResult | null>;
+  /** Refreshes the remembered query without superseding queued foreground intent. */
+  refreshReplacement: () => Promise<SessionsListResult | null>;
+  /** Reconciles an operation's agent without claiming the foreground query. */
+  reconcileMutation: (agentId?: string | null) => Promise<SessionRefreshOutcome>;
+  /** Captures freshness of this conversation's permission facts. */
+  capturePermissionObservation: (key: string, agentId?: string | null) => () => boolean;
   createResult: (
     params?: SessionCreateParams,
     options?: { reconciliation?: SessionCreateReconciliation },
@@ -242,6 +273,10 @@ export type SessionCapability = {
   create: (params?: SessionCreateParams) => Promise<string | null>;
   recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
+  patchMany: (
+    targets: SessionsPatchManyParams["targets"],
+    patch: SessionsPatchManyParams["patch"],
+  ) => Promise<SessionsPatchManyResult | null>;
   archiveVisibility: (key: string) => SessionArchiveVisibility | undefined;
   beginArchive: (key: string, sessionId: string | undefined) => (() => void) | null;
   assignOwner: (
@@ -251,8 +286,12 @@ export type SessionCapability = {
   ) => Promise<SessionOwner | null>;
   retireModelOverride: (key: string) => void;
   think: (key: string, agentId?: string | null) => string | undefined;
-  /** Keep optimistic row changes in the published snapshot through later publishes. */
-  patchRowLocal: (key: string, patch: Partial<GatewaySessionRow>) => void;
+  /** Local previews update the primary snapshot; explicit targets also update held incarnations. */
+  patchRowLocal: (
+    key: string,
+    patch: Partial<GatewaySessionRow>,
+    target?: { agentId: string; sessionId: string },
+  ) => void;
   /** True while a just-created work session awaits its canonical placement row. */
   isPreparedWorkSession: (key: string) => boolean;
   pullRequestSummary: (key: string) => SessionCatalogPullRequestSummary | undefined;
@@ -291,20 +330,6 @@ export type SessionCapability = {
     options?: { agentId?: string | null; includeApprovals?: boolean },
   ) => Promise<SessionMessageSubscription>;
   unsubscribeMessages: (subscription: SessionMessageSubscription) => Promise<void>;
-  listCheckpoints: (
-    key: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionCompactionCheckpoint[]>;
-  branchCheckpoint: (
-    key: string,
-    checkpointId: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionsCompactionBranchResult>;
-  restoreCheckpoint: (
-    key: string,
-    checkpointId: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionsCompactionRestoreResult>;
   rewind: (
     key: string,
     entryId: string,

@@ -6,11 +6,13 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { warmDoctorConfigFlow } from "./doctor-config-flow-warmup.test-support.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
   getDoctorConfigInputForTest,
@@ -71,17 +73,13 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
     changes.push(`Moved ${pathLabel}.threadBindings.ttlHours to idleHours.`);
   }
 
-  function migrateStreamingAlias(channel: Record<string, unknown>, channelId: string): boolean {
+  function migrateStreamingAlias(channel: Record<string, unknown>): boolean {
     if (
       !("streamMode" in channel) &&
       typeof channel.streaming !== "boolean" &&
       typeof channel.streaming !== "string"
     ) {
       return false;
-    }
-    if (channelId === "googlechat") {
-      delete channel.streamMode;
-      return true;
     }
     const streaming = readNullableRecord(channel.streaming) ?? {};
     if (!("mode" in streaming)) {
@@ -95,45 +93,6 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
     delete channel.streamMode;
     channel.streaming = streaming;
     return true;
-  }
-
-  function migrateNestedAllowAliases(channel: Record<string, unknown>, channelId: string): boolean {
-    let changed = false;
-    if (channelId === "slack") {
-      for (const room of Object.values(readNullableRecord(channel.channels) ?? {})) {
-        const roomRecord = readNullableRecord(room);
-        if (roomRecord && "allow" in roomRecord) {
-          roomRecord.enabled = roomRecord.allow;
-          delete roomRecord.allow;
-          changed = true;
-        }
-      }
-    }
-    if (channelId === "googlechat") {
-      for (const group of Object.values(readNullableRecord(channel.groups) ?? {})) {
-        const groupRecord = readNullableRecord(group);
-        if (groupRecord && "allow" in groupRecord) {
-          groupRecord.enabled = groupRecord.allow;
-          delete groupRecord.allow;
-          changed = true;
-        }
-      }
-    }
-    if (channelId === "discord") {
-      for (const guild of Object.values(readNullableRecord(channel.guilds) ?? {})) {
-        for (const room of Object.values(
-          readNullableRecord(readNullableRecord(guild)?.channels) ?? {},
-        )) {
-          const roomRecord = readNullableRecord(room);
-          if (roomRecord && "allow" in roomRecord) {
-            roomRecord.enabled = roomRecord.allow;
-            delete roomRecord.allow;
-            changed = true;
-          }
-        }
-      }
-    }
-    return changed;
   }
 
   function migrate(raw: unknown): { next: Record<string, unknown> | null; changes: string[] } {
@@ -223,18 +182,15 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
         continue;
       }
       migrateThreadBinding(channel, changes, `channels.${channelId}`);
-      if (migrateStreamingAlias(channel, channelId)) {
+      if (migrateStreamingAlias(channel)) {
         changes.push(`Normalized channels.${channelId} streaming aliases.`);
-      }
-      if (migrateNestedAllowAliases(channel, channelId)) {
-        changes.push(`Normalized channels.${channelId} nested allow aliases.`);
       }
       for (const [accountId, accountRaw] of Object.entries(
         readNullableRecord(channel.accounts) ?? {},
       )) {
         const account = readNullableRecord(accountRaw);
         migrateThreadBinding(account, changes, `channels.${channelId}.accounts.${accountId}`);
-        if (account && migrateStreamingAlias(account, channelId)) {
+        if (account && migrateStreamingAlias(account)) {
           changes.push(`Normalized channels.${channelId}.accounts.${accountId} streaming aliases.`);
         }
       }
@@ -500,42 +456,6 @@ vi.mock("../config/legacy.js", async () => {
             'channels.<id>.threadBindings.ttlHours is legacy; use channels.<id>.threadBindings.idleHours. Run "openclaw doctor --fix".',
           );
         }
-        if (channelId === "slack") {
-          for (const roomRaw of Object.values(readNullableRecord(channel.channels) ?? {})) {
-            if ("allow" in (readNullableRecord(roomRaw) ?? {})) {
-              addIssue(
-                issues,
-                ["channels", "slack"],
-                'channels.slack.channels.<id>.allow is legacy; use enabled. Run "openclaw doctor --fix".',
-              );
-            }
-          }
-        }
-        if (channelId === "googlechat") {
-          for (const spaceRaw of Object.values(readNullableRecord(channel.groups) ?? {})) {
-            if ("allow" in (readNullableRecord(spaceRaw) ?? {})) {
-              addIssue(
-                issues,
-                ["channels", "googlechat"],
-                'channels.googlechat.groups.<id>.allow is legacy; use enabled. Run "openclaw doctor --fix".',
-              );
-            }
-          }
-        }
-        if (channelId === "discord") {
-          for (const guildRaw of Object.values(readNullableRecord(channel.guilds) ?? {})) {
-            const guild = readNullableRecord(guildRaw);
-            for (const roomRaw of Object.values(readNullableRecord(guild?.channels) ?? {})) {
-              if ("allow" in (readNullableRecord(roomRaw) ?? {})) {
-                addIssue(
-                  issues,
-                  ["channels", "discord"],
-                  'channels.discord.guilds.<id>.channels.<id>.allow is legacy; use enabled. Run "openclaw doctor --fix".',
-                );
-              }
-            }
-          }
-        }
         for (const [accountId, accountRaw] of Object.entries(
           readNullableRecord(channel.accounts) ?? {},
         )) {
@@ -747,10 +667,6 @@ vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
   })),
 }));
 
-vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: vi.fn(async () => []),
-}));
-
 vi.mock("./doctor/shared/stale-oauth-profile-shadows.js", () => ({
   repairStaleOAuthProfileShadows: vi.fn(async () => ({
     changes: [],
@@ -800,7 +716,9 @@ vi.mock("./doctor/channel-capabilities.js", () => {
   };
 });
 
-vi.mock("../plugins/doctor-contract-registry.js", async () => {
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const { withDeferredPluginDoctorMigrations } =
+    await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
   const { asNullableRecord: readNullableRecord } =
     await import("@openclaw/normalization-core/record-coerce");
 
@@ -946,6 +864,7 @@ vi.mock("../plugins/doctor-contract-registry.js", async () => {
   };
   return {
     collectRelevantDoctorPluginIds,
+    withDeferredPluginDoctorMigrations,
     collectDoctorConfigRepairPluginIds: collectRelevantDoctorPluginIds,
     applyPluginDoctorCompatibilityMigrations: normalizeDiscordStreamingAliasesForTest,
     listPluginDoctorLegacyConfigRules: () => [
@@ -1131,7 +1050,6 @@ vi.mock("./doctor/shared/channel-doctor.js", async () => {
 
   return {
     collectChannelDoctorCompatibilityMutations: vi.fn(collectCompatibilityMutations),
-    collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(collectTelegramFirstTimeExtraWarnings),
     collectChannelDoctorMutableAllowlistWarnings: vi.fn(
       ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {
         const zalouser = readNullableRecord(cfg.channels?.zalouser);
@@ -1230,40 +1148,29 @@ vi.mock("./doctor/shared/preview-warnings.js", async () => {
   }: {
     cfg: {
       channels?: Record<string, unknown>;
-      plugins?: { enabled?: boolean; entries?: Record<string, { enabled?: boolean }> };
     };
     doctorFixCommand: string;
   }): Promise<string[]> {
     const warnings: string[] = [];
     const telegram = readNullableRecord(cfg.channels?.telegram);
     if (telegram) {
-      const telegramBlocked =
-        cfg.plugins?.enabled === false || cfg.plugins?.entries?.telegram?.enabled === false;
-      if (telegramBlocked) {
-        warnings.push(
-          cfg.plugins?.enabled === false
-            ? "- channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally. Fix plugin enablement before relying on setup guidance for this channel."
-            : '- channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false. Fix plugin enablement before relying on setup guidance for this channel.',
-        );
-      } else {
-        warnings.push(
-          ...telegramFirstTimeWarnings({
-            account: telegram,
-            prefix: "channels.telegram",
-          }),
-        );
-        const accounts = readNullableRecord(telegram.accounts);
-        for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
-          const account = readNullableRecord(accountRaw);
-          if (account) {
-            warnings.push(
-              ...telegramFirstTimeWarnings({
-                account,
-                parent: telegram,
-                prefix: `channels.telegram.accounts.${accountId}`,
-              }),
-            );
-          }
+      warnings.push(
+        ...telegramFirstTimeWarnings({
+          account: telegram,
+          prefix: "channels.telegram",
+        }),
+      );
+      const accounts = readNullableRecord(telegram.accounts);
+      for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
+        const account = readNullableRecord(accountRaw);
+        if (account) {
+          warnings.push(
+            ...telegramFirstTimeWarnings({
+              account,
+              parent: telegram,
+              prefix: `channels.telegram.accounts.${accountId}`,
+            }),
+          );
         }
       }
     }
@@ -1387,51 +1294,18 @@ vi.mock("./doctor-config-preflight.js", async () => {
 });
 
 vi.mock("./doctor-config-analysis.js", async (importOriginal) => {
-  const { noteDoctorHookConfigWarnings, noteMissingDefaultAgentOwner } =
-    await importOriginal<typeof import("./doctor-config-analysis.js")>();
-  function formatConfigKeyPath(parts: Array<string | number>): string {
-    if (parts.length === 0) {
-      return "<root>";
-    }
-    let out = "";
-    for (const part of parts) {
-      if (typeof part === "number") {
-        out += `[${part}]`;
-      } else {
-        out = out ? `${out}.${part}` : part;
-      }
-    }
-    return out || "<root>";
-  }
-
-  function resolveConfigPathTarget(root: unknown, pathParts: Array<string | number>): unknown {
-    let current: unknown = root;
-    for (const part of pathParts) {
-      if (typeof part === "number") {
-        if (!Array.isArray(current)) {
-          return null;
-        }
-        current = current[part];
-        continue;
-      }
-      if (!current || typeof current !== "object" || Array.isArray(current)) {
-        return null;
-      }
-      current = (current as Record<string, unknown>)[part];
-    }
-    return current;
-  }
+  const actual = await importOriginal<typeof import("./doctor-config-analysis.js")>();
 
   return {
-    collectImplicitFallbackClobberWarnings: collectImplicitFallbackClobberWarningsMock,
-    formatConfigKeyPath,
+    formatConfigKeyPath: actual.formatConfigKeyPath,
     noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,
     noteOpencodeProviderOverrides: vi.fn(),
     noteMcpOriginWarning: vi.fn(),
-    noteDoctorHookConfigWarnings,
-    noteMissingDefaultAgentOwner,
+    noteDoctorHookConfigWarnings: actual.noteDoctorHookConfigWarnings,
+    noteMediaCliModelWarnings: actual.noteMediaCliModelWarnings,
+    noteMissingDefaultAgentOwner: actual.noteMissingDefaultAgentOwner,
     noteSandboxOriginProxyWarning: vi.fn(),
-    resolveConfigPathTarget,
+    resolveConfigPathTarget: actual.resolveConfigPathTarget,
     stripUnknownConfigKeys: vi.fn((config: Record<string, unknown>) => {
       const next = structuredClone(config);
       const removed: string[] = [];
@@ -1439,7 +1313,7 @@ vi.mock("./doctor-config-analysis.js", async (importOriginal) => {
         delete next.bridge;
         removed.push("bridge");
       }
-      const gatewayAuth = resolveConfigPathTarget(next, ["gateway", "auth"]);
+      const gatewayAuth = actual.resolveConfigPathTarget(next, ["gateway", "auth"]);
       if (
         gatewayAuth &&
         typeof gatewayAuth === "object" &&
@@ -1496,33 +1370,7 @@ type RepairedDiscordPolicy = {
 };
 
 describe("doctor config flow", () => {
-  beforeAll(async () => {
-    await Promise.all([
-      import("../config/plugin-auto-enable.js"),
-      import("./doctor/repair-sequencing.js"),
-      import("./doctor/shared/channel-doctor.js"),
-      import("./doctor/shared/legacy-config-issues.js"),
-      import("./doctor/shared/plugin-tool-allowlist-warnings.js"),
-      import("./doctor/shared/preview-warnings.js"),
-      import("./doctor/shared/hooks-token-reuse-repair.js"),
-    ]);
-    await collectDoctorWarnings({
-      channels: {
-        slack: {
-          dangerouslyAllowNameMatching: true,
-          accounts: { work: { allowFrom: ["alice"] } },
-        },
-      },
-    });
-    await collectDoctorWarnings({
-      channels: {
-        googlechat: {
-          groupPolicy: "allowlist",
-          accounts: { work: { groupPolicy: "allowlist" } },
-        },
-      },
-    });
-  });
+  beforeAll(() => warmDoctorConfigFlow(collectDoctorWarnings));
 
   beforeEach(() => {
     terminalNoteMock.mockClear();
@@ -1541,6 +1389,17 @@ describe("doctor config flow", () => {
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
     noteImplicitFallbackClobberWarningsMock.mockClear();
     runDoctorConfigPreflightOptionsMock.mockClear();
+  });
+
+  it("explains GitHub preview recovery without expanding the plugin allowlist", async () => {
+    const config = { plugins: { allow: ["telegram"] } };
+    const warnings = await collectDoctorWarnings(config);
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('append "github" to the existing allowlist'),
+      ]),
+    );
+    expect(config.plugins.allow).toEqual(["telegram"]);
   });
 
   it("preserves invalid config for doctor repairs", async () => {
@@ -2071,11 +1930,6 @@ describe("doctor config flow", () => {
     );
     expect(result.runWithPluginMetadataSnapshot).toEqual(expect.any(Function));
     expect(result.invalidatePluginMetadataSnapshot).toEqual(expect.any(Function));
-    expect(collectDoctorPreviewNotesParamsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        runWithPluginMetadataSnapshot: result.runWithPluginMetadataSnapshot,
-      }),
-    );
   });
 
   it("exposes cleanup-refreshed plugin metadata to later Doctor scopes", async () => {
@@ -2422,6 +2276,37 @@ describe("doctor config flow", () => {
     expect(doctorWarnings.join("\n")).toContain("clobbers agents.defaults.model.fallbacks");
   });
 
+  it.each([false, true])(
+    "reports invalid CLI media models without repairing them (repair=%s)",
+    async (repair) => {
+      const models = [
+        { provider: "fixture-provider", capabilities: ["audio"] },
+        { type: "cli", capabilities: ["audio"] },
+        { type: "cli", command: "fixture-transcribe", capabilities: ["audio"] },
+        { type: "cli", command: "fixture-transcribe", args: ["{{AttachmentPath}}"] },
+        { command: "fixture-transcribe", args: ["/synthetic/audio.wav"] },
+      ] satisfies MediaUnderstandingModelConfig[];
+      const config: OpenClawConfig = { plugins: { enabled: false }, tools: { media: { models } } };
+      config.agents = { entries: { main: {} } };
+      const result = await runDoctorConfigWithInput({
+        config,
+        repair,
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      const warnings = terminalNoteMock.mock.calls
+        .filter(([, title]) => title === "Doctor warnings")
+        .map(([message]) => message)
+        .join("\n");
+      expect(warnings).toContain("tools.media.models[1].command");
+      expect(warnings).toContain("tools.media.models[2].args");
+      expect(warnings).toContain("{{AttachmentPath}}");
+      expect(warnings).toContain("Doctor cannot choose");
+      expect(warnings).not.toMatch(/tools\.media\.models\[(?:0|3|4)\]/);
+      expect(result.cfg.tools?.media).toEqual(config.tools?.media);
+      expect(result.shouldWriteConfig, result.pendingChangePanels?.join("\n")).toBe(false);
+    },
+  );
+
   it("warns when internal hook entries include unsupported loader keys", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       hooks: {
@@ -2535,56 +2420,6 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
-  it("shows plugin-blocked guidance instead of first-time Telegram guidance when telegram is explicitly disabled", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
-      channels: {
-        telegram: {
-          botToken: "123:abc",
-          groupPolicy: "allowlist",
-        },
-      },
-      plugins: {
-        entries: {
-          telegram: {
-            enabled: false,
-          },
-        },
-      },
-    });
-
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes(
-          'channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false.',
-        ),
-      ),
-    ).toBe(true);
-    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
-  });
-
-  it("shows plugin-blocked guidance instead of first-time Telegram guidance when plugins are disabled globally", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
-      channels: {
-        telegram: {
-          botToken: "123:abc",
-          groupPolicy: "allowlist",
-        },
-      },
-      plugins: {
-        enabled: false,
-      },
-    });
-
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes(
-          "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
-        ),
-      ),
-    ).toBe(true);
-    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
-  });
-
   it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
@@ -2602,21 +2437,6 @@ describe("doctor config flow", () => {
           line.includes("mutable allowlist") && line.includes("channels.zalouser.groups: Ops Room"),
       ),
     ).toBe(true);
-  });
-
-  it("does not warn on mutable Zalouser group entries when dangerous name matching is enabled", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
-      channels: {
-        zalouser: {
-          dangerouslyAllowNameMatching: true,
-          groups: {
-            "Ops Room": { allow: true },
-          },
-        },
-      },
-    });
-
-    expect(doctorWarnings.some((line) => line.includes("channels.zalouser.groups"))).toBe(false);
   });
 
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
@@ -2751,58 +2571,6 @@ describe("doctor config flow", () => {
     });
   });
 
-  it("warns clearly about legacy channel streaming aliases and points to doctor --fix", async () => {
-    const noteSpy = resetTerminalNoteMock();
-    try {
-      await runDoctorConfigWithInput({
-        config: {
-          channels: {
-            telegram: {
-              streamMode: "block",
-            },
-            discord: {
-              streaming: false,
-            },
-            googlechat: {
-              streamMode: "append",
-            },
-            slack: {
-              streaming: true,
-            },
-          },
-        },
-        run: loadAndMaybeMigrateDoctorConfig,
-      });
-
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            message.includes("channels.telegram:") &&
-            message.includes("channels.telegram.streamMode, channels.telegram.streaming"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            message.includes("channels.googlechat:") &&
-            message.includes("channels.googlechat.streamMode is legacy and no longer used"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            message.includes("channels.slack:") &&
-            message.includes("channels.slack.streamMode, channels.slack.streaming"),
-        ),
-      ).toBe(true);
-    } finally {
-      noteSpy.mockClear();
-    }
-  });
-
   it("keeps discord streaming aliases on disk during repair so downgrades stay recoverable", async () => {
     await withTempHome(
       async (home) => {
@@ -2850,147 +2618,6 @@ describe("doctor config flow", () => {
       },
       { skipSessionCleanup: true },
     );
-  });
-
-  it("repairs legacy googlechat streamMode by removing it", async () => {
-    const result = await runDoctorConfigWithInput({
-      config: {
-        channels: {
-          googlechat: {
-            streamMode: "append",
-            accounts: {
-              work: {
-                streamMode: "replace",
-              },
-            },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as {
-      channels: {
-        googlechat: {
-          accounts?: {
-            work?: Record<string, unknown>;
-          };
-        } & Record<string, unknown>;
-      };
-    };
-    expect(cfg.channels.googlechat.streamMode).toBeUndefined();
-    expect(cfg.channels.googlechat.accounts?.work?.streamMode).toBeUndefined();
-  });
-
-  it("warns clearly about legacy nested channel allow aliases and points to doctor --fix", async () => {
-    const noteSpy = resetTerminalNoteMock();
-    try {
-      await runDoctorConfigWithInput({
-        config: {
-          channels: {
-            slack: {
-              channels: {
-                ops: {
-                  allow: false,
-                },
-              },
-            },
-            googlechat: {
-              groups: {
-                "spaces/aaa": {
-                  allow: false,
-                },
-              },
-            },
-            discord: {
-              guilds: {
-                "100": {
-                  channels: {
-                    general: {
-                      allow: false,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        run: loadAndMaybeMigrateDoctorConfig,
-      });
-
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            message.includes("channels.slack:") &&
-            message.includes("channels.slack.channels.<id>.allow is legacy"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            message.includes("channels.googlechat:") &&
-            message.includes("channels.googlechat.groups.<id>.allow is legacy"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            message.includes("channels.discord:") &&
-            message.includes("channels.discord.guilds.<id>.channels.<id>.allow is legacy"),
-        ),
-      ).toBe(true);
-    } finally {
-      noteSpy.mockClear();
-    }
-  });
-
-  it("repairs legacy nested channel allow aliases on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          slack: {
-            channels: {
-              ops: {
-                allow: false,
-              },
-            },
-          },
-          googlechat: {
-            groups: {
-              "spaces/aaa": {
-                allow: false,
-              },
-            },
-          },
-          discord: {
-            guilds: {
-              "100": {
-                channels: {
-                  general: {
-                    allow: false,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    expect(result.cfg.channels?.slack?.channels?.ops).toEqual({
-      enabled: false,
-    });
-    expect(result.cfg.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
-      enabled: false,
-    });
-    expect(result.cfg.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
-      enabled: false,
-    });
   });
 
   it("sanitizes config-derived doctor warnings and changes before logging", async () => {
@@ -3471,104 +3098,6 @@ describe("doctor config flow", () => {
     expect(toolsBySender["id:alice"]).toEqual({ deny: ["exec"] });
     expect(toolsBySender["username:@ops-bot"]).toEqual({ allow: ["fs.read"] });
     expect(toolsBySender["*"]).toEqual({ deny: ["exec"] });
-  });
-
-  it("repairs legacy root runtime config surfaces in one pass", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        heartbeat: {
-          model: "anthropic/claude-3-5-haiku-20241022",
-          every: "30m",
-          showOk: true,
-          showAlerts: false,
-        },
-        gateway: {
-          bind: "0.0.0.0",
-        },
-        session: {
-          threadBindings: {
-            ttlHours: 24,
-          },
-        },
-        channels: {
-          discord: {
-            threadBindings: {
-              ttlHours: 12,
-            },
-            accounts: {
-              alpha: {
-                threadBindings: {
-                  ttlHours: 6,
-                },
-              },
-            },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as {
-      heartbeat?: unknown;
-      gateway?: {
-        bind?: string;
-      };
-      session?: {
-        maintenance?: {
-          rotateBytes?: unknown;
-        };
-        threadBindings?: {
-          idleHours?: number;
-          ttlHours?: number;
-        };
-      };
-      agents?: {
-        defaults?: {
-          heartbeat?: {
-            model?: string;
-            every?: string;
-          };
-        };
-      };
-      channels?: {
-        defaults?: {
-          heartbeat?: {
-            showOk?: boolean;
-            showAlerts?: boolean;
-            useIndicator?: boolean;
-          };
-        };
-        discord?: {
-          threadBindings?: {
-            idleHours?: number;
-            ttlHours?: number;
-          };
-          accounts?: Record<
-            string,
-            {
-              threadBindings?: {
-                idleHours?: number;
-                ttlHours?: number;
-              };
-            }
-          >;
-        };
-      };
-    };
-    expect(cfg.heartbeat).toBeUndefined();
-    expect(cfg.agents?.defaults?.heartbeat?.model).toBe("anthropic/claude-3-5-haiku-20241022");
-    expect(cfg.agents?.defaults?.heartbeat?.every).toBe("30m");
-    expect(cfg.gateway?.bind).toBe("lan");
-    expect(cfg.session?.maintenance?.rotateBytes).toBeUndefined();
-    expect(cfg.session?.threadBindings?.idleHours).toBe(24);
-    expect(cfg.channels?.discord?.threadBindings?.idleHours).toBe(12);
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.idleHours).toBe(6);
-    expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.defaults?.heartbeat?.showOk).toBe(true);
-    expect(cfg.channels?.defaults?.heartbeat?.showAlerts).toBe(false);
   });
 
   it("warns clearly about legacy config surfaces and points to doctor --fix", async () => {

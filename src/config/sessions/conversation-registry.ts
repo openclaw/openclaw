@@ -24,7 +24,10 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import {
+  parseSessionEntryJson,
+  sessionEntryMetadataJson,
+} from "./session-accessor.sqlite-status.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -197,6 +200,7 @@ function selectConversationRows(
     limit?: number;
     primarySession?: { sessionId: string; sessionKey: string };
     currentBindingOnly?: boolean;
+    currentSession?: { sessionKey: string; sessionId: string };
   } = {},
 ): ConversationRecord[] {
   const resolved = resolveSqliteReadScope({
@@ -214,7 +218,7 @@ function selectConversationRows(
       // Historical windows retain address activity, while session_nodes owns
       // the current session binding after reset/rebind.
       .leftJoin("session_nodes as sn", "sn.session_key", "s.session_key")
-      .select([
+      .select((eb) => [
         "c.conversation_id",
         "c.channel",
         "c.account_id",
@@ -234,7 +238,7 @@ function selectConversationRows(
         "sc.last_seen_at",
         "s.session_id as associated_session_id",
         "sn.current_session_id as current_session_id",
-        "sn.entry_json as current_entry_json",
+        eb.parens(sessionEntryMetadataJson.expression).as("current_entry_json"),
         "sn.session_key as current_session_key",
       ]);
     const channel = normalizeOptionalLowercaseString(options.channel);
@@ -247,6 +251,11 @@ function selectConversationRows(
         "=",
         normalizeConversationRef(options.conversationRef),
       );
+    }
+    if (options.currentSession) {
+      query = query
+        .where("sn.session_key", "=", options.currentSession.sessionKey)
+        .where("s.session_id", "=", options.currentSession.sessionId);
     }
     if (options.primarySession) {
       // The window's primary pointer, not address recency, owns this route.
@@ -283,17 +292,19 @@ function selectConversationRows(
     ).rows;
     const unique = new Map<string, MappedConversationRow>();
     for (const row of rows) {
+      const existing = unique.get(row.conversation_id);
+      if (existing?.associationIsCurrent) {
+        continue;
+      }
       const mapped = mapConversationRow(row);
       if (!mapped) {
         continue;
       }
-      const existing = unique.get(mapped.record.conversationRef);
       if (!existing) {
         unique.set(mapped.record.conversationRef, mapped);
         continue;
       }
       if (
-        !existing.associationIsCurrent &&
         mapped.associationIsCurrent &&
         mapped.record.sessionId &&
         mapped.record.sessionKey &&
@@ -375,10 +386,12 @@ export function resolveConversation(
 export function resolveCurrentConversationSession(
   scope: ConversationRegistryScope,
   conversationRef: string,
+  currentSession?: { sessionKey: string; sessionId: string },
 ): { sessionKey: string; sessionId: string } | undefined {
   const [conversation] = selectConversationRows(scope, {
     conversationRef: normalizeConversationRef(conversationRef),
     currentBindingOnly: true,
+    currentSession,
     limit: 1,
   });
   return conversation?.sessionKey && conversation.sessionId

@@ -1,7 +1,7 @@
-// Qa Lab plugin module implements suite runtime agent media behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildQaImageGenerationConfigPatch } from "./providers/image-generation.js";
+import { readFirstMediaPath } from "./providers/mock-openai/mock-openai-directives.js";
 import {
   fetchJson,
   patchConfig,
@@ -32,39 +32,7 @@ function extractMediaPathFromText(text: string | undefined): string | undefined 
   if (!media || typeof media !== "object" || Array.isArray(media)) {
     return undefined;
   }
-  return readFirstMediaPath(media);
-}
-
-function readFirstMediaPath(value: unknown): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const media = value as Record<string, unknown>;
-  for (const key of ["mediaUrl", "path", "filePath"] as const) {
-    const candidate = media[key];
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  const mediaUrls = media.mediaUrls;
-  if (Array.isArray(mediaUrls)) {
-    const mediaUrl = mediaUrls.find(
-      (candidate) => typeof candidate === "string" && candidate.trim(),
-    );
-    if (typeof mediaUrl === "string" && mediaUrl.trim()) {
-      return mediaUrl.trim();
-    }
-  }
-  const attachments = media.attachments;
-  if (Array.isArray(attachments)) {
-    for (const attachment of attachments) {
-      const mediaPath = readFirstMediaPath(attachment);
-      if (mediaPath) {
-        return mediaPath;
-      }
-    }
-  }
-  return undefined;
+  return readFirstMediaPath(media) || undefined;
 }
 
 function readPluginAllow(config: Record<string, unknown>) {

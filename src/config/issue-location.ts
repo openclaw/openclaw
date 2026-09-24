@@ -94,31 +94,16 @@ function skipValue(raw: string, cursor: Cursor): void {
     scanQuoted(raw, cursor);
     return;
   }
-  if (char === "{") {
+  if (char === "{" || char === "[") {
+    const close = char === "{" ? "}" : "]";
     cursor.pos++;
     while (cursor.pos < raw.length) {
       skipTrivia(raw, cursor);
-      if (raw[cursor.pos] === "}") {
+      if (raw[cursor.pos] === close) {
         cursor.pos++;
         return;
       }
-      if (readObjectKey(raw, cursor) === null || !consume(raw, cursor, ":")) {
-        return;
-      }
-      skipValue(raw, cursor);
-      skipTrivia(raw, cursor);
-      if (raw[cursor.pos] === ",") {
-        cursor.pos++;
-      }
-    }
-    return;
-  }
-  if (char === "[") {
-    cursor.pos++;
-    while (cursor.pos < raw.length) {
-      skipTrivia(raw, cursor);
-      if (raw[cursor.pos] === "]") {
-        cursor.pos++;
+      if (char === "{" && (readObjectKey(raw, cursor) === null || !consume(raw, cursor, ":"))) {
         return;
       }
       skipValue(raw, cursor);

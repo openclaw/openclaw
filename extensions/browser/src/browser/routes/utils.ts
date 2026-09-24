@@ -7,7 +7,7 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isLocalManagedProfile } from "../config.js";
 import { BrowserProfileUnavailableError, type BrowserErrorResponse } from "../errors.js";
-import { isManagedOnlyBrowserRequest } from "../request-policy.js";
+import { isManagedOnlyBrowserRequest, resolveRequestedBrowserProfile } from "../request-policy.js";
 import {
   type BrowserRouteContext,
   type ProfileContext,
@@ -25,23 +25,8 @@ export function getProfileContext(
   req: BrowserRequest,
   ctx: BrowserRouteContext,
 ): ProfileContext | { error: string; status: number } {
-  let profileName: string | undefined;
-
-  // Check query string first (works for GET and POST)
-  if (typeof req.query.profile === "string") {
-    profileName = normalizeOptionalString(req.query.profile);
-  }
-
-  // Fall back to body for POST requests
-  if (!profileName && req.body && typeof req.body === "object") {
-    const body = req.body as Record<string, unknown>;
-    if (typeof body.profile === "string") {
-      profileName = normalizeOptionalString(body.profile);
-    }
-  }
-
   try {
-    const profile = ctx.forProfile(profileName);
+    const profile = ctx.forProfile(resolveRequestedBrowserProfile(req));
     const managedOnly = isManagedOnlyBrowserRequest(req);
     if (managedOnly && !isLocalManagedProfile(profile.profile)) {
       return { error: "This dashboard requires a local managed browser profile", status: 400 };
@@ -104,6 +89,7 @@ export function jsonError(res: BrowserResponse, status: number, message: string)
 export function jsonBrowserError(res: BrowserResponse, error: BrowserErrorResponse) {
   res.status(error.status).json({
     error: error.message,
+    ...(error.code ? { code: error.code } : {}),
     ...("reason" in error ? { reason: error.reason } : {}),
     ...("details" in error ? { details: error.details } : {}),
   });

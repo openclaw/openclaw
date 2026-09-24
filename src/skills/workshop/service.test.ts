@@ -118,7 +118,7 @@ beforeEach(async () => {
     DELETE FROM skill_workshop_proposals;
   `);
   await fs.rm(path.join(stateDir, "skill-workshop"), { recursive: true, force: true });
-  await fs.rm(path.join(stateDir, "workshop-skills"), { recursive: true, force: true });
+  await fs.rm(workshopSkillsDir(), { recursive: true, force: true });
 });
 
 afterEach(async () => {
@@ -897,13 +897,7 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("rejects and quarantines proposals without touching active skills", async (ctx) => {
-    // Manifest order follows updatedAt, so each terminal mutation needs a distinct timestamp.
-    vi.useFakeTimers({ toFake: ["Date"] });
-    ctx.onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    vi.setSystemTime(new Date("2026-08-30T00:00:00.000Z"));
+  it("rejects and quarantines proposals without touching active skills", async () => {
     const workspaceDir = await makeWorkspace();
     const rejected = await proposeCreateSkill({
       workspaceDir,
@@ -929,13 +923,11 @@ describe("skill workshop proposals", () => {
       proposalId: rejected.record.id,
       reason: "not useful",
     });
-    vi.setSystemTime(new Date("2026-08-30T00:00:01.000Z"));
     await quarantineSkillProposal({
       workspaceDir,
       proposalId: quarantined.record.id,
       reason: "needs review",
     });
-    vi.setSystemTime(new Date("2026-08-30T00:00:02.000Z"));
     await applySkillProposal({
       workspaceDir,
       proposalId: applied.record.id,

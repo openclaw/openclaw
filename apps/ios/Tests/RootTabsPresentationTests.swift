@@ -424,9 +424,9 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `chat transport identity distinguishes unresolved and resolved agents`() {
-        #expect(ChatProTab.transportAgentID(nil).isEmpty)
-        #expect(ChatProTab.transportAgentID("   ").isEmpty)
-        #expect(ChatProTab.transportAgentID(" Main ") == "main")
+        #expect(IOSChatViewModelOwner.transportAgentID(nil).isEmpty)
+        #expect(IOSChatViewModelOwner.transportAgentID("   ").isEmpty)
+        #expect(IOSChatViewModelOwner.transportAgentID(" Main ") == "main")
     }
 
     @Test func `chat keeps active voice capture stoppable while attachment ownership is pinned`() {
@@ -442,17 +442,17 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `chat view model rebuilds only when its transport owner changes`() {
-        #expect(!ChatProTab.requiresViewModelRebuild(
+        #expect(!IOSChatViewModelOwner.requiresViewModelRebuild(
             currentOwnerID: "gateway-a",
             nextOwnerID: "gateway-a",
             currentTransportAgentID: "main",
             nextTransportAgentID: "main"))
-        #expect(ChatProTab.requiresViewModelRebuild(
+        #expect(IOSChatViewModelOwner.requiresViewModelRebuild(
             currentOwnerID: "gateway-a",
             nextOwnerID: "gateway-b",
             currentTransportAgentID: "main",
             nextTransportAgentID: "main"))
-        #expect(ChatProTab.requiresViewModelRebuild(
+        #expect(IOSChatViewModelOwner.requiresViewModelRebuild(
             currentOwnerID: "gateway-a",
             nextOwnerID: "gateway-a",
             currentTransportAgentID: "main",

@@ -1,10 +1,18 @@
 import { expect, it } from "vitest";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { formatCliProcessFailure, runCliProcessChild } from "../cli-process-child.test-helpers.js";
+import { updateServiceRuntimeEntrypoints } from "./update-command-legacy-finalize-entrypoint.test-support.js";
+
+const serviceCommand = resolveRuntimeWorkerUrl(updateServiceRuntimeEntrypoints.command);
+const sourceArgs = serviceCommand.pathname.endsWith(".ts") ? ["--import", "./scripts/tsx.mjs"] : [];
 
 it.each([
   "restart",
   "install",
+  "restart managed",
+  "install managed",
   "missing candidate",
   "unregistered executor",
   "missing executor",
@@ -31,35 +39,43 @@ it.each([
           const dist = path.join(root, "dist");
           const receipt = path.join(root, "candidate.json");
           const release = path.join(root, "release");
-          const owner = ${JSON.stringify(new URL("./update-command-service-command.ts", import.meta.url).href)};
+          const owner = ${JSON.stringify(serviceCommand.href)};
+          const moduleUrl = (specifier) => new URL(
+            owner.endsWith(".ts") ? specifier.replace(/\.js$/, ".ts") : specifier,
+            owner,
+          ).href;
           await fs.mkdir(dist, { recursive: true });
 
           // A split build can emit a separate namespace facade even when other
-          // imports have already loaded the underlying implementation. Keep the
-          // actual helpers cached, then replace only the owner's facade files.
-          const facades = new Map();
-          for (const specifier of [
-            "./shared.js",
-            "./update-command-service-recovery.js",
-            "../daemon-cli/install.runtime.js",
-            "../daemon-cli/install.js",
-          ]) {
-            const source = new URL(specifier.replace(/\.js$/, ".ts"), owner).href;
-            await import(source);
-            const facade = path.join(dist, "old-" + facades.size + ".mjs");
-            await fs.writeFile(facade, "export * from " + JSON.stringify(source) + ";\n");
-            facades.set(specifier, pathToFileURL(facade).href);
-          }
+          // imports have already loaded its implementation. Preload only this
+          // dependency: recovery preloads would cache the owner before its hook.
+          const sharedSource = moduleUrl("./shared.js");
+          await import(sharedSource);
+          const facade = pathToFileURL(path.join(dist, "old-shared.mjs"));
+          await fs.writeFile(facade, "export * from " + JSON.stringify(sharedSource) + ";\n");
+          let sharedIntercepted = false;
           registerHooks({
             resolve(specifier, context, nextResolve) {
-              const facade = context.parentURL === owner && facades.get(specifier);
-              return facade ? { url: facade, shortCircuit: true } : nextResolve(specifier, context);
+              const target = context.parentURL === owner ? moduleUrl(specifier) : undefined;
+              if (target === sharedSource) {
+                sharedIntercepted = true;
+                return { url: facade.href, shortCircuit: true };
+              }
+              return nextResolve(specifier, context);
             },
           });
           const { runUpdatedInstallGatewayCommand } = await import(owner);
+          assert.equal(sharedIntercepted, true, "Shared facade was not intercepted before replacement");
 
           await fs.rm(dist, { recursive: true });
           await fs.mkdir(dist);
+          const managedEnv = scenario.endsWith(" managed") ? {
+            ...process.env,
+            OPENCLAW_SERVICE_MARKER: "openclaw",
+            OPENCLAW_SERVICE_KIND: "gateway",
+            OPENCLAW_GATEWAY_SERVICE_PID: "1234",
+            OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.recovery-fixture",
+          } : undefined;
           const params = {
             result: { root, mode: "npm" },
             opts: { json: true, ...(scenario === "missing executor" ? { run: { runId: "original", env: process.env } } : scenario === "unregistered executor" ? {
@@ -68,6 +84,8 @@ it.each([
               } },
             } : {}) },
             invocationEnv: process.env,
+            serviceEnv: managedEnv,
+            serviceInstallEnv: managedEnv,
             timeoutMs: scenario === "install slow" ? 120_000 : 10_000,
             assertCurrent() {
               if (scenario !== "unregistered executor" && scenario.endsWith("revoked") && existsSync(receipt)) {
@@ -87,27 +105,31 @@ it.each([
               '  node: process.execPath,',
               '  config: process.env.OPENCLAW_CONFIG_PATH,',
               '  compileCacheDisabled: process.env.NODE_DISABLE_COMPILE_CACHE,',
+              '  serviceMarker: process.env.OPENCLAW_SERVICE_MARKER,',
+              '  serviceKind: process.env.OPENCLAW_SERVICE_KIND,',
+              '  servicePid: process.env.OPENCLAW_GATEWAY_SERVICE_PID,',
+              '  serviceLabel: process.env.OPENCLAW_LAUNCHD_LABEL,',
               '}));',
               scenario === "install slow" ? 'const timer = setInterval(() => { if (fs.existsSync(' + JSON.stringify(release) + ')) clearInterval(timer); }, 5);' : '',
             ].join("\n"));
             if (scenario === "missing executor") {
-              await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
+              await assert.rejects(runUpdatedInstallGatewayCommand(params, action), {
                 message: "Native command requires its original update executor.",
               });
               assert.equal(existsSync(receipt), false);
             } else if (scenario === "unregistered executor") {
-              await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
-                message: "Child continuation requires its live executor.",
+              await assert.rejects(runUpdatedInstallGatewayCommand(params, action), {
+                message: "Package recovery requires its admitted executor.",
               });
               assert.equal(existsSync(receipt), false);
             } else if (scenario.endsWith("revoked")) {
-              await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
+              await assert.rejects(runUpdatedInstallGatewayCommand(params, action), {
                 message: "Update authority revoked during native command",
               });
             } else if (scenario === "install slow") {
               mock.timers.enable({ apis: ["setTimeout"] });
               let settled = false;
-              const completed = runUpdatedInstallGatewayCommand(params, action, true).then(
+              const completed = runUpdatedInstallGatewayCommand(params, action).then(
                 (value) => { settled = true; return value; },
                 (error) => { settled = true; return error; },
               );
@@ -121,7 +143,7 @@ it.each([
               mock.timers.reset();
               assert.equal(await completed, "unverified");
             } else {
-              assert.equal(await runUpdatedInstallGatewayCommand(params, action, true), "unverified");
+              assert.equal(await runUpdatedInstallGatewayCommand(params, action), "unverified");
             }
             if (scenario !== "unregistered executor" && scenario !== "missing executor") {
               const observed = JSON.parse(await fs.readFile(receipt, "utf8"));
@@ -130,13 +152,15 @@ it.each([
                 node: process.execPath,
                 config: process.env.OPENCLAW_CONFIG_PATH,
                 compileCacheDisabled: "1",
+                ...(managedEnv ? { serviceLabel: "ai.openclaw.recovery-fixture" } : {}),
               });
             }
           }
           console.log("UPDATE_COMMAND_AFTER_REPLACEMENT_OK");
         `;
       const result = await runCliProcessChild({
-        nodeArgs: ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
+        nodeExecutable: resolveTestNodeExecPath(),
+        nodeArgs: [...sourceArgs, "--input-type=module", "--eval", script],
         env: {
           PATH: process.env.PATH,
           ...state.envVars,

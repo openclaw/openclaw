@@ -309,6 +309,10 @@ describe("CronService", () => {
     expectMainSystemEventPosted(enqueueSystemEvent, { text: "hello", jobId: job.id });
     expect(requestHeartbeat).toHaveBeenCalled();
 
+    const reenabled = await cron.update(job.id, { enabled: true });
+    expect(reenabled.state.nextRunAtMs).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
     await cron.list({ includeDisabled: true });
     await stopCronAndCleanup(cron, store);
   });
@@ -457,6 +461,9 @@ describe("CronService", () => {
 
     await vi.advanceTimersByTimeAsync(secondAt! - Date.now());
     await vi.waitFor(() => expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2));
+    await events.waitFor(
+      (evt) => evt.jobId === job.id && evt.action === "finished" && evt.status === "error",
+    );
     const updated = cron.getJob(job.id);
     expect(updated).toMatchObject({
       enabled: true,

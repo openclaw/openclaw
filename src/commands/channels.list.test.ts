@@ -1,5 +1,5 @@
 // Channels list tests cover catalog entries, installed plugins, status fallback, and terminal output.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -125,6 +125,8 @@ function loggedText(runtime: ReturnType<typeof createTestRuntime>): string {
 }
 
 describe("channels list", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   beforeEach(() => {
     mocks.readConfigFileSnapshot.mockReset();
     mocks.resolveCommandConfigWithSecrets.mockClear();
@@ -487,56 +489,40 @@ describe("channels list", () => {
     expect(output).toContain("--all");
   });
 
-  it("default output shows configured official external channels when the plugin is missing", async () => {
-    const runtime = createTestRuntime();
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
-      createCatalogEntry("discord", "Discord"),
-    ]);
-    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([
-      {
-        pluginId: "discord",
-        channelId: "discord",
-        label: "Discord",
-        installSpec: "@openclaw/discord",
-        installCommand: "openclaw plugins install @openclaw/discord",
-        doctorFixCommand: "openclaw doctor --fix",
-        repairHint:
-          "Install the official external plugin with: openclaw plugins install @openclaw/discord, or run: openclaw doctor --fix.",
-      },
-    ]);
-    mocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        channels: {
-          discord: { enabled: true, token: "secret" },
-        },
-      }),
-    );
+  it.each(["config", "env"])(
+    "default output shows recovery for a missing plugin with credentials from %s",
+    async (source) => {
+      const runtime = createTestRuntime();
+      mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+        createCatalogEntry("mattermost", "Mattermost"),
+      ]);
+      const actual = await vi.importActual<
+        typeof import("../plugins/official-external-plugin-repair-hints.js")
+      >("../plugins/official-external-plugin-repair-hints.js");
+      mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockImplementation(
+        actual.resolveMissingOfficialExternalChannelPluginRepairHints,
+      );
+      vi.stubEnv("MATTERMOST_URL", source === "env" ? "https://mattermost.example.test" : "");
+      vi.stubEnv("MATTERMOST_BOT_TOKEN", source === "env" ? "test-token" : "");
+      mocks.readConfigFileSnapshot.mockResolvedValue(
+        createTestConfigSnapshot(
+          source === "config" ? { channels: { mattermost: { botToken: "test-token" } } } : {},
+        ),
+      );
 
-    await channelsListCommand({}, runtime);
+      await channelsListCommand({}, runtime);
 
-    expect(mocks.resolveMissingOfficialExternalChannelPluginRepairHints).toHaveBeenCalledWith({
-      config: {
-        channels: {
-          discord: { enabled: true, token: "secret" },
-        },
-      },
-      channelIds: ["discord"],
-      workspaceDir: "/tmp/workspace",
-      // Prepared once for the invocation; the row loop must not rediscover.
-      manifestRecords: expect.any(Array),
-    });
-    const output = stripAnsi(loggedText(runtime));
-    expect(output).toContain("Discord");
-    expect(output).toContain("not installed");
-    expect(output).toContain("configured");
-    expect(output).toContain("disabled");
-    expect(output).toContain(
-      "run openclaw plugins install @openclaw/discord or openclaw doctor --fix",
-    );
-    expect(output).not.toContain("no configured chat channels");
-  });
+      const output = stripAnsi(loggedText(runtime));
+      expect(output).toContain("Mattermost");
+      expect(output).toContain("not installed");
+      expect(output).toContain("configured");
+      expect(output).toContain("disabled");
+      expect(output).toContain(
+        "run openclaw plugins install @openclaw/mattermost or openclaw doctor --fix",
+      );
+      expect(output).not.toContain("no configured chat channels");
+    },
+  );
 
   it("JSON output includes configured official external channels when the plugin is missing", async () => {
     const runtime = createTestRuntime();

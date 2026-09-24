@@ -7,6 +7,7 @@ import { buildMacosCatalog } from "../../scripts/apple-app-i18n.ts";
 import {
   assignNativeI18nIds,
   collectNativeI18nEntries,
+  collectNativeI18nEntriesFromSources,
   extractNativeI18nCandidates,
   isConditionalBranchIdentifier,
   NATIVE_I18N_LOCALES,
@@ -416,6 +417,63 @@ describe("native app i18n inventory", () => {
     );
 
     expect(entries.map((entry) => entry.source)).toEqual(["off", "Visible choice"]);
+  });
+
+  it("shares discovered UI helpers across files only within the same platform", () => {
+    const entries = collectNativeI18nEntriesFromSources([
+      {
+        surface: "android",
+        repoPath: "apps/android/Screen.kt",
+        source: `
+          AndroidBadge("Android badge")
+          Text("Android built-in")
+          SharedCard("Not an Android view")
+          request.header("Cookie", cookie)
+            .header("Cf-Access-Metadata-Request", "true")
+            .header("Cf-Access-Token", token)
+            .header("User-Agent", agent)
+            .header("Accept", contentType)
+          response.header("Location")
+        `,
+      },
+      {
+        surface: "apple",
+        repoPath: "apps/ios/Screen.swift",
+        source: `
+          header("iOS heading")
+          SharedCard("Shared card")
+          Text("Apple built-in")
+          AndroidBadge("Not an Apple view")
+        `,
+      },
+      {
+        surface: "apple",
+        repoPath: "apps/macos/Sources/Screen.swift",
+        source: 'header("macOS heading")',
+      },
+      {
+        surface: "apple",
+        repoPath: "apps/shared/OpenClawKit/Sources/Views.swift",
+        source: `
+          func header(_ text: String) -> some View { Text(text) }
+          struct SharedCard: View { var body: some View { EmptyView() } }
+        `,
+      },
+      {
+        surface: "android",
+        repoPath: "apps/android/Components.kt",
+        source: "@Composable fun AndroidBadge(text: String) { Text(text) }",
+      },
+    ]);
+
+    expect(entries.map(({ surface, source }) => ({ surface, source }))).toEqual([
+      { surface: "android", source: "Android badge" },
+      { surface: "android", source: "Android built-in" },
+      { surface: "apple", source: "Apple built-in" },
+      { surface: "apple", source: "Shared card" },
+      { surface: "apple", source: "iOS heading" },
+      { surface: "apple", source: "macOS heading" },
+    ]);
   });
 
   it("collects stable Android and Apple UI entries", async () => {

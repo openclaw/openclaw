@@ -31,7 +31,7 @@ const PREFIXED_TLS_FINGERPRINT = `sha256:${TLS_FINGERPRINT.toUpperCase()}`;
 type RunMainModule = typeof import("./run-main.js");
 
 let runCli: RunMainModule["runCli"];
-let shouldStartProxyForCli: RunMainModule["shouldStartProxyForCli"];
+let shouldStartProxyForCli: typeof import("./run-main-policy.js").shouldStartProxyForCli;
 
 type ConfigSnapshotStub = {
   exists: boolean;
@@ -254,8 +254,8 @@ vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
 }));
 
-vi.mock("../logging.js", async () => ({
-  ...(await vi.importActual<typeof import("../logging.js")>("../logging.js")),
+vi.mock("../logging/console.js", async () => ({
+  ...(await vi.importActual<typeof import("../logging/console.js")>("../logging/console.js")),
   enableConsoleCapture: enableConsoleCaptureMock,
 }));
 
@@ -399,7 +399,7 @@ vi.mock("./program/program-context.js", () => ({
   getProgramContext: getProgramContextMock,
 }));
 
-vi.mock("./program/command-registry.js", () => ({
+vi.mock("./program/command-registry-core.js", () => ({
   registerCoreCliByName: registerCoreCliByNameMock,
 }));
 
@@ -564,7 +564,7 @@ describe("runCli exit behavior", () => {
     const runMainModule = await import("./run-main.js");
     expect(dotenvModuleImportState.count).toBe(0);
     runCli = runMainModule.runCli;
-    shouldStartProxyForCli = runMainModule.shouldStartProxyForCli;
+    ({ shouldStartProxyForCli } = await import("./run-main-policy.js"));
   });
 
   afterAll(() => {
@@ -2449,15 +2449,22 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
-  it("reads source-only proxy config before doctor lint owns plugin-aware validation", async () => {
+  it.each([
+    ["lint", ["--lint", "--json"]],
+    ["repair", ["--fix", "--non-interactive"]],
+    ["diagnosis", []],
+  ])("reads source-only proxy config before Doctor %s owns state access", async (_mode, args) => {
     tryRouteCliMock.mockResolvedValueOnce(true);
-    readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "doctor-lint" } });
+    readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "doctor" } });
+    loadConfigMock.mockImplementation(() => {
+      throw new Error("Shared state requires Doctor repair");
+    });
 
-    await runCli(["node", "openclaw", "doctor", "--lint", "--json"]);
+    await runCli(["node", "openclaw", "doctor", ...args]);
 
     expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
     expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(startProxyMock).toHaveBeenCalledWith({ selected: "doctor-lint" });
+    expect(startProxyMock).toHaveBeenCalledWith({ selected: "doctor" });
   });
 
   it.each([

@@ -177,6 +177,7 @@ describe("fetchClaudeUsage", () => {
           { percent: 27, scope: { model: { display_name: " ", id: " Fable " } } },
           { percent: 90, scope: { model: { display_name: "FABLE" } } },
           { percent: 12, is_active: "false", scope: { model: { id: "Other" } } },
+          { percent: 0, is_active: null, scope: { model: { id: "Zero" } } },
         ],
       }),
     );
@@ -187,23 +188,35 @@ describe("fetchClaudeUsage", () => {
       { label: "Sonnet", usedPercent: 40 },
       { label: "Fable", usedPercent: 27, resetAt: undefined },
       { label: "Other", usedPercent: 12, resetAt: undefined },
+      { label: "Zero", usedPercent: 0, resetAt: undefined },
     ]);
   });
 
-  it("keeps the extra usage window when credit amounts are missing", async () => {
+  it.each([
+    ["missing credit amounts", undefined, undefined, undefined],
+    ["negative credits", -1, 100, undefined],
+    [
+      "a zero credit budget",
+      0,
+      0,
+      [{ type: "budget", used: 0, limit: 0, unit: "USD", period: "month" }],
+    ],
+  ])("handles extra usage with %s", async (_name, usedCredits, monthlyLimit, billing) => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {
         extra_usage: {
           is_enabled: true,
           utilization: 12,
+          used_credits: usedCredits,
+          monthly_limit: monthlyLimit,
         },
       }),
     );
 
     const result = await fetchClaudeUsage("token", 5000, mockFetch);
 
-    expect(result.windows).toEqual([{ label: "Extra usage", usedPercent: 12 }]);
-    expect(result.billing).toBeUndefined();
+    expect(result.windows).toEqual(billing ? [] : [{ label: "Extra usage", usedPercent: 12 }]);
+    expect(result.billing).toEqual(billing);
   });
 
   it("clamps oauth usage windows and prefers sonnet over opus when both exist", async () => {
@@ -308,6 +321,10 @@ describe("fetchClaudeUsage", () => {
         limits: [
           null,
           "malformed",
+          [],
+          { percent: 50, scope: [] },
+          { percent: 60, scope: { model: [] } },
+          { percent: "80", scope: { model: { id: "Numeric string" } } },
           {
             percent: 27,
             is_active: true,
@@ -380,6 +397,8 @@ describe("fetchClaudeUsage", () => {
       if (url.endsWith("/api/organizations/org-123/usage")) {
         return makeResponse(200, {
           five_hour: { utilization: 12 },
+          limits: [{ percent: 30, scope: { model: { id: "Extra usage" } } }],
+          extra_usage: { is_enabled: true, utilization: 25, used_credits: 25, monthly_limit: 100 },
         });
       }
 
@@ -389,7 +408,12 @@ describe("fetchClaudeUsage", () => {
     const result = await fetchClaudeUsage("token", 5000, mockFetch);
 
     expect(result.error).toBeUndefined();
-    expect(result.windows).toEqual([{ label: "5h", usedPercent: 12, resetAt: undefined }]);
+    expect(result.windows).toStrictEqual([
+      { label: "5h", usedPercent: 12, resetAt: undefined },
+      { label: "Extra usage", usedPercent: 30, resetAt: undefined },
+      { label: "Extra usage", usedPercent: 25 },
+    ]);
+    expect(result.billing).toBeUndefined();
   });
 
   it("parses sessionKey from Cookie-prefixed CLAUDE_WEB_COOKIE headers", async () => {

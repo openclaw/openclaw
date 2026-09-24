@@ -215,7 +215,7 @@ function createRealtimeTalkEvidenceWriter(
         SOURCE_PATH,
         SMOKE_PATH,
         "extensions/openai/realtime-voice-provider.ts",
-        "ui/src/pages/chat/realtime-talk-webrtc.ts",
+        "ui/src/pages/chat/talk/webrtc.ts",
       ],
     },
   });

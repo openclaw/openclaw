@@ -11,7 +11,9 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
+  PreparedQuestionAnswerRefusedError,
   QuestionDispatchRefusedError,
   type AgentHarnessQuestionGatewayCall,
 } from "./gateway-question-dispatch.js";
@@ -19,6 +21,7 @@ import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
   claimPendingAgentQuestionAnswerFromCaller,
+  claimPreparedPendingAgentQuestionAnswer,
   registerPendingAgentQuestion,
   runAgentHarnessGatewayQuestion,
 } from "./gateway-question.js";
@@ -37,7 +40,14 @@ const questions = [
 ] as const;
 
 describe("gateway harness questions", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      for (const dir of tempDirs.dirs) {
+        await closeOpenClawAgentDatabasesAsync(dir);
+      }
+      cleanup();
+    }),
+  );
   it.each([
     "committed",
     "failed",
@@ -46,6 +56,8 @@ describe("gateway harness questions", () => {
     "question-replaced",
     "creator-closed",
     "unstaged",
+    "prepared-route-refused",
+    "prepared-source-revoked",
   ] as const)("settles secret input only after current source persistence: %s", async (change) => {
     const sessionKey = "agent:main:secret-source-persistence";
     const attempt = {
@@ -138,7 +150,18 @@ describe("gateway harness questions", () => {
           assertCurrent: () => source.signal.throwIfAborted(),
         },
       };
-      claim = claimPendingAgentQuestionAnswer(claimParams).then(
+      const claimAttempt =
+        change === "prepared-route-refused" || change === "prepared-source-revoked"
+          ? claimPreparedPendingAgentQuestionAnswer(claimParams, async () => {
+              expect(sourceRecorder.hasPersisted()).toBe(true);
+              await Promise.resolve();
+              if (change === "prepared-route-refused") {
+                throw new QuestionDispatchRefusedError("prepared route changed");
+              }
+              source.abort();
+            })
+          : claimPendingAgentQuestionAnswer(claimParams);
+      claim = claimAttempt.then(
         (accepted) => ({ accepted }),
         (error: unknown) => ({ error }),
       );
@@ -189,13 +212,21 @@ describe("gateway harness questions", () => {
         });
       } else {
         expect(await claim).toMatchObject({
-          error: expect.any(change === "failed" ? Error : QuestionDispatchRefusedError),
+          error: expect.any(
+            change === "failed"
+              ? Error
+              : change === "prepared-route-refused" || change === "prepared-source-revoked"
+                ? PreparedQuestionAnswerRefusedError
+                : QuestionDispatchRefusedError,
+          ),
         });
         if (
           change === "failed" ||
           change === "uncommitted" ||
           change === "source-revoked" ||
-          change === "question-replaced"
+          change === "question-replaced" ||
+          change === "prepared-route-refused" ||
+          change === "prepared-source-revoked"
         ) {
           await expect(
             claimPendingAgentQuestionAnswer({
@@ -224,6 +255,88 @@ describe("gateway harness questions", () => {
       host.closeAdmission();
     }
   });
+
+  it.each(["current", "route-refused", "route-unavailable", "source-revoked"] as const)(
+    "revalidates prepared question input after registration and persistence: %s",
+    async (outcome) => {
+      const sessionKey = "agent:main:prepared-question-input";
+      const registration = createDeferred();
+      const persistenceStarted = createDeferred();
+      const persistence = createDeferred();
+      const preparationStarted = createDeferred();
+      const preparation = createDeferred();
+      const source = new AbortController();
+      const gatewayCall = vi.fn<AgentHarnessQuestionGatewayCall>(async () => ({}));
+      const question = registerPendingAgentQuestion({
+        questionId: "ask_88888888888888888888888888888888",
+        sessionKey,
+        questions,
+        gatewayCall,
+      });
+      question.attachRegistration(registration.promise);
+      const persist = vi.fn(async () => {
+        persistenceStarted.resolve();
+        await persistence.promise;
+      });
+      const prepare = vi.fn(async () => {
+        preparationStarted.resolve();
+        await preparation.promise;
+        if (outcome === "route-refused") {
+          throw new QuestionDispatchRefusedError("prepared route changed");
+        }
+        if (outcome === "route-unavailable") {
+          throw new Error("binding owner unavailable");
+        }
+      });
+      const attempt = claimPreparedPendingAgentQuestionAnswer(
+        {
+          sessionKey,
+          text: "prepared answer",
+          persist,
+          authority: { kind: "run", assertCurrent: () => source.signal.throwIfAborted() },
+        },
+        prepare,
+      ).then(
+        (accepted) => ({ accepted }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        expect(persist).not.toHaveBeenCalled();
+        expect(prepare).not.toHaveBeenCalled();
+        registration.resolve();
+        await persistenceStarted.promise;
+        expect(prepare).not.toHaveBeenCalled();
+        persistence.resolve();
+        await preparationStarted.promise;
+        expect(gatewayCall).not.toHaveBeenCalled();
+        if (outcome === "source-revoked") {
+          source.abort();
+        }
+        preparation.resolve();
+        if (outcome === "current") {
+          expect(await attempt).toEqual({ accepted: true });
+        } else {
+          expect(await attempt).toMatchObject({
+            error: expect.any(PreparedQuestionAnswerRefusedError),
+          });
+          expect(gatewayCall).not.toHaveBeenCalled();
+          expect(question.isResolving()).toBe(false);
+          await expect(
+            claimPendingAgentQuestionAnswer({ sessionKey, text: "fresh answer" }),
+          ).resolves.toBe(true);
+        }
+        expect(gatewayCall).toHaveBeenCalledOnce();
+        expect(persist).toHaveBeenCalledOnce();
+        expect(prepare).toHaveBeenCalledOnce();
+      } finally {
+        registration.resolve();
+        persistence.resolve();
+        preparation.resolve();
+        await attempt;
+        question.dispose();
+      }
+    },
+  );
 
   it("leaves an aborted caller without a pending question to ordinary admission", async () => {
     const source = new AbortController();

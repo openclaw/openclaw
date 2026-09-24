@@ -9,7 +9,7 @@
   "cliCommands": [
     {
       "name": "crabbox",
-      "description": "Inspect and recover Crabbox warm images",
+      "description": "Run model-backed commands and manage Crabbox warm images",
       "hasSubcommands": true
     }
   ],
@@ -20,8 +20,27 @@
   },
   "commandAliases": [{ "name": "crabbox", "kind": "cli" }],
   "contracts": {
-    "workerProviders": ["crabbox"]
+    "workerProviders": ["crabbox"],
+    "tools": ["crabbox"]
   },
+  "skills": ["./skills"],
+  "toolMetadata": {
+    "crabbox": { "profiles": ["coding"] }
+  },
+  "configGroups": [
+    {
+      "id": "sandbox",
+      "title": "Sandbox",
+      "order": 10,
+      "properties": ["sandbox"]
+    },
+    {
+      "id": "warm-images",
+      "title": "Warm images",
+      "order": 20,
+      "properties": ["warmImages"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

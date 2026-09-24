@@ -230,15 +230,30 @@ export function createMemoryPage(params: {
     navigate: params.navigate ?? vi.fn(),
     replace: params.replace ?? vi.fn(),
   } as unknown as ApplicationContext;
-  const agentSelection = createAgentSelectionCapability(
+  const settingsAgentSelection = createAgentSelectionCapability(
     {
       connection: { gatewayUrl: "ws://memory.test" },
       snapshot: { assistantAgentId: params.selectedAgentId ?? params.agents?.[0]?.id ?? "main" },
       subscribe: () => () => undefined,
     },
     context.agents,
+    undefined,
+    undefined,
+    { requireConfiguredAgent: true },
   );
-  Object.assign(context, { agentSelection });
+  if (params.selectedAgentId) {
+    settingsAgentSelection.set(params.selectedAgentId);
+  }
+  Object.assign(context, { settingsAgentSelection });
+  if (element.routeData) {
+    element.routeData = {
+      ...element.routeData,
+      agentSelectionIntent: {
+        owner: settingsAgentSelection,
+        revision: settingsAgentSelection.intentRevision,
+      },
+    };
+  }
   const connectionLifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
   (element as unknown as { context: ApplicationContext }).context = context;
   new ContextProvider(element, { context: applicationContext, initialValue: context }).setValue(
@@ -280,7 +295,7 @@ export function createMemoryPage(params: {
   };
   return {
     element,
-    agentSelection,
+    settingsAgentSelection,
     request,
     setPhase,
     publishPluginGeneration,

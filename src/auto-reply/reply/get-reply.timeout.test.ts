@@ -22,24 +22,16 @@ afterEach(async () => {
 });
 
 it.each([
-  { options: { timeoutOverrideMs: 1800000 }, expected: 1800000, expectedOverride: 1800000 },
-  { options: { timeoutOverrideMs: 180000 }, expected: 180000, expectedOverride: 180000 },
-  { options: { timeoutOverrideMs: 1500 }, expected: 1500, expectedOverride: 1500 },
-  {
-    options: { timeoutOverrideMs: 0 },
-    expected: MAX_TIMER_TIMEOUT_MS,
-    expectedOverride: MAX_TIMER_TIMEOUT_MS,
-  },
-  { options: {}, expected: 180000, expectedOverride: undefined },
-  { options: { timeoutOverrideSeconds: 1800 }, expected: 1800000, expectedOverride: 1800000 },
-  {
-    options: { timeoutOverrideSeconds: 0 },
-    expected: MAX_TIMER_TIMEOUT_MS,
-    expectedOverride: MAX_TIMER_TIMEOUT_MS,
-  },
+  [{ timeoutOverrideMs: 1800000 }, 1800000, 1800000],
+  [{ timeoutOverrideMs: 180000 }, 180000, 180000],
+  [{ timeoutOverrideMs: 1500 }, 1500, 1500],
+  [{ timeoutOverrideMs: 0 }, MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS],
+  [{}, 180000, undefined],
+  [{ timeoutOverrideSeconds: 1800 }, 1800000, 1800000],
+  [{ timeoutOverrideSeconds: 0 }, MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS],
 ])(
-  "passes timeout options $options to the actual runtime entrypoint",
-  async ({ options, expected, expectedOverride }) => {
+  "passes timeout options %s to the actual runtime entrypoint",
+  async (options, expected, expectedOverride) => {
     state = await createOpenClawTestState({
       label: "reply-timeout",
       env: { OPENCLAW_TEST_FAST: "0" },

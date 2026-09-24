@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createSandboxFsBridge } from "../sandbox/fs-bridge.js";
+import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import {
   hasGenerationToolAvailability,
@@ -70,6 +72,67 @@ describe("resolveGenerateAction", () => {
 });
 
 describe("resolveMediaToolLocalRoots", () => {
+  it("adds host-owned attachment roots to workspace-scoped reads", async () => {
+    const workspaceDir = path.join("/tmp", "openclaw-media-workspace");
+    const attachmentRoot = path.join("/tmp", "openclaw-subagent-attachments");
+
+    const { localRoots } = await resolveMediaToolReferenceAccess({
+      input: path.join(attachmentRoot, "receipt.png"),
+      isDataUrl: false,
+      workspaceDir,
+      fsPolicy: { workspaceOnly: true, readOnlyRoots: [attachmentRoot] },
+    });
+
+    expect(localRoots.map(normalizeHostPath)).toEqual([
+      normalizeHostPath(workspaceDir),
+      normalizeHostPath(attachmentRoot),
+    ]);
+  });
+
+  it("adds host-owned attachment roots to default local reads", async () => {
+    const workspaceDir = path.join("/tmp", "openclaw-media-workspace");
+    const attachmentRoot = path.join("/tmp", "openclaw-subagent-attachments");
+
+    const { localRoots } = await resolveMediaToolReferenceAccess({
+      input: path.join(attachmentRoot, "receipt.png"),
+      isDataUrl: false,
+      workspaceDir,
+      fsPolicy: { workspaceOnly: false, readOnlyRoots: [attachmentRoot] },
+    });
+
+    expect(localRoots.map(normalizeHostPath)).toContain(normalizeHostPath(attachmentRoot));
+  });
+
+  it("admits only the declared attachment mount in workspace-only sandboxes", async () => {
+    const root = path.join("/tmp", "openclaw-media-workspace");
+    const hostPath = path.join("/tmp", "openclaw-subagent-attachments");
+    const mount = { hostPath, containerPath: "/openclaw/attachments" };
+    const sandbox = resolveMediaToolSandboxConfig(
+      {
+        root,
+        bridge: createSandboxFsBridge({
+          sandbox: createSandboxTestContext({
+            overrides: {
+              workspaceDir: root,
+              agentWorkspaceDir: root,
+              readOnlyResourceMounts: [mount],
+            },
+          }),
+        }),
+        readOnlyResourceMounts: [mount],
+      },
+      true,
+    );
+
+    await expect(
+      resolveMediaToolReferenceAccess({
+        input: "/openclaw/attachments/receipt.png",
+        isDataUrl: false,
+        sandbox,
+      }),
+    ).resolves.toMatchObject({ resolvedPath: path.join(hostPath, "receipt.png") });
+  });
+
   it("does not widen default local roots from media sources", async () => {
     const stateDir = path.join("/tmp", "openclaw-media-tool-roots-state");
     const picturesDir =

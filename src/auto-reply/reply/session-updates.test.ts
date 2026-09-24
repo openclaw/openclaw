@@ -51,6 +51,7 @@ vi.mock("../../skills/runtime/refresh.js", () => ({
 
 vi.mock("../../skills/runtime/refresh-state.js", () => ({
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
+  getSkillsSourceVersion: getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));
 
@@ -201,48 +202,53 @@ describe("ensureSkillSnapshot", () => {
     expect(sessionStore[sessionKey]).toEqual(reboundEntry);
   });
 
-  it("persists first-turn skill snapshots as a guarded partial update", async () => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-    const sessionKey = "agent:main:main";
-    const sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 10,
-      modelOverride: "gpt-5.5",
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    updateSessionEntryMock.mockImplementationOnce(async (_scope, update) => {
-      const patch = await update({
-        ...sessionEntry,
-        updatedAt: 20,
-        modelOverride: "sonnet-4.6",
-      });
-      expect(patch).toMatchObject({
+  it.each([true, false])(
+    "persists skill snapshots as a guarded partial update (first turn: %s)",
+    async (isFirstTurnInSession) => {
+      vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+      const sessionKey = "agent:main:main";
+      const sessionEntry = {
         sessionId: "session-1",
-        systemSent: true,
-      });
-      expect(patch).not.toHaveProperty("modelOverride");
-      return {
-        ...sessionEntry,
-        ...patch,
-        modelOverride: "sonnet-4.6",
+        updatedAt: 10,
+        modelOverride: "gpt-5.5",
       };
-    });
+      const sessionStore = { [sessionKey]: sessionEntry };
+      updateSessionEntryMock.mockImplementationOnce(async (_scope, update) => {
+        const patch = await update({
+          ...sessionEntry,
+          updatedAt: 20,
+          modelOverride: "sonnet-4.6",
+        });
+        expect(patch).toMatchObject({ sessionId: "session-1" });
+        if (isFirstTurnInSession) {
+          expect(patch).toHaveProperty("systemSent", true);
+        } else {
+          expect(patch).not.toHaveProperty("systemSent");
+        }
+        expect(patch).not.toHaveProperty("modelOverride");
+        return {
+          ...sessionEntry,
+          ...patch,
+          modelOverride: "sonnet-4.6",
+        };
+      });
 
-    const result = await ensureSkillSnapshot({
-      agentId: "main",
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      sessionId: "session-1",
-      storePath: "/tmp/sessions.json",
-      isFirstTurnInSession: true,
-      workspaceDir: TEST_WORKSPACE_DIR,
-      cfg: {},
-    });
+      const result = await ensureSkillSnapshot({
+        agentId: "main",
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        sessionId: "session-1",
+        storePath: "/tmp/sessions.json",
+        isFirstTurnInSession,
+        workspaceDir: TEST_WORKSPACE_DIR,
+        cfg: {},
+      });
 
-    expect(result.sessionEntry?.modelOverride).toBe("sonnet-4.6");
-    expect(sessionStore[sessionKey]?.modelOverride).toBe("sonnet-4.6");
-  });
+      expect(result.sessionEntry?.modelOverride).toBe("sonnet-4.6");
+      expect(sessionStore[sessionKey]?.modelOverride).toBe("sonnet-4.6");
+    },
+  );
 
   it("keeps a concurrent rename and unpin while persisting a skill snapshot", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");

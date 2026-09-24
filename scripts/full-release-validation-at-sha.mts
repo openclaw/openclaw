@@ -32,6 +32,7 @@ import { isRecord as isJsonRecord } from "../packages/normalization-core/src/rec
 import {
   decodePublicationDispatchEnvelope,
   normalizePublicationIntent,
+  normalizePublicationLaneInputs,
   publicationDispatchEnvelope,
   publicationIntentInputs,
 } from "./full-release-publication-contract.mjs";
@@ -49,6 +50,13 @@ import {
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
+import {
+  RELEASE_PRIORITY_RECORD_KIND,
+  RELEASE_PRIORITY_VARIABLE,
+  defaultReleasePriorityRecordPath,
+  readReleasePriorityRecord,
+  writeReleasePriorityRecord,
+} from "./lib/release-priority.mjs";
 import { validatePackageSourceRef } from "./package-source-preflight.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
@@ -854,7 +862,9 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
     requireDispatch(
       !enveloped ||
         (!Object.hasOwn(request.inputs, "validation_purpose") &&
-          !Object.hasOwn(request.inputs, "publication_selection_json")),
+          !Object.hasOwn(request.inputs, "publication_selection_json") &&
+          !Object.hasOwn(request.inputs, "extension_test_exclude_patterns_json") &&
+          !Object.hasOwn(request.inputs, "known_flaky_jobs_json")),
       "Retained dispatch contains conflicting source intent representations",
     );
     requireDispatch(
@@ -995,7 +1005,30 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     Object.keys(definitions).length <= 25,
     "Pinned workflow exceeds 25 dispatch inputs",
   );
-  const { validation_purpose, publication_selection_json, ...wireOverrides } = overrides;
+  const {
+    validation_purpose,
+    publication_selection_json,
+    extension_test_exclude_patterns_json,
+    known_flaky_jobs_json,
+    ...wireOverrides
+  } = overrides;
+  const laneInputs =
+    extension_test_exclude_patterns_json === undefined && known_flaky_jobs_json === undefined
+      ? undefined
+      : {
+          ...(extension_test_exclude_patterns_json !== undefined
+            ? { extension_test_exclude_patterns_json }
+            : {}),
+          ...(known_flaky_jobs_json !== undefined ? { known_flaky_jobs_json } : {}),
+        };
+  requireDispatch(
+    laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support packed lane inputs; no remote refs or run were created. Keep the frozen Tooling SHA.`,
+  );
+  requireDispatch(
+    known_flaky_jobs_json === undefined || workflow.env.FULL_RELEASE_FLAKE_RETRY_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support declared flake retries; no remote refs or run were created. Keep the frozen Tooling SHA.`,
+  );
   const intent = normalizePublicationIntent(validation_purpose, publication_selection_json);
   requireDispatch(
     intent.validationPurpose !== "publish" ||
@@ -1005,6 +1038,7 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
   wireOverrides.trusted_workflow_json = publicationDispatchEnvelope(
     JSON.parse(overrides.trusted_workflow_json || "null"),
     intent,
+    laneInputs,
   );
   requireDispatch(
     Object.keys(wireOverrides).every((key) => Object.hasOwn(definitions, key)),
@@ -1334,9 +1368,11 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
   let retainedIntent: ReturnType<typeof publicationIntentInputs> | undefined;
   const rawIdentity = request.wireInputs.trusted_workflow_json;
   if (rawIdentity && Object.hasOwn(JSON.parse(rawIdentity), "trustedWorkflow")) {
-    retainedIntent = publicationIntentInputs(decodePublicationDispatchEnvelope(rawIdentity));
+    const envelope = decodePublicationDispatchEnvelope(rawIdentity);
+    retainedIntent = publicationIntentInputs(envelope);
     retainedInputs = {
       ...retainedInputs,
+      ...envelope.laneInputs,
       validation_purpose: retainedIntent.validationPurpose,
       publication_selection_json: retainedIntent.publicationSelectionJson,
     };
@@ -1352,7 +1388,10 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
           ? publicationIntentInputs(
               normalizePublicationIntent(retainedIntent.validationPurpose, args.inputs[key]),
             ).publicationSelectionJson === retainedIntent.publicationSelectionJson
-          : args.inputs[key] === retainedInputs[key],
+          : key === "extension_test_exclude_patterns_json" || key === "known_flaky_jobs_json"
+            ? normalizePublicationLaneInputs({ [key]: args.inputs[key] })[key] ===
+              retainedInputs[key]
+            : args.inputs[key] === retainedInputs[key],
       ),
     "Reopen arguments conflict with the retained request",
   );
@@ -1369,6 +1408,46 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
       `Retained refs: refs/heads/${request.workflowRef} and refs/heads/${request.targetRef}`,
     );
     throw error;
+  }
+}
+
+// Release priority: the active parent holds hosted-runner priority until it seals.
+// The variable is advisory tooling state, so a failure here never fails validation.
+function setReleasePriority(parentRunId: string, dryRun: boolean, mode: "set" | "clear" = "set") {
+  const variableArgs = [RELEASE_PRIORITY_VARIABLE, "--repo", REPOSITORY];
+  try {
+    if (mode === "set") {
+      // The pause window is recorded before the gate so `prioritize --restore`
+      // can re-queue deferred work even if this parent never seals.
+      const recordPath = defaultReleasePriorityRecordPath(parentRunId);
+      if (!dryRun && !readReleasePriorityRecord(recordPath, { optional: true })) {
+        writeReleasePriorityRecord(recordPath, {
+          kind: RELEASE_PRIORITY_RECORD_KIND,
+          parentRunId,
+          repository: REPOSITORY,
+          recordedAt: new Date().toISOString(),
+          cancelled: [],
+        });
+      }
+      runGh(["variable", "set", ...variableArgs, "--body", parentRunId], { dryRun });
+    } else if (
+      dryRun ||
+      runGh([
+        "api",
+        `repos/${REPOSITORY}/actions/variables/${RELEASE_PRIORITY_VARIABLE}`,
+        "--jq",
+        ".value",
+      ]) === parentRunId
+    ) {
+      runGh(["variable", "delete", ...variableArgs], { dryRun });
+    } else {
+      return;
+    }
+    console.log(`Release priority ${mode}: ${RELEASE_PRIORITY_VARIABLE}=${parentRunId}`);
+  } catch (error) {
+    console.warn(
+      `Release priority ${mode} failed (${error instanceof Error ? error.message : String(error)}); use pnpm frv prioritize ${mode === "set" ? `--run ${parentRunId}` : "--restore <record>"}.`,
+    );
   }
 }
 
@@ -2000,6 +2079,7 @@ async function main() {
       retain({ ...record, phase: "observed", run: observed });
       parentRunId = String(observed.id);
       console.log(`dispatch=observed: attempt=${observed.attempt}`);
+      setReleasePriority(parentRunId, args.dryRun);
     }
     if (parentRunId) {
       console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
@@ -2024,6 +2104,11 @@ async function main() {
         `node scripts/full-release-validation-at-sha.mjs --reconcile-request ${JSON.stringify(requestPath)}`,
       );
     }
+  }
+
+  // Never leave hosted-runner priority set once this operation ends, sealed or not.
+  if (parentRunId) {
+    setReleasePriority(parentRunId, args.dryRun, "clear");
   }
 
   const createdRefs = [

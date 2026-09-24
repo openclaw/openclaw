@@ -57,6 +57,13 @@ alias was removed with it. `pnpm run lint:plugins:no-extension-test-core-imports
 (`scripts/check-no-extension-test-core-imports.ts`) keeps extension tests on
 the focused test subpaths above.
 
+Bundled channel integration tests can use `agent-runtime-test-contracts` for
+real session and subscriber fixtures, `reply-payload-testing` for payload
+construction and delivery settlement, and `plugin-test-runtime` for hook
+runners and registries. These helpers reuse their core owners; register the
+session fixture lifecycle explicitly. Use published runtime subpaths when
+they already expose the needed operation.
+
 ### Available exports
 
 | Export                                                                    | Purpose                                                                                                                                     |
@@ -245,6 +252,18 @@ describe("my-channel plugin", () => {
 ```
 
 ### Unit testing a provider plugin
+
+For bundled catalog tests that resolve provider endpoint capabilities, call
+`useProviderCatalogMetadata(new URL(".", import.meta.url))` from
+`openclaw/plugin-sdk/plugin-test-runtime` at file or suite scope. It prepares
+the plugin's manifest metadata once, installs and clears that snapshot around
+each test, and rejects Jiti loading during assertions. This keeps cold runtime
+discovery out of catalog test deadlines without changing provider behavior.
+
+Pass additional manifest roots when a case exercises another provider's endpoints,
+for example `useProviderCatalogMetadata(new URL(".", import.meta.url), new URL("../google/", import.meta.url))`.
+Assert the endpoint class in route-specific cases so missing metadata cannot turn
+a provider route into an unintended custom-endpoint case.
 
 ```typescript
 import { describe, it, expect } from "vitest";

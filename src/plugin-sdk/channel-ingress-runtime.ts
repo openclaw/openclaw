@@ -1,10 +1,20 @@
+import type {
+  ChannelIngressResolver,
+  CreateChannelIngressResolverParams,
+  ResolveChannelMessageIngressParams,
+  ResolveStableChannelMessageIngressParams,
+  ResolvedChannelMessageIngress,
+} from "../channels/message-access/runtime-types.js";
+import {
+  createChannelIngressPolicyResolver,
+  resolveChannelIngressPolicy,
+  resolveStableChannelIngressPolicy,
+} from "../channels/message-access/runtime.js";
 /**
  * High-level runtime resolver for inbound channel access decisions.
  *
- * Channel plugins should use this subpath for new receive paths. It accepts
- * platform facts, raw allowlists, route descriptors, command facts, and access
- * group config, then returns sender/route/command/activation projections plus
- * the ordered ingress graph.
+ * New receive paths use runtime.channel.inbound.ingress. This subpath retains
+ * released resolver adapters alongside identity, policy, and monitor helpers.
  */
 import {
   createChannelIngressMonitor,
@@ -14,12 +24,14 @@ import {
   type ChannelIngressMonitorPayloadCodec,
   type CreateChannelIngressMonitorOptions,
 } from "../channels/message/ingress-monitor.js";
-export {
-  channelIngressRoutes,
-  createChannelIngressResolver,
-  resolveChannelMessageIngress,
-  resolveStableChannelMessageIngress,
-} from "../channels/message-access/runtime.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
+import {
+  getPluginInstanceOwner,
+  getPluginValueInstance,
+  type PluginInstanceHandle,
+} from "../plugins/plugin-instance-scope.js";
+import { getPluginRecordRegistry } from "../plugins/registry-lifecycle.js";
+export { channelIngressRoutes } from "../channels/message-access/runtime.js";
 export {
   meetsIdentifierAuthentication,
   type IdentifierAuthentication,
@@ -63,6 +75,65 @@ export type {
 } from "../channels/message-access/types.js";
 export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
 
+function currentIngressInstance(): PluginInstanceHandle | undefined {
+  const instance = pluginInstanceInvocation.getStore()?.instance;
+  const owner = instance && getPluginInstanceOwner(instance);
+  return owner?.instance?.hasActiveCall && owner.instance === instance && !owner.revoked
+    ? owner.instance
+    : undefined;
+}
+
+function registeredIngress(instance: PluginInstanceHandle | undefined, channelId: string) {
+  const owner = instance?.owner;
+  if (!instance?.hasActiveCall || instance.lifecycle.signal.aborted || !owner || owner.revoked) {
+    return undefined;
+  }
+  const registry = getPluginRecordRegistry(owner.registry, owner.record);
+  const registration = registry.channels.find(
+    (entry) =>
+      entry.pluginId === owner.record.id &&
+      entry.plugin.id === channelId.trim() &&
+      getPluginValueInstance(entry.plugin) === instance,
+  );
+  return registration?.captureReadAuthority?.()?.()
+    ? registration.resolveChannelRuntime?.().inbound.ingress
+    : undefined;
+}
+
+/** Retain the creating instance when adapting a released reusable resolver. */
+export function createChannelIngressResolver(
+  base: CreateChannelIngressResolverParams,
+): ChannelIngressResolver {
+  // Registration may precede channel publication. Retain the creating instance,
+  // never whichever plugin happens to invoke this resolver later.
+  const instance = currentIngressInstance();
+  const policy = createChannelIngressPolicyResolver(base);
+  const resolve = () => registeredIngress(instance, base.channelId)?.createResolver(base) ?? policy;
+  return {
+    message: (params) => resolve().message(params),
+    command: (params) => resolve().command(params),
+    event: (params) => resolve().event(params),
+  };
+}
+
+/** Preserve the released helper's trusted attribution within its managed callback. */
+export async function resolveChannelMessageIngress(
+  params: ResolveChannelMessageIngressParams,
+): Promise<ResolvedChannelMessageIngress> {
+  const ingress = registeredIngress(currentIngressInstance(), params.channelId);
+  return await (ingress ? ingress.resolve(params) : resolveChannelIngressPolicy(params));
+}
+
+/** Preserve the released stable-identity helper through the same ingress owner. */
+export async function resolveStableChannelMessageIngress(
+  params: ResolveStableChannelMessageIngressParams,
+): Promise<ResolvedChannelMessageIngress> {
+  const ingress = registeredIngress(currentIngressInstance(), params.channelId);
+  return await (ingress
+    ? ingress.resolveStable(params)
+    : resolveStableChannelIngressPolicy(params));
+}
+
 type ChannelIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
 type StandardRawEventPayload = { version: 1; rawEvent: string };
@@ -71,7 +142,13 @@ type StandardRawEventAdmission<TInspection> =
   | { kind: "durable" | (null extends TInspection ? "ignored" : never) };
 type StandardRawEventIngressOptions<TRaw, TMetadata, TInspection> = Omit<
   CreateChannelIngressMonitorOptions<TRaw, string, StandardRawEventPayload, TMetadata>,
-  "admissionMode" | "drain" | "inspect" | "payload" | "pollIntervalMs" | "retention"
+  | "admissionMode"
+  | "drain"
+  | "inspect"
+  | "inspectAsync"
+  | "payload"
+  | "pollIntervalMs"
+  | "retention"
 > & {
   inspect: (raw: TRaw) => TInspection;
   payload: Omit<

@@ -185,7 +185,9 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "mimo-v2-omni",
   "mimo-v2.5",
   "mimo-v2.5-pro",
+  "mimo-v2.6-flash",
   "mimo-v2.6-pro",
+  "mimo-v2.6-pro-ultraspeed",
 ]);
 
 // Tier/access suffixes that some providers append to otherwise identical model

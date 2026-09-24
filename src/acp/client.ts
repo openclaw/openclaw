@@ -252,8 +252,23 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
   console.log(`Session: ${sessionId}`);
   console.log('Type a prompt, or "exit" to quit.\n');
 
-  let quitting = false; // Only explicit quit makes the client-owned signal stop successful.
+  let quitting = false; // Only client-owned shutdown makes a signal stop successful.
+  const quit = async () => {
+    if (quitting || hasChildExited(agent)) {
+      return;
+    }
+    quitting = true;
+    await terminateAcpServer(agent);
+    rl.close();
+    process.exit(0);
+  };
+  rl.once("close", () => {
+    void quit();
+  });
   const prompt = () => {
+    if (quitting) {
+      return;
+    }
     rl.question("> ", (input) => {
       void (async () => {
         const text = input.trim();
@@ -262,10 +277,8 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
           return;
         }
         if (text === "exit" || text === "quit") {
-          quitting = true;
-          await terminateAcpServer(agent);
-          rl.close();
-          process.exit(0);
+          await quit();
+          return;
         }
 
         try {

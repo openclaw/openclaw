@@ -7,7 +7,6 @@ import { sleepWithAbort } from "../../infra/backoff.js";
 import { updatePairedNodeBins } from "../../infra/device-pairing-node-facts.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import type { SkillEligibilityContext } from "../types.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 import {
@@ -308,7 +307,10 @@ function listCurrentRemoteConnectionKeys(): ReadonlySet<string> | undefined {
 
 export function setSkillsRemoteRegistry(registry: NodeRegistry | null) {
   remoteRegistry = registry;
-  setRemoteSkillConnectionReconciler(registry ? () => listCurrentRemoteConnectionKeys() : null);
+  setRemoteSkillConnectionReconciler(
+    registry ? () => listCurrentRemoteConnectionKeys() : null,
+    registry ? () => registry.listCurrentConnected() : undefined,
+  );
   if (!registry) {
     remoteNodeProbeStates.clear();
   }
@@ -487,10 +489,11 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   if (!remoteRegistry) {
     return;
   }
+  const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
   // Pairing can replace the command surface while the connect-time readiness
-  // delay is pending. Probe the live session so that approval refresh is not lost.
-  const liveSession = remoteRegistry.get(params.nodeId);
-  if (!liveSession?.pairingGeneration) {
+  // delay or loader import is pending. Probe the live session after both settle.
+  const liveSession = remoteRegistry?.get(params.nodeId);
+  if (params.readinessSignal?.aborted || !liveSession?.pairingGeneration) {
     return;
   }
   const probeOwner: RemoteNodeOwner = {
@@ -647,10 +650,13 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
     const nextBins = new Set(bins);
     const hasChanged = !areBinSetsEqual(existingBins, nextBins);
     if (hasChanged) {
-      const persisted = await updatePairedNodeBins(params.nodeId, bins, {
-        nodeId: params.nodeId,
-        key: probeOwner.pairingGeneration,
-      });
+      const persisted = await updatePairedNodeBins(
+        params.nodeId,
+        bins,
+        { nodeId: params.nodeId, key: probeOwner.pairingGeneration },
+        undefined,
+        () => isCurrentRemoteNodeOwner(params.nodeId, probeOwner),
+      );
       if (!persisted) {
         return;
       }
@@ -724,7 +730,7 @@ export async function refreshRemoteBinsForConnectedNodes(cfg: OpenClawConfig) {
   if (!remoteRegistry) {
     return;
   }
-  const connected = listCurrentRemoteSessions();
+  const connected = await remoteRegistry.listCurrentConnected();
   for (const node of connected) {
     try {
       await refreshRemoteNodeBins({

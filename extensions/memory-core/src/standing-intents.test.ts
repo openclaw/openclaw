@@ -352,14 +352,19 @@ describe("standing intents", () => {
     ).toHaveLength(1);
   });
 
-  it("rearms a cooled cohort without per-intent writes", async () => {
+  it("rearms a cooled cohort without per-intent writes or reminder payloads", async () => {
     const created: Awaited<ReturnType<typeof createStandingIntent>>[] = [];
     for (let index = 0; index < 32; index += 1) {
       created.push(
         await createStandingIntent({
           agentId: "main",
-          description: `Review reminder ${index}.`,
-          triggerKeywords: ["cohort review"],
+          description: `Review reminder ${index}.`.padEnd(120, " Use the reviewed checklist."),
+          triggerKeywords: [
+            "cohort review",
+            "release checklist",
+            "rollback owner",
+            "migration review",
+          ],
           cooldownSeconds: 60,
           maxFires: 3,
           nowMs: 1_000 + index,
@@ -381,12 +386,53 @@ describe("standing intents", () => {
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     const prepare = db.prepare.bind(db);
     let writes = 0;
+    let firedTextBytes = 0;
+    const observeRow = (row: Record<string, unknown>) => {
+      if (row.status !== "fired") {
+        return;
+      }
+      for (const value of Object.values(row)) {
+        if (typeof value === "string") {
+          firedTextBytes += Buffer.byteLength(value);
+        }
+      }
+    };
     const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
       const statement = prepare(sql);
       statement.run = new Proxy(statement.run.bind(statement), {
         apply(run, receiver, args) {
           writes += 1;
           return Reflect.apply(run, receiver, args);
+        },
+      });
+      statement.get = new Proxy(statement.get.bind(statement), {
+        apply(get, receiver, args) {
+          const row = Reflect.apply(get, receiver, args);
+          if (row) {
+            observeRow(row);
+          }
+          return row;
+        },
+      });
+      statement.all = new Proxy(statement.all.bind(statement), {
+        apply(all, receiver, args) {
+          const rows = Reflect.apply(all, receiver, args);
+          for (const row of rows) {
+            observeRow(row);
+          }
+          return rows;
+        },
+      });
+      statement.iterate = new Proxy(statement.iterate.bind(statement), {
+        apply(iterate, receiver, args) {
+          const rows = Reflect.apply(iterate, receiver, args);
+          return (function* () {
+            for (const row of rows) {
+              observeRow(row);
+              yield row;
+            }
+            return undefined;
+          })();
         },
       });
       return statement;
@@ -397,6 +443,8 @@ describe("standing intents", () => {
       }
       expect(await listStandingIntents({ agentId: "main", nowMs: 62_000 })).toEqual(created);
       expect(writes).toBeLessThanOrEqual(2);
+      expect(firedTextBytes).toBeGreaterThan(0);
+      expect(firedTextBytes).toBeLessThanOrEqual(4_096);
     } finally {
       prepareSpy.mockRestore();
     }

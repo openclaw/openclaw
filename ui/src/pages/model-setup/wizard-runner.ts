@@ -16,6 +16,7 @@ import {
   resolveSafeExternalUrl,
 } from "../../lib/open-external-url.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import type { FirstRunSetup } from "./first-run-setup.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
@@ -25,6 +26,7 @@ import {
 } from "./state.ts";
 
 export type ModelSetupWizardStartMethod =
+  | "mcp.authLogin"
   | "models.authLogin"
   | "openclaw.setup.auth.start"
   | "openclaw.setup.prepare.start"
@@ -47,7 +49,7 @@ type WizardRunnerOptions = {
   onBackgroundCompletion?: (completion: ModelSetupWizardCompletion) => Promise<void>;
   onStart?: (
     method: ModelSetupWizardStartMethod,
-    activation?: SystemAgentSetupActivateParams,
+    activation?: Parameters<FirstRunSetup["beginActivation"]>[0],
   ) => WizardTerminalObserver | undefined;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
@@ -82,13 +84,15 @@ export class ModelSetupWizardRunner {
   private currentState: ModelSetupWizardState = { phase: "idle" };
   private session: WizardSession | null = null;
   private retirementGeneration = 0;
+  private authLabel: string | undefined;
   private pendingSignIn:
     | { kind: ProviderLoginOption["kind"]; window: WindowProxy | null }
     | undefined;
 
   constructor(private readonly options: WizardRunnerOptions) {}
 
-  prepareSignIn(kind: ProviderLoginOption["kind"] | "install" | "custom"): void {
+  prepareSignIn(kind: ProviderLoginOption["kind"] | "install" | "custom", label: string): void {
+    this.authLabel = label;
     this.pendingSignIn?.window?.close();
     const browser = kind === "oauth" || kind === "device-code";
     this.pendingSignIn = {
@@ -153,11 +157,16 @@ export class ModelSetupWizardRunner {
     authChoice: string,
     startMethod: Exclude<
       ModelSetupWizardStartMethod,
-      "openclaw.setup.activate.start"
+      "openclaw.setup.activate.start" | "mcp.authLogin"
     > = "openclaw.setup.auth.start",
     preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> = {},
+    modelTarget?: "utility",
   ): Promise<ModelSetupWizardCompletion | null> {
-    return this.startSession(authChoice, startMethod, { authChoice, ...preferences });
+    return this.startSession(authChoice, startMethod, {
+      authChoice,
+      ...preferences,
+      ...(modelTarget ? { modelTarget } : {}),
+    });
   }
 
   activate(
@@ -172,10 +181,17 @@ export class ModelSetupWizardRunner {
     );
   }
 
+  startMcpLogin(serverName: string): Promise<ModelSetupWizardCompletion | null> {
+    return this.startSession(serverName, "mcp.authLogin", { serverName });
+  }
+
   private async startSession(
     authChoice: string,
     startMethod: ModelSetupWizardStartMethod,
-    params: { authChoice: string } | SystemAgentSetupActivateParams,
+    params:
+      | { authChoice: string; modelTarget?: "utility" }
+      | SystemAgentSetupActivateParams
+      | { serverName: string },
     activationTargetId?: string,
   ): Promise<ModelSetupWizardCompletion | null> {
     const client = this.options.getClient();
@@ -193,13 +209,20 @@ export class ModelSetupWizardRunner {
       abortController: new AbortController(),
       startMethod,
       activationTargetId,
-      onTerminalResult: this.options.onStart?.(startMethod, "kind" in params ? params : undefined),
+      onTerminalResult: this.options.onStart?.(
+        startMethod,
+        "kind" in params
+          ? params
+          : startMethod === "openclaw.setup.auth.start" && "authChoice" in params
+            ? { ...params, kind: "provider-auth" }
+            : undefined,
+      ),
     };
     this.pendingSignIn = undefined;
     this.session = session;
     this.setState({ phase: "starting", authChoice });
     try {
-      const agentId = this.options.getAgentId();
+      const agentId = startMethod === "mcp.authLogin" ? null : this.options.getAgentId();
       const request = client
         .request<WizardStartResult>(
           startMethod,
@@ -275,6 +298,7 @@ export class ModelSetupWizardRunner {
       session?.abortController.abort();
     }
     this.session = null;
+    this.authLabel = undefined;
     this.setState({ phase: "idle" });
     if (session) {
       await this.cancelSession(session);
@@ -305,7 +329,7 @@ export class ModelSetupWizardRunner {
       return undefined;
     }
     if (result?.status === "cancelled" || result?.status === "error") {
-      if (session.startMethod === "models.authLogin") {
+      if (session.startMethod === "models.authLogin" || session.startMethod === "mcp.authLogin") {
         // Cancellation acknowledges the abort before provider teardown releases
         // admission. Status waits for that release; a purged session is settled.
         try {
@@ -318,6 +342,9 @@ export class ModelSetupWizardRunner {
             },
           );
         } catch (error) {
+          if (session !== this.session || this.isRetired(session) || session.suspended) {
+            return undefined;
+          }
           if (!isWizardNotFoundError(error)) {
             throw error;
           }
@@ -350,11 +377,14 @@ export class ModelSetupWizardRunner {
     clearTimeout(this.session?.externalInputTimer);
     this.session?.abortController.abort();
     this.session = null;
+    this.authLabel = undefined;
     this.setState({ phase: "idle" });
   }
 
   fail(message: string): void {
+    const label = this.authLabel;
     this.close();
+    this.authLabel = label;
     this.setState({ phase: "error", message });
   }
 
@@ -597,7 +627,10 @@ export class ModelSetupWizardRunner {
 
   private async cancelSession(session: WizardSession): Promise<WizardStatusResult | undefined> {
     try {
-      return await this.sendCancellation(session, session.startMethod === "models.authLogin");
+      return await this.sendCancellation(
+        session,
+        session.startMethod === "models.authLogin" || session.startMethod === "mcp.authLogin",
+      );
     } catch {
       // Detached cleanup is best effort; explicit cancellation surfaces failures.
       return undefined;
@@ -658,6 +691,9 @@ export class ModelSetupWizardRunner {
 
   private setState(state: ModelSetupWizardState): void {
     clearTimeout(this.session?.externalInputTimer);
+    if (this.authLabel) {
+      state.authLabel = this.authLabel;
+    }
     this.currentState = state;
     this.options.onChange(state);
   }

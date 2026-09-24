@@ -113,6 +113,50 @@ describe("channel ingress drain watchdog", () => {
     });
   });
 
+  it("adopts a dispatching handler that stays live beyond the stall timeout", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("compacting", { text: "x" }, { laneKey: "l1" });
+      let dispatchSignal: AbortSignal | undefined;
+      const dispatch = vi.fn(
+        async (_event: unknown, lifecycle: ChannelIngressDispatchLifecycle) => {
+          dispatchSignal = lifecycle.abortSignal;
+          const pulse = setInterval(
+            expectDefined(lifecycle.onDeferredHeartbeat, "pre-adoption heartbeat"),
+            expectDefined(lifecycle.deferredHeartbeatIntervalMs, "heartbeat cadence"),
+          );
+          try {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 3_500);
+            });
+            await lifecycle.onAdopted();
+          } finally {
+            clearInterval(pulse);
+          }
+        },
+      );
+      const drain = createChannelIngressDrain({
+        queue,
+        adoptionStallTimeoutMs: 1_000,
+        dispatchClaimedEvent: dispatch,
+      });
+      try {
+        await drain.drainOnce();
+        await vi.advanceTimersByTimeAsync(3_500);
+        await drain.waitForIdle();
+        expect(dispatchSignal?.aborted).toBe(false);
+        expect(await queue.listClaims()).toEqual([]);
+        expect(await queue.listPending()).toEqual([]);
+        expect(await queue.listFailed?.()).toEqual([]);
+        expect((await queue.enqueue("compacting", { text: "duplicate" })).kind).toBe("completed");
+        expect(await drain.drainOnce()).toEqual({ started: 0 });
+        expect(dispatch).toHaveBeenCalledOnce();
+      } finally {
+        drain.dispose();
+      }
+    });
+  });
+
   it("rearms a live deferred wait, then guillotines silence", async () => {
     await withTempState(async (stateDir) => {
       let clock = 30_000;

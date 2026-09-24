@@ -4,6 +4,8 @@ import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspac
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { RunSkillUsage } from "../runtime/run-usage.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
@@ -149,7 +151,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
     // This timer outlives the foreground turn that armed it. Create its async
     // resource outside the parent scope so review work admits on the current generation.
     const timer = runOutsidePreparedModelRuntimePluginGenerationScope(() =>
-      setTimer(timerCallback, delayMs),
+      runOutsidePluginRuntimeGenerationScope(() => setTimer(timerCallback, delayMs)),
     );
     pending.timer = timer;
     timer.unref?.();
@@ -158,7 +160,11 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
   return {
     schedule(params: SkillExperienceReviewParams): void {
       const sessionKey = params.ctx.sessionKey?.trim();
-      if (!sessionKey) {
+      if (
+        !sessionKey ||
+        isIncognitoSessionKey(sessionKey) ||
+        isIncognitoSessionKey(params.source?.sessionKey)
+      ) {
         return;
       }
       // Unqualified keys such as global still belong to one foreground agent.

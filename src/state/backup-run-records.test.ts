@@ -1,24 +1,36 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildBackupStatusValue, noteBackupDoctorHint } from "../commands/backup-health.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readBackupRunFreshness, recordBackupRunOutcome } from "./backup-run-records.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
-const roots: string[] = [];
 const mocks = vi.hoisted(() => ({ note: vi.fn() }));
+const roots = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    try {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      cleanup();
+    } finally {
+      vi.restoreAllMocks();
+      mocks.note.mockReset();
+    }
+  }),
+);
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 async function testEnv(options?: { bootstrap?: boolean }): Promise<NodeJS.ProcessEnv> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-runs-test-"));
-  roots.push(root);
+  const root = roots.make("openclaw-backup-runs-test-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
   if (options?.bootstrap) {
     // Recording is non-creating by contract, so the fixture bootstraps the
@@ -28,16 +40,44 @@ async function testEnv(options?: { bootstrap?: boolean }): Promise<NodeJS.Proces
   return env;
 }
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  mocks.note.mockReset();
-  closeOpenClawStateDatabaseForTest();
-  await Promise.all(
-    roots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
-  );
-});
-
 describe("backup run records", () => {
+  it("records an ordinary snapshot outcome without main-thread SQL and retains it after reopen", async () => {
+    const env = await testEnv({ bootstrap: true });
+    await closeOpenClawStateDatabaseAsync();
+    const native = requireNodeSqlite();
+    const counters = [
+      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
+      vi.spyOn(native.DatabaseSync.prototype, "exec"),
+      ...(["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(native.StatementSync.prototype, method),
+      ),
+    ];
+    try {
+      await recordBackupRunOutcome({
+        env,
+        archivePath: "/backups/snapshot",
+        kind: "sqlite-snapshot",
+        status: "ok",
+        createdAt: 7,
+      });
+      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    } finally {
+      for (const counter of counters) {
+        counter.mockRestore();
+      }
+    }
+    await closeOpenClawStateDatabaseAsync();
+    expect(await readBackupRunFreshness(env)).toMatchObject({
+      latest: {
+        archivePath: "/backups/snapshot",
+        kind: "sqlite-snapshot",
+        status: "ok",
+        createdAt: 7,
+      },
+      latestOk: { archivePath: "/backups/snapshot" },
+    });
+  });
+
   it("records archive and Git outcomes and prunes the operational log to 200 rows", async () => {
     const env = await testEnv({ bootstrap: true });
     await recordBackupRunOutcome({

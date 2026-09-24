@@ -14,8 +14,9 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createAuthProfileStoreFixture } from "./credential-fixtures.test-support.js";
-import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
+import { isSettledOAuthRefreshFailure, OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { buildRefreshContentionError } from "./oauth-refresh-lock-errors.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
@@ -165,6 +166,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   afterEach(async () => {
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
+    await cleanupSessionStateForTest({ stateDir: tmpDir });
     closeOpenClawAgentDatabasesForTest();
     vi.unstubAllGlobals();
 
@@ -290,46 +292,51 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
   });
 
-  it("surfaces contention once without exposing the lock path", async () => {
-    const profileId = "openai:default";
-    const store = createOauthStore({
-      profileId,
-      provider: "openai",
-      access: "expired-access",
-      refresh: "expired-refresh",
-      expires: 1,
-    });
-    saveAuthProfileStore(store, mainAgentDir);
-    const lockPath = path.join(mainAgentDir, "oauth-refresh.lock");
-    refreshCredentialMock.mockRejectedValueOnce(
-      buildRefreshContentionError({
+  it.each([false, true])(
+    "surfaces contention once without exposing the lock path (frozen: %s)",
+    async (frozen) => {
+      const profileId = "openai:default";
+      const store = createOauthStore({
+        profileId,
+        provider: "openai",
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: 1,
+      });
+      saveAuthProfileStore(store, mainAgentDir);
+      const lockPath = path.join(mainAgentDir, "oauth-refresh.lock");
+      const refreshError = buildRefreshContentionError({
         provider: "openai",
         profileId,
         cause: Object.assign(new Error(`file lock timeout for ${lockPath}`), {
           code: FILE_LOCK_TIMEOUT_ERROR_CODE,
           lockPath,
         }),
-      }),
-    );
-    const failure = await resolveApiKeyForProfile({
-      store,
-      profileId,
-      agentDir: mainAgentDir,
-      forceRefresh: true,
-    }).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
-    expect(failure).toMatchObject({
-      provider: "openai",
-      profileId,
-      reason: null,
-      cause: { code: "refresh_contention", lockPath },
-    });
-    const message = formatErrorMessage(failure);
-    expect(message.match(/OAuth token refresh failed/g)).toHaveLength(1);
-    expect(message.match(/OAuth refresh failed \(refresh_contention\)/g)).toHaveLength(1);
-    expect(message).not.toContain(lockPath);
-    expect(message).not.toContain("file lock timeout");
-  });
+      });
+      refreshCredentialMock.mockRejectedValueOnce(
+        frozen ? Object.freeze(refreshError) : refreshError,
+      );
+      const failure = await resolveApiKeyForProfile({
+        store,
+        profileId,
+        agentDir: mainAgentDir,
+        forceRefresh: true,
+      }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
+      expect(isSettledOAuthRefreshFailure(failure)).toBe(true);
+      expect(failure).toMatchObject({
+        provider: "openai",
+        profileId,
+        reason: null,
+        cause: { code: "refresh_contention", lockPath },
+      });
+      const message = formatErrorMessage(failure);
+      expect(message.match(/OAuth token refresh failed/g)).toHaveLength(1);
+      expect(message.match(/OAuth refresh failed \(refresh_contention\)/g)).toHaveLength(1);
+      expect(message).not.toContain(lockPath);
+      expect(message).not.toContain("file lock timeout");
+    },
+  );
 
   it.each([false, true])(
     "clears stale lastGood and respects a locked selection ($locked)",

@@ -200,10 +200,10 @@ export async function evaluateSkillProposal(
   return { record: stored.record, evaluation };
 }
 
-export function listSkillProposalEvents(
+export async function listSkillProposalEvents(
   input: SkillProposalEventsListInput,
-): SkillProposalEventsListResult {
-  return readSkillProposalEvents(input, storeOptions(input.env, input.agentId, input.config));
+): Promise<SkillProposalEventsListResult> {
+  return await readSkillProposalEvents(input, storeOptions(input.env, input.agentId, input.config));
 }
 
 export function assertExpectedRevisionHash(actual: string, expected?: string): void {

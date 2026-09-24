@@ -6,6 +6,7 @@ import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { serveCompanion } from "./native-desktop.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native desktop Gateways E2E" });
 const companionFile = (file: string) =>
@@ -68,37 +69,6 @@ async function capture(page: Page, directory: string | undefined, name: string) 
   if (directory) {
     await page.screenshot({ path: path.join(directory, name), animations: "disabled" });
   }
-}
-
-async function serveCompanion(page: Page) {
-  await page.route("**/companion/**", (route) => {
-    const { pathname } = new URL(route.request().url());
-    const file = pathname.slice(pathname.indexOf("/companion/") + "/companion/".length);
-    const sharedFont = [
-      "instrument-sans-latin.woff2",
-      "instrument-sans-latin-ext.woff2",
-      "instrument-sans-OFL.txt",
-    ].includes(file);
-    return route.fulfill({
-      contentType: file.endsWith(".js")
-        ? "text/javascript"
-        : file.endsWith(".css")
-          ? "text/css"
-          : file.endsWith(".svg")
-            ? "image/svg+xml"
-            : file.endsWith(".woff2")
-              ? "font/woff2"
-              : file.endsWith(".txt")
-                ? "text/plain"
-                : "text/html",
-      body: readFileSync(
-        new URL(
-          sharedFont ? `../../public/fonts/${file}` : `../../../apps/linux/ui/${file}`,
-          import.meta.url,
-        ),
-      ),
-    });
-  });
 }
 
 suite.define(() => {
@@ -565,6 +535,24 @@ suite.define(() => {
       await page.getByText(/Saved credentials stay hidden/).waitFor();
       await capture(page, proof, "edit-saved-gateway.png");
       await token.fill("unsaved-token");
+      for (const colorScheme of ["dark", "light", "dark"] as const) {
+        await page.emulateMedia({ colorScheme });
+        await expect
+          .poll(() =>
+            page.evaluate(() => ({
+              background: getComputedStyle(document.documentElement).backgroundColor,
+              field: getComputedStyle(document.querySelector("#gateway-token")!).backgroundColor,
+            })),
+          )
+          .toEqual(
+            colorScheme === "light"
+              ? { background: "rgb(250, 249, 247)", field: "rgb(255, 255, 255)" }
+              : { background: "rgb(14, 16, 21)", field: "rgb(22, 25, 32)" },
+          );
+        expect(await page.getByLabel("Name", { exact: true }).inputValue()).toBe("Studio");
+        expect(await token.inputValue()).toBe("unsaved-token");
+        expect(await token.getAttribute("type")).toBe("password");
+      }
       await page.getByRole("button", { name: "Show credential", exact: true }).click();
       expect(await token.getAttribute("type")).toBe("text");
       await page.getByRole("button", { name: "Back to Gateways", exact: true }).click();

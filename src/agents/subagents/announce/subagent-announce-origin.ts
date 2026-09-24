@@ -20,8 +20,8 @@ import type { SessionDeliveryRoute } from "../../../infra/session-delivery-queue
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../../routing/session-key.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
+import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
@@ -152,23 +152,17 @@ function resolveBoundConversationOrigin(params: {
   const inferredThreadId =
     boundTarget?.threadId ??
     (parentConversationId && parentConversationId !== conversationId ? conversationId : undefined);
-  if (
+  const to =
     requesterTo &&
     conversationId &&
     requesterConversationId &&
     conversationId === requesterConversationId
-  ) {
-    return {
-      channel: conversation.channel,
-      accountId: conversation.accountId,
-      to: requesterTo,
-      threadId: inferredThreadId,
-    };
-  }
+      ? requesterTo
+      : boundTarget?.to;
   return {
     channel: conversation.channel,
     accountId: conversation.accountId,
-    to: boundTarget?.to,
+    to,
     threadId: inferredThreadId,
   };
 }

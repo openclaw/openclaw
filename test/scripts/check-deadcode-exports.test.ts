@@ -84,6 +84,10 @@ describe("check-deadcode-exports", () => {
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/vitest/vitest*.config.ts!",
+        "scripts/crabbox-wrapper.mjs!",
+        "scripts/crabbox-wrapper.mts!",
+        "scripts/check-openclaw-package-tarball.mjs!",
+        "scripts/check-openclaw-package-tarball.mts!",
       ]),
     );
     expect(fullExtensionWorkspace.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
@@ -153,6 +157,8 @@ describe("check-deadcode-exports", () => {
         "security/opengrep/check-rule-metadata.mjs!",
         "skills/meme-maker/scripts/meme.mjs!",
         "scripts/check-openclaw-package-tarball.mts!",
+        "scripts/crabbox-wrapper.mjs!",
+        "scripts/crabbox-wrapper.mts!",
         "scripts/check-live-cache.ts!",
         "scripts/lib/vitest-resource-reporter.mts!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
@@ -168,6 +174,23 @@ describe("check-deadcode-exports", () => {
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
       "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
     );
+  });
+
+  it("models upgrade survivor inline imports from the shell source", () => {
+    const runner = "scripts/e2e/lib/upgrade-survivor/run.sh";
+    const source = fs.readFileSync(runner, "utf8");
+    const compile = knipConfig.compilers.sh;
+    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
+      expect(workspace.entry).toContain(`${runner}!`);
+    }
+    expect(compile(source, runner)).toContain(
+      'import { readPostCoreSnapshot } from "./diagnostics.mjs";',
+    );
+    const withoutSnapshot = source.replace(/^import \{ readPostCoreSnapshot \}[^\n]+\n/mu, "");
+    const remaining = compile(withoutSnapshot, runner);
+    expect(remaining).not.toContain("readPostCoreSnapshot");
+    expect(remaining).toContain('from "../../../lib/release-version.mjs";');
+    expect(compile(source, "scripts/e2e/lib/upgrade-survivor/other.sh")).toBe("");
   });
 
   it("audits executable code outside the main source trees", () => {

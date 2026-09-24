@@ -2,6 +2,16 @@ import { nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
 
+export function syncScrollState(element: HTMLElement, horizontal = false) {
+  const size = horizontal ? element.scrollWidth : element.scrollHeight;
+  const viewport = horizontal ? element.clientWidth : element.clientHeight;
+  const position = horizontal ? element.scrollLeft : element.scrollTop;
+  const scrollable = size > viewport + 1;
+  element.dataset.scrollable = String(scrollable);
+  element.dataset.atStart = String(!scrollable || position <= 1);
+  element.dataset.atEnd = String(!scrollable || position + viewport >= size - 1);
+}
+
 class ScrollStateDirective extends AsyncDirective {
   private element: HTMLElement | undefined;
   private horizontal = false;
@@ -12,13 +22,7 @@ class ScrollStateDirective extends AsyncDirective {
     if (!this.isConnected || !element?.isConnected) {
       return;
     }
-    const size = this.horizontal ? element.scrollWidth : element.scrollHeight;
-    const viewport = this.horizontal ? element.clientWidth : element.clientHeight;
-    const position = this.horizontal ? element.scrollLeft : element.scrollTop;
-    const scrollable = size > viewport + 1;
-    element.dataset.scrollable = String(scrollable);
-    element.dataset.atStart = String(!scrollable || position <= 1);
-    element.dataset.atEnd = String(!scrollable || position + viewport >= size - 1);
+    syncScrollState(element, this.horizontal);
   };
   private readonly observer =
     typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(this.sync);

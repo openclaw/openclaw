@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements channel outbound behavior.
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
@@ -19,15 +18,6 @@ const loadWhatsAppApprovalReactionsModule = createLazyRuntimeModule(
 const loadWhatsAppQuestionReactionsModule = createLazyRuntimeModule(
   () => import("./question-reactions.js"),
 );
-
-function normalizeWhatsAppChannelPayloadText(text: string | undefined): string {
-  return normalizeWhatsAppPayloadTextPreservingIndentation(text);
-}
-
-function normalizeWhatsAppChannelSendText(text: string | undefined): string {
-  const normalized = normalizeWhatsAppChannelPayloadText(text);
-  return normalized.trim() ? normalized : "";
-}
 
 async function prepareWhatsAppApprovalPayloadForDelivery(
   params: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0],
@@ -67,14 +57,14 @@ export const whatsappChannelOutbound = {
     shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
     resolveTarget: ({ to, allowFrom, mode }) =>
       resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-    normalizeText: normalizeWhatsAppChannelSendText,
+    normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
   }),
   sendTextOnlyErrorPayloads: true,
   renderPresentation: prepareWhatsAppApprovalPayloadForDelivery,
   afterDeliverPayload: registerDeliveredWhatsAppApprovalPayload,
   normalizePayload: ({ payload }: { payload: { text?: string } }) => ({
     ...payload,
-    text: normalizeWhatsAppChannelPayloadText(payload.text),
+    text: normalizeWhatsAppPayloadTextPreservingIndentation(payload.text),
   }),
 };
 

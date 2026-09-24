@@ -1,6 +1,4 @@
 // Gateway daemon install plan builder, including service env and SecretRef passthrough policy.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -10,6 +8,8 @@ import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.j
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+import { resolveLaunchAgentLabel } from "../daemon/launchd-label.js";
+import { resolveLaunchAgentEnvWrapperPath } from "../daemon/launchd-service-files.js";
 import { resolveGatewayStateDir, resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import {
   OPENCLAW_WRAPPER_ENV_KEY,
@@ -25,11 +25,10 @@ import { applyManagedServiceEnvRenderPolicy } from "../daemon/service-env-render
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   formatManagedServiceEnvKeys,
-  hasEnvironmentFileSource,
   readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "../daemon/service-managed-env.js";
-import { isNonMinimalServicePathEntry } from "../daemon/service-path-policy.js";
+import { mergeServicePath } from "../daemon/service-path-policy.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
@@ -55,19 +54,13 @@ import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
+  type GatewayInstallPlan,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
-type GatewayInstallPlan = {
-  programArguments: string[];
-  workingDirectory?: string;
-  environment: Record<string, string | undefined>;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
-};
-
 // Gateway ingress secrets must never be newly materialized into supervisor metadata.
-// Existing active file-backed values are retained separately during regeneration.
+// Existing active service values are retained separately during regeneration.
 const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.password",
   "gateway.auth.token",
@@ -445,104 +438,6 @@ function collectPluginConfigSecretRefs(params: {
   return context.assignments.map((assignment) => assignment.ref);
 }
 
-function mergeServicePath(
-  nextPath: string | undefined,
-  existingPath: string | undefined,
-  tmpDir: string | undefined,
-  platform: NodeJS.Platform,
-): string | undefined {
-  const segments: string[] = [];
-  const seen = new Set<string>();
-  const normalizedTmpDirs = [tmpDir, os.tmpdir()]
-    .map((value) => value?.trim())
-    .filter((value): value is string => Boolean(value))
-    .map((value) => path.resolve(value));
-  const realTmpDirs = normalizedTmpDirs.map((tmpRoot) => {
-    try {
-      return path.normalize(fs.realpathSync.native(tmpRoot));
-    } catch {
-      return tmpRoot;
-    }
-  });
-  const isSameOrChildPath = (candidate: string, parent: string) =>
-    candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
-  const isUnsafeProcPath = (candidate: string) =>
-    candidate === `${path.sep}proc` || candidate.startsWith(`${path.sep}proc${path.sep}`);
-  const realpathExistingPath = (candidate: string): string | undefined => {
-    const parts: string[] = [];
-    let current = candidate;
-    while (current && current !== path.dirname(current)) {
-      try {
-        const realCurrent = path.normalize(fs.realpathSync.native(current));
-        return path.normalize(path.join(realCurrent, ...parts.toReversed()));
-      } catch {
-        parts.push(path.basename(current));
-        current = path.dirname(current);
-      }
-    }
-    try {
-      return path.normalize(path.join(fs.realpathSync.native(current), ...parts.toReversed()));
-    } catch {
-      return undefined;
-    }
-  };
-  const normalizePreservedPathSegment = (segment: string): string | undefined => {
-    if (!path.isAbsolute(segment)) {
-      return undefined;
-    }
-    const normalized = path.normalize(segment);
-    if (isUnsafeProcPath(normalized)) {
-      return undefined;
-    }
-    const cwd = path.resolve(process.cwd());
-    if (isSameOrChildPath(normalized, cwd)) {
-      return undefined;
-    }
-    try {
-      const realSegment = realpathExistingPath(normalized);
-      const realCwd = path.normalize(fs.realpathSync.native(cwd));
-      if (realSegment && isSameOrChildPath(realSegment, realCwd)) {
-        return undefined;
-      }
-    } catch {
-      // Legacy PATH entries may no longer exist; keep filtering best-effort.
-    }
-    return normalized;
-  };
-  const shouldPreserveNormalizedPathSegment = (segment: string) => {
-    if (isNonMinimalServicePathEntry(segment, platform)) {
-      return false;
-    }
-    const resolved = path.resolve(segment);
-    const realResolved = realpathExistingPath(resolved) ?? resolved;
-    return ![...normalizedTmpDirs, ...realTmpDirs].some(
-      (tmpRoot) => isSameOrChildPath(resolved, tmpRoot) || isSameOrChildPath(realResolved, tmpRoot),
-    );
-  };
-  const addPath = (value: string | undefined, options?: { preserve?: boolean }) => {
-    if (typeof value !== "string" || value.trim().length === 0) {
-      return;
-    }
-    for (const segment of value.split(path.delimiter)) {
-      const trimmed = segment.trim();
-      const candidate = options?.preserve ? normalizePreservedPathSegment(trimmed) : trimmed;
-      if (options?.preserve && (!candidate || !shouldPreserveNormalizedPathSegment(candidate))) {
-        continue;
-      }
-      if (!candidate || seen.has(candidate)) {
-        continue;
-      }
-      seen.add(candidate);
-      segments.push(candidate);
-    }
-  };
-  addPath(nextPath);
-  if (platform !== "darwin") {
-    addPath(existingPath, { preserve: true });
-  }
-  return segments.length > 0 ? segments.join(path.delimiter) : undefined;
-}
-
 // Operator opt-in env vars that should survive service regeneration even though
 // they share the OPENCLAW_ prefix that is otherwise stripped from preserved
 // environments. These represent intentional, user-placed configuration on the
@@ -593,12 +488,8 @@ function collectPreservedExistingServiceEnvVars(
   return preserved;
 }
 
-function collectExistingEnvironmentFileManagedServiceEnvVars(params: {
+function collectExistingConfigSecretRefServiceEnvVars(params: {
   existingEnvironment: Record<string, string | undefined> | undefined;
-  existingEnvironmentValueSources?: Record<
-    string,
-    GatewayServiceEnvironmentValueSource | undefined
-  >;
   configSecretRefKeys: ReadonlySet<string>;
 }): Record<string, string | undefined> {
   if (!params.existingEnvironment || params.configSecretRefKeys.size === 0) {
@@ -615,13 +506,6 @@ function collectExistingEnvironmentFileManagedServiceEnvVars(params: {
       continue;
     }
     if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
-      continue;
-    }
-    const source = readEnvironmentValueSource(
-      params.existingEnvironmentValueSources,
-      normalizedKey,
-    );
-    if (!hasEnvironmentFileSource(source)) {
       continue;
     }
     const value = rawValue?.trim();
@@ -757,10 +641,9 @@ async function buildGatewayInstallEnvironment(params: {
     },
     { omitKeys: Object.keys(params.serviceEnvironment) },
   );
-  const existingEnvironmentFileRenderEnvironment = omitEnvironmentEntriesShadowedBy(
-    collectExistingEnvironmentFileManagedServiceEnvVars({
+  const existingSecretRefRenderEnvironment = omitEnvironmentEntriesShadowedBy(
+    collectExistingConfigSecretRefServiceEnvVars({
       existingEnvironment: params.existingEnvironment,
-      existingEnvironmentValueSources: params.existingEnvironmentValueSources,
       configSecretRefKeys: new Set(configSecretRefKeys),
     }),
     [
@@ -775,7 +658,7 @@ async function buildGatewayInstallEnvironment(params: {
     managedServiceEnvKeys,
     serviceEnvironment: params.serviceEnvironment,
     platform: params.platform,
-    existingEnvironmentFileEnvironment: existingEnvironmentFileRenderEnvironment,
+    existingSecretRefEnvironment: existingSecretRefRenderEnvironment,
     stateDirDotEnvEnvironment: stateDirDotEnvRenderEnvironment,
     configSecretRefEnvironment,
   });
@@ -809,6 +692,7 @@ export async function buildGatewayInstallPlan(params: {
   existingCommand?: GatewayServiceCommandConfig | null;
   devMode?: boolean;
   runtimePath?: string;
+  pinnedRuntimePath?: string;
   wrapperPath?: string;
   platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
@@ -822,16 +706,24 @@ export async function buildGatewayInstallPlan(params: {
 }): Promise<GatewayInstallPlan> {
   const platform = params.platform ?? process.platform;
   const wrapperInput = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
-  const wrapperPointsAtWindowsTaskScript =
-    Boolean(wrapperInput?.trim()) &&
-    platform === "win32" &&
-    isSameServicePath(wrapperInput, resolveGatewayTaskScriptPath(params.env), platform);
-  if (wrapperPointsAtWindowsTaskScript) {
+  const generatedWrapperPath =
+    platform === "win32"
+      ? resolveGatewayTaskScriptPath(params.env)
+      : platform === "darwin"
+        ? resolveLaunchAgentEnvWrapperPath(params.env, resolveLaunchAgentLabel(params.env))
+        : undefined;
+  const wrapperPointsAtGeneratedScript =
+    generatedWrapperPath !== undefined &&
+    normalizeServicePathForCompare(wrapperInput, platform) ===
+      normalizeServicePathForCompare(generatedWrapperPath, platform);
+  if (wrapperPointsAtGeneratedScript) {
     params.warn?.(
-      `Ignoring ${OPENCLAW_WRAPPER_ENV_KEY} because it points to the Windows task script; using the OpenClaw gateway entrypoint directly to avoid a recursive gateway.cmd wrapper.`,
+      platform === "win32"
+        ? `Ignoring ${OPENCLAW_WRAPPER_ENV_KEY} because it points to the Windows task script; using the OpenClaw gateway entrypoint directly to avoid a recursive gateway.cmd wrapper.`
+        : `Ignoring ${OPENCLAW_WRAPPER_ENV_KEY} because it points to the generated LaunchAgent environment wrapper; using the OpenClaw gateway entrypoint directly to avoid a self-referencing wrapper.`,
     );
   }
-  const wrapperPath = wrapperPointsAtWindowsTaskScript
+  const wrapperPath = wrapperPointsAtGeneratedScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
   const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
@@ -839,13 +731,15 @@ export async function buildGatewayInstallPlan(params: {
     runtime: params.runtime,
     devMode: params.devMode,
     runtimePath: params.runtimePath,
+    pinnedRuntimePath: params.pinnedRuntimePath,
     wrapperPath,
   });
-  const serviceInputEnv: Record<string, string | undefined> = wrapperPath
-    ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
-    : wrapperPointsAtWindowsTaskScript
-      ? omitEnvKey(params.env, OPENCLAW_WRAPPER_ENV_KEY)
-      : params.env;
+  const serviceInputEnv = { ...params.env };
+  if (wrapperPath) {
+    serviceInputEnv[OPENCLAW_WRAPPER_ENV_KEY] = wrapperPath;
+  } else if (wrapperPointsAtGeneratedScript) {
+    delete serviceInputEnv[OPENCLAW_WRAPPER_ENV_KEY];
+  }
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     allowUnconfigured:
@@ -918,25 +812,6 @@ function normalizeServicePathForCompare(
     return undefined;
   }
   return platform === "win32" ? path.win32.resolve(trimmed).toLowerCase() : path.resolve(trimmed);
-}
-
-function isSameServicePath(
-  left: string | undefined,
-  right: string | undefined,
-  platform: NodeJS.Platform,
-): boolean {
-  const normalizedLeft = normalizeServicePathForCompare(left, platform);
-  const normalizedRight = normalizeServicePathForCompare(right, platform);
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
-}
-
-function omitEnvKey(
-  env: Record<string, string | undefined>,
-  key: string,
-): Record<string, string | undefined> {
-  const next = { ...env };
-  delete next[key];
-  return next;
 }
 
 /** Return the user-facing recovery hint for failed Gateway service installation. */

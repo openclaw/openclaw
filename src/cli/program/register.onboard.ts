@@ -339,7 +339,7 @@ export function registerOnboardCommand(program: Command): void {
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         const agent = resolveRecommendationAgentOption(recommendationsCommand);
-        onboardRecommendationsCommand(
+        await onboardRecommendationsCommand(
           { json, ...(agent !== undefined ? { agent } : {}) },
           defaultRuntime,
         );
@@ -363,7 +363,7 @@ export function registerOnboardCommand(program: Command): void {
         const { acknowledgeOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         const agent = resolveRecommendationAgentOption(acknowledgeCommand);
-        acknowledgeOnboardRecommendationsCommand(
+        await acknowledgeOnboardRecommendationsCommand(
           { retry: opts.retry, ...(agent !== undefined ? { agent } : {}) },
           defaultRuntime,
         );
@@ -386,7 +386,10 @@ export function registerOnboardCommand(program: Command): void {
         const { refreshOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         const agent = resolveRecommendationAgentOption(refreshCommand);
-        refreshOnboardRecommendationsCommand(agent !== undefined ? { agent } : {}, defaultRuntime);
+        await refreshOnboardRecommendationsCommand(
+          agent !== undefined ? { agent } : {},
+          defaultRuntime,
+        );
       });
     });
 

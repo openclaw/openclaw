@@ -114,7 +114,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
 
   mocks.preparePromptAssembly.mockImplementation(async (input: AssemblyCall) => {
     order.push("assembly");
-    const lease = { leaseId: "lease-1", runIds: ["run-1"] };
+    const lease = { leaseId: "lease-1", runIds: ["run-1"], isCurrent: () => true };
     input.applyPromptBuildToolsAllow(undefined);
     input.setLeasedSteering(lease);
     return {
@@ -242,6 +242,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
       promptToolPolicy: {
         current: {
           activeToolNames: ["read"],
+          callableToolNames: ["read"],
           effectiveTools: [{ name: "read" }],
           uncompactedEffectiveTools: [{ name: "read" }],
           tools: [{ name: "read" }],

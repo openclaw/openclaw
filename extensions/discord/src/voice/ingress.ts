@@ -1,6 +1,7 @@
-// Discord plugin module implements ingress behavior.
+import { randomUUID } from "node:crypto";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
+import type { RealtimeVoiceSelectionHandle } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMention } from "../mentions.js";
@@ -110,35 +111,19 @@ export async function resolveDiscordVoiceIngressContext(params: {
 }
 
 export async function runDiscordVoiceAgentTurn(params: {
-  readPolicy?: DiscordLivePolicyReader;
   entry: VoiceSessionEntry;
   accountId: string;
   userId: string;
   message: string;
-  cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
-  context?: DiscordVoiceIngressContext;
+  context: DiscordVoiceIngressContext;
   toolsAllow?: string[];
+  voiceSelection?: RealtimeVoiceSelectionHandle;
   signal?: AbortSignal;
-  admissionAllowFrom?: string[];
-  fetchGuildName: (guildId: string) => Promise<string | undefined>;
-  speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<DiscordVoiceAgentTurnResult | null> {
-  const context =
-    params.context ??
-    (await resolveDiscordVoiceIngressContext({
-      readPolicy: params.readPolicy,
-      entry: params.entry,
-      userId: params.userId,
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      admissionAllowFrom: params.admissionAllowFrom,
-      fetchGuildName: params.fetchGuildName,
-      speakerContext: params.speakerContext,
-    }));
+  const { context } = params;
   if (
-    !context ||
     params.entry.captureOnly ||
     params.entry.sessionLifecycle.status !== "active" ||
     context.isCurrent?.() === false
@@ -147,24 +132,47 @@ export async function runDiscordVoiceAgentTurn(params: {
   }
   params.signal?.throwIfAborted();
   const voiceModel = normalizeOptionalString(params.discordConfig.voice?.model);
-  const result = await getDiscordRuntime().agent.runCommandFromIngress(
-    {
-      message: params.message,
-      sessionKey: params.entry.route.sessionKey,
-      agentId: params.entry.route.agentId,
-      messageChannel: "discord",
-      messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
-      accountId: params.accountId,
-      extraSystemPrompt: context.extraSystemPrompt,
-      senderIsOwner: context.senderIsOwner,
-      allowModelOverride: Boolean(voiceModel),
-      model: voiceModel,
-      toolsAllow: params.toolsAllow,
-      deliver: false,
-      ...(params.signal ? { abortSignal: params.signal } : {}),
-    },
-    params.runtime,
-  );
+  const runId = params.voiceSelection ? randomUUID() : undefined;
+  const unbind = runId
+    ? params.voiceSelection?.bindRun({
+        runId,
+        assertCurrent: () => {
+          params.signal?.throwIfAborted();
+          if (
+            params.entry.sessionLifecycle.status !== "active" ||
+            context.isCurrent?.() === false
+          ) {
+            throw new Error("Discord voice access is no longer valid for this call");
+          }
+        },
+      })
+    : undefined;
+  let result: Awaited<
+    ReturnType<ReturnType<typeof getDiscordRuntime>["agent"]["runCommandFromIngress"]>
+  >;
+  try {
+    result = await getDiscordRuntime().agent.runCommandFromIngress(
+      {
+        message: params.message,
+        sessionKey: params.entry.route.sessionKey,
+        agentId: params.entry.route.agentId,
+        messageChannel: "discord",
+        messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
+        accountId: params.accountId,
+        extraSystemPrompt: context.extraSystemPrompt,
+        senderIsOwner: context.senderIsOwner,
+        allowModelOverride: Boolean(voiceModel),
+        model: voiceModel,
+        toolsAllow: params.toolsAllow,
+        deliver: false,
+        ...(runId ? { runId } : {}),
+        ...(params.signal ? { abortSignal: params.signal } : {}),
+      },
+      params.runtime,
+    );
+  } finally {
+    unbind?.();
+  }
   const payloads = result.payloads ?? [];
   const text = payloads
     .map((payload) => payload.text)

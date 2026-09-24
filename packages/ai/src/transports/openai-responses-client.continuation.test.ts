@@ -165,6 +165,22 @@ function sdkEvents(...events: Array<Record<string, unknown>>): SdkResponse {
   };
 }
 
+// A custom/proxy OpenAI-Responses-compatible endpoint (e.g. a self-hosted
+// OmniRoute deployment) carries no native-host trust signal on its own --
+// the operator's explicit per-model opt-in is the *only* path to eligibility.
+const customEndpointModel = {
+  ...model,
+  provider: "omniroute",
+  baseUrl: "https://omniroute.example.com/v1",
+  compat: { supportsResponsesContinuation: true },
+} satisfies Model<"openai-responses">;
+
+const unoptedCustomEndpointModel = {
+  ...model,
+  provider: "omniroute",
+  baseUrl: "https://omniroute.example.com/v1",
+} satisfies Model<"openai-responses">;
+
 async function run(
   context: Context,
   options: {
@@ -275,6 +291,105 @@ describe("native OpenAI Responses SSE continuation", () => {
       });
     },
   );
+
+  it.each([undefined, "session-raw"])(
+    "preserves native raw no-store requests with session %s",
+    async (sessionId) => {
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        sdkCompletion("resp_2", "second answer"),
+      );
+      const transport = createOpenAIResponsesTransportStreamFn();
+      const options = { apiKey: "test-key", transport: "sse" as const, sessionId };
+      const firstUser = userMessage("first question", 1);
+      const first = await (await transport(model, { messages: [firstUser] }, options)).result();
+      const second = await (
+        await transport(
+          model,
+          {
+            messages: [firstUser, first, userMessage("second question", 2)],
+          },
+          options,
+        )
+      ).result();
+
+      expect(first.stopReason).toBe("stop");
+      expect(second.stopReason).toBe("stop");
+      expect(sseState.requests).toHaveLength(2);
+      for (const request of sseState.requests) {
+        expect(request.store).toBe(false);
+        expect(request).not.toHaveProperty("previous_response_id");
+      }
+      expect(sseState.requests[1]?.input).toHaveLength(3);
+    },
+  );
+
+  it("engages for a custom/proxy endpoint once the operator opts a model in explicitly", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload },
+      customEndpointModel,
+    );
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload },
+      customEndpointModel,
+    );
+
+    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sseState.requests[1]?.input).toHaveLength(1);
+  });
+
+  it("engages for a custom/proxy endpoint purely from the real store policy, with no onPayload store override", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const identity = (payload: Record<string, unknown>) => payload;
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload: identity },
+      customEndpointModel,
+    );
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload: identity },
+      customEndpointModel,
+    );
+
+    expect(sseState.requests[0]).toMatchObject({ store: true });
+    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sseState.requests[1]?.input).toHaveLength(1);
+  });
+
+  it("never engages for a custom endpoint without the explicit opt-in, even with store:true forced (the host carries no trust signal on its own)", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload },
+      unoptedCustomEndpointModel,
+    );
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload },
+      unoptedCustomEndpointModel,
+    );
+
+    expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
+    expect(sseState.requests[1]?.input).toHaveLength(3);
+  });
 
   it("keeps final store:false turns stateless and sends full history", async () => {
     sseState.outcomes.push(

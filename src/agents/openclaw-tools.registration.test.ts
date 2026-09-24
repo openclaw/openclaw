@@ -7,6 +7,7 @@ import { createPluginRecord } from "../plugins/loader-records.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import * as userProfileList from "../state/user-profile-list.js";
 import { withEnv } from "../test-utils/env.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
@@ -27,6 +28,7 @@ import { textResult, type AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
+import * as sessionsSpawnTool from "./tools/sessions-spawn-tool.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
@@ -107,6 +109,36 @@ describe("openclaw-tools progress_card gating", () => {
       emittedNames.filter((name) => resolveCoreToolFactoryFamily(name) !== "openclaw"),
     ).toEqual([]);
   });
+
+  it.each([false, true])(
+    "gates personal instructions on multiple people (%s) without general filesystem access",
+    (multipleProfiles) => {
+      const identityCount = vi
+        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+        .mockReturnValue(multipleProfiles);
+      const tools = createOpenClawCodingTools({
+        sessionKey: "agent:main:dashboard:project",
+        runSessionKey: "agent:main:dashboard:project",
+        cwd: "/project/worktree",
+        workspaceDir: "/project/worktree",
+        config: {
+          agents: { entries: { main: { default: true, workspace: "/agent/workspace" } } },
+          tools: { allow: ["personal_instructions"], fs: { workspaceOnly: true } },
+        },
+        disableMessageTool: true,
+        wrapBeforeToolCallHook: false,
+      });
+      expect(toolNames(tools).includes("personal_instructions")).toBe(multipleProfiles);
+      expect(toolNames(tools)).not.toContain("write");
+      expect(toolNames(tools)).not.toContain("exec");
+      expect(resolveCoreToolFactoryFamily("personal_instructions")).toBe("openclaw");
+      setEmbeddedMode(true);
+      expect(createFastToolNames({ agentSessionKey: "agent:main:main" })).not.toContain(
+        "personal_instructions",
+      );
+      identityCount.mockRestore();
+    },
+  );
 
   it("enables progress_card by default", () => {
     expectProgressCardEnabled({ config: {} as OpenClawConfig }, true);
@@ -322,6 +354,41 @@ describe("openclaw-tools progress_card gating", () => {
     expect(defaultTools).not.toContain("sessions_send");
     expect(gatewayBoundTools).toContain("sessions_spawn");
     expect(gatewayBoundTools).not.toContain("sessions_send");
+  });
+
+  it.each([
+    {
+      currentChannelId: "channel:111",
+      currentMessagingTarget: "user:222",
+      nativeChannelId: "111",
+      expectedTarget: "user:222",
+      expectedChannelId: "111",
+    },
+    {
+      currentChannelId: "telegram:-100:topic:77",
+      nativeChannelId: "-100",
+      expectedTarget: "telegram:-100:topic:77",
+      expectedChannelId: "-100",
+    },
+    {
+      currentChannelId: "channel:111",
+      expectedTarget: "channel:111",
+      expectedChannelId: "channel:111",
+    },
+  ])("keeps native spawn metadata separate from delivery ($expectedTarget)", (context) => {
+    const spawn = vi.spyOn(sessionsSpawnTool, "createSessionsSpawnTool");
+    try {
+      createTestOpenClawTools(context);
+
+      expect(spawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          currentMessagingTarget: context.expectedTarget,
+          currentChannelId: context.expectedChannelId,
+        }),
+      );
+    } finally {
+      spawn.mockRestore();
+    }
   });
 
   it("advertises sessions_spawn from agents_list only when spawn is available", () => {
@@ -916,6 +983,11 @@ describe("gateway client capability tool filtering", () => {
   it("only exposes screen to UI-command clients", () => {
     expect(hasTool(createOpenClawTools(), "screen")).toBe(false);
     expect(hasTool(createOpenClawTools({ clientCaps: ["ui-commands"] }), "screen")).toBe(true);
+  });
+
+  it("exposes profile theme actions without a connected UI capability", () => {
+    expect(hasTool(createOpenClawTools(), "theme")).toBe(true);
+    expect(hasTool(createOpenClawTools({ clientCaps: ["ui-commands"] }), "theme")).toBe(true);
   });
 
   it("retains the requesting browser through coding tool assembly", async () => {

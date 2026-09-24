@@ -179,7 +179,7 @@ export function expectLinkedGenerationTransaction({
       },
     },
   });
-  expect(first.claimed).toBe(true);
+  expect(first).toMatchObject({ claimed: true, status: "pending" });
   expect(phases).toEqual(["queue", "subagent", "task"]);
   expect(rowCount("delivery_queue_entries")).toBe(1);
   expect(rowCount("subagent_runs")).toBe(1);
@@ -189,7 +189,7 @@ export function expectLinkedGenerationTransaction({
     ...input,
     databaseOptions: { database },
   });
-  expect(second.claimed).toBe(false);
+  expect(second).toMatchObject({ claimed: false, status: "pending" });
   expect(rowCount("delivery_queue_entries")).toBe(1);
 
   const settledSubagent: SubagentRunRecord = structuredClone(input.subagent);

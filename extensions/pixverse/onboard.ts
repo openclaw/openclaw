@@ -7,13 +7,10 @@ import type {
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
-  ensureApiKeyFromOptionEnvOrPrompt,
-  normalizeApiKeyInput,
+  captureProviderApiKey,
   normalizeOptionalSecretInput,
   type OpenClawConfig,
-  type SecretInput,
-  upsertAuthProfileWithLockOrThrow,
-  validateApiKeyInput,
+  persistProviderApiKey,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -127,41 +124,20 @@ async function promptForPixVerseRegion(ctx: ProviderAuthContext): Promise<PixVer
 }
 
 async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<PixVerseAuthResult> {
-  let capturedSecretInput: SecretInput | undefined;
-  let capturedCredential = false;
-  let capturedMode: "plaintext" | "ref" | undefined;
-
-  await ensureApiKeyFromOptionEnvOrPrompt({
+  const { input, mode } = await captureProviderApiKey(ctx, {
     token:
       normalizeOptionalSecretInput(ctx.opts?.pixverseApiKey) ??
       normalizeOptionalSecretInput(ctx.opts?.token),
     tokenProvider: normalizeOptionalSecretInput(ctx.opts?.pixverseApiKey)
       ? PIXVERSE_PROVIDER_ID
       : normalizeOptionalSecretInput(ctx.opts?.tokenProvider),
-    secretInputMode:
-      ctx.allowSecretRefPrompt === false
-        ? (ctx.secretInputMode ?? "plaintext")
-        : ctx.secretInputMode,
-    config: ctx.config,
     env: ctx.env,
-    workspaceDir: ctx.workspaceDir,
     expectedProviders: [PIXVERSE_PROVIDER_ID],
     provider: PIXVERSE_PROVIDER_ID,
     envLabel: "PIXVERSE_API_KEY",
     promptMessage: "Enter PixVerse API key",
-    normalize: normalizeApiKeyInput,
-    validate: validateApiKeyInput,
-    prompter: ctx.prompter,
-    setCredential: async (apiKey, mode) => {
-      capturedSecretInput = apiKey;
-      capturedCredential = true;
-      capturedMode = mode;
-    },
+    missingInputMessage: "Missing PixVerse API key.",
   });
-
-  if (!capturedCredential) {
-    throw new Error("Missing PixVerse API key.");
-  }
 
   const region = await promptForPixVerseRegion(ctx);
   return {
@@ -170,11 +146,11 @@ async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<PixVerse
         profileId: PROFILE_ID,
         credential: buildApiKeyCredential(
           PIXVERSE_PROVIDER_ID,
-          capturedSecretInput ?? "",
+          input,
           undefined,
-          capturedMode
+          mode
             ? {
-                secretInputMode: capturedMode,
+                secretInputMode: mode,
                 config: ctx.config,
               }
             : undefined,
@@ -197,19 +173,13 @@ async function runPixVerseApiKeyAuthNonInteractive(ctx: ProviderAuthMethodNonInt
     return null;
   }
 
-  if (resolved.source !== "profile") {
-    const credential = ctx.toApiKeyCredential({
+  if (
+    !(await persistProviderApiKey(ctx, PROFILE_ID, {
       provider: PIXVERSE_PROVIDER_ID,
       resolved,
-    });
-    if (!credential) {
-      return null;
-    }
-    await upsertAuthProfileWithLockOrThrow({
-      profileId: PROFILE_ID,
-      credential,
-      agentDir: ctx.agentDir,
-    });
+    }))
+  ) {
+    return null;
   }
 
   const next = applyAuthProfileConfig(ctx.config, {

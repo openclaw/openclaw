@@ -9,11 +9,7 @@ import type {
 } from "../agents/worktrees/git-worktree-operations.js";
 import { runGitBytes, runGitBuffered } from "../agents/worktrees/git.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  ownedGitWorkerBytes,
-  restoreGitWorkerFailure,
-  serializeGitWorkerFailure,
-} from "./git-worker-context.js";
+import { restoreGitWorkerFailure, serializeGitWorkerFailure } from "./git-worker-context.js";
 import type {
   GitWorkerCommand,
   GitWorkerHostRequest,
@@ -25,6 +21,7 @@ import { GIT_WORKER_HOST_BATCH_LIMIT } from "./git-worker-contract.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool, type WorkerTaskResponse } from "./worker-task-pool.js";
+import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 type GitPool = WorkerTaskPool<GitWorkerCommand, GitWorkerReply<GitWorkerResult>>;
 type GitWorkerRuntime = {
@@ -98,6 +95,11 @@ export type GitWorkerOperationOptions = {
   transferList?: (command: GitWorkerCommand) => readonly Transferable[];
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  /** Host-owned Git policy; the broker still owns authority and process settlement. */
+  git?: {
+    text: typeof runGitBytes;
+    buffered: typeof runGitBuffered;
+  };
   onInventoryChunk?: (bytes: Uint8Array, context: { signal: AbortSignal }) => Promise<void>;
   onEffect?: (
     effect: GitWorktreeEffect,
@@ -125,7 +127,21 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
     ? structuredClone(command, { transfer: [...new Set(transferList)] })
     : structuredClone(command);
   const baseEnv = { ...process.env };
-  const operation = executeOperation(poolFor(state, admitted), admitted, baseEnv, { ...options });
+  // Pooled workers do not inherit later environment changes. Git discovery
+  // overrides must disable direct metadata reads for this admission too.
+  admitted.filesystemRefs =
+    options.git === undefined &&
+    !Object.entries(baseEnv).some(
+      ([key, value]) =>
+        value !== undefined &&
+        /^(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_NAMESPACE)$/i.test(
+          key,
+        ),
+    );
+  const operation = executeOperation(poolFor(state, admitted), admitted, baseEnv, {
+    ...options,
+    git: options.git ? { text: options.git.text, buffered: options.git.buffered } : undefined,
+  });
   state.pending.add(operation);
   void operation.then(
     () => state.pending.delete(operation),
@@ -156,27 +172,35 @@ async function executeOperation(
       let result: unknown;
       const transferList: Transferable[] = [];
       if (effect.type === "git.text") {
-        const output = await runGitBytes(effect.input.cwd, effect.input.args, {
-          ...effect.input.options,
-          baseEnv,
-          signal,
-          beforeRun: options.assertCurrent,
-          killProcessTree: true,
-        });
-        const stdout = ownedGitWorkerBytes(output.stdout);
-        const stderr = ownedGitWorkerBytes(output.stderr);
+        const output = await (options.git?.text ?? runGitBytes)(
+          effect.input.cwd,
+          effect.input.args,
+          {
+            ...effect.input.options,
+            baseEnv,
+            signal,
+            beforeRun: options.assertCurrent,
+            killProcessTree: true,
+          },
+        );
+        const stdout = ownedWorkerBytes(output.stdout);
+        const stderr = ownedWorkerBytes(output.stderr);
         result = { ...output, stdout, stderr };
         transferList.push(stdout.buffer, stderr.buffer);
       } else if (effect.type === "git.buffer") {
-        const output = await runGitBuffered(effect.input.cwd, effect.input.args, {
-          ...effect.input.options,
-          baseEnv,
-          signal,
-          beforeRun: options.assertCurrent,
-          killProcessTree: true,
-        });
-        const stdout = ownedGitWorkerBytes(output.stdout);
-        const stderr = ownedGitWorkerBytes(output.stderr);
+        const output = await (options.git?.buffered ?? runGitBuffered)(
+          effect.input.cwd,
+          effect.input.args,
+          {
+            ...effect.input.options,
+            baseEnv,
+            signal,
+            beforeRun: options.assertCurrent,
+            killProcessTree: true,
+          },
+        );
+        const stdout = ownedWorkerBytes(output.stdout);
+        const stderr = ownedWorkerBytes(output.stderr);
         result = { ...output, stdout, stderr };
         transferList.push(stdout.buffer, stderr.buffer);
       } else if (effect.type === "git.temporary-directory") {

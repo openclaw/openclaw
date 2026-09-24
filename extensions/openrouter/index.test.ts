@@ -123,6 +123,18 @@ type OpenRouterManifest = {
   }>;
 };
 
+function createFusionModelConfig(modelKey: string, extraBody: Record<string, unknown>) {
+  return {
+    agents: {
+      defaults: {
+        models: {
+          [modelKey]: { params: { extraBody } },
+        },
+      },
+    },
+  };
+}
+
 function readManifest(): OpenRouterManifest {
   return JSON.parse(readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"));
 }
@@ -388,6 +400,8 @@ describe("openrouter provider hooks", () => {
     getOpenRouterModelCapabilitiesMock.mockReturnValue({
       name: "Claude Sonnet 4.6",
       reasoning: true,
+      compat: { supportedReasoningEfforts: ["high", "low"] },
+      thinkingLevelMap: { off: null },
       input: ["text", "image"],
       supportsTools: true,
       cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
@@ -412,7 +426,8 @@ describe("openrouter provider hooks", () => {
       name: "Claude Sonnet 4.6",
       reasoning: true,
       input: ["text", "image"],
-      compat: { supportsTools: true },
+      compat: { supportsTools: true, supportedReasoningEfforts: ["high", "low"] },
+      thinkingLevelMap: { off: null },
       contextWindow: 200_000,
       maxTokens: 64_000,
     });
@@ -441,31 +456,19 @@ describe("openrouter provider hooks", () => {
       provider: "openrouter",
       modelId: "openrouter/fusion",
       promptMode: "full",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/openrouter/fusion": {
-                params: {
-                  extraBody: {
-                    plugins: [
-                      {
-                        id: "fusion",
-                        analysis_models: [
-                          "google/gemini-3.5-flash",
-                          "moonshotai/kimi-k2.6",
-                          "deepseek/deepseek-v4-pro",
-                        ],
-                        model: "google/gemini-3.5-flash",
-                      },
-                    ],
-                  },
-                },
-              },
-            },
+      config: createFusionModelConfig("openrouter/openrouter/fusion", {
+        plugins: [
+          {
+            id: "fusion",
+            analysis_models: [
+              "google/gemini-3.5-flash",
+              "moonshotai/kimi-k2.6",
+              "deepseek/deepseek-v4-pro",
+            ],
+            model: "google/gemini-3.5-flash",
           },
-        },
-      },
+        ],
+      }),
     } as never);
 
     expect(contribution?.dynamicSuffix).toContain("OpenRouter Fusion Configuration");
@@ -482,27 +485,15 @@ describe("openrouter provider hooks", () => {
       provider: "openrouter",
       modelId: "openrouter/fusion",
       promptMode: "full",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/fusion": {
-                params: {
-                  extraBody: {
-                    plugins: [
-                      {
-                        id: "fusion",
-                        analysis_models: [boundaryModelId],
-                        model: boundaryModelId,
-                      },
-                    ],
-                  },
-                },
-              },
-            },
+      config: createFusionModelConfig("openrouter/fusion", {
+        plugins: [
+          {
+            id: "fusion",
+            analysis_models: [boundaryModelId],
+            model: boundaryModelId,
           },
-        },
-      },
+        ],
+      }),
     } as never);
 
     expect(contribution?.dynamicSuffix).toContain(`Analysis models: ${"a".repeat(255)}.`);
@@ -515,26 +506,14 @@ describe("openrouter provider hooks", () => {
       provider: "openrouter",
       modelId: "openrouter/fusion",
       promptMode: "full",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/fusion": {
-                params: {
-                  extraBody: {
-                    plugins: [
-                      {
-                        id: "fusion",
-                        analysis_models: ["deepseek/deepseek-v4-pro"],
-                      },
-                    ],
-                  },
-                },
-              },
-            },
+      config: createFusionModelConfig("openrouter/fusion", {
+        plugins: [
+          {
+            id: "fusion",
+            analysis_models: ["deepseek/deepseek-v4-pro"],
           },
-        },
-      },
+        ],
+      }),
     } as never);
 
     expect(contribution?.dynamicSuffix).toContain("Analysis models: deepseek/deepseek-v4-pro.");
@@ -640,28 +619,16 @@ describe("openrouter provider hooks", () => {
       provider: "openrouter",
       modelId: "openrouter/fusion",
       promptMode: "full",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/fusion": {
-                params: {
-                  extraBody: {
-                    plugins: [
-                      {
-                        id: "fusion",
-                        enabled: false,
-                        analysis_models: ["deepseek/deepseek-v4-pro"],
-                        model: "google/gemini-3.5-flash",
-                      },
-                    ],
-                  },
-                },
-              },
-            },
+      config: createFusionModelConfig("openrouter/fusion", {
+        plugins: [
+          {
+            id: "fusion",
+            enabled: false,
+            analysis_models: ["deepseek/deepseek-v4-pro"],
+            model: "google/gemini-3.5-flash",
           },
-        },
-      },
+        ],
+      }),
     } as never);
 
     expect(contribution).toBeUndefined();
@@ -865,22 +832,23 @@ describe("openrouter provider hooks", () => {
     } as never);
     expect(normalizedAnthropicModel?.id).toBe("anthropic/claude-sonnet-4.6");
 
+    const autoModel = {
+      provider: "openrouter",
+      id: "openrouter/auto",
+      name: "OpenRouter Auto",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    };
     expect(
       provider.normalizeResolvedModel?.({
         provider: "openrouter",
         modelId: "openrouter/auto",
-        model: {
-          provider: "openrouter",
-          id: "openrouter/auto",
-          name: "OpenRouter Auto",
-          api: "openai-completions",
-          baseUrl: "https://openrouter.ai/api/v1",
-          reasoning: false,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 200_000,
-          maxTokens: 8192,
-        },
+        model: autoModel,
       } as never),
     ).toBeUndefined();
 
@@ -888,16 +856,8 @@ describe("openrouter provider hooks", () => {
       provider: "openrouter",
       modelId: "openrouter/openrouter/auto",
       model: {
-        provider: "openrouter",
+        ...autoModel,
         id: "openrouter/openrouter/auto",
-        name: "OpenRouter Auto",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 8192,
       },
     } as never);
     expect(normalizedDuplicatedAutoModel?.id).toBe("openrouter/auto");
@@ -1144,7 +1104,7 @@ describe("openrouter provider hooks", () => {
         messages: [{ role: "assistant", content: "done", reasoning_content: "" }],
       },
     });
-    expect(capturedPayload).not.toHaveProperty("reasoning");
+    expect(capturedPayload?.reasoning).toEqual({ effort: "none" });
     expect(capturedPayload).not.toHaveProperty("thinking");
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
     expect(capturedPayload?.messages).toEqual([{ role: "assistant", content: "done" }]);

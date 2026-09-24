@@ -1,15 +1,16 @@
-// Feishu plugin module implements client behavior.
 import type { Agent } from "node:https";
 import { createRequire } from "node:module";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
+import { captureFeishuSendContext } from "./send-context.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 const require = createRequire(import.meta.url);
@@ -234,6 +235,12 @@ type FeishuProxyAwareHttpRequestOptions<D> = Lark.HttpRequestOptions<D> &
     proxy?: false;
   };
 
+type FeishuRequestAuthority = {
+  assertCurrent: () => void;
+  assertRedirect: () => void;
+  beforeDispatch?: () => Promise<void>;
+};
+
 // Multi-account client cache
 const clientCache = new Map<
   string,
@@ -283,14 +290,14 @@ function createFeishuHttpInstance(
 
   async function injectRequestOptions<D>(
     opts?: Lark.HttpRequestOptions<D>,
-    assertReadAuthority?: () => void,
+    authority?: FeishuRequestAuthority,
   ): Promise<FeishuProxyAwareHttpRequestOptions<D>> {
     const next: FeishuProxyAwareHttpRequestOptions<D> = { timeout: defaultTimeoutMs, ...opts };
     if (typeof next.url === "string") {
       next.url = resolveRequestUrl(next.url);
     }
     const agent = await getFeishuProxyAgent();
-    assertReadAuthority?.();
+    authority?.assertCurrent();
     if (agent) {
       if (isManagedProxyActive()) {
         next.httpAgent = agent;
@@ -301,16 +308,20 @@ function createFeishuHttpInstance(
       }
       next.proxy = false;
     }
-    if (assertReadAuthority) {
+    if (authority?.beforeDispatch) {
+      await authority.beforeDispatch();
+      authority.assertCurrent();
+    }
+    if (authority) {
       const defaults = feishuClientSdk.defaultHttpInstance.defaults;
       const transforms =
         next.transformRequest === undefined ? defaults.transformRequest : next.transformRequest;
       // Axios runs these after its async interceptors, immediately before the
-      // HTTP adapter starts a read or JSON token request.
+      // HTTP adapter starts the request, including multipart uploads.
       next.transformRequest = [
         ...(Array.isArray(transforms) ? transforms : transforms ? [transforms] : []),
         (data: unknown) => {
-          assertReadAuthority();
+          authority.assertCurrent();
           return data;
         },
       ];
@@ -318,31 +329,99 @@ function createFeishuHttpInstance(
         next.beforeRedirect === undefined ? defaults.beforeRedirect : next.beforeRedirect;
       next.beforeRedirect = (...args) => {
         beforeRedirect?.(...args);
-        assertReadAuthority();
+        authority.assertRedirect();
       };
     }
     return next;
   }
 
   async function runRequest<T>(
-    request: (assertReadAuthority: (() => void) | undefined) => Promise<T>,
+    request: (authority: FeishuRequestAuthority | undefined) => Promise<T>,
+    sdkMethod?: "request",
   ): Promise<T> {
     const assertReadAuthority = captureChannelReadAuthority();
-    assertReadAuthority?.();
+    const sendContext = captureFeishuSendContext();
+    const recipientVisible = sdkMethod === "request" && sendContext?.recipientVisible === true;
+    const onPlatformSendDispatch = recipientVisible
+      ? sendContext.onPlatformSendDispatch
+      : undefined;
+    let fenceFailure: Error | undefined;
+    const assertCurrent = () => {
+      try {
+        assertReadAuthority?.();
+        sendContext?.assertCurrent();
+      } catch (cause) {
+        fenceFailure =
+          cause instanceof Error ? cause : new Error("Feishu request authority closed", { cause });
+        throw fenceFailure;
+      }
+    };
+    const authority: FeishuRequestAuthority | undefined =
+      assertReadAuthority || sendContext
+        ? {
+            assertCurrent,
+            assertRedirect: recipientVisible
+              ? () => {
+                  try {
+                    assertCurrent();
+                  } catch {
+                    // The first POST may have been accepted. A denied redirect
+                    // cannot prove the entire message was never dispatched.
+                    const failure = new Error(
+                      "Feishu sender retired before following a message redirect",
+                    );
+                    fenceFailure = failure;
+                    throw failure;
+                  }
+                }
+              : assertCurrent,
+            ...(onPlatformSendDispatch
+              ? {
+                  beforeDispatch: async () => {
+                    try {
+                      await onPlatformSendDispatch();
+                    } catch (cause) {
+                      // Still before the HTTP adapter: distinguish retirement
+                      // from a retryable failure to persist dispatch timing.
+                      assertCurrent();
+                      fenceFailure =
+                        cause instanceof PlatformMessageNotDispatchedError
+                          ? cause
+                          : new PlatformMessageNotDispatchedError(
+                              "Feishu dispatch refresh failed before request",
+                              { cause },
+                            );
+                      throw fenceFailure;
+                    }
+                  },
+                }
+              : {}),
+          }
+        : undefined;
+    authority?.assertCurrent();
     try {
-      return await request(assertReadAuthority);
+      return await request(authority);
     } catch (error) {
       // SDK auth diagnostics include transport request data. Replace a closed
       // invocation's wrapped error before those diagnostics can expose credentials.
       assertReadAuthority?.();
+      // Axios/follow-redirects attach request data to errors. Return the safe
+      // error recorded at the failed fence, without rechecking a settled send.
+      if (fenceFailure) {
+        throw fenceFailure;
+      }
       throw error;
     }
   }
 
   return {
     request: (opts) =>
-      runRequest(async (assert) =>
-        base.request(await injectRequestOptions(normalizeMultipartUploadData(opts), assert)),
+      // SDK message requests reach this seam after formatPayload/auth. Token
+      // requests use post below and must never mark a message as dispatched.
+      runRequest(
+        async (authority) =>
+          base.request(await injectRequestOptions(normalizeMultipartUploadData(opts), authority)),
+        "request",
       ),
     get: (url, opts) =>
       runRequest(async (assert) =>

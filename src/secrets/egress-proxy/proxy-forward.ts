@@ -6,6 +6,7 @@ import {
 } from "node:http";
 import { request as httpsRequest, type Agent as HttpsAgent } from "node:https";
 import { PassThrough, Writable, type Readable } from "node:stream";
+import { toForwardableResponseHeaders } from "./response-headers.js";
 import {
   createSecretEgressBodyTransform,
   SecretEgressSubstitutionError,
@@ -15,10 +16,13 @@ import {
 
 export const REFUSAL_BODY = "Secret egress proxy refused the request.\n";
 const UPSTREAM_ERROR_BODY = "Secret egress proxy could not reach the upstream host.\n";
+const UPSTREAM_RESPONSE_ERROR_BODY =
+  "Secret egress proxy could not forward the upstream response.\n";
 const MAX_BUFFERED_REQUEST_BODY_BYTES = 100 * 1024 * 1024;
 const BUFFERED_REQUEST_WRITE_BYTES = 64 * 1024;
+const MAX_BUFFERED_UPGRADE_BYTES = 64 * 1024;
 
-export type UpgradeRequest = { stream: PassThrough };
+export type UpgradeRequest = { stream: PassThrough; stopBuffering: () => void };
 export type RequestHandler = (
   request: IncomingMessage,
   response: ServerResponse,
@@ -57,10 +61,37 @@ export function handleUpgradeRequest(
     request.socket.destroy();
     return;
   }
-  // Buffer early frames with stream backpressure while waiting for the upstream
-  // handshake. Unlike a paused socket, this still observes a disconnect with no data.
-  const stream = new PassThrough();
-  request.socket.once("close", () => stream.destroy());
+  // Retain parser-owned head bytes and bounded early frames while the upstream
+  // handshake is pending. Flowing reads let a FIN behind an early frame cancel
+  // the request; a full buffer closes instead of leaving that FIN unread.
+  const stream = new PassThrough({ highWaterMark: MAX_BUFFERED_UPGRADE_BYTES });
+  let buffering = true;
+  const stopBuffering = () => {
+    if (!buffering) {
+      return;
+    }
+    buffering = false;
+    request.socket.pause();
+    request.socket.off("data", onData);
+    request.socket.off("end", onEnd);
+  };
+  const onData = (chunk: Buffer) => {
+    if (!stream.write(chunk)) {
+      stopBuffering();
+      response.destroy();
+      request.socket.destroy();
+    }
+  };
+  const onEnd = () => stream.end();
+  request.socket.on("data", onData);
+  request.socket.once("end", onEnd);
+  request.socket.once("close", () => {
+    stopBuffering();
+    stream.destroy();
+    if (!response.writableEnded) {
+      response.destroy();
+    }
+  });
   response.once("finish", () => {
     if (response.socket) {
       stream.destroy();
@@ -68,10 +99,12 @@ export function handleUpgradeRequest(
     }
   });
   if (head.length > 0) {
-    stream.write(head);
+    onData(head);
   }
-  request.socket.pipe(stream);
-  handler(request, response, { stream });
+  if (request.socket.destroyed) {
+    return;
+  }
+  handler(request, response, { stream, stopBuffering });
 }
 
 /** Forwards one authorized HTTPS request, retaining ownership across a WebSocket upgrade. */
@@ -132,13 +165,40 @@ function sendSecretEgressRequest(
           return;
         }
         upstreamResponse.once("error", () => forward.response.destroy());
-        forward.response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+        const statusCode = upstreamResponse.statusCode ?? 502;
+        try {
+          forward.response.writeHead(
+            statusCode,
+            toForwardableResponseHeaders(upstreamResponse.headers),
+          );
+        } catch {
+          // This callback runs outside any caller's try block; a throw here
+          // would exit the Gateway. Keep the failure on this one request.
+          refused = true;
+          upstreamResponse.destroy();
+          // Node may already have marked 1xx/204/304 heads bodyless, so a
+          // refusal body cannot be framed reliably; close those instead.
+          if (statusCode < 200 || statusCode === 204 || statusCode === 304) {
+            forward.response.destroy();
+          } else {
+            sendHttpRefusal(forward.response, 502, UPSTREAM_RESPONSE_ERROR_BODY);
+          }
+          return;
+        }
         upstreamResponse.pipe(forward.response);
       },
     ),
   );
+  upstream.once("socket", () => {
+    // An agent can queue prepared credentials; recheck before Node flushes them.
+    if (!forward.isActive()) {
+      upstream.destroy();
+      forward.response.destroy();
+    }
+  });
   const bodyTransform = forward.ownResource(
     createSecretEgressBodyTransform({
+      isActive: forward.isActive,
       onSubstitution: () => {
         substituted = true;
       },
@@ -215,7 +275,7 @@ function sendSecretEgressRequest(
     // not HTTP bodies. Forward them opaquely, including both parsers' head buffers.
     forward.response.off("close", onResponseClose);
     upgraded = true;
-    forward.response.writeHead(101, response.headers);
+    forward.response.writeHead(101, toForwardableResponseHeaders(response.headers));
     forward.response.end();
     forward.response.detachSocket(clientSocket);
     forward.releaseResponse();
@@ -225,7 +285,16 @@ function sendSecretEgressRequest(
     if (head.length > 0) {
       clientSocket.write(head);
     }
-    forward.upgrade.stream.pipe(upstreamSocket).pipe(clientSocket);
+    const bufferedClientFrames = forward.upgrade.stream;
+    forward.upgrade.stopBuffering();
+    bufferedClientFrames.once("end", () => {
+      if (!clientSocket.destroyed && !upstreamSocket.destroyed) {
+        clientSocket.pipe(upstreamSocket);
+      }
+    });
+    bufferedClientFrames.pipe(upstreamSocket, { end: false });
+    bufferedClientFrames.end();
+    upstreamSocket.pipe(clientSocket);
   });
   if (forward.upgrade) {
     upstream.end();
@@ -374,6 +443,11 @@ export function forwardSecretEgressRequest(
                 substituted = true;
               },
             });
+      // Revocation can arrive from the Gateway while this Worker scans a body.
+      if (!forward.isActive()) {
+        release();
+        return;
+      }
       upstream = sendSecretEgressRequest(
         { ...forward, ...prepared, substituted, isActive: () => !refused && forward.isActive() },
         output,

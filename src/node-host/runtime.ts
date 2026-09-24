@@ -20,10 +20,16 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
+import { resolveNodeDesktopHostConfig } from "./desktop-stream-command.js";
 import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
 import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } from "./invoke.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
+import {
+  dispatchNodeInvokeInput,
+  registerNodeInvokeInputHandler,
+  type NodeInvokeInputTarget,
+} from "./node-invoke-input.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
@@ -32,6 +38,7 @@ import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
   ensureNodeHostPluginRegistry,
+  hasRegisteredNodeHostCommandActiveWork,
   isRegisteredNodeHostCommandDuplex,
   listRegisteredNodeHostCapsAndCommands,
   notifyRegisteredNodeHostCommandDisconnect,
@@ -44,6 +51,7 @@ import {
   type NodeHostManifest,
   type NodeHostInventory,
 } from "./runtime-manifest.js";
+import { createNodeHostUpdatePause } from "./runtime-update-pause.js";
 import { scanNodeHostedSkills } from "./skills.js";
 export type { NodeHostInventory } from "./runtime-manifest.js";
 
@@ -71,20 +79,14 @@ type ActiveNodeHostRuntime = {
   handleInput(invokeId: string, seq: number, payloadJSON: string): void;
   cancel(invokeId: string): void;
   cancelAll(): void;
+  tryPauseForUpdate(): Promise<boolean>;
+  resumeAfterUpdate(): void;
   updateGatewayConnection(connection?: {
     url: string;
     tlsFingerprint?: string;
     cloudflareAccess?: CloudflareAccessCredentials;
   }): void;
   close(): Promise<void>;
-};
-
-type NodeInvokeInputTarget = {
-  nextInputSeq: number;
-  input?: (payloadJSON: string) => void;
-  // Buffer spawn-window input so its sequence cannot wedge before PTY registration.
-  pendingInput: BoundedBuffer<string>;
-  inputFailed: boolean;
 };
 
 type ActiveNodeInvoke = {
@@ -94,43 +96,6 @@ type ActiveNodeInvoke = {
 };
 
 const MAX_PENDING_INVOKE_INPUT_BYTES = 64 * 1024;
-
-function dispatchNodeInvokeInput(
-  target: NodeInvokeInputTarget | undefined,
-  seq: number,
-  payloadJSON: string,
-): boolean {
-  if (!target || target.inputFailed || seq < target.nextInputSeq) {
-    return false;
-  }
-  if (seq > target.nextInputSeq) {
-    logDebug(`node-host: input sequence gap: expected ${target.nextInputSeq}, received ${seq}`);
-  }
-  target.nextInputSeq = seq + 1;
-  if (target.input) {
-    target.input(payloadJSON);
-    return true;
-  }
-  if (!target.pendingInput.push(payloadJSON)) {
-    target.inputFailed = true;
-    logDebug("node-host: aborted invoke after buffered input exceeded 64 KiB");
-    return false;
-  }
-  return true;
-}
-
-function registerNodeInvokeInputHandler(
-  target: NodeInvokeInputTarget,
-  input: (payloadJSON: string) => void,
-): void {
-  if (target.inputFailed) {
-    return;
-  }
-  target.input = input;
-  for (const pending of target.pendingInput.drain()) {
-    input(pending);
-  }
-}
 
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
@@ -241,6 +206,7 @@ export async function prepareNodeHostRuntime(params?: {
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
   installedAppsSharingEnabled?: boolean;
+  desktopSharingEnabled?: boolean;
   commands?: readonly string[];
   platform?: NodeJS.Platform;
 }): Promise<PreparedNodeHostRuntime> {
@@ -258,9 +224,12 @@ export async function prepareNodeHostRuntime(params?: {
   const platform = params?.platform ?? process.platform;
   const installedAppsSharingEnabled =
     platform === "darwin" && params?.installedAppsSharingEnabled === true;
-  const desktopStreamingEnabled =
-    (platform === "darwin" || platform === "linux" || platform === "win32") &&
-    config.desktop?.host?.enabled === true;
+  const desktopHostConfig = resolveNodeDesktopHostConfig({
+    config: config.desktop?.host,
+    desktopSharingEnabled: params?.desktopSharingEnabled,
+    platform,
+    ephemeral: params?.ephemeral,
+  });
   const availabilityContext = { config, env };
   const resolvePluginNodeHost = () =>
     listRegisteredNodeHostCapsAndCommands(availabilityContext, {
@@ -283,13 +252,16 @@ export async function prepareNodeHostRuntime(params?: {
   let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
   let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
   let preparedContainerInitialized = false;
+  let workerCleanupIncomplete = false;
   let publishContainerCapacity: ((capacity: NodeWorkerCapacitySnapshot) => void) | undefined;
   let workerHostingDisabledReason: string | undefined;
   const disablePreparedContainerHosting = async (error: unknown) => {
     let failure = error;
+    workerCleanupIncomplete ||= error instanceof NodeWorkerContainerContextMismatchError;
     try {
       await preparedContainerSupervisor?.close();
     } catch (closeError) {
+      workerCleanupIncomplete = true;
       if (closeError !== error) {
         failure = new Error(`${String(error)}; supervisor cleanup failed: ${String(closeError)}`);
       }
@@ -345,7 +317,7 @@ export async function prepareNodeHostRuntime(params?: {
       commandAllowlist,
       claudeEnabled: Boolean(claudePath),
       installedAppsSharingEnabled,
-      desktopStreamingEnabled,
+      desktopStreamingEnabled: desktopHostConfig.enabled,
       ephemeral: params?.ephemeral === true,
       pathEnv,
     });
@@ -374,6 +346,7 @@ export async function prepareNodeHostRuntime(params?: {
     }) {
       const mcpAbort = new AbortController();
       let closing = false;
+      let inFlightInvokes = 0;
       let connectionGeneration = 0;
       let closePromise: Promise<void> | undefined;
       let initializationRetry: ReturnType<typeof setTimeout> | undefined;
@@ -410,6 +383,8 @@ export async function prepareNodeHostRuntime(params?: {
             return;
           }
           if (error instanceof NodeWorkerContainerContextMismatchError) {
+            // Closing this supervisor cannot retire claims on a different daemon.
+            workerCleanupIncomplete = true;
             workerSupervisor = undefined;
             onWorkerHostingDisabled?.(error.message);
             await supervisor.close().catch((closeError: unknown) => {
@@ -430,11 +405,15 @@ export async function prepareNodeHostRuntime(params?: {
       let skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
       let pluginDisconnectCleanup: Promise<void> = Promise.resolve();
+      let pendingPluginDisconnectCleanups = 0;
+      let pluginDisconnectCleanupFailed = false;
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
         sendNodeEvent: async (event, payload) =>
           await client.request("node.event", buildNodeEventParams(event, payload)),
         ...(workerWorkspace
           ? {
+              acquireManagedWorkspaceAsync: (request) =>
+                workerWorkspace.acquireManagedWorkspaceAsync(request),
               acquireManagedWorkspace: (request) =>
                 workerWorkspace.acquireManagedWorkspace(request),
             }
@@ -450,6 +429,7 @@ export async function prepareNodeHostRuntime(params?: {
           }
         | undefined;
       let manager: NodeHostMcpManager | undefined;
+      let mcpStartupComplete = Boolean(commandAllowlist);
       const publishInventory = () =>
         onInventoryChanged?.(
           createNodeHostInventory(
@@ -469,6 +449,7 @@ export async function prepareNodeHostRuntime(params?: {
             },
           }).then((resolved) => {
             manager = resolved;
+            mcpStartupComplete = true;
             if (!closing) {
               publishInventory();
             }
@@ -496,150 +477,179 @@ export async function prepareNodeHostRuntime(params?: {
       if (onManifestChanged) {
         refreshAvailability();
       }
+      const updatePause = createNodeHostUpdatePause({
+        hasLocalActiveWork: () =>
+          closing ||
+          !mcpStartupComplete ||
+          inFlightInvokes > 0 ||
+          pendingPluginDisconnectCleanups > 0 ||
+          pluginDisconnectCleanupFailed ||
+          hasRegisteredNodeHostCommandActiveWork() ||
+          workerCleanupIncomplete,
+        hasWorkerActiveWork: () => workerSupervisor?.hasActiveWork(),
+      });
       return {
         async invoke(frame) {
-          const generation = connectionGeneration;
-          await pluginDisconnectCleanup;
-          if (closing || generation !== connectionGeneration) {
-            return;
-          }
-          // Enforce the declaration locally too: a paired Gateway cannot widen
-          // an operator-restricted surface by sending a hidden command directly.
-          if (commandAllowlist && !currentManifest.commands.includes(frame.command)) {
+          if (updatePause.isPaused) {
             await client
               .request("node.invoke.result", {
                 id: frame.id,
                 nodeId: frame.nodeId,
                 ok: false,
-                error: { code: "UNAVAILABLE", message: "command not advertised by this node" },
+                error: { code: "UNAVAILABLE", message: "node host is updating; retry shortly" },
               })
               .catch(() => {});
             return;
           }
-          const claudeSkills =
-            frame.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND &&
-            requestsClaudeNodeSkillRuntime(frame.paramsJSON);
-          const duplexCommand =
-            duplexEnabled && (claudeSkills || isRegisteredNodeHostCommandDuplex(frame.command));
-          const progressEnabled = duplexCommand || frame.command === NODE_DESKTOP_STREAM_COMMAND;
-          const controller = new AbortController();
-          // Every command must remain cancellable after dispatch; only duplex
-          // commands own ordered input and its pre-spawn buffer.
-          const input: NodeInvokeInputTarget | undefined = duplexCommand
-            ? {
-                nextInputSeq: 0,
-                pendingInput: new BoundedBuffer<string>(
-                  MAX_PENDING_INVOKE_INPUT_BYTES,
-                  {
-                    mode: "fail-closed",
-                    onOverflow: () =>
-                      controller.abort(
-                        new Error("terminal input exceeded the 64 KiB pre-spawn buffer"),
-                      ),
-                  },
-                  (payload) => Buffer.byteLength(payload, "utf8"),
-                ),
-                inputFailed: false,
-              }
-            : undefined;
-          const active: ActiveNodeInvoke = { controller, ...(input ? { input } : {}) };
-          // Redelivered IDs must not orphan the original command's process or
-          // let its cleanup unregister the replacement invocation.
-          activeInvokes.get(frame.id)?.controller.abort();
-          activeInvokes.set(frame.id, active);
-          const progress = progressEnabled
-            ? createNodeInvokeProgressWriter({
-                client,
-                frame,
-                idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
-                onError: () => controller.abort(),
-              })
-            : undefined;
-          if (duplexCommand) {
-            progress?.startHeartbeats();
-          }
-          const framedIo =
-            input && progress
-              ? createNodeDuplexEndpoint({
-                  ...(claudeSkills ? { maxMessageBytes: NODE_CLAUDE_SKILLS_MESSAGE_BYTES } : {}),
-                  sendFrame: async (payload) => await progress.write(JSON.stringify(payload)),
-                  onError: (error) => {
-                    active.framedFailure = error;
-                    controller.abort(error);
-                  },
+          // Admission precedes the first await; disconnects and duplicate IDs do
+          // not release update ownership before the original command settles.
+          inFlightInvokes += 1;
+          try {
+            const generation = connectionGeneration;
+            await pluginDisconnectCleanup;
+            if (closing || generation !== connectionGeneration) {
+              return;
+            }
+            // Enforce the declaration locally too: a paired Gateway cannot widen
+            // an operator-restricted surface by sending a hidden command directly.
+            if (commandAllowlist && !currentManifest.commands.includes(frame.command)) {
+              await client
+                .request("node.invoke.result", {
+                  id: frame.id,
+                  nodeId: frame.nodeId,
+                  ok: false,
+                  error: { code: "UNAVAILABLE", message: "command not advertised by this node" },
                 })
-              : undefined;
-          if (framedIo) {
-            controller.signal.addEventListener("abort", () => framedIo.close(), { once: true });
-          }
-          let framedInputRegistered = false;
-          const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
-            input && progress && framedIo
+                .catch(() => {});
+              return;
+            }
+            const claudeSkills =
+              frame.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND &&
+              requestsClaudeNodeSkillRuntime(frame.paramsJSON);
+            const duplexCommand =
+              duplexEnabled && (claudeSkills || isRegisteredNodeHostCommandDuplex(frame.command));
+            const progressEnabled = duplexCommand || frame.command === NODE_DESKTOP_STREAM_COMMAND;
+            const controller = new AbortController();
+            // Every command must remain cancellable after dispatch; only duplex
+            // commands own ordered input and its pre-spawn buffer.
+            const input: NodeInvokeInputTarget | undefined = duplexCommand
               ? {
-                  signal: controller.signal,
-                  emitChunk: async (chunk) => await progress.write(chunk),
-                  onInput: (callback) => {
-                    if (activeInvokes.get(frame.id) === active) {
-                      registerNodeInvokeInputHandler(input, callback);
-                    }
-                  },
-                  frames: {
-                    send: async (message) => await framedIo.send(message),
-                    onMessage: (callback) => {
-                      const unsubscribe = framedIo.onMessage(callback);
-                      if (!framedInputRegistered) {
-                        framedInputRegistered = true;
-                        registerNodeInvokeInputHandler(input, (payloadJSON) => {
-                          try {
-                            framedIo.receive(payloadJSON);
-                          } catch (error) {
-                            controller.abort(error);
-                          }
-                        });
-                        void framedIo.sendReady().catch(controller.abort.bind(controller));
-                      }
-                      return unsubscribe;
+                  nextInputSeq: 0,
+                  pendingInput: new BoundedBuffer<string>(
+                    MAX_PENDING_INVOKE_INPUT_BYTES,
+                    {
+                      mode: "fail-closed",
+                      onOverflow: () =>
+                        controller.abort(
+                          new Error("terminal input exceeded the 64 KiB pre-spawn buffer"),
+                        ),
                     },
-                  },
+                    (payload) => Buffer.byteLength(payload, "utf8"),
+                  ),
+                  inputFailed: false,
                 }
               : undefined;
-          try {
-            await handleInvoke(frame, client, skillBins, manager, {
-              ...(claudePath ? { claudePath } : {}),
-              signal: controller.signal,
-              pluginCommandIo,
-              flushPluginCommandIo: framedIo?.drain,
-              canReportAbortedFailure: (error) =>
-                controller.signal.aborted &&
-                error === active.framedFailure &&
-                error === controller.signal.reason &&
-                activeInvokes.get(frame.id) === active,
-              ...(gatewayConnection?.url ? { gatewayUrl: gatewayConnection.url } : {}),
-              ...(gatewayConnection?.tlsFingerprint
-                ? { gatewayTlsFingerprint: gatewayConnection.tlsFingerprint }
-                : {}),
-              ...(gatewayConnection?.cloudflareAccess
-                ? { gatewayCloudflareAccess: gatewayConnection.cloudflareAccess }
-                : {}),
-              ...(config.desktop?.host ? { desktopHostConfig: config.desktop.host } : {}),
-              ...(progress ? { emitProgress: (text) => progress.write(text) } : {}),
-              installedAppsSharingEnabled,
-              installedAppsPlatform: platform,
-              pluginCommandContext,
-              ...(params?.ephemeral === true && !commandAllowlist
-                ? { workerComputer: { capabilities: () => resolvePluginNodeHost().computerUse } }
-                : {}),
-              ...(workerBundleInstaller ? { workerBundleInstaller } : {}),
-              ...(workerSupervisor ? { workerSupervisor } : {}),
-              ...(workerWorkspace ? { workerWorkspace } : {}),
-            });
-          } finally {
-            framedIo?.close();
-            progress?.stop();
-            await progress?.flush();
-            if (activeInvokes.get(frame.id) === active) {
-              activeInvokes.delete(frame.id);
+            const active: ActiveNodeInvoke = { controller, ...(input ? { input } : {}) };
+            // Redelivered IDs must not orphan the original command's process or
+            // let its cleanup unregister the replacement invocation.
+            activeInvokes.get(frame.id)?.controller.abort();
+            activeInvokes.set(frame.id, active);
+            const progress = progressEnabled
+              ? createNodeInvokeProgressWriter({
+                  client,
+                  frame,
+                  idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
+                  onError: () => controller.abort(),
+                })
+              : undefined;
+            if (duplexCommand) {
+              progress?.startHeartbeats();
             }
+            const framedIo =
+              input && progress
+                ? createNodeDuplexEndpoint({
+                    ...(claudeSkills ? { maxMessageBytes: NODE_CLAUDE_SKILLS_MESSAGE_BYTES } : {}),
+                    sendFrame: async (payload) => await progress.write(JSON.stringify(payload)),
+                    onError: (error) => {
+                      active.framedFailure = error;
+                      controller.abort(error);
+                    },
+                  })
+                : undefined;
+            if (framedIo) {
+              controller.signal.addEventListener("abort", () => framedIo.close(), { once: true });
+            }
+            let framedInputRegistered = false;
+            const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
+              input && progress && framedIo
+                ? {
+                    signal: controller.signal,
+                    emitChunk: async (chunk) => await progress.write(chunk),
+                    onInput: (callback) => {
+                      if (activeInvokes.get(frame.id) === active) {
+                        registerNodeInvokeInputHandler(input, callback);
+                      }
+                    },
+                    frames: {
+                      send: async (message) => await framedIo.send(message),
+                      onMessage: (callback) => {
+                        const unsubscribe = framedIo.onMessage(callback);
+                        if (!framedInputRegistered) {
+                          framedInputRegistered = true;
+                          registerNodeInvokeInputHandler(input, (payloadJSON) => {
+                            try {
+                              framedIo.receive(payloadJSON);
+                            } catch (error) {
+                              controller.abort(error);
+                            }
+                          });
+                          void framedIo.sendReady().catch(controller.abort.bind(controller));
+                        }
+                        return unsubscribe;
+                      },
+                    },
+                  }
+                : undefined;
+            try {
+              await handleInvoke(frame, client, skillBins, manager, {
+                ...(claudePath ? { claudePath } : {}),
+                signal: controller.signal,
+                pluginCommandIo,
+                flushPluginCommandIo: framedIo?.drain,
+                canReportAbortedFailure: (error) =>
+                  controller.signal.aborted &&
+                  error === active.framedFailure &&
+                  error === controller.signal.reason &&
+                  activeInvokes.get(frame.id) === active,
+                ...(gatewayConnection?.url ? { gatewayUrl: gatewayConnection.url } : {}),
+                ...(gatewayConnection?.tlsFingerprint
+                  ? { gatewayTlsFingerprint: gatewayConnection.tlsFingerprint }
+                  : {}),
+                ...(gatewayConnection?.cloudflareAccess
+                  ? { gatewayCloudflareAccess: gatewayConnection.cloudflareAccess }
+                  : {}),
+                desktopHostConfig,
+                ...(progress ? { emitProgress: (text) => progress.write(text) } : {}),
+                installedAppsSharingEnabled,
+                installedAppsPlatform: platform,
+                pluginCommandContext,
+                ...(params?.ephemeral === true && !commandAllowlist
+                  ? { workerComputer: { capabilities: () => resolvePluginNodeHost().computerUse } }
+                  : {}),
+                ...(workerBundleInstaller ? { workerBundleInstaller } : {}),
+                ...(workerSupervisor ? { workerSupervisor } : {}),
+                ...(workerWorkspace ? { workerWorkspace } : {}),
+              });
+            } finally {
+              framedIo?.close();
+              progress?.stop();
+              await progress?.flush();
+              if (activeInvokes.get(frame.id) === active) {
+                activeInvokes.delete(frame.id);
+              }
+            }
+          } finally {
+            inFlightInvokes -= 1;
           }
         },
         handleInput(invokeId, seq, payloadJSON) {
@@ -659,12 +669,22 @@ export async function prepareNodeHostRuntime(params?: {
             active.controller.abort();
           }
           activeInvokes.clear();
+          pendingPluginDisconnectCleanups += 1;
           pluginDisconnectCleanup = pluginDisconnectCleanup
-            .then(async () => await notifyRegisteredNodeHostCommandDisconnect())
+            .then(async () => {
+              await notifyRegisteredNodeHostCommandDisconnect();
+              pluginDisconnectCleanupFailed = false;
+            })
             .catch((error: unknown) => {
+              pluginDisconnectCleanupFailed = true;
               logDebug(`node-host: plugin disconnect cleanup failed: ${String(error)}`);
+            })
+            .finally(() => {
+              pendingPluginDisconnectCleanups -= 1;
             });
         },
+        tryPauseForUpdate: updatePause.tryPauseForUpdate,
+        resumeAfterUpdate: updatePause.resumeAfterUpdate,
         updateGatewayConnection(connection) {
           gatewayConnection = connection;
         },

@@ -88,9 +88,25 @@ export async function runManualStage(params: {
       }
     }
 
+    const presentedOption = [
+      ...params.detection.manualProviders,
+      ...params.detection.authOptions,
+      ...(params.detection.prepareOptions ?? []),
+    ].find((option) => option.id === choice);
+    const modelTarget = candidate
+      ? candidate.modelTarget
+      : presentedOption
+        ? presentedOption.modelTarget
+        : (await import("../flows/provider-flow.js"))
+            .resolveProviderSetupFlowContributions({
+              config: params.config,
+              workspaceDir: params.workspace,
+            })
+            .find((entry) => entry.option.value === choice)?.option.modelTarget;
     const result = await withConsoleSubsystemsSuppressed(() =>
       params.activate({
         kind: candidate?.kind ?? "provider-auth",
+        ...(modelTarget ? { modelTarget } : {}),
         ...(candidate ? { modelRef: candidate.modelRef } : { authChoice: choice }),
         workspace: params.workspace,
         surface: "cli",

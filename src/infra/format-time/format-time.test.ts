@@ -349,7 +349,6 @@ describe("format-relative", () => {
         { input: 7200000, expected: "2h ago" },
         { input: 47 * 3600000, expected: "47h ago" },
         { input: 48 * 3600000, expected: "2d ago" },
-        { input: 172800000, expected: "2d ago" },
       ]);
     });
 

@@ -15,8 +15,6 @@ export const SESSION_MUTATION_TEST_METHODS = [
   "sessions.branches.switch",
   "sessions.catalog.startTerminal",
   "sessions.compact",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
   "sessions.create",
   "sessions.delete",
   "sessions.dispatch",

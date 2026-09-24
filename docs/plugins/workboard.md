@@ -128,7 +128,8 @@ parameters. Choosing **All boards** returns to `/workboard`.
 A board can store an `automationJobId` reference to the automation job that
 owns its AI-categorization prompt, model, schedule, and run history. The board
 page shows an **Automation** link when that reference is present. Matching
-session events nudge the attached automation to run immediately, with events
+session events nudge the attached automation through the active Workboard service's
+scheduler authority, including after the worker's tool authority closes, with events
 for the same board coalesced for 60 seconds. The automation's schedule remains
 the backstop. Disabled and auto-disabled automations are never nudged. Deleting
 the board does not delete or otherwise mutate the
@@ -212,11 +213,14 @@ Dispatch is Gateway-local: it does not spawn arbitrary OS processes. Normal
 OpenClaw subagent sessions still own execution. One dispatch pass:
 
 1. Promotes dependency-ready cards.
-2. Records dispatch metadata on ready cards.
-3. Blocks expired claims or timed-out runs.
-4. Marks board-configured triage cards as orchestration candidates.
-5. Claims a small batch of ready cards and starts worker runs through the
+2. Blocks expired claims or timed-out runs.
+3. Marks board-configured triage cards as orchestration candidates.
+4. Claims a small batch of ready cards and starts worker runs through the
    Gateway subagent runtime.
+
+Idle scans leave ready-card history unchanged. Existing dispatch counters and
+timestamps remain as historical values; new launches use the card's launch,
+attempt, and execution history.
 
 Workers get bounded card context plus the claim token needed to heartbeat,
 complete, or block the card through the Workboard tools.

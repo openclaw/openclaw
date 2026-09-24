@@ -42,7 +42,8 @@ import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../utils/delivery-context.shared.js";
+} from "../utils/delivery-context.read.js";
+import { formatTokenCount } from "../utils/token-format.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,
@@ -60,8 +61,6 @@ type SessionCandidate = { agentId: string; entry: SessionEntry; sessionKey: stri
 
 const DEFAULT_SESSIONS_LIMIT = 100;
 const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
-
-const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
 /** True ACP sessions use the child runtime's model, not the configured fallback. */
 function applyAcpModelOverlayIfNeeded(
@@ -121,7 +120,7 @@ const formatTokensCell = (
   contextTokens: number | null,
   rich: boolean,
 ) => {
-  const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
+  const ctxLabel = contextTokens ? formatTokenCount(contextTokens) : "?";
   if (total === undefined) {
     const label = `unknown/${ctxLabel} (?%)`;
     return rich ? theme.muted(label) : label;
@@ -130,7 +129,7 @@ const formatTokensCell = (
     contextTokens && freshTotal !== undefined
       ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
       : null;
-  const label = `${formatKTokens(total)}/${ctxLabel} (${pct ?? "?"}%)`;
+  const label = `${formatTokenCount(total)}/${ctxLabel} (${pct ?? "?"}%)`;
   return colorByPct(label, pct, rich);
 };
 
@@ -172,15 +171,6 @@ function resolveSessionStoreDisplayPath(target: { agentId: string; storePath: st
   return resolveSqliteTargetFromSessionStorePath(target.storePath, {
     agentId: target.agentId,
   }).path;
-}
-
-function toJsonSessionRow<T extends { displayModelRef: unknown; runtimeLabel: string }>(
-  row: T,
-): Omit<T, "displayModelRef" | "runtimeLabel"> {
-  const { displayModelRef, runtimeLabel, ...jsonRow } = row;
-  void displayModelRef;
-  void runtimeLabel;
-  return jsonRow;
 }
 
 function stripChannelRecipientPrefix(
@@ -376,7 +366,7 @@ export async function sessionsCommand(
       resolvedContextTokens: modelContext.contextTokens,
       authoredContextTokens: modelContext.authoredContextTokens,
     });
-    return Object.assign({}, row, {
+    return Object.assign(row, {
       agentId,
       acpRuntime,
       agentRuntime,
@@ -389,13 +379,15 @@ export async function sessionsCommand(
         key: row.key,
         entry,
       }),
-      runtimeLabel: resolveSessionRuntimeLabel({
-        cfg,
-        entry,
-        agentRuntime,
-        modelProvider: modelRef.provider,
-        classifyCliProvider,
-      }),
+      runtimeLabel: opts.json
+        ? ""
+        : resolveSessionRuntimeLabel({
+            cfg,
+            entry,
+            agentRuntime,
+            modelProvider: modelRef.provider,
+            classifyCliProvider,
+          }),
     });
   });
   const hasMore = rows.length < totalCount;
@@ -417,17 +409,15 @@ export async function sessionsCommand(
       limitApplied: limit ?? null,
       hasMore,
       activeMinutes: activeMinutes ?? null,
-      sessions: rows.map((row) => {
-        const r = toJsonSessionRow(row);
-        const modelRef = row.displayModelRef;
-        return {
-          ...r,
-          totalTokens: resolveSessionTotalTokens(r) ?? null,
-          totalTokensFresh: resolveFreshSessionTotalTokens(r) !== undefined,
-          contextTokens: r.contextTokens ?? configContextTokens ?? null,
+      sessions: rows.map(({ displayModelRef: modelRef, runtimeLabel, ...row }) => {
+        void runtimeLabel;
+        return Object.assign(row, {
+          totalTokens: resolveSessionTotalTokens(row) ?? null,
+          totalTokensFresh: resolveFreshSessionTotalTokens(row) !== undefined,
+          contextTokens: row.contextTokens ?? configContextTokens ?? null,
           modelProvider: modelRef.provider,
           model: modelRef.model,
-        };
+        });
       }),
     });
     return;

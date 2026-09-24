@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, onTestFinished, vi } from "vitest";
@@ -263,7 +265,7 @@ export function createCodexLifecycleTurnHarness(
     completeTurn: async ({ threadId, turnId }: { threadId: string; turnId: string }) => {
       await notify({
         method: "turn/completed",
-        params: { threadId, turn: { id: turnId, status: "completed" } },
+        params: { threadId, turn: { id: turnId, status: "completed", items: [] } },
       });
     },
     close: () => client.close(),
@@ -317,6 +319,10 @@ function createTrackedThreadLifecycleHostCapability(): ThreadLifecycleTestHostCa
     kind: "agent-harness-host-capability",
     version: 1,
     assertActive,
+    retainSourceAuthority: () => {
+      assertActive();
+      return undefined;
+    },
     bindToolSurface: (tools) => {
       assertActive();
       return tools.map((tool) => {
@@ -362,43 +368,35 @@ export function startOrResumeThread(
 }
 
 export function threadStartResult(threadId = "thread-1"): Record<string, unknown> {
-  return {
-    thread: {
-      id: threadId,
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: "/tmp",
-      projectId: null,
-      cliVersion: "0.149.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4-codex",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: "/tmp",
-    instructionSources: [],
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
-  };
+  const result = nativeThreadStartResult(threadId, "/tmp");
+  return { ...result, thread: { ...result.thread, cliVersion: "0.149.0" } };
 }
 
 export function threadResumeResult(threadId = "thread-existing"): Record<string, unknown> {
   return threadStartResult(threadId);
+}
+
+export async function writeNativeCatalogFixture(
+  rolloutPath: string,
+  threadId: string,
+  dynamicTools: unknown,
+) {
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(
+    rolloutPath,
+    `${JSON.stringify({ type: "session_meta", payload: { id: threadId, dynamic_tools: dynamicTools } })}\n`,
+  );
+}
+
+export function disabledMcpServerStatus(name: string) {
+  return {
+    name,
+    serverInfo: null,
+    tools: {},
+    resources: [],
+    resourceTemplates: [],
+    authStatus: "unsupported",
+  };
 }
 
 export function createAppServerOptions(): CodexAppServerRuntimeOptions {
@@ -413,6 +411,15 @@ export function createAppServerOptions(): CodexAppServerRuntimeOptions {
     loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
     approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+  } as unknown as CodexAppServerRuntimeOptions;
+}
+
+export function createThreadRequestAppServerOptions(): CodexAppServerRuntimeOptions {
+  return {
+    start: createAppServerOptions().start,
+    approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
   } as unknown as CodexAppServerRuntimeOptions;

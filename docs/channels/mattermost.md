@@ -203,6 +203,7 @@ Notes:
 - Thread-scoped sessions use the triggering post id as the thread root.
 - `first` and `all` are equivalent because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
 - Per-chat-type overrides take precedence over `replyToMode`. Without a `direct` override, existing deployments keep flat, non-threaded DMs.
+- After a restart or session reset, thread-scoped conversations recover recent messages from Mattermost when their pending history is cold. This includes DMs with threading enabled; flat DMs are unchanged. Recovery respects sender access and context visibility, excludes the triggering message, and is bounded by `historyLimit`, a 200-post server window, and a five-second deadline. A temporary server failure does not block the new message indefinitely.
 
 ## Access control (DMs)
 
@@ -588,6 +589,7 @@ Account values override top-level fields; `channels.mattermost.defaultAccount` p
       - the callback is hitting the wrong gateway/account
       - Mattermost still has old commands pointing at a previous callback target
       - the gateway restarted without reactivating slash commands
+    - HTTP 429 under load: callbacks using an outgoing OAuth connection or a proxy that strips the `Authorization` header carry the command token only in the body. They share the bounded anonymous request pool and can be throttled when it is saturated. Preserve Mattermost's original `Authorization: Token` header through proxies so recognized command credentials receive separate capacity.
     - If native slash commands stop working, check logs for `mattermost: failed to register slash commands` or `mattermost: native slash commands enabled but no commands could be registered`.
     - If `callbackUrl` is omitted and logs warn that the callback resolved to a loopback URL like `http://localhost:18789/...`, that URL is probably only reachable when Mattermost runs on the same host/network namespace as OpenClaw. Set an explicit externally reachable `commands.callbackUrl` instead.
 

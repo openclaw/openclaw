@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { BrowserProfileConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
-import { getRuntimeConfig } from "../config/config.js";
-import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 import {
@@ -63,16 +63,22 @@ const writeConfigFile = configMocks.writeConfigFile;
 const lifecycleMocks = vi.hoisted(() => ({
   closeChromeMcpSession: vi.fn(async () => false),
   stopOpenClawChrome: vi.fn(async () => {}),
+  stopOwnedOpenClawChrome: vi.fn<typeof import("./chrome.js").stopOwnedOpenClawChrome>(),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => {
   return {
-    ...actual,
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/config-mutation")>()),
     replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
       await configMocks.writeConfigFile(nextConfig);
     }),
     mutateConfigFile: configMocks.mutateConfigFile,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
+  return {
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
     getRuntimeConfig: configMocks.getRuntimeConfig,
     getRuntimeConfigSourceSnapshot: configMocks.getRuntimeConfigSourceSnapshot,
   };
@@ -96,6 +102,7 @@ vi.mock("./pw-ai-module.js", () => ({
 vi.mock("./chrome.js", () => ({
   resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw-test/openclaw/user-data"),
   stopOpenClawChrome: lifecycleMocks.stopOpenClawChrome,
+  stopOwnedOpenClawChrome: lifecycleMocks.stopOwnedOpenClawChrome,
 }));
 
 const [{ resolveBrowserConfig, resolveProfile }, { createBrowserProfilesService }] =
@@ -182,6 +189,7 @@ describe("BrowserProfilesService", () => {
     configMocks.writeConfigFile.mockReset().mockResolvedValue(undefined);
     lifecycleMocks.closeChromeMcpSession.mockReset().mockResolvedValue(false);
     lifecycleMocks.stopOpenClawChrome.mockReset().mockResolvedValue(undefined);
+    lifecycleMocks.stopOwnedOpenClawChrome.mockReset().mockResolvedValue({ status: "not-running" });
     vi.mocked(resolveOpenClawUserDataDir)
       .mockReset()
       .mockReturnValue("/tmp/openclaw-test/openclaw/user-data");
@@ -579,10 +587,43 @@ describe("BrowserProfilesService", () => {
     fs.mkdirSync(path.dirname(userDataDir), { recursive: true });
     vi.mocked(resolveOpenClawUserDataDir).mockReturnValue(userDataDir);
 
+    const order: string[] = [];
+    lifecycleMocks.stopOwnedOpenClawChrome.mockImplementationOnce(async () => {
+      order.push("stop");
+      return { status: "stopped" };
+    });
+    configMocks.writeConfigFile.mockImplementationOnce(async () => {
+      order.push("config");
+    });
+    vi.mocked(movePathToTrash).mockImplementationOnce(async (targetPath) => {
+      order.push("trash");
+      return targetPath;
+    });
+
     const result = await service.deleteProfile("work");
 
     expect(result.deleted).toBe(true);
+    expect(order).toEqual(["stop", "config", "trash"]);
     expect(movePathToTrash).toHaveBeenCalledWith(path.dirname(userDataDir));
+  });
+
+  it("preserves profile config and data when a live browser cannot be safely stopped", async () => {
+    const { service, state } = createDeletionFixture({
+      resolvedProfile: { cdpPort: 18801, color: "#0066CC" },
+    });
+    lifecycleMocks.stopOwnedOpenClawChrome.mockResolvedValueOnce({
+      status: "unverified",
+      reason: "managed process identity changed",
+    });
+
+    await expect(service.deleteProfile("work")).rejects.toThrow("managed process identity changed");
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(movePathToTrash).not.toHaveBeenCalled();
+    expect(state.resolved.profiles).toHaveProperty("work");
+
+    await expect(service.deleteProfile("work")).resolves.toMatchObject({ ok: true });
+    expect(writeConfigFile).toHaveBeenCalledOnce();
   });
 
   it("keeps local data and reports deleted=false when Trash rejects", async () => {

@@ -20,7 +20,7 @@ import { loadSkillStatusReport } from "./status-report.ts";
 export type ClawHubSkillDetail = SkillsDetailResult;
 export type ClawHubSkillSecurityVerdict = SkillsSecurityVerdictsResult["items"][number];
 
-type SkillsState = {
+export type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   runtimeConfig: SkillConfigMutationOwner;
@@ -29,6 +29,10 @@ type SkillsState = {
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
   skillsError: string | null;
+  skillsFilter: string;
+  skillsStatusFilter: "all" | "ready" | "needs-setup" | "disabled";
+  skillsDetailKey: string | null;
+  skillsDetailTab: "overview" | "card";
   skillOperation: SkillOperation;
   skillEdits: Record<string, string>;
   skillMessages: SkillMessageMap;
@@ -36,6 +40,7 @@ type SkillsState = {
   clawhubSearchResults: ClawHubSearchResult[] | null;
   clawhubSearchLoading: boolean;
   clawhubSearchError: string | null;
+  clawhubIconUrls: Record<string, string>;
   clawhubDetail: ClawHubSkillDetail | null;
   clawhubDetailRef: string | null;
   clawhubDetailLoading: boolean;
@@ -158,28 +163,6 @@ function isSkillsAgentScopeCurrent(
   scope: SkillsAgentScope,
 ): boolean {
   return state.skillsAgentId === scope.agentId && state.skillsAgentRevision === scope.revision;
-}
-
-async function runStaleAwareRequest<T>(
-  isCurrent: () => boolean,
-  request: () => Promise<T>,
-  onSuccess: (value: T) => void,
-  onError: (err: unknown) => void,
-  onFinally: () => void,
-) {
-  try {
-    const result = await request();
-    if (!isCurrent()) {
-      return;
-    }
-    onSuccess(result);
-  } catch (err) {
-    if (!isCurrent()) {
-      return;
-    }
-    onError(err);
-  }
-  onFinally();
 }
 
 export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
@@ -574,23 +557,24 @@ export async function loadClawHubDetail(state: SkillsState, ref: string) {
   state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
-  await runStaleAwareRequest(
-    () =>
-      state.connected &&
-      state.client === client &&
-      ref === state.clawhubDetailRef &&
-      isSkillsAgentScopeCurrent(state, agentScope),
-    () => client.request<ClawHubSkillDetail>("skills.detail", { slug: ref }),
-    (res) => {
-      state.clawhubDetail = res ?? null;
-    },
-    (err) => {
-      state.clawhubDetailError = formatUiError(err);
-    },
-    () => {
-      state.clawhubDetailLoading = false;
-    },
-  );
+  const isCurrent = () =>
+    state.connected &&
+    state.client === client &&
+    ref === state.clawhubDetailRef &&
+    isSkillsAgentScopeCurrent(state, agentScope);
+  try {
+    const res = await client.request<ClawHubSkillDetail>("skills.detail", { slug: ref });
+    if (!isCurrent()) {
+      return;
+    }
+    state.clawhubDetail = res ?? null;
+  } catch (err) {
+    if (!isCurrent()) {
+      return;
+    }
+    state.clawhubDetailError = formatUiError(err);
+  }
+  state.clawhubDetailLoading = false;
 }
 
 export function closeClawHubDetail(state: SkillsState) {

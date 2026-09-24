@@ -209,11 +209,12 @@ export type ProviderAuthMethod = {
 };
 
 export type ProviderPluginWizardSetup = {
+  modelTarget?: "utility";
   choiceId?: string;
   choiceLabel?: string;
   choiceHint?: string;
   assistantPriority?: number;
-  assistantVisibility?: "visible" | "manual-only";
+  assistantVisibility?: "visible" | "manual-only" | "detected-only";
   onboardingFeatured?: boolean;
   groupId?: string;
   groupLabel?: string;

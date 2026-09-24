@@ -46,6 +46,10 @@ export const InputProvenanceSchema = closedObject({
   sourceSessionKey: Type.Optional(Type.String()),
   sourceChannel: Type.Optional(Type.String()),
   sourceTool: Type.Optional(Type.String()),
+  sourceRole: Type.Optional(Type.Literal("subagent")),
+  sourcePromptPrefix: Type.Optional(Type.String()),
+  jobId: Type.Optional(Type.String()),
+  runId: Type.Optional(Type.String()),
 });
 
 /** Closed gateway client id schema aligned with `GATEWAY_CLIENT_IDS`. */

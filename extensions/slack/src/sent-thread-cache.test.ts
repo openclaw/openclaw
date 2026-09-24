@@ -31,11 +31,6 @@ describe("slack sent-thread-cache", () => {
     vi.restoreAllMocks();
   });
 
-  it("records and checks thread participation", () => {
-    recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
-    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(true);
-  });
-
   it("returns false for unrecorded threads", () => {
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
   });

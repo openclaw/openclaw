@@ -3,7 +3,9 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
-import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import { sessionParticipantsSchemaSql } from "../../state/openclaw-agent-session-participants-schema.js";
 import {
   readExactSessionEntryJson,
@@ -22,7 +24,7 @@ afterEach(() => {
 });
 
 function createDatabase(filename = ":memory:") {
-  const db = new DatabaseSync(filename);
+  const db = openNodeSqliteDatabase(filename);
   openedDatabases.push(db);
   enableNodeSqliteKyselyStatementCache(db);
   db.exec(`
@@ -53,11 +55,12 @@ function createDatabase(filename = ":memory:") {
       `participant-${index}`,
     );
   }
+  admitSqliteSchema(db);
   return { agentId: "main", db, keys };
 }
 
 function addOwnerColumns(db: DatabaseSync) {
-  for (const { columnName, dataType } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+  for (const { columnName, dataType } of SESSION_OWNER_COLUMN_DEFINITIONS) {
     db.exec(`ALTER TABLE session_nodes ADD COLUMN ${columnName} ${dataType}`);
   }
 }
@@ -109,7 +112,7 @@ describe("prepared session entry reads", () => {
       expect(read()?.owner?.actor).toEqual({ type: "human", id: ownerId });
       database.db.prepare("UPDATE session_nodes SET owner_actor_id = 'current-owner'").run();
       expect(read()?.owner?.actor.id).toBe("current-owner");
-      for (const { columnName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+      for (const { columnName } of SESSION_OWNER_COLUMN_DEFINITIONS) {
         database.db.exec(`ALTER TABLE session_nodes DROP COLUMN ${columnName}`);
       }
       expect(read()?.owner).toBeUndefined();
@@ -120,7 +123,8 @@ describe("prepared session entry reads", () => {
     const filename = path.join(tempDirs.make("session-metadata-snapshot-"), "agent.sqlite");
     const database = createDatabase(filename);
     database.db.exec("PRAGMA journal_mode=WAL");
-    const peer = new DatabaseSync(filename);
+    const peer = openNodeSqliteDatabase(filename);
+    admitSqliteSchema(peer);
     openedDatabases.push(peer);
     const key = database.keys[0];
     const read = () => readExactSessionEntryRowValidated(database, key, "list")?.entry;

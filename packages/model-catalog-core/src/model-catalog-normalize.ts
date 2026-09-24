@@ -36,6 +36,7 @@ import {
   type NormalizedModelCatalogRow,
 } from "./model-catalog-types.js";
 import { normalizeProviderId } from "./provider-id.js";
+export { normalizeOpenRouterModelReasoning } from "./model-catalog-reasoning.js";
 
 // Normalizes raw provider model catalogs into stable rows for lookup and merging.
 
@@ -329,6 +330,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "sendSessionIdHeader",
     "supportsEagerToolInputStreaming",
     "supportsLongCacheRetention",
+    "supportsResponsesContinuation",
     "requiresOpenAiAnthropicToolPayload",
   ] as const;
   for (const field of booleanFields) {
@@ -352,7 +354,10 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   ] as const;
   for (const field of stringListFields) {
     const normalized = normalizeTrimmedStringList(value[field]);
-    if (normalized.length > 0) {
+    if (
+      normalized.length > 0 ||
+      (field === "supportedReasoningEfforts" && Array.isArray(value[field]))
+    ) {
       compat[field] = normalized;
     }
   }

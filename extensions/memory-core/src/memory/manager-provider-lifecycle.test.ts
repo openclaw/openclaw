@@ -268,11 +268,19 @@ describe("memory index", () => {
     const fields = manager as unknown as {
       provider: {
         embed: (text: string) => Promise<number[]>;
+        close: () => Promise<void>;
       } | null;
     };
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
+    const providerCloseStarted = createDeferred<void>();
+    const closeProvider = fields.provider.close.bind(fields.provider);
+    fields.provider.close = () => {
+      const closing = closeProvider();
+      providerCloseStarted.resolve();
+      return closing;
+    };
     fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
     };
@@ -281,7 +289,8 @@ describe("memory index", () => {
     const searchPromise = manager.search("alpha");
     let concurrentSearch: ReturnType<typeof manager.search> = Promise.resolve([]);
     try {
-      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
+      await Promise.race([providerCloseStarted.promise, searchPromise]);
+      expect(providerFixture.providerCloseCalls).toBe(1);
       concurrentSearch = manager.search("zebra");
       let concurrentSettled = false;
       void concurrentSearch.then(

@@ -303,6 +303,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
     <Note>
     `responsesServerCompaction` only controls `context_management` injection.
+    The public OpenAI Responses API also uses `/responses/compact` by default
+    for budget-triggered compaction. Set
+    `params.responsesCompactEndpoint: false` to disable this separate endpoint.
+    Provider-confirmed overflow and endpoint failures use client-side
+    summarization. Manual compaction keeps its existing behavior unless this
+    endpoint is explicitly enabled with `params.responsesCompactEndpoint: true`.
+
     Direct OpenAI Responses models still force `store: true` unless compat
     sets `supportsStore: false`.
     </Note>

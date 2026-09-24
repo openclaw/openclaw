@@ -366,11 +366,13 @@ const profiles = {
       openclaw: { extensions: ["./index.js"] },
     },
     indexJs: `import isNumber from "is-number";
+import { realpathSync } from "node:fs";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 const dependencyUrl = import.meta.resolve("is-number");
-const expectedDependencyBaseUrl = new URL("./node_modules/is-number/", import.meta.url).href;
-if (!dependencyUrl.startsWith(expectedDependencyBaseUrl)) {
+// Captured generations link dependency packages; compare the canonical entry files.
+const expectedDependencyUrl = new URL("./node_modules/is-number/index.js", import.meta.url);
+if (realpathSync(new URL(dependencyUrl)) !== realpathSync(expectedDependencyUrl)) {
   throw new Error(\`kitchen-sink dependency resolved outside plugin root: \${dependencyUrl}\`);
 }
 

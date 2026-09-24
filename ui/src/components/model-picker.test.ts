@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { updatePickers, choosePickerValue } from "../test-helpers/select-picker.ts";
 import { renderModelPicker } from "./model-picker.ts";
 import type { SelectPicker } from "./select-picker.ts";
+import { installTitleTooltips } from "./tooltip-title.ts";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -78,5 +79,56 @@ describe("renderModelPicker", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith("vendor/model with spaces");
     expect(onChange).not.toHaveBeenCalledWith(customOption.getAttribute("data-value"));
+  });
+
+  it("does not show a raw model reference when a model option receives pointer hover", async () => {
+    const host = document.createElement("div");
+    const onChange = vi.fn();
+    const dispose = installTitleTooltips(document);
+    try {
+      render(
+        renderModelPicker({
+          label: "Model",
+          value: "openai/fixture-alpha",
+          showSelectedDetail: true,
+          options: [
+            { value: "", label: "Select a model", disabled: true },
+            {
+              value: "openai/fixture-alpha",
+              label: "Fixture Alpha",
+              provider: "openai",
+              detail: "API",
+            },
+            {
+              value: "openai/fixture-beta",
+              label: "Fixture Beta",
+              provider: "openai",
+              detail: "API",
+            },
+          ],
+          onChange,
+        }),
+        host,
+      );
+      await updatePickers(host);
+      const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
+      picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!.click();
+      await picker.updateComplete;
+      const row = picker.querySelector<HTMLElement>(
+        '[role="option"][data-value="openai/fixture-beta"]',
+      )!;
+      expect(row.textContent).toContain("Fixture Beta");
+      expect(row.textContent).toContain("API");
+      expect(row.querySelector("[data-provider-icon]")).not.toBeNull();
+      row.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+      const tooltip = document.querySelector("openclaw-tooltip");
+      expect(tooltip?.content ?? "").toBe("");
+      row.click();
+      await picker.updateComplete;
+      expect(onChange).toHaveBeenCalledExactlyOnceWith("openai/fixture-beta");
+    } finally {
+      dispose();
+      host.remove();
+    }
   });
 });

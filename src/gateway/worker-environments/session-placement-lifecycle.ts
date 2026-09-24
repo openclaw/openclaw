@@ -64,7 +64,18 @@ type RetirablePlacement = Extract<Placement, { state: "local" | "reclaimed" | "f
 type FailedPlacement = Extract<Placement, { state: "failed" }>;
 
 export function isFailedWorkerPlacementEnvironmentGone(params: {
-  environmentService: SessionWorkerPlacementContext["workerEnvironmentService"];
+  environmentService:
+    | {
+        get(
+          environmentId: string,
+        ):
+          | Pick<
+              NonNullable<ReturnType<WorkerEnvironmentServiceContract["get"]>>,
+              "state" | "leaseId"
+            >
+          | undefined;
+      }
+    | undefined;
   placement: FailedPlacement;
 }): boolean {
   if (params.placement.environmentId === null) {

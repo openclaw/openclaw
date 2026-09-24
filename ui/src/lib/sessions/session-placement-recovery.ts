@@ -17,6 +17,8 @@ import {
   sessionPlacementRecoveryScopeStoragePrefix,
 } from "./session-placement-recovery-storage-key.ts";
 
+export type SessionPlacementStartMode = "dispatch" | "recover" | "retry";
+
 export type SessionPlacementTarget =
   | { kind: "profile"; profileId: string; os?: string; machineClass?: string }
   | { kind: "device"; deviceId: string }

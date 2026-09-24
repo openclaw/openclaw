@@ -2,13 +2,15 @@ import fs from "node:fs/promises";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
+import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
+import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 import {
   hasPathAncestor,
   manifestNodes,
   sameEntry,
   type WorkspaceNode,
 } from "./workspace-manifest-comparison.js";
-import { MAX_RECONCILIATION_ENTRIES, type WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 import {
   directoryContainsOnlyDerivedWorkspaceEntries,
@@ -22,6 +24,7 @@ async function localWorkspaceDescendantPaths(
   root: string,
   entryPaths: readonly string[],
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
+  nonDirectoryReplacements: ReadonlySet<string>,
 ): Promise<string[]> {
   const paths: string[] = [];
   const pending = [...entryPaths];
@@ -33,7 +36,7 @@ async function localWorkspaceDescendantPaths(
     for await (const entry of await fs.opendir(localPath(root, directory))) {
       names.push(entry.name);
       enumeratedEntries += 1;
-      if (enumeratedEntries > MAX_RECONCILIATION_ENTRIES) {
+      if (enumeratedEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
         throw new Error("Gateway workspace manifest has too many entries");
       }
     }
@@ -42,6 +45,14 @@ async function localWorkspaceDescendantPaths(
       pathBytes += Buffer.byteLength(childPath);
       if (pathBytes > MAX_RECONCILIATION_PATH_BYTES) {
         throw new Error("Gateway workspace manifest paths exceed their byte limit");
+      }
+      if (isManagedSandboxSkillsPath(childPath)) {
+        // Runtime projections are excluded edits, not disposable cache children.
+        // Surface their presence as a conflict before replacing an ancestor.
+        if (hasPathAncestor(nonDirectoryReplacements, childPath)) {
+          paths.push(childPath);
+        }
+        continue;
       }
       if (isDerivedWorkspacePath(childPath, await isRetainedInput(childPath))) {
         continue;
@@ -97,6 +108,7 @@ export async function preflightWorkspaceApplyImpl(params: {
     params.root,
     localStructuralRoots,
     isRetainedInput,
+    new Set(structuralRoots.filter((entryPath) => currentNodes.has(entryPath))),
   );
   const paths = [...new Set([...changed, ...localStructuralPaths])].toSorted();
   const applyPaths = new Set<string>();

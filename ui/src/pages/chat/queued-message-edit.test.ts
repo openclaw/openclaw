@@ -28,6 +28,7 @@ import {
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
@@ -213,16 +214,23 @@ describe("queued message edit round-trip", () => {
     expect(host.chatAttachments).toEqual([added]);
   });
 
-  it("replaces the row in the same slot when the edited message is sent", async () => {
-    const { host } = queueHost([{}, {}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-2");
-    updateQueuedMessageEdit(host as never, "message 2, corrected");
-
-    await submitQueuedEdit(host);
-
-    expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
-    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
-  });
+  it.each(["corrected prompt", "/review-this", "!echo hello"])(
+    "keeps an edited row's place and only eligible frozen context: %s",
+    async (draft) => {
+      const workContext = { page: "chat", title: "Original work" };
+      const { host } = queueHost([{}, { workContext }, {}], {
+        getWorkContext: () => ({ page: "chat", title: "Later work" }),
+      });
+      beginQueuedMessageEdit(host, "queued-2");
+      updateQueuedMessageEdit(host, draft);
+      await submitQueuedEdit(host);
+      expect(storedOrder(host)).toEqual(["message 1", draft, "message 3"]);
+      expect(host.chatQueue[1]?.workContext).toEqual(
+        draft === "corrected prompt" ? workContext : undefined,
+      );
+      expect(isQueuedMessageBeingEdited(host, "queued-2")).toBe(false);
+    },
+  );
 
   it.each(["steer", "interrupt"] as const)(
     "keeps an explicitly queued edit behind earlier messages while the composer defaults to %s",
@@ -451,7 +459,7 @@ describe("queued message edit round-trip", () => {
     }
   });
 
-  it("reports when a peer reorder crosses the row another pane is editing", () => {
+  it("clears a peer reorder conflict when the edit closes and the move succeeds", () => {
     const { host, unsubscribe } = queueHost([{}, {}, {}]);
     const peer = makeChatHost({
       client: host.client,
@@ -466,8 +474,29 @@ describe("queued message edit round-trip", () => {
       expect(moveQueuedChatMessage(peer as never, "queued-3", "queued-1")).toBe("rejected");
       expect(peer.chatError).toBe(QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
       expect(storedOrder(peer)).toEqual(["message 1", "message 2", "message 3"]);
+      expect(cancelQueuedMessageEdit(host as never)).toBe(true);
+      expect(moveQueuedChatMessage(peer as never, "queued-3", "queued-1")).toBe("moved");
+      expect(storedOrder(peer)).toEqual(["message 3", "message 1", "message 2"]);
+      expect(peer.chatError).toBeNull();
+      expect(peer.lastError).toBeNull();
     } finally {
       stopPeer();
+      unsubscribe();
+    }
+  });
+
+  it("preserves other operations' storage errors when a queue move succeeds", () => {
+    const { host, unsubscribe } = queueHost([{}, {}]);
+    try {
+      host.lastError = "History could not be refreshed";
+      host.chatError = OFFLINE_QUEUE_STORAGE_ERROR;
+
+      expect(moveQueuedChatMessage(host as never, "queued-2", "queued-1")).toBe("moved");
+
+      expect(storedOrder(host)).toEqual(["message 2", "message 1"]);
+      expect(host.lastError).toBe("History could not be refreshed");
+      expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
+    } finally {
       unsubscribe();
     }
   });

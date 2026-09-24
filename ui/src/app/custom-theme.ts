@@ -209,7 +209,7 @@ export function parseImportedCustomTheme(value: unknown): ImportedCustomTheme | 
   }
 }
 
-function buildCustomThemeStyles(theme: ImportedCustomTheme) {
+function buildCustomThemeStyles(theme: Pick<ImportedCustomTheme, "light" | "dark">) {
   const light = normalizeStoredTokenMap(theme.light);
   const dark = normalizeStoredTokenMap(theme.dark);
   if (!light || !dark) {
@@ -227,7 +227,9 @@ function buildCustomThemeStyles(theme: ImportedCustomTheme) {
   ].join("\n");
 }
 
-export function syncCustomThemeStyleTag(theme: ImportedCustomTheme | null | undefined) {
+export function syncCustomThemeStyleTag(
+  theme: Pick<ImportedCustomTheme, "light" | "dark"> | null | undefined,
+) {
   if (typeof document === "undefined") {
     return;
   }

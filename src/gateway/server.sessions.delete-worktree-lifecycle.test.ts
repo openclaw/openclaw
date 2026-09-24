@@ -29,6 +29,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -213,7 +214,7 @@ test("sessions.create only allocates worktrees for lifecycle-manageable agent ow
   const { storePath } = await createSessionStoreDir();
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
   const allocatedWorktreeIds = new Set<string>();
-  const createWorktree = vi.spyOn(managedWorktrees, "create");
+  const createWorktree = vi.spyOn(managedWorktrees, "createWithOutcome");
   try {
     for (const owner of [{ agentId: "main" }, { key: "agent:main:dashboard:unconfigured-owner" }]) {
       const created = await directSessionReq<{
@@ -263,7 +264,7 @@ test("sessions.create only allocates worktrees for lifecycle-manageable agent ow
         await managedWorktrees.remove({ id, reason: "test-cleanup", allowSnapshotLoss: true });
       }
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     testState.agentsConfig = undefined;
     await openClawState.cleanup();
@@ -354,7 +355,7 @@ test("sessions.delete snapshots and removes session worktrees", async () => {
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -479,7 +480,7 @@ test("sessions.delete keeps same-key successor worktree creation behind exact cl
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -571,7 +572,7 @@ test.each([
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -624,7 +625,7 @@ test("sessions.delete reports a busy preserved worktree while a live run lease e
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
@@ -693,7 +694,7 @@ test("sessions.delete preserves an entry-bound worktree owned by another princip
         allowSnapshotLoss: true,
       });
     }
-    closeOpenClawStateDatabaseForTest();
+    await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }

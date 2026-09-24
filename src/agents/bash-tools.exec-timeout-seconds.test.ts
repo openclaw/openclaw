@@ -7,8 +7,11 @@
  * `timeout` is a silent 1000x error. These tests pin that contract.
  */
 import { describe, expect, it } from "vitest";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { createExecTool } from "./bash-tools.js";
 import { execSchema, nodeExecSchema, processSchema } from "./bash-tools.schemas.js";
+import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
+import { createLazyExecTool } from "./lazy-exec-tool.js";
 
 /** TypeBox optional wrappers do not surface `description` on their static type. */
 function describedAs(schema: unknown): string {
@@ -51,5 +54,42 @@ describe("removed exec timeout field", () => {
         timeout: 5,
       } as never),
     ).rejects.toThrow('exec parameter "timeout" is unsupported; use "timeoutSeconds" instead');
+  });
+});
+
+describe("foreground node exec wait budgets", () => {
+  it.each([
+    { timeoutSec: undefined, timeoutSeconds: undefined, expectedMs: 1_810_000 },
+    { timeoutSec: 120, timeoutSeconds: undefined, expectedMs: 130_000 },
+    { timeoutSec: 120, timeoutSeconds: 12, expectedMs: 22_000 },
+    { timeoutSec: 120, timeoutSeconds: 0, expectedMs: 130_000 },
+    { timeoutSec: undefined, timeoutSeconds: 0, expectedMs: 1_810_000 },
+    { timeoutSec: 120, timeoutSeconds: 1, expectedMs: 15_000 },
+    { timeoutSec: 120, timeoutSeconds: Number.MAX_VALUE, expectedMs: MAX_SAFE_TIMEOUT_DELAY_MS },
+  ])(
+    "keeps prepared and pinned budgets for $timeoutSec/$timeoutSeconds seconds",
+    ({ timeoutSec, timeoutSeconds, expectedMs }) => {
+      for (const createTool of [createExecTool, createLazyExecTool]) {
+        const tool = createTool({ host: "node", timeoutSec });
+        const args = { command: "echo ready", timeoutSeconds };
+        expect(tool.getExecutionTimeoutMs?.(args)).toBe(expectedMs);
+
+        const nodeTool = pinExecToolTarget(tool, { host: "node" });
+        expect(nodeTool.getExecutionTimeoutMs?.({ ...args, host: "gateway" })).toBe(expectedMs);
+
+        const gatewayTool = pinExecToolTarget(tool, { host: "gateway" });
+        expect(gatewayTool.getExecutionTimeoutMs?.({ ...args, host: "node" })).toBeUndefined();
+      }
+    },
+  );
+
+  it("leaves ordinary gateway exec on the harness's existing timeout policy", () => {
+    for (const createTool of [createExecTool, createLazyExecTool]) {
+      const tool = createTool({ host: "gateway", timeoutSec: 120 });
+      expect(tool.getExecutionTimeoutMs?.({ command: "echo ready" })).toBeUndefined();
+      expect(
+        tool.getExecutionTimeoutMs?.({ command: "echo ready", timeoutSeconds: 0 }),
+      ).toBeUndefined();
+    }
   });
 });

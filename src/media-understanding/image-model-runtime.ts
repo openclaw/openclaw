@@ -156,6 +156,7 @@ async function prepareResolvedImageRuntime(
       params.agentDir,
       params.cfg,
       {
+        abortSignal: params.signal,
         modelIdSource: "selected",
         authStorage,
         modelRegistry,
@@ -292,6 +293,7 @@ export async function resolveImageRuntime(
     Pick<NonNullable<Parameters<typeof resolveModelAsync>[4]>, "authStorage" | "modelRegistry">
   >;
   const resolveOptions = {
+    abortSignal: params.signal,
     modelIdSource: "selected" as const,
     allowBundledStaticCatalogFallback: true,
     ...preparedStores,

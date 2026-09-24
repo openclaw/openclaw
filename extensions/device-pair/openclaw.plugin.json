@@ -16,6 +16,14 @@
       "kind": "runtime-slash"
     }
   ],
+  "configGroups": [
+    {
+      "id": "device-pairing",
+      "title": "Device pairing",
+      "order": 10,
+      "properties": ["publicUrl"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { displayPath } from "../utils.js";
-import { createConfigIO } from "./io.js";
+import { resolveConfigPath, resolveStateDir } from "./paths.js";
 
 type LogConfigUpdatedOptions = {
   path?: string;
@@ -12,7 +12,9 @@ type LogConfigUpdatedOptions = {
 };
 
 /** Formats a config path for operator-facing log output. */
-export function formatConfigFilePath(path: string = createConfigIO().configPath): string {
+export function formatConfigFilePath(
+  path: string = resolveConfigPath(process.env, resolveStateDir()),
+): string {
   return displayPath(path);
 }
 
@@ -35,5 +37,10 @@ export function formatConfigUpdatedMessage(
 
 /** Emits the standard config-updated message through the active runtime logger. */
 export function logConfigUpdated(runtime: RuntimeEnv, opts: LogConfigUpdatedOptions = {}): void {
-  runtime.log(formatConfigUpdatedMessage(opts.path ?? createConfigIO().configPath, opts));
+  runtime.log(
+    formatConfigUpdatedMessage(
+      opts.path ?? resolveConfigPath(process.env, resolveStateDir()),
+      opts,
+    ),
+  );
 }

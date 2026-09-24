@@ -1,6 +1,7 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
@@ -8,6 +9,7 @@ import {
   findAuthorizedSwarmCollectorRequest,
   findSwarmCollectorSession,
 } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { isSubagentSessionFromEntry } from "../../agents/subagents/spawn/subagent-depth-policy.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
@@ -15,6 +17,7 @@ import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isMainSessionRestartRecoveryInputProvenance,
+  isProgressCardRefreshInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
@@ -26,6 +29,7 @@ import {
 } from "../server-methods/agent-expected-session.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
 import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
 import {
   resolveAllowModelOverrideFromClient,
@@ -256,6 +260,59 @@ export function prepareAgentRequestPreflight(params: {
     return undefined;
   }
   const inputProvenance = normalizeInputProvenance(request.inputProvenance);
+  if (isProgressCardRefreshInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
+    params.io.emitAcceptance([
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Progress refresh input is reserved for progressCard.refresh.",
+      ),
+    ]);
+    return undefined;
+  }
+  if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
+    const sourceSessionKey = inputProvenance.sourceSessionKey;
+    const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
+    const sourceTarget =
+      sourceSessionKey && sourceAgentId
+        ? resolveGatewaySessionStoreTargetWithStore({
+            cfg,
+            key: sourceSessionKey,
+            agentId: sourceAgentId,
+            readOnly: true,
+            exactRead: true,
+            clone: false,
+            projection: "full",
+          })
+        : undefined;
+    const sourceEntry = sourceTarget ? sourceTarget.store[sourceTarget.canonicalKey] : undefined;
+    let sourceIsSubagent = Boolean(
+      sourceTarget && isSubagentSessionFromEntry(sourceTarget.canonicalKey, sourceEntry),
+    );
+    if (
+      !sourceIsSubagent &&
+      sourceTarget &&
+      sourceEntry &&
+      (sourceEntry.parentSessionKey || sourceEntry.spawnedBy)
+    ) {
+      sourceIsSubagent = isSubagentSessionFromEntry(
+        sourceTarget.canonicalKey,
+        sourceEntry,
+        readAcpSessionMetaForEntry({
+          sessionKey: sourceTarget.canonicalKey,
+          agentId: sourceTarget.agentId,
+          cfg,
+          entry: sourceEntry,
+        }),
+      );
+    }
+    if (sourceIsSubagent) {
+      inputProvenance.sourceRole = "subagent";
+    } else {
+      delete inputProvenance.sourceRole;
+    }
+  }
   const isRestartRecoveryResumeRun =
     canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
   if (

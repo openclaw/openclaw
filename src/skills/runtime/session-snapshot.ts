@@ -7,8 +7,13 @@ import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
-import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
+import {
+  getSkillsSnapshotVersion,
+  getSkillsSourceVersion,
+  shouldRefreshSnapshotForVersion,
+} from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";
+import { prepareRemoteSkillConnections } from "./remote-skills.js";
 import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
 
 // Full snapshots let fresh sessions and runtime-only hydration share one versioned rebuild.
@@ -57,7 +62,6 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   params: ReusableSkillSnapshotParams,
 ): Promise<ReusableSkillSnapshotResult> {
   params.assertCurrent?.();
-  const eligibility = params.resolveEligibility?.() ?? params.eligibility;
   const normalizedRoots = normalizeWorkspaceSkillRoots({
     agentWorkspaceDir: params.workspaceDir,
     executionWorkspaceDir: params.executionWorkspaceDir,
@@ -69,6 +73,15 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       }
     : undefined;
   const watcherWorkspaceDir = skillRoots?.agentWorkspaceDir ?? params.workspaceDir;
+  const versionBeforePreparation = getSkillsSnapshotVersion(watcherWorkspaceDir);
+  await prepareRemoteSkillConnections();
+  params.assertCurrent?.();
+  // A caller's explicit version predates any source changes while authority was preparing.
+  const requestedSnapshotVersion =
+    getSkillsSnapshotVersion(watcherWorkspaceDir) === versionBeforePreparation
+      ? params.snapshotVersion
+      : undefined;
+  const eligibility = params.resolveEligibility?.() ?? params.eligibility;
   if (params.watch !== false) {
     ensureSkillsWatcher({
       workspaceDir: watcherWorkspaceDir,
@@ -80,7 +93,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
         : {}),
     });
   }
-  const snapshotVersion = params.snapshotVersion ?? getSkillsSnapshotVersion(watcherWorkspaceDir);
+  const snapshotVersion = requestedSnapshotVersion ?? getSkillsSnapshotVersion(watcherWorkspaceDir);
   const promptFormatChanged =
     params.existingSnapshot?.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION;
   const skillVersionChanged = shouldRefreshSnapshotForVersion(
@@ -114,10 +127,16 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   ) {
     return { snapshot: params.existingSnapshot, shouldRefresh, snapshotVersion };
   }
-  const sourceVersion = getSkillsSnapshotVersion(watcherWorkspaceDir);
+  const sourceScope = {
+    executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
+    agentId: params.agentId,
+  };
+  const sourceVersion = getSkillsSourceVersion(watcherWorkspaceDir, sourceScope);
+  const effectiveVersion = getSkillsSnapshotVersion(watcherWorkspaceDir);
   const eligibilityKey = stableStringify(eligibility);
   const projectionIsCurrent = () =>
-    getSkillsSnapshotVersion(watcherWorkspaceDir) === sourceVersion &&
+    getSkillsSourceVersion(watcherWorkspaceDir, sourceScope) === sourceVersion &&
+    getSkillsSnapshotVersion(watcherWorkspaceDir) === effectiveVersion &&
     stableStringify(params.resolveEligibility?.() ?? params.eligibility) === eligibilityKey;
   const buildSnapshot = async (assertCurrent: () => void) => {
     const snapshot = await buildSkillSnapshot(normalizedRoots.agentWorkspaceDir, {
@@ -224,7 +243,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       // Capacity fallback invalidates on reconciliation; retry only the prepared source work.
       watch: false,
       // An explicit version describes the original request, never a later rebuilt source tree.
-      ...(currentVersion !== sourceVersion ? { snapshotVersion: currentVersion } : {}),
+      snapshotVersion: currentVersion,
     });
   }
   params.assertCurrent?.();

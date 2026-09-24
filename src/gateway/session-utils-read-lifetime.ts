@@ -1,4 +1,4 @@
-import { captureSessionEntryCacheRead } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import { captureSessionEntryRead } from "../config/sessions/session-accessor.sqlite-entry-read-lifetime.js";
 import { isOpenClawAgentDatabasePathCurrent } from "../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
@@ -39,7 +39,7 @@ export function retainGatewaySessionEntryReadOnly(sessionKey: string, agentId: s
     throw new Error("Session store changed while preparing its metadata. Retry the request.");
   }
   const { database, claim } = retained;
-  let entryRead: ReturnType<typeof captureSessionEntryCacheRead> | undefined;
+  let entryRead: ReturnType<typeof captureSessionEntryRead> | undefined;
   let unregister = () => {};
   const release = () => {
     if (released) {
@@ -51,7 +51,7 @@ export function retainGatewaySessionEntryReadOnly(sessionKey: string, agentId: s
     claim.release();
   };
   try {
-    entryRead = captureSessionEntryCacheRead(database, selected.legacyKey ?? selected.canonicalKey);
+    entryRead = captureSessionEntryRead(database, selected.legacyKey ?? selected.canonicalKey);
     const read = entryRead;
     unregister = registerOpenClawAgentDatabaseAsyncResource({
       agentId: database.agentId,
@@ -63,9 +63,9 @@ export function retainGatewaySessionEntryReadOnly(sessionKey: string, agentId: s
     return {
       ...selected,
       entry: read.entry,
-      // Catalog projection can call this per model; only owner-held facts belong here.
-      isCurrent: () => !released && claim.isCurrent() && read.isObservedCurrent(),
-      // Raw/external writes and route replacement are checked at the publication boundary.
+      // Catalog projection calls this per model; exact target reads belong at publication.
+      isCurrent: () => !released && claim.isCurrent(),
+      // Re-read canonical target facts and verify physical ownership before publishing.
       isCurrentAtResponse: () =>
         !released &&
         claim.isCurrent() &&

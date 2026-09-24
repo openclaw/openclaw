@@ -6,7 +6,9 @@ import {
   LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
   WORKSPACE_DOCTOR_CLAIM_SUFFIX,
 } from "../agents/workspace-legacy-state.js";
+import { pinDirectory, requireDirectorySync } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
+import { readFileWindowFully } from "./file-read.js";
 import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
 import type { SourceSnapshot } from "./state-migrations.workspace-setup-store.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
@@ -37,18 +39,9 @@ async function readBoundedRegularFile(params: {
       throw new Error("legacy workspace source is not a safe regular file");
     }
     const buffer = Buffer.alloc(before.size);
-    let offset = 0;
-    while (offset < buffer.length) {
-      const { bytesRead } = await opened.handle.read(
-        buffer,
-        offset,
-        buffer.length - offset,
-        offset,
-      );
-      if (bytesRead === 0) {
-        throw new Error("legacy workspace source ended unexpectedly");
-      }
-      offset += bytesRead;
+    const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
+    if (bytesRead !== buffer.length) {
+      throw new Error("legacy workspace source ended unexpectedly");
     }
     const after = await opened.handle.stat();
     if (
@@ -59,7 +52,7 @@ async function readBoundedRegularFile(params: {
       after.size !== before.size ||
       after.mtimeMs !== before.mtimeMs ||
       after.ctimeMs !== before.ctimeMs ||
-      offset !== after.size
+      bytesRead !== after.size
     ) {
       throw new Error("legacy workspace source changed while reading");
     }
@@ -96,7 +89,18 @@ export async function archiveWorkspaceSetupSource(
   // The receipt publishes only a verified backup. A crash during creation leaves
   // an unreferenced artifact, so the next attempt can safely use a fresh name.
   if (!existingArchivePath) {
-    await sourceRoot.create(relativePath, snapshot.buffer, { mode: 0o600 });
+    const parent = await pinDirectory(await sourceRoot.resolve(path.dirname(relativePath)));
+    try {
+      // Buffered exclusive creation avoids native no-replace rename on FUSE.
+      await sourceRoot.create(relativePath, snapshot.buffer, {
+        mode: 0o600,
+        renameIdentity: "verify-content-with-lock",
+        durable: "file",
+      });
+      requireDirectorySync(await parent.sync(), "Workspace setup archive directory");
+    } finally {
+      await parent.close();
+    }
   }
   const archived = await readBoundedRegularFile({
     sourceRoot,

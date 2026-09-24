@@ -2,7 +2,10 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as nodeSqlite from "../../../node-sqlite.mjs";
+import { runDoctorLintCli as runDoctorLintCliEntry } from "../../commands/doctor-lint.js";
+import { parseReleasedDoctorLintReport } from "../../infra/test-fixtures/update-doctor-lint.v2026-9-5.js";
 import { ExitError } from "../../runtime.js";
+import { UpdateSchemaRefusalError } from "../../state/openclaw-update-schema-refusal.js";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
 const mocks = vi.hoisted(() => ({
@@ -20,15 +23,9 @@ const mocks = vi.hoisted(() => ({
   runDoctorLintCli: vi.fn(),
 }));
 
-const {
-  doctorCommand,
-  triageCommand,
-  dashboardCommand,
-  resetCommand,
-  uninstallCommand,
-  runtime,
-  runDoctorLintCli,
-} = mocks;
+const { doctorCommand, triageCommand, dashboardCommand, resetCommand, uninstallCommand, runtime } =
+  mocks;
+const runDoctorLintCli = vi.mocked(runDoctorLintCliEntry);
 
 const DOCTOR_MUTATION_OPTIONS = [
   "--repair",
@@ -68,7 +65,8 @@ vi.mock("../../commands/uninstall.js", () => ({
   uninstallCommand: mocks.uninstallCommand,
 }));
 
-vi.mock("../../commands/doctor-lint.js", () => ({
+vi.mock("../../commands/doctor-lint.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/doctor-lint.js")>()),
   runDoctorLintCli: mocks.runDoctorLintCli,
 }));
 
@@ -97,6 +95,8 @@ describe("registerMaintenanceCommands doctor action", () => {
   async function runMaintenanceCli(args: string[]) {
     const program = new Command();
     registerMaintenanceCommands(program);
+    const originalArgv = process.argv;
+    process.argv = [process.execPath, "openclaw", ...args];
     try {
       await program.parseAsync(args, { from: "user" });
     } catch (error) {
@@ -104,6 +104,8 @@ describe("registerMaintenanceCommands doctor action", () => {
         throw error;
       }
       runtime.exit(error.code);
+    } finally {
+      process.argv = originalArgv;
     }
   }
 
@@ -111,8 +113,20 @@ describe("registerMaintenanceCommands doctor action", () => {
     vi.clearAllMocks();
   });
 
+  it("rejects legacy capture cleanup before entering Doctor maintenance", async () => {
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+    registerMaintenanceCommands(program);
+
+    await expect(
+      program.parseAsync(["doctor", "--cleanup-legacy-plugin-captures"], { from: "user" }),
+    ).rejects.toMatchObject({ code: "commander.unknownOption" });
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+  });
+
   it.each(["22.23.2", "26.0.0"])("keeps plain doctor read-only on Node %s", async (node) => {
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node } });
+    vi.spyOn(process.versions, "node", "get").mockReturnValue(node);
     const capabilities = await nodeSqlite.detectCurrentSqliteCapabilities();
     vi.spyOn(nodeSqlite, "detectCurrentSqliteCapabilities").mockResolvedValue({
       ...capabilities,
@@ -168,23 +182,59 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).not.toHaveBeenCalledWith(0);
   });
 
-  it("writes JSON when Doctor maintenance fails before producing a report", async () => {
-    const token = "sk-abcdefghijklmnopqrstuv";
-    doctorCommand.mockRejectedValue(
-      new Error(`maintenance failed: Authorization: Bearer ${token}`),
-    );
+  it.each([["--state-sqlite", "compact"], ["--session-sqlite", "inspect"], ["--post-upgrade"]])(
+    "writes JSON when Doctor %j fails before producing a report",
+    async (...args) => {
+      const token = "sk-abcdefghijklmnopqrstuv";
+      doctorCommand.mockRejectedValue(
+        new Error(`maintenance failed: Authorization: Bearer ${token}`),
+      );
+
+      await runMaintenanceCli(["doctor", ...args, "--json"]);
+
+      expect(runtime.writeJson).toHaveBeenCalledWith({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining("maintenance failed: Authorization: Bearer"),
+        },
+      });
+      expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain(token);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(2);
+    },
+  );
+
+  it.each([0, 1, 2])("preserves an already-reported Doctor exit %s", async (code) => {
+    doctorCommand.mockRejectedValue(new ExitError(code));
+
+    await runMaintenanceCli(["doctor", "--post-upgrade", "--json"]);
+
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(code);
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("preserves structured recovery fields in Doctor JSON failures", async () => {
+    const error = new UpdateSchemaRefusalError([], "2026.9.2", {
+      targetVersion: "2026.9.4",
+    });
+    doctorCommand.mockRejectedValue(error);
 
     await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--json"]);
 
-    expect(runtime.writeJson).toHaveBeenCalledWith({
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({
       ok: false,
       error: {
         type: "cli_error",
-        message: expect.stringContaining("maintenance failed: Authorization: Bearer"),
+        message: expect.stringContaining("Doctor refused update-time schema repair"),
+        code: "update-schema-bump-unfenced",
+        databases: [],
+        updaterVersion: "2026.9.2",
+        targetVersion: "2026.9.4",
+        commands: expect.arrayContaining(["openclaw doctor --fix"]),
       },
     });
-    expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain(token);
-    expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
@@ -365,6 +415,85 @@ describe("registerMaintenanceCommands doctor action", () => {
       expect(runtime.exit).toHaveBeenCalledWith(2);
     },
   );
+
+  it.each([
+    ["lint and post-upgrade", ["--lint", "--post-upgrade"]],
+    ["session and post-upgrade", ["--session-sqlite", "inspect", "--post-upgrade"]],
+    ["session and repair", ["--session-sqlite", "import", "--fix"]],
+    ["session and repair alias", ["--session-sqlite", "inspect", "--repair"]],
+    ["session and forced repair", ["--session-sqlite", "inspect", "--force"]],
+    ["session and gateway token", ["--session-sqlite", "inspect", "--generate-gateway-token"]],
+    ["post-upgrade and repair", ["--post-upgrade", "--fix"]],
+    ["post-upgrade and gateway token", ["--post-upgrade", "--generate-gateway-token"]],
+  ])("rejects %s before either operation runs", async (_label, args) => {
+    await runMaintenanceCli(["doctor", ...args, "--json"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      jsonFailure(
+        "doctor operations are mutually exclusive: choose one of --lint, --fix/--repair, --post-upgrade, --state-sqlite, or --session-sqlite.",
+      ),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it.each(DOCTOR_SESSION_SQLITE_MODES.filter((mode) => mode !== "recover"))(
+    "rejects GitHub issue creation for session SQLite %s",
+    async (mode) => {
+      await runMaintenanceCli(["doctor", "--session-sqlite", mode, "--github-issue", "--json"]);
+
+      expect(doctorCommand).not.toHaveBeenCalled();
+      expect(runDoctorLintCli).not.toHaveBeenCalled();
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        jsonFailure("--github-issue requires --session-sqlite recover."),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(2);
+    },
+  );
+
+  it("preserves standalone post-upgrade diagnostics", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--post-upgrade", "--json"]);
+
+    expect(doctorCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({ postUpgrade: true, json: true }),
+      undefined,
+    );
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("redacts credentials in lint failure output", async () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    runDoctorLintCli.mockRejectedValueOnce(
+      new Error(`lint failed: Authorization: Bearer ${token}`),
+    );
+
+    await runMaintenanceCli(["doctor", "--lint", "--json"]);
+
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining("lint failed: Authorization: Bearer"),
+        },
+      }),
+    );
+    const emitted = JSON.stringify(runtime.writeJson.mock.calls.at(-1)?.[0]);
+    expect(parseReleasedDoctorLintReport(emitted)).toMatchObject({
+      ok: false,
+      checksRun: 0,
+      findings: [{ severity: "error", message: expect.stringContaining("lint failed") }],
+    });
+    expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain(token);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
 
   it("runs doctor lint mode without invoking repair doctor", async () => {
     runDoctorLintCli.mockResolvedValue(1);
@@ -627,7 +756,16 @@ describe("registerMaintenanceCommands doctor action", () => {
 
     await runMaintenanceCli(["doctor", "--json"]);
 
-    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure("lint failed"));
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining(jsonFailure("lint failed")),
+    );
+    expect(
+      parseReleasedDoctorLintReport(JSON.stringify(runtime.writeJson.mock.calls.at(-1)?.[0])),
+    ).toMatchObject({
+      ok: false,
+      checksRun: 0,
+      findings: [{ severity: "error", message: "lint failed" }],
+    });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
@@ -689,10 +827,12 @@ describe("registerMaintenanceCommands doctor action", () => {
         updateResult: "/tmp/update-failure.json",
       },
     },
-    ...["claude", "codex", "opencode", "pi"].map((agent) => ({
-      args: ["--agent", agent],
-      options: { json: false, noExport: false, run: false, agent },
-    })),
+    ...["claude", "codex", "cursor", "grok", "kimi", "muse", "opencode", "pi", "qwen"].map(
+      (agent) => ({
+        args: ["--agent", agent],
+        options: { json: false, noExport: false, run: false, agent },
+      }),
+    ),
   ])("forwards triage options for $args", async ({ args, options }) => {
     triageCommand.mockResolvedValue(undefined);
 
@@ -735,7 +875,8 @@ describe("registerMaintenanceCommands doctor action", () => {
       await runMaintenanceCli(["triage", "--agent", "unknown-agent", ...(json ? ["--json"] : [])]);
 
       expect(triageCommand).not.toHaveBeenCalled();
-      const message = "Invalid --agent. Use claude, codex, opencode, or pi.";
+      const message =
+        "Invalid --agent. Use claude, codex, cursor, grok, kimi, muse, opencode, pi, or qwen.";
       if (json) {
         expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
         expect(runtime.error).not.toHaveBeenCalled();

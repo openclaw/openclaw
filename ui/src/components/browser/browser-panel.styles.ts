@@ -62,9 +62,9 @@ export const browserPanelStyles = css`
     flex: none;
   }
   .bp-toolbar .bp-icon[aria-busy="true"] > svg {
-    animation: bp-download-spin 1s linear infinite;
+    animation: bp-toolbar-spin 1s linear infinite;
   }
-  @keyframes bp-download-spin {
+  @keyframes bp-toolbar-spin {
     to {
       transform: rotate(360deg);
     }

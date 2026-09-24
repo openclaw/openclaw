@@ -54,7 +54,7 @@ export function requireWorktreeDiskSpace(
 export async function estimateWorktreeGitBytes(
   repoRoot: string,
   ref: string,
-  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent"> = {},
+  options: Pick<GitWorkerOperationOptions, "signal" | "assertCurrent" | "git"> = {},
 ): Promise<number> {
   return await runGitWorkerOperation(
     {

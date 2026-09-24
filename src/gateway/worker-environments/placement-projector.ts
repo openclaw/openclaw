@@ -7,6 +7,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
@@ -29,7 +30,13 @@ export type WorkerPlacementDiskSpaceReader = {
 };
 
 export type WorkerPlacementRunnerAvailabilityReader = {
-  read(record: WorkerSessionPlacementRecord): SessionPlacementRunner | undefined;
+  read(
+    record: WorkerSessionPlacementRecord,
+    environment?: Pick<
+      WorkerEnvironmentPlacementFacts,
+      "providerId" | "state" | "ownerEpoch" | "attachedSessionIds" | "nodeDeviceId"
+    > | null,
+  ): SessionPlacementRunner | undefined;
   version(): number;
 };
 
@@ -42,8 +49,14 @@ type WorkerPlacementIdentity = {
 export function readWorkerPlacementIdentity(
   record: WorkerSessionPlacementRecord,
   environments: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape"> | undefined,
+  preparedEnvironment?: WorkerEnvironmentPlacementFacts | null,
 ): WorkerPlacementIdentity | undefined {
-  const environment = record.environmentId ? environments?.get(record.environmentId) : undefined;
+  const environment =
+    preparedEnvironment === undefined
+      ? record.environmentId
+        ? environments?.get(record.environmentId)
+        : undefined
+      : preparedEnvironment;
   if (!environment) {
     return undefined;
   }
@@ -59,7 +72,10 @@ export function readWorkerPlacementIdentity(
   if (!correlated) {
     return undefined;
   }
-  const machine = environments?.readMachineShape(environment.environmentId);
+  const machine = environments?.readMachineShape(
+    environment.environmentId,
+    preparedEnvironment ?? undefined,
+  );
   return {
     providerId: environment.providerId,
     profileId: environment.profileId,
@@ -72,11 +88,14 @@ export function createWorkerPlacementRunnerAvailabilityReader(params: {
   hasCurrentDeviceRunner: (deviceId: string) => boolean;
 }): WorkerPlacementRunnerAvailabilityReader & { markChanged(): void } {
   let version = 0;
-  const read: WorkerPlacementRunnerAvailabilityReader["read"] = (record) => {
+  const read: WorkerPlacementRunnerAvailabilityReader["read"] = (record, preparedEnvironment) => {
     if (record.state !== "active") {
       return undefined;
     }
-    const environment = params.environments.get(record.environmentId);
+    const environment =
+      preparedEnvironment === undefined
+        ? params.environments.get(record.environmentId)
+        : preparedEnvironment;
     if (
       environment?.providerId !== DEVICE_WORKER_PROVIDER_ID ||
       environment.state !== "attached" ||

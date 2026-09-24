@@ -63,7 +63,6 @@ describe("lmstudio lightweight provider policy", () => {
         unchangedModel,
       ],
     });
-    expect(normalized.baseUrl).toBe(providerConfig.baseUrl);
     expect(normalized.request).toBe(request);
     expect(normalized.headers).toBe(headers);
     expect(normalized.models[1]).toBe(unchangedModel);

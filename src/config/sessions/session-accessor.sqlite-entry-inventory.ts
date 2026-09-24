@@ -1,5 +1,9 @@
 import type { CompiledQuery } from "kysely";
-import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  iterateSqliteQuerySync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -92,7 +96,8 @@ export function readSessionEntryCount(
     queries.set(includeArchived, compiled);
   }
   let count = 0;
-  for (const row of iterateSqliteQuerySync(database.db, { compile: () => compiled })) {
+  // Eager execution reuses the shared statement cache without retaining a reader.
+  for (const row of executeSqliteQuerySync(database.db, { compile: () => compiled }).rows) {
     count +=
       row.entry_json === null
         ? row.count

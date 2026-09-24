@@ -1,44 +1,26 @@
-import {
-  resolveClaudeFable5ModelIdentity,
-  type Model,
-  type SimpleStreamOptions,
-  type StreamFn,
-  type Usage,
-} from "@openclaw/llm-core";
+import type { Model, StreamFn, Usage } from "@openclaw/llm-core";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveAgentReasoningOption } from "../../reasoning.js";
-import {
-  type AgentCoreCompletionRuntimeDeps,
-  consumeAgentCoreStream,
-  resolveAgentCoreCompleteFn,
-} from "../../runtime-deps.js";
+import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
-import { convertToLlm, type HarnessMessage, isRuntimeContextCarrier } from "../messages.js";
+import { isRuntimeContextCarrier } from "../messages.js";
 import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
 import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
-import {
-  CompactionError,
-  err,
-  InvalidSummaryOutputError,
-  ok,
-  type Result,
-  type SessionTreeEntry,
-} from "../types.js";
+import { CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.js";
+import { runSummarizationCompletion } from "./summarization-completion.js";
 import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
-  extractSummaryText,
   type FileOperations,
   formatFileOperations,
+  formatPersistedSenderSuffix,
   getCompactionContent,
   mergeSummaryFileOperations,
-  serializeConversation,
   stringifyCompactionValue,
 } from "./utils.js";
 
@@ -369,12 +351,10 @@ export function estimateTokens(message: AgentMessage): number {
     return 0;
   }
   let chars = 0;
-  const harnessMessage = message as HarnessMessage;
 
-  switch (harnessMessage.role) {
+  switch (message.role) {
     case "assistant": {
-      const assistant = harnessMessage;
-      for (const block of assistant.content) {
+      for (const block of message.content) {
         if (block.type === "text") {
           chars += estimateStringChars(block.text);
         } else if (block.type === "thinking") {
@@ -387,20 +367,24 @@ export function estimateTokens(message: AgentMessage): number {
       }
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
-    case "user":
+    case "user": {
+      chars = countContentChars(message.content);
+      // serializeConversation projects this exact persisted-sender suffix.
+      chars += estimateStringChars(formatPersistedSenderSuffix(message));
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+    }
     case "custom":
     case "toolResult": {
-      chars = countContentChars(harnessMessage.content);
+      chars = countContentChars(message.content);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
-      chars =
-        estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
+      chars = estimateStringChars(message.command) + estimateStringChars(message.output);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = estimateStringChars(harnessMessage.summary);
+      chars = estimateStringChars(message.summary);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
   }
@@ -588,10 +572,6 @@ export function findCutPoint(
   };
 }
 
-export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
-
-Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
-
 const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
 
 Use this EXACT format:
@@ -664,96 +644,6 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
-function createSummarizationOptions(
-  model: Model,
-  maxTokens: number,
-  apiKey: string | undefined,
-  headers: Record<string, string> | undefined,
-  signal: AbortSignal | undefined,
-  thinkingLevel: ThinkingLevel | undefined,
-): SimpleStreamOptions {
-  const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
-  const fableReasoning =
-    (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") &&
-    resolveClaudeFable5ModelIdentity(model) !== undefined;
-  if ((model.reasoning || fableReasoning) && thinkingLevel) {
-    options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
-  }
-  return options;
-}
-
-/** Runs one summarization completion and maps abort/error stops to CompactionError. */
-async function runSummarizationCompletion(params: {
-  messages: AgentMessage[];
-  prompt: string;
-  customInstructions?: string;
-  previousSummary?: string;
-  model: Model;
-  maxTokens: number;
-  apiKey: string | undefined;
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
-  thinkingLevel?: ThinkingLevel;
-  streamFn?: StreamFn;
-  runtime?: AgentCoreCompletionRuntimeDeps;
-  errorLabel: string;
-}): Promise<Result<string, CompactionError>> {
-  const conversationText = serializeConversation(convertToLlm(params.messages));
-  let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
-  if (params.previousSummary) {
-    promptText += `<previous-summary>\n${params.previousSummary}\n</previous-summary>\n\n`;
-  }
-  promptText += params.prompt;
-  // SDK callers also pass generated policy here; the host bounds raw operator focus.
-  if (params.customInstructions) {
-    promptText += `\n\nAdditional focus: ${params.customInstructions}`;
-  }
-  const context = {
-    systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user" as const,
-        content: [{ type: "text" as const, text: promptText }],
-        timestamp: Date.now(),
-      },
-    ],
-  };
-  const options = createSummarizationOptions(
-    params.model,
-    params.maxTokens,
-    params.apiKey,
-    params.headers,
-    params.signal,
-    params.thinkingLevel,
-  );
-  const response = params.streamFn
-    ? await consumeAgentCoreStream(params.streamFn(params.model, context, options), params.runtime)
-    : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
-  // Usage belongs to the completed provider request even when its summary is invalid.
-  params.runtime?.internalUsageSink?.(response.usage);
-  if (response.stopReason === "aborted") {
-    return err(
-      new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),
-    );
-  }
-  if (response.stopReason === "error") {
-    return err(
-      new CompactionError(
-        "summarization_failed",
-        `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
-      ),
-    );
-  }
-
-  const summary = extractSummaryText(response);
-  if (summary === undefined) {
-    return err(
-      new InvalidSummaryOutputError(`${params.errorLabel} failed: model returned no summary text`),
-    );
-  }
-  return ok(summary);
-}
-
 /** Caller-owned formats replace the default headings; focus remains additive. */
 export type CompactionSummaryPrompt =
   | { kind: "turn-prefix" }
@@ -782,7 +672,7 @@ export async function generateSummary(
     summaryPrompt?.kind === "turn-prefix"
       ? TURN_PREFIX_SUMMARIZATION_PROMPT
       : summaryPrompt?.instructions;
-  const prompt = summaryPrompt
+  const promptWithoutProvenance = summaryPrompt
     ? [
         previousSummary &&
           "Update the previous summary with the new conversation. Preserve relevant facts, decisions, and unresolved asks; remove stale or duplicate detail. Use the format below.",
@@ -795,7 +685,7 @@ export async function generateSummary(
       : SUMMARIZATION_PROMPT;
   return await runSummarizationCompletion({
     messages: currentMessages,
-    prompt,
+    prompt: promptWithoutProvenance,
     customInstructions,
     previousSummary,
     model,

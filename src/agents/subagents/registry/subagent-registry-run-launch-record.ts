@@ -1,5 +1,48 @@
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import type { RegisterSubagentRunParams, SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+export type RegisterSubagentRunParams = {
+  runId: string;
+  requesterTurnRunId?: string;
+  childSessionKey: string;
+  controllerSessionKey?: string;
+  requesterSessionKey: string;
+  requesterOrigin?: SubagentRunRecord["requesterOrigin"];
+  progressOrigin?: SubagentRunRecord["progressOrigin"];
+  requesterDisplayKey: string;
+  task: string;
+  taskName?: string;
+  agentId?: string;
+  requesterAgentId?: string;
+  cleanup: "delete" | "keep";
+  label?: string;
+  model?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  runTimeoutSeconds?: number;
+  expectsCompletionMessage?: boolean;
+  completionTarget?: "parent";
+  completionRequesterSessionId?: string;
+  spawnMode?: "run" | "session";
+  attachmentId?: string;
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
+  collect?: boolean;
+  swarmRequesterSessionKey?: string;
+  swarmLaunchIdempotencyKey?: string;
+  swarmLaunchReplayKey?: string;
+  swarmLaunchRequestFingerprint?: string;
+  groupId?: string;
+  outputSchema?: Record<string, unknown>;
+  queuedLaunch?: SubagentRunRecord["queuedLaunch"];
+  queued?: boolean;
+  /** Required when direct dispatch suppresses Gateway tracking. Out-of-process launches keep
+      Gateway's existing best-effort CLI policy; other callers create a best-effort row here. */
+  taskRowOwnership?: "required" | "gateway_best_effort";
+  gatewayContextResolver?: GatewayContextResolver;
+};
 
 export function createSubagentRegistrationRecord(
   registerParams: RegisterSubagentRunParams,
@@ -74,8 +117,7 @@ export function createSubagentRegistrationRecord(
     cleanupHandled: false,
     wakeOnDescendantSettle: undefined,
     requesterSettleWake: undefined,
-    attachmentsDir: registerParams.attachmentsDir,
-    attachmentsRootDir: registerParams.attachmentsRootDir,
+    attachmentId: registerParams.attachmentId,
     retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
   });
 }

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements lab server capture behavior.
 import net from "node:net";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 

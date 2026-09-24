@@ -55,6 +55,11 @@ removed parent does not transfer the result to another session. When a settled
 batch contains a private result, its combined review stays private; ordinary
 siblings retain their individual completion delivery.
 
+Waiting for the spawning parent turn does not consume a private result's delivery
+retry window. A normal parent finish starts that window when it releases the
+result. After `sessions_yield`, the yielded batch owns delivery; individual child
+cleanup cannot expire or suspend that batch's result.
+
 Use a build that supports this option throughout the run. Older builds cannot
 resume private completion handoffs and may discard them after a downgrade;
 existing session transcripts remain separate.
@@ -71,6 +76,21 @@ Announce context is normalized to a stable internal event block:
 | Status         | Derived from runtime outcome (`ok`, `error`, `timeout`, or `unknown`) — **not** inferred from model text |
 | Result content | Latest visible assistant text from the child                                                             |
 | Follow-up      | Instruction describing when to reply vs stay silent                                                      |
+
+The result is the child's complete visible final answer for the completed run.
+OpenClaw preserves prompt-data escaping and stable order when it delivers several
+results together. It does not shorten an answer to fit the former announce
+projection limits. The bounded lifecycle snapshot remains separate from the
+complete answer sent to the parent.
+
+For nested work, descendant findings help the child form its answer. The child's
+own final answer is what travels onward to its parent. If the child sends its
+final answer through the message tool and then returns `NO_REPLY`, that final
+answer remains authoritative.
+
+Completion delivery can read an existing registered archive when child cleanup
+finishes before the parent resumes. This does not add a post-cleanup retrieval
+feature.
 
 Terminal failed runs report failure status without replaying captured
 reply text. Tool/toolResult output is not promoted into child result text.

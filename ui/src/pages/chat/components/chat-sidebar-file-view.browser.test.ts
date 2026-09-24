@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { canReloadControlUiDocument } from "../../../app/document-reload-guard.ts";
+import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
@@ -45,8 +47,11 @@ type DetailPanel = HTMLElement & {
 };
 
 const mounted: HTMLElement[] = [];
+const files: FileSidebarContent[] = [];
 
 async function mountFile(content: FileSidebarContent, width?: number): Promise<DetailPanel> {
+  content.draftKey ??= crypto.randomUUID();
+  files.push(content);
   const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
   panel.content = content;
   if (width === undefined) {
@@ -81,6 +86,9 @@ afterEach(() => {
   for (const panel of mounted.splice(0)) {
     panel.remove();
   }
+  for (const file of files.splice(0)) {
+    setFileDraft(file, null);
+  }
 });
 
 describe.runIf(browserMode)("chat file editor", () => {
@@ -104,6 +112,39 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(getComputedStyle(scroller).overflowX).toBe("auto");
   });
 
+  it("wraps long lines at the panel width when word wrap is on and remembers the choice", async () => {
+    localStorage.removeItem("openclaw.control.fileView.wrap.v1");
+    const panel = await mountFile(
+      {
+        kind: "file",
+        path: "src/long-line.ts",
+        name: "long-line.ts",
+        content: `export const value = "${"long-content-".repeat(80)}";`,
+      },
+      320,
+    );
+    const scroller = panel.querySelector<HTMLElement>(".cm-scroller")!;
+    await expect.poll(() => scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth);
+
+    const wrapButton = button(panel, "Enable word wrap");
+    expect(wrapButton.getAttribute("aria-pressed")).toBe("false");
+    await userEvent.click(wrapButton);
+
+    await expect.poll(() => scroller.scrollWidth).toBeLessThanOrEqual(scroller.clientWidth);
+    // One logical line now occupies several visual rows.
+    const line = panel.querySelector<HTMLElement>(".cm-line")!;
+    expect(line.getBoundingClientRect().height).toBeGreaterThan(
+      Number.parseFloat(getComputedStyle(line).lineHeight) * 2,
+    );
+    expect(button(panel, "Disable word wrap").getAttribute("aria-pressed")).toBe("true");
+    expect(localStorage.getItem("openclaw.control.fileView.wrap.v1")).toBe("true");
+
+    await userEvent.click(button(panel, "Disable word wrap"));
+    await expect.poll(() => scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth);
+    expect(localStorage.getItem("openclaw.control.fileView.wrap.v1")).toBe("false");
+    localStorage.removeItem("openclaw.control.fileView.wrap.v1");
+  });
+
   it("renders content and decorates the requested line", async () => {
     const panel = await mountFile({
       kind: "file",
@@ -118,7 +159,119 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(target?.getAttribute("data-line")).toBe("2");
   });
 
-  it("enables save after an edit and keeps the saved content", async () => {
+  it.each([
+    { name: "LF", content: "first\nneedle\nlast\nneedle\n", matchLines: [1, 3] },
+    { name: "CRLF", content: "first\r\nneedle\r\nlast\r\nneedle\r\n", matchLines: [1, 3] },
+    { name: "CR", content: "first\rneedle\rlast\rneedle\r", matchLines: [1, 3] },
+    { name: "mixed CRLF first", content: "first\r\nneedle\rlast\r\nneedle", matchLines: [1, 2] },
+    { name: "mixed LF first", content: "first\nneedle\rlast\r\nneedle", matchLines: [1, 3] },
+    {
+      name: "editable mixed LF first",
+      content: "first\nneedle\rlast\r\nneedle",
+      matchLines: [1, 3],
+      editable: true,
+    },
+  ])("searches the displayed lines in $name files", async ({ content, matchLines, editable }) => {
+    const panel = await mountFile({
+      kind: "file",
+      path: "search.txt",
+      name: "search.txt",
+      draftKey: crypto.randomUUID(),
+      content,
+      ...(editable ? { edit: { hash: "hash-1", save: vi.fn(), fetchLatest: vi.fn() } } : {}),
+    });
+    await userEvent.click(button(panel, "Search in file"));
+    await userEvent.fill(panel.querySelector<HTMLInputElement>('input[type="search"]')!, "needle");
+    const lineIndexes = (selector: string) => {
+      const lines = Array.from(panel.querySelectorAll(".cm-line"));
+      return Array.from(panel.querySelectorAll(selector), (line) => lines.indexOf(line));
+    };
+    await expect.poll(() => lineIndexes(".file-view__line--match")).toEqual(matchLines);
+    expect(panel.querySelector(".file-view__search-counter")?.textContent?.trim()).toBe("1/2");
+    expect(lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
+    await userEvent.click(button(panel, "Next match"));
+    await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[1]]);
+    await userEvent.click(button(panel, "Previous match"));
+    await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
+    expect(readFileDraft(panel.content)).toBeUndefined();
+    expect(canReloadControlUiDocument()).toBe(true);
+    panel.remove();
+    expect(canReloadControlUiDocument()).toBe(true);
+  });
+
+  it("clears a mixed-line-ending draft when an edit is undone", async () => {
+    const panel = await mountFile({
+      kind: "file",
+      path: "mixed.txt",
+      name: "mixed.txt",
+      draftKey: crypto.randomUUID(),
+      content: "first\nsecond\rthird\r\nlast",
+      edit: { hash: "hash-1", save: vi.fn(), fetchLatest: vi.fn() },
+    });
+    await userEvent.click(button(panel, "Edit file"));
+    const editor = panel.querySelector<HTMLElement>(".cm-content")!;
+    await userEvent.type(editor, "x");
+    expect(readFileDraft(panel.content)?.content).toBe("xfirst\nsecond\nthird\nlast");
+    expect(canReloadControlUiDocument()).toBe(false);
+    await userEvent.keyboard(
+      navigator.platform === "MacIntel" ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
+    );
+    await expect.poll(() => button(panel, "Save").disabled).toBe(true);
+    expect(readFileDraft(panel.content)).toBeUndefined();
+    panel.remove();
+    expect(canReloadControlUiDocument()).toBe(true);
+  });
+
+  it("closes file search from every search control and preserves keyboard navigation", async () => {
+    const panel = await mountFile({
+      kind: "file",
+      path: "search.json",
+      name: "search.json",
+      content: '{\n"first":"雪",\n"second":"雪",\n"third":"雪"\n}\n',
+    });
+    const searchToggle = button(panel, "Search in file");
+    const counter = () => panel.querySelector(".file-view__search-counter")?.textContent?.trim();
+    for (const control of ["input", "Previous match", "Next match"]) {
+      await userEvent.click(searchToggle);
+      const input = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
+      await expect.poll(() => document.activeElement).toBe(input);
+      expect(input.value).toBe("");
+      await userEvent.fill(input, "雪");
+      expect(counter()).toBe("1/3");
+
+      if (control === "input") {
+        await userEvent.keyboard("{Enter}");
+        expect(counter()).toBe("2/3");
+        await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+        expect(counter()).toBe("1/3");
+      } else {
+        const navigation = button(panel, control);
+        await userEvent.click(navigation);
+        expect(document.activeElement).toBe(navigation);
+        expect(counter()).toBe(control === "Previous match" ? "3/3" : "2/3");
+        await userEvent.keyboard("{Enter}");
+        expect(counter()).toBe(control === "Previous match" ? "2/3" : "3/3");
+        await userEvent.keyboard(" ");
+        expect(counter()).toBe("1/3");
+      }
+
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => panel.querySelector('input[type="search"]')).toBeNull();
+      expect(document.activeElement).toBe(searchToggle);
+      expect(searchToggle.getAttribute("aria-pressed")).toBe("false");
+    }
+
+    await userEvent.keyboard("{Enter}");
+    await expect
+      .poll(() => document.activeElement === panel.querySelector('input[type="search"]'))
+      .toBe(true);
+    expect(panel.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("");
+    await userEvent.click(searchToggle);
+    await expect.poll(() => panel.querySelector('input[type="search"]')).toBeNull();
+    expect(document.activeElement).toBe(searchToggle);
+  });
+
+  it("keeps the named file view keyboard accessible through editing and saving", async () => {
     const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
     const panel = await mountFile({
       kind: "file",
@@ -128,9 +281,19 @@ describe.runIf(browserMode)("chat file editor", () => {
       edit: { hash: "hash-1", save, fetchLatest: vi.fn() },
     });
 
-    await userEvent.click(button(panel, "Edit file"));
     const editor = panel.querySelector<HTMLElement>(".cm-content");
     expect(editor).not.toBeNull();
+    button(panel, "Copy file contents").focus();
+    await userEvent.tab();
+    await expect.element(editor!).toHaveFocus();
+    await expect.element(editor!).toHaveAccessibleName("notes.txt");
+    expect(editor!.getAttribute("aria-readonly")).toBe("true");
+
+    button(panel, "Edit file").focus();
+    await userEvent.keyboard("{Enter}");
+    await expect.element(editor!).toHaveFocus();
+    await expect.element(editor!).toHaveAccessibleName("notes.txt");
+    expect(editor!.hasAttribute("aria-readonly")).toBe(false);
     await userEvent.fill(editor!, "after");
     const saveButton = button(panel, "Save");
     expect(saveButton.disabled).toBe(false);
@@ -140,31 +303,40 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(save).toHaveBeenCalledWith({ content: "after", expectedHash: "hash-1" });
     await expect.poll(() => button(panel, "Save").disabled).toBe(true);
     expect(panel.querySelector(".cm-content")?.textContent).toContain("after");
+
+    await userEvent.click(button(panel, "Discard"));
+    button(panel, "Copy file contents").focus();
+    await userEvent.tab();
+    await expect.element(editor!).toHaveFocus();
+    await expect.element(editor!).toHaveAccessibleName("notes.txt");
+    expect(editor!.getAttribute("aria-readonly")).toBe("true");
   });
 
-  it("round-trips CRLF line endings through an edit and save", async () => {
-    const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
-    const panel = await mountFile({
-      kind: "file",
-      path: "notes.txt",
-      name: "notes.txt",
-      content: "alpha\r\nbeta",
-      edit: { hash: "hash-1", save, fetchLatest: vi.fn() },
-    });
+  it.each(["\n", "\r\n", "\r"])(
+    "round-trips %j line endings through an edit and save",
+    async (separator) => {
+      const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
+      const panel = await mountFile({
+        kind: "file",
+        path: "notes.txt",
+        name: "notes.txt",
+        content: `alpha${separator}beta`,
+        edit: { hash: "hash-1", save, fetchLatest: vi.fn() },
+      });
 
-    await userEvent.click(button(panel, "Edit file"));
-    const editor = panel.querySelector<HTMLElement>(".cm-content");
-    expect(editor).not.toBeNull();
-    await userEvent.type(editor!, "x");
-    await userEvent.click(button(panel, "Save"));
+      await userEvent.click(button(panel, "Edit file"));
+      const editor = panel.querySelector<HTMLElement>(".cm-content");
+      expect(editor).not.toBeNull();
+      await userEvent.type(editor!, "x");
+      await userEvent.click(button(panel, "Save"));
 
-    await expect.poll(() => save.mock.calls.length).toBe(1);
-    const saved = expectDefined(save.mock.calls[0], "save callback call")[0] as {
-      content: string;
-    };
-    expect(saved.content).toContain("\r\n");
-    expect(saved.content).toContain("x");
-  });
+      await expect.poll(() => save.mock.calls.length).toBe(1);
+      const saved = expectDefined(save.mock.calls[0], "save callback call")[0] as {
+        content: string;
+      };
+      expect(saved.content).toBe(`xalpha${separator}beta`);
+    },
+  );
 
   it("keeps edits made while a save is in flight dirty", async () => {
     let finishSave: ((outcome: { ok: true; hash: string }) => void) | undefined;
@@ -299,35 +471,42 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(button(panel, "Save").disabled).toBe(true);
   });
 
-  it("drops edit mode when a conflict reload returns non-editable content", async () => {
-    const save = vi.fn().mockResolvedValue({ ok: false, code: "conflict" });
-    const fetchLatest = vi.fn().mockResolvedValue({
-      content: "mixed\r\nendings\nnow",
-      hash: "hash-2",
-      editable: false,
-    });
-    const panel = await mountFile({
-      kind: "file",
-      path: "notes.txt",
-      name: "notes.txt",
-      content: "before",
-      edit: { hash: "hash-1", save, fetchLatest },
-    });
+  it.each(["mixed\r\nendings\nnow", "mixed\nendings\r\nnow"])(
+    "drops edit mode and its draft when a conflict reload returns %j",
+    async (content) => {
+      const save = vi.fn().mockResolvedValue({ ok: false, code: "conflict" });
+      const fetchLatest = vi.fn().mockResolvedValue({
+        content,
+        hash: "hash-2",
+        editable: false,
+      });
+      const panel = await mountFile({
+        kind: "file",
+        path: "notes.txt",
+        name: "notes.txt",
+        content: "before",
+        edit: { hash: "hash-1", save, fetchLatest },
+      });
 
-    await userEvent.click(button(panel, "Edit file"));
-    await userEvent.fill(panel.querySelector<HTMLElement>(".cm-content")!, "local");
-    await userEvent.click(button(panel, "Save"));
-    await expect.poll(() => panel.querySelector('[role="alert"]')).not.toBeNull();
-    await userEvent.click(button(panel, "Reload"));
+      await userEvent.click(button(panel, "Edit file"));
+      await userEvent.fill(panel.querySelector<HTMLElement>(".cm-content")!, "local");
+      await userEvent.click(button(panel, "Save"));
+      await expect.poll(() => panel.querySelector('[role="alert"]')).not.toBeNull();
+      await userEvent.click(button(panel, "Reload"));
 
-    await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toContain("mixed");
-    expect(panel.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("false");
-    expect(
-      Array.from(panel.querySelectorAll("button")).some(
-        (candidate) => candidate.getAttribute("aria-label") === "Edit file",
-      ),
-    ).toBe(false);
-  });
+      await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toContain("mixed");
+      expect(panel.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("false");
+      expect(
+        Array.from(panel.querySelectorAll("button")).some(
+          (candidate) => candidate.getAttribute("aria-label") === "Edit file",
+        ),
+      ).toBe(false);
+      expect(readFileDraft(panel.content)).toBeUndefined();
+      expect(canReloadControlUiDocument()).toBe(true);
+      panel.remove();
+      expect(canReloadControlUiDocument()).toBe(true);
+    },
+  );
 
   it("makes the editor read-only while reloading a conflict", async () => {
     let finishReload:

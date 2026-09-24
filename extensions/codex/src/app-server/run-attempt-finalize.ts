@@ -1,11 +1,9 @@
-import { addAbortListener } from "node:events";
 import {
   buildEmbeddedForegroundPromptContext,
   embeddedAgentLog,
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { appendSessionYieldContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
@@ -15,7 +13,6 @@ import {
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
-import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
 import { buildCodexContinuityCalibration } from "./context-engine-projection.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
@@ -27,7 +24,9 @@ import {
   shouldKeepCodexSharedAbortOpen,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
+import { settleReplyMedia } from "./run-attempt-reply-media.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import { beginCodexAttemptSettlement } from "./run-attempt-settlement.js";
 import {
   clearCodexBindingAfterInvalidImagePayload,
   shouldUseFreshCodexThreadAfterContextEngineOverflow,
@@ -92,9 +91,8 @@ export async function finalizeCodexAttempt(
     assertCodexBindingMayBeReplaced(resourceState.thread, operation);
     return true;
   };
-  const { state, completion, deadlines, settlementExpired } = turnRuntime;
+  const { state, completion } = turnRuntime;
   const { emitLifecycleTerminal, buildLifecycleTerminalMeta } = lifecycle;
-  const { drainNotificationQueue } = notifications;
   const { codexModelCallDiagnostics } = requestRuntime;
   const {
     activeTurnId,
@@ -105,49 +103,15 @@ export async function finalizeCodexAttempt(
     notifyUserMessagePersisted,
   } = activeTurn;
   await completion;
-  const drainGraceElapsed = createDeferred<void>();
-  let settlementPhase: "active" | "expired" | "closed" = "active";
-  let drainGraceTimer: ReturnType<typeof setTimeout> | undefined;
-  const beginDrainGrace = () => {
-    if (settlementPhase !== "active" || drainGraceTimer) {
-      return;
-    }
-    drainGraceTimer = setTimeout(() => {
-      settlementPhase = "expired";
-      drainGraceElapsed.resolve();
-    }, TURN_FINALIZE_DRAIN_ABORT_GRACE_MS);
-    drainGraceTimer.unref?.();
-  };
-  const abortListener = addAbortListener(runAbortController.signal, () => {
-    // Abort may first arrive after native completion. Its authoritative cleanup
-    // must finish before projection gets the full five-second drain grace.
-    void state.abortCleanup.then(beginDrainGrace, beginDrainGrace);
-  });
-  const closeProjection = () => {
-    state.projectionClosed = true;
-    return activeProjector.closeProjection();
-  };
-  const closeSettlement = () => {
-    if (settlementPhase === "closed") {
-      return;
-    }
-    settlementPhase = "closed";
-    abortListener[Symbol.dispose]();
-    clearTimeout(drainGraceTimer);
-    deadlines.dispose();
-  };
-  if (state.pluginRuntimeRefreshStop) {
-    // Snapshot only after native cleanup and projection. Cleanup retains the rejection
-    // so a failed handoff still returns its completed effects and preserves its binding.
-    await state.pluginRuntimeRefreshStop.catch(() => undefined);
-  }
-  const settlement = drainNotificationQueue().then(async () => {
-    await closeProjection();
-    await activeProjector.settlement.drain();
-  });
-  const degradedSettlement = settlementExpired.then(() => {
-    beginDrainGrace();
-  });
+  const {
+    settlement,
+    degradedSettlement,
+    drainGraceElapsed,
+    closeProjection,
+    closeSettlement,
+    isActive: isSettlementActive,
+    readRetainedNativeCommands,
+  } = await beginCodexAttemptSettlement(resources, turnRuntime, notifications, activeTurn);
   let projectionDrained = false;
   try {
     try {
@@ -168,6 +132,7 @@ export async function finalizeCodexAttempt(
     }
     const result = activeProjector.buildResult(toolBridge.telemetry, {
       yieldDetected: toolState.yieldDetected,
+      readRetainedNativeCommands,
       // The original transcript fence excludes steering accepted during this turn.
       steeringMessages: params.pluginRuntimeRefreshPending?.()
         ? turnRuntime.steeringQueueRef.current?.getAcceptedMessages()
@@ -376,7 +341,7 @@ export async function finalizeCodexAttempt(
       return codexTranscriptMirrorRuntime.mirrorBestEffort({
         assertWriteCurrent: () => {
           // Expiry replaces this exact pending write; it cannot borrow the degraded final's owner.
-          if (settlementPhase !== "active" || state.settlementWarning !== warning) {
+          if (!isSettlementActive() || state.settlementWarning !== warning) {
             throw new Error("Codex transcript settlement is no longer active");
           }
           const current = projectTerminalOutcome();
@@ -401,7 +366,7 @@ export async function finalizeCodexAttempt(
     };
     try {
       // Canceling retired media can drain the queue; that cannot reopen ordinary settlement.
-      if (projectionDrained && settlementPhase === "active" && !state.settlementWarning) {
+      if (projectionDrained && isSettlementActive() && !state.settlementWarning) {
         mirrorOutcome = await Promise.race([
           mirrorFinal(),
           drainGraceElapsed.promise.then(() => unavailableMirror),
@@ -435,7 +400,7 @@ export async function finalizeCodexAttempt(
             message: toolState.yieldMessage,
             assertCurrent: () => {
               connection.assertCurrent();
-              if (settlementPhase !== "active" || !projectTerminalOutcome().turnSucceeded) {
+              if (!isSettlementActive() || !projectTerminalOutcome().turnSucceeded) {
                 throw new Error("Codex yield settlement is no longer active");
               }
             },
@@ -444,9 +409,7 @@ export async function finalizeCodexAttempt(
           degradedSettlement,
         ]);
       }
-      if (runAbortController.signal.aborted) {
-        await state.abortCleanup;
-      }
+      await settleReplyMedia(activeTurn, result, turnRuntime, runAbortController.signal);
     } finally {
       // Retire this exact write before releasing the run. A queued mirror cannot
       // borrow a later session writer after its settlement deadline has elapsed.
@@ -665,31 +628,37 @@ export async function finalizeCodexAttempt(
     const terminalAssistantText = collectTerminalAssistantText(result);
     if (
       terminalAssistantText &&
-      (!streamState.eventEmitted || streamState.needsTerminalSnapshot) &&
-      !finalAborted &&
-      !finalPromptError
+      (assistantTranscriptIdempotencyKey ||
+        ((!streamState.eventEmitted || streamState.needsTerminalSnapshot) &&
+          !finalAborted &&
+          !finalPromptError))
     ) {
       void emitCodexAppServerEvent(params, {
         stream: "assistant",
-        data: { text: terminalAssistantText },
+        data: {
+          text: terminalAssistantText,
+          // The receipt identifies the selected persisted occurrence, which can
+          // exclude candidates streamed before a native tool or sleep boundary.
+          ...(assistantTranscriptIdempotencyKey
+            ? {
+                itemId: assistantTranscriptIdempotencyKey,
+                replace: true,
+                replaceable: true,
+              }
+            : {}),
+        },
       });
     }
-    emitLifecycleTerminal(
-      finalPromptError
-        ? {
-            phase: "error",
-            error: formatErrorMessage(finalPromptError),
-            ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
-          }
-        : {
-            phase: "end",
-            ...buildLifecycleTerminalMeta({
-              aborted: finalAborted,
-              timedOut: effectiveTimedOut,
-              yielded: toolState.yieldDetected,
-            }),
-          },
-    );
+    emitLifecycleTerminal({
+      phase: finalPromptError ? "error" : "end",
+      ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+      ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
+      ...buildLifecycleTerminalMeta({
+        aborted: finalAborted,
+        timedOut: effectiveTimedOut,
+        yielded: finalPromptError ? undefined : toolState.yieldDetected,
+      }),
+    });
     // Preserve the exact result identity carrying host-issued TTS delivery provenance.
     const finalizedResult: EmbeddedRunAttemptResult = Object.assign(result, {
       ...(runtimeModelSelection ? { runtimeModelSelection } : {}),

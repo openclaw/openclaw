@@ -6,6 +6,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  prepareSqliteQuerySync,
 } from "./kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
@@ -116,6 +117,25 @@ export function prepareSqliteAuditRecord<T>(
   return { event_key: record.key, payload_json: payloadJson, created_at: record.createdAt };
 }
 
+type AuditRecordInsert = DiagnosticEventRow & { scope: string };
+
+function createAuditRecordInsert(database: DatabaseSync) {
+  return prepareSqliteQuerySync<AuditRecordInsert>(database, (parameter) =>
+    getAuditRecordKysely(database)
+      .insertInto("diagnostic_events")
+      .values({
+        scope: parameter((record) => record.scope),
+        event_key: parameter((record) => record.event_key),
+        payload_json: parameter((record) => record.payload_json),
+        created_at: parameter((record) => record.created_at),
+        sequence: parameter((record) => record.sequence),
+      })
+      .onConflict((conflict) => conflict.columns(["scope", "event_key"]).doNothing()),
+  );
+}
+
+const auditRecordInserts = new WeakMap<DatabaseSync, ReturnType<typeof createAuditRecordInsert>>();
+
 /** Connection-bound operations; mutation callers retain the complete transaction. */
 export function createSqliteAuditRecordKernel<T>(
   database: DatabaseSync,
@@ -124,19 +144,12 @@ export function createSqliteAuditRecordKernel<T>(
   const scope = options.scope;
   const maxEntries = options.maxEntries;
   function insertRecord(record: DiagnosticEventRow): void {
-    executeSqliteQuerySync(
-      database,
-      getAuditRecordKysely(database)
-        .insertInto("diagnostic_events")
-        .values({
-          scope,
-          event_key: record.event_key,
-          payload_json: record.payload_json,
-          created_at: record.created_at,
-          sequence: record.sequence,
-        })
-        .onConflict((conflict) => conflict.columns(["scope", "event_key"]).doNothing()),
-    );
+    let insert = auditRecordInserts.get(database);
+    if (!insert) {
+      insert = createAuditRecordInsert(database);
+      auditRecordInserts.set(database, insert);
+    }
+    insert({ ...record, scope });
   }
 
   function upsertPreparedRecord(record: PreparedSqliteAuditRecord): void {

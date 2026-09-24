@@ -23,7 +23,10 @@ export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined
 /**
  * Resolves the active channel implementation together with host-owned provenance.
  */
-export function resolveChannelPluginRegistration(id: ChannelId):
+export function resolveChannelPluginRegistration(
+  id: ChannelId,
+  options: { loadedOnly?: boolean } = {},
+):
   | {
       plugin: ChannelPlugin;
       origin?: string;
@@ -57,6 +60,9 @@ export function resolveChannelPluginRegistration(id: ChannelId):
         ? { captureReadAuthority: loadedEntry.captureReadAuthority }
         : {}),
     };
+  }
+  if (options.loadedOnly) {
+    return undefined;
   }
   const plugin = getBundledChannelPlugin(resolvedId);
   return plugin ? { plugin, origin: "bundled" } : undefined;

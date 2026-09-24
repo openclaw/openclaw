@@ -1,7 +1,5 @@
 // Memory destination shell and its merged Settings surface.
 import { html, nothing, type TemplateResult } from "lit";
-import "../../components/agent-select-registration.ts";
-import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
   renderLearnMoreLink,
@@ -189,9 +187,6 @@ type MemoryViewProps = {
   editor: TemplateResult;
   /** Global dreaming controls, sharing runtimeConfig with the editor above. */
   dreamingSettings: TemplateResult;
-  agentId: string | null;
-  agents: readonly AgentSelectOption[];
-  onAgentChange: (agentId: string | null) => void;
 };
 
 const MEMORY_PANEL_ID = "memory-settings-panel";
@@ -428,25 +423,6 @@ export function renderMemory(props: MemoryViewProps) {
             panelId: MEMORY_PANEL_ID,
             onSelect: (tab) => props.onTabChange(tab),
           })}
-        </div>
-        <div class="hub-page-header__actions">
-          ${
-            props.activeTab === "settings" || props.agents.length <= 1
-              ? nothing
-              : html`
-                  <div class="agent-scope-control">
-                    <span class="agent-scope-control__label"
-                      >${t("memoryPage.dreaming.agentScope.rowTitle")}</span
-                    >
-                    <openclaw-agent-select
-                      .options=${props.agents}
-                      .value=${props.agentId ?? ""}
-                      .accessibleLabel=${t("memoryPage.dreaming.agentScope.rowTitle")}
-                      .onSelect=${(value: string) => props.onAgentChange(value || null)}
-                    ></openclaw-agent-select>
-                  </div>
-                `
-          }
         </div>
       </section>
       <div id=${MEMORY_PANEL_ID} class="memory-page__panel" role="tabpanel">

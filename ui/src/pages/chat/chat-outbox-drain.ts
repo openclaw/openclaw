@@ -3,6 +3,7 @@ import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   listStoredChatOutboxes,
+  readStoredChatOutbox,
   type StoredChatOutbox,
 } from "../../lib/chat/outbox-store-projection.ts";
 import {
@@ -26,16 +27,13 @@ import {
   type ChatCommandTarget,
   type ChatCommandResetOptions,
 } from "./chat-commands.ts";
-import {
-  isInterruptedChatInput,
-  readCurrentStoredChatHistory,
-  readStoredChatOutbox,
-} from "./chat-outbox-receipts.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   consumeChatOutboxRetry,
   scheduleChatOutboxRetry,
   settleChatOutboxRetry,
 } from "./chat-outbox-retry.ts";
+import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import {
   anyChatOutboxPaneMatches,
   readQueuedMessageById,
@@ -58,6 +56,8 @@ export type QueuedChatStorageMode = "durable" | "memory";
 export type QueuedChatSendOptions = {
   /** Fresh selected-session sends may let the Gateway resolve its effective active-run mode. */
   allowActiveRunSend?: boolean;
+  /** Confirmation-triggered sends retain their UI owner across preparation waits. */
+  canDispatch?: () => boolean;
   /** Exact submit-time leaf; restored drains omit it so intervening advances park the draft. */
   expectedLeafEntryId?: string | null;
   pendingSettings?: Promise<boolean>;
@@ -141,12 +141,8 @@ async function reconcileStoredChatOutboxHead(
   if (!client || !host.connected) {
     return "blocked";
   }
-  // A never-attempted head cannot be in server history, so its reconcile only
-  // needs the active-run answer — which the event that woke this drain already
-  // recorded into the session row. Skipping the 1000-message chat.history here
-  // stops one full-history RPC per transcript event while a run streams.
-  // Attempted items keep the fetch: delivered-detection must retire their
-  // bubbles even mid-run; missing transcript and run proof falls through conservatively.
+  // Never-attempted input needs only the session row. Attempted input still needs
+  // history to retire delivered messages, even while a run streams.
   const neverAttempted =
     (item.sendAttempts ?? 0) === 0 && item.sendRequestStartedAtMs === undefined;
   if (neverAttempted && item.queueMode && item.sendState !== "unconfirmed") {
@@ -171,6 +167,22 @@ async function reconcileStoredChatOutboxHead(
     connectionEpoch,
     (delayMs: number) => scheduleStoredChatOutboxRetry(host, outbox, delayMs, dependencies),
   ] as const;
+  const isCurrent = () =>
+    host.connected && host.client === client && host.connectionEpoch === connectionEpoch;
+  let recovery: typeof import("./chat-outbox-receipts.ts");
+  try {
+    recovery = await import("./chat-outbox-receipts.ts");
+  } catch (error) {
+    if (isCurrent()) {
+      surfaceChatDeliveryFailure(host, outbox.sessionKey, outbox.agentId, formatUiError(error));
+      host.requestUpdate?.();
+    }
+    return "blocked";
+  }
+  if (!isCurrent()) {
+    return "blocked";
+  }
+  const { readCurrentStoredChatHistory, isInterruptedChatInput } = recovery;
   const history = await readCurrentStoredChatHistory(...historyArgs);
   if (
     typeof history !== "string" &&
@@ -241,6 +253,10 @@ async function drainStoredChatOutbox(
 ): Promise<"blocked" | "empty"> {
   while (true) {
     const host = lane.host;
+    if (chatProviderReviewRow(host, scope.sessionKey, scope.agentId)?.providerReview) {
+      holdProviderReviewQueuedInputs(host, scope.sessionKey, scope.agentId);
+      return "blocked";
+    }
     if (!host.connected || !host.client || chatSendHoldReason(host, scope.sessionKey)) {
       return "blocked";
     }
@@ -248,11 +264,12 @@ async function drainStoredChatOutbox(
     if (!outbox) {
       return "empty";
     }
-    // A fresh active-run send is an explicit operator action, not work queued
-    // behind the run. Let it bypass older FIFO rows; ordinary fresh admissions
-    // still preserve their existing order.
+    // Fresh active-run sends bypass older rows, including when the Gateway resolves the mode.
     const freshActiveRunItem = outbox.queue.find(
-      (entry) => lane.freshAdmissions.has(entry.id) && Boolean(entry.queueMode),
+      (entry) =>
+        lane.freshAdmissions.has(entry.id) &&
+        (entry.queueMode ||
+          (!entry.intent && lane.pendingOptions.get(entry.id)?.allowActiveRunSend)),
     );
     const storedItem =
       freshActiveRunItem ??
@@ -273,6 +290,10 @@ async function drainStoredChatOutbox(
       return "empty";
     }
     if (
+      // Browser input still belongs to the foreground submitter. Only its fresh
+      // admission may deliver this version; passive wakes must not drop its fence.
+      (!freshItem && chatOutboxOwner(host).hasPendingSubmission(outbox, storedItem)) ||
+      item.sendState === "held" ||
       (item.sendState === "unconfirmed" && (!item.sendRunId || item.localCommandName)) ||
       (item.sendState === "waiting-model" && !lane.pendingOptions.has(item.id)) ||
       // An open edit owns this row: sending the superseded text would deliver a
@@ -499,6 +520,14 @@ async function drainStoredChatOutbox(
     lane.outcomes.set(item.id, result);
     lane.pendingOptions.delete(item.id);
     if (result === "pending") {
+      const current = readStoredChatOutbox(host, scope)?.queue.find(
+        (entry) => entry.id === item.id,
+      );
+      if (!current || current.orderKey !== item.orderKey) {
+        // A removal or move during preparation invalidates this selection.
+        // Reselect immediately so the newly ordered head does not lose its wakeup.
+        continue;
+      }
       // A later submission still owns its wakeup if this row became stale while waiting.
       if (!pendingOptions?.pendingSettings && lane.freshAdmissions.size === 0) {
         lane.rerun = false;

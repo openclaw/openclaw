@@ -9,6 +9,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -76,8 +77,9 @@ beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "gc-availability-"));
 });
 
-afterEach(() => {
+afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   fs.rmSync(stateDir, { recursive: true, force: true });
 });
@@ -94,7 +96,9 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
     );
 
     expect(result.deletedRecordCount).toBe(0);
-    expect(readManagedImageRecord("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", stateDir)).not.toBeNull();
+    expect(
+      await readManagedImageRecord("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", stateDir),
+    ).not.toBeNull();
     expect(fs.existsSync(originalPath)).toBe(true);
   });
 
@@ -108,7 +112,9 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
     );
 
     expect(result.deletedRecordCount).toBe(1);
-    expect(readManagedImageRecord("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", stateDir)).toBeNull();
+    expect(
+      await readManagedImageRecord("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", stateDir),
+    ).toBeNull();
     expect(fs.existsSync(originalPath)).toBe(false);
   });
   it.each(["original_width", "original_height", "original_size_bytes"])(
@@ -152,7 +158,7 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
         alt: metadata,
       }),
     );
-    const claimed = readManagedImageRecord(survivorIds[2], stateDir);
+    const claimed = await readManagedImageRecord(survivorIds[2], stateDir);
     if (!claimed) {
       throw new Error("Expected the seeded claimed record");
     }

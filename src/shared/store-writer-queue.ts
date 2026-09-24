@@ -45,6 +45,47 @@ const activeStoreWriters = resolveGlobalSingleton(
   () => new AsyncLocalStorage<ActiveStoreWriter>(),
 );
 
+// Independently draining stores share one event loop, including separately bundled callers.
+const writerTurn = resolveGlobalSingleton(
+  Symbol.for("openclaw.storeWriterTurn"),
+  (): {
+    started: number;
+    startedAt: number;
+    reset: Promise<void> | undefined;
+    wait: Promise<void> | undefined;
+  } => ({
+    started: 0,
+    startedAt: 0,
+    reset: undefined,
+    wait: undefined,
+  }),
+);
+
+function claimStoreWriterTurn(immediate: boolean): Promise<void> | undefined {
+  const now = performance.now();
+  if (!writerTurn.reset) {
+    writerTurn.started = 0;
+    writerTurn.startedAt = now;
+    writerTurn.reset = nextTurn().then(() => {
+      writerTurn.reset = undefined;
+    });
+  }
+  // Idle first writers retain synchronous acquisition; their work still consumes the turn.
+  if (
+    !immediate &&
+    (writerTurn.wait ||
+      writerTurn.started >= MAX_WRITERS_PER_TURN ||
+      now - writerTurn.startedAt >= WRITER_TURN_BUDGET_MS)
+  ) {
+    // The reset can precede I/O queued during this turn. Yield from exhaustion, not its start.
+    return (writerTurn.wait ??= nextTurn().then(() => {
+      writerTurn.wait = undefined;
+    }));
+  }
+  writerTurn.started++;
+  return undefined;
+}
+
 function isActiveStoreWriter(queues: StoreWriterQueues, storePath: string): boolean {
   // A new lane cannot be reentrant; bulk acquisition must not scan every held lock.
   if (!queues.has(storePath)) {
@@ -103,26 +144,20 @@ async function drainStoreWriterQueue(queues: StoreWriterQueues, storePath: strin
   // Publish ownership before the first writer can enqueue more work, without
   // yielding its place to a competing lifecycle admission on an idle lane.
   queue.drainPromise = drain.promise;
-  let completed = 0;
-  let turnStarted = performance.now();
+  let first = true;
   try {
     while (queue.pending.length > 0) {
+      let wait: Promise<void> | undefined;
+      // Every resumed drain claims again; sharing only the wakeup would admit the whole herd.
+      while ((wait = claimStoreWriterTurn(first))) {
+        await wait;
+      }
+      first = false;
       const task = queue.pending.shift();
       if (!task) {
         continue;
       }
       await task.fn().then(task.resolve, task.reject);
-      // Amortize short writes without letting a ready backlog starve I/O.
-      // Only settled writers yield, and this drain retains FIFO ownership.
-      if (
-        queue.pending.length > 0 &&
-        (++completed >= MAX_WRITERS_PER_TURN ||
-          performance.now() - turnStarted >= WRITER_TURN_BUDGET_MS)
-      ) {
-        await nextTurn();
-        completed = 0;
-        turnStarted = performance.now();
-      }
     }
   } finally {
     queue.drainPromise = null;
@@ -140,6 +175,8 @@ export async function runQueuedStoreWrite<T>(params: {
   fn: () => Promise<T>;
   reentrant?: boolean;
   timing?: StoreWriterTiming;
+  /** Cancellation removes only a waiting task; admitted work must settle normally. */
+  signal?: AbortSignal;
 }): Promise<T> {
   if (!params.storePath || typeof params.storePath !== "string") {
     throw new Error(
@@ -148,6 +185,7 @@ export async function runQueuedStoreWrite<T>(params: {
       )}`,
     );
   }
+  params.signal?.throwIfAborted();
   // Explicit reentrancy keeps one logical read/decide/write section on the
   // active lane; ordinary async children must queue behind the current writer.
   if (params.reentrant === true && isActiveStoreWriter(params.queues, params.storePath)) {
@@ -167,22 +205,39 @@ export async function runQueuedStoreWrite<T>(params: {
   // async context. The active-writer scope still belongs to actual execution.
   const runInAsyncContext = AsyncLocalStorage.snapshot();
   const queue = getOrCreateStoreWriterQueue(params.queues, params.storePath);
-  return await new Promise<T>((resolve, reject) => {
+  let detach = () => {};
+  const completion = new Promise<T>((resolve, reject) => {
+    detach = () => params.signal?.removeEventListener("abort", abort);
+    const abort = () => {
+      const index = queue.pending.indexOf(task);
+      if (index !== -1) {
+        queue.pending.splice(index, 1);
+        task.reject(params.signal?.reason);
+      }
+    };
     const task: StoreWriterTask = {
-      fn: async () =>
-        await runInAsyncContext(
+      fn: async () => {
+        detach();
+        return await runInAsyncContext(
           runActiveStoreWriter,
           params.queues,
           params.storePath,
           params.fn,
           params.timing,
-        ),
+        );
+      },
       resolve: (value) => resolve(value as T),
       reject,
     };
     queue.pending.push(task);
+    params.signal?.addEventListener("abort", abort, { once: true });
     void drainStoreWriterQueue(params.queues, params.storePath);
   });
+  if (params.signal) {
+    // Observe cleanup without adding a settlement hop to the writer's result.
+    void completion.then(detach, detach);
+  }
+  return await completion;
 }
 
 /** Rejects pending queued writes and clears queue state for test cleanup. */
@@ -191,30 +246,7 @@ export function clearStoreWriterQueuesForTest(queues: StoreWriterQueues, message
     for (const task of queue.pending) {
       task.reject(new Error(message));
     }
+    queue.pending.length = 0;
   }
   queues.clear();
-}
-
-/** Waits for active drains to settle while rejecting still-pending test writes. */
-export async function drainStoreWriterQueuesForTest(
-  queues: StoreWriterQueues,
-  message: string,
-): Promise<void> {
-  while (queues.size > 0) {
-    const activeQueues = [...queues.values()];
-    for (const queue of activeQueues) {
-      for (const task of queue.pending) {
-        task.reject(new Error(message));
-      }
-      queue.pending.length = 0;
-    }
-    const activeDrains = activeQueues.flatMap((queue) =>
-      queue.drainPromise ? [queue.drainPromise] : [],
-    );
-    if (activeDrains.length === 0) {
-      queues.clear();
-      return;
-    }
-    await Promise.allSettled(activeDrains);
-  }
 }

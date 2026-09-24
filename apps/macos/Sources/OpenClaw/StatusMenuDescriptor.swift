@@ -80,7 +80,7 @@ struct StatusMenuDescriptor {
             case let .session(session):
                 "session.\(session.key)"
             case let .approval(approval):
-                "approval.\(approval.id)"
+                "approval.\(approval.idKey.base64EncodedString())"
             case .placeholder:
                 "placeholder"
             case let .action(action):
@@ -183,14 +183,14 @@ struct StatusMenuDescriptor {
         let visibleKeys = Set(visibleRows.map(\.key))
         var entries = snapshot.approvals
             .filter { approval in
-                guard let sessionKey = approval.request.sessionKey else { return true }
+                guard let sessionKey = approval.sessionKey else { return true }
                 return !visibleKeys.contains(sessionKey)
             }
             .map { Entry(.approval($0)) }
 
         for row in visibleRows {
             entries.append(contentsOf: snapshot.approvals
-                .filter { $0.request.sessionKey == row.key }
+                .filter { $0.sessionKey == row.key }
                 .map { Entry(.approval($0)) })
             entries.append(Entry(.session(row)))
         }

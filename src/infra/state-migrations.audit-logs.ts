@@ -1,4 +1,5 @@
 // Doctor-only import for retired core JSONL audit stores.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -11,6 +12,7 @@ import {
   SYSTEM_AGENT_AUDIT_SCOPE,
   type SystemAgentAuditEntry,
 } from "../system-agent/audit.js";
+import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
@@ -26,14 +28,13 @@ import type {
 import {
   prepareLegacyAuditRecords,
   serializePreparedAuditRecords,
-  type PreparedAuditRecord,
 } from "./state-migrations.audit-records.js";
 import {
+  auditRecoveryCheckpointPrefixMatches,
   finalizeLegacyAuditRecoveryArchive,
   findPreviousLegacyAuditRawCheckpoint,
   readLegacyAuditSourceSnapshot,
   recordLegacyAuditRawCheckpoint,
-  recordsAfterLegacyAuditRawCheckpoint,
   restoreInterruptedAuditRecoveryArchive,
   scrubLegacyAuditRecoveryArchive,
   type AuditMigrationRoot,
@@ -57,7 +58,7 @@ function legacyAuditClaimPathForArchive(sourcePath: string, sanitizedArchivePath
 export { detectLegacyAuditLogs } from "./state-migrations.audit-checkpoints.js";
 
 type AuditLogMigrationResult = Pick<MigrationMessages, "changes" | "warnings"> & {
-  outcome: "completed" | "skipped" | "refused";
+  outcome: "completed" | "skipped" | "refused" | "quarantined";
 };
 
 const AUDIT_SKIP_RECOVERY_GUIDANCE =
@@ -276,6 +277,26 @@ async function migrateLegacyAuditLogSource(params: {
     path.resolve(params.stateDir),
     params.source.sourcePath,
   );
+  const quarantine = async (observed: string): Promise<AuditLogMigrationResult> => {
+    const relativePath = `${detectedRelativePath}.quarantined-${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID()}`;
+    const quarantinePath = path.join(params.stateDir, relativePath);
+    const mismatch = `expected append-only growth; observed ${observed}`;
+    try {
+      await root.move(detectedRelativePath, relativePath);
+    } catch (error) {
+      warnings.push(
+        `Skipped ${params.source.label} recovery: ${mismatch}. Could not quarantine ${params.source.sourcePath}: ${String(error)}. Left the archive in place; other repairs can continue.`,
+      );
+      return result("skipped");
+    }
+    warnings.push(
+      `Quarantined ${params.source.label} recovery archive → ${quarantinePath}: ${mismatch}. Kept sanitized history and existing SQLite records; other repairs can continue.`,
+    );
+    await syncDirectoryIfSupported(path.dirname(quarantinePath)).catch((error: unknown) => {
+      warnings.push(`Failed syncing quarantine directory for ${quarantinePath}: ${String(error)}`);
+    });
+    return result("quarantined");
+  };
   let archivePaths: AuditArchiveRelativePaths | undefined;
   let claimRelativePath = detectedRelativePath;
   if (params.source.storage === "active") {
@@ -342,9 +363,23 @@ async function migrateLegacyAuditLogSource(params: {
       params.source.storage === "raw-archive"
         ? findPreviousLegacyAuditRawCheckpoint(params.stateDir, rawArchiveRelativePath)
         : undefined;
+    if (previousCheckpoint && !auditRecoveryCheckpointPrefixMatches(snapshot, previousCheckpoint)) {
+      return await quarantine(
+        `archive changed other than by append (${snapshot.size} bytes; checkpoint ${previousCheckpoint.size} bytes)`,
+      );
+    }
     if (params.source.storage === "raw-archive" && !previousCheckpoint) {
       if (!sanitizedRelativePath) {
         throw new Error(`Missing sanitized archive path for ${params.source.sourcePath}`);
+      }
+      if (
+        snapshot.size === 0 &&
+        (await root.exists(sanitizedRelativePath)) &&
+        (await readLegacyAuditSourceSnapshot(root, sanitizedRelativePath)).size > 0
+      ) {
+        return await quarantine(
+          "an empty raw archive without a checkpoint beside retained sanitized history",
+        );
       }
       const firstContentByte = snapshot.rawBytes.findIndex(
         (byte) => byte !== 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d,
@@ -366,6 +401,9 @@ async function migrateLegacyAuditLogSource(params: {
       warnings.push(...prepared.warnings);
       return result("refused");
     }
+    if (previousCheckpoint && prepared.records.length < previousCheckpoint.recordCount) {
+      return await quarantine("fewer records than the raw archive checkpoint");
+    }
     const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
     const maxEntries =
       params.source.kind === "config" ? CONFIG_AUDIT_MAX_ENTRIES : SYSTEM_AGENT_AUDIT_MAX_ENTRIES;
@@ -376,23 +414,9 @@ async function migrateLegacyAuditLogSource(params: {
     });
     const existingEntries = store.entries();
     const existingKeys = new Set(existingEntries.map((entry) => entry.key));
-    let candidateRecords: readonly PreparedAuditRecord[] = prepared.records;
-    if (params.source.storage === "raw-archive") {
-      if (previousCheckpoint) {
-        const appendedRecords = recordsAfterLegacyAuditRawCheckpoint({
-          checkpoint: previousCheckpoint,
-          snapshot,
-          records: prepared.records,
-        });
-        if (!appendedRecords) {
-          warnings.push(
-            `Skipped ${params.source.label} recovery because ${params.source.sourcePath} changed other than by append; left the raw archive in place. ${AUDIT_SKIP_RECOVERY_GUIDANCE}`,
-          );
-          return result("skipped");
-        }
-        candidateRecords = appendedRecords;
-      }
-    }
+    let candidateRecords = previousCheckpoint
+      ? prepared.records.slice(previousCheckpoint.recordCount)
+      : prepared.records;
     if (!previousCheckpoint && candidateRecords === prepared.records) {
       const lastRetainedSourceIndex = prepared.records.findLastIndex((record) =>
         existingKeys.has(record.key),
@@ -675,7 +699,7 @@ export async function migrateLegacyAuditLogs(params: {
             ) {
               hasRefusal = true;
             }
-            if (result.outcome !== "completed") {
+            if (result.outcome === "refused" || result.outcome === "skipped") {
               // Generations encode append order. A later archive must not overtake
               // an older source that still needs repair or durable checkpointing.
               blockedLogicalSources.add(source.logicalSourcePath);

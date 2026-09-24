@@ -16,6 +16,12 @@ import {
 } from "./io.health-state.js";
 import type { ConfigHealthFingerprint, ConfigHealthSnapshot } from "./io.health-state.types.js";
 import {
+  createConfigRecoveryStatEffect,
+  createConfigBackupMissingEffect,
+  createConfigBackupReadEffect,
+  type ConfigRecoveryEffect,
+} from "./io.observe-recovery-effects.js";
+import {
   createConfigHealthFingerprint,
   createConfigObserveAuditAppendParams,
   extractRestoreErrorDetails,
@@ -24,7 +30,7 @@ import {
   readConfigHealthEntry,
 } from "./io.observe-state.js";
 import { resolveConfigReadRecoveryContext } from "./io.observe-suspicious.js";
-import { hashConfigRaw } from "./io.read-helpers.js";
+import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
 import type {
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
@@ -198,11 +204,6 @@ export function maybeRecoverSuspiciousConfigReadSync(
   return step.value;
 }
 
-type ConfigRecoveryEffect<T> = {
-  sync: () => T;
-  async: (health: ReturnType<typeof captureConfigHealthStateStore>) => T | Promise<T>;
-};
-
 type ConfigRecoveryOperation<T> = Generator<ConfigRecoveryEffect<unknown>, T, unknown>;
 type SuspiciousConfigRecoveryPlan = {
   candidate: ConfigReadRecoveryResult;
@@ -294,44 +295,17 @@ function* recoverSuspiciousConfigRead(
   return applied.superseded ? { raw, parsed } : plan.candidate;
 }
 
-function createConfigRecoveryStatEffect(
-  deps: ObserveRecoveryDeps,
-  configPath: string,
-): ConfigRecoveryEffect<fs.Stats | null> {
-  return {
-    sync: () => {
-      try {
-        return deps.fs.statSync(configPath, { throwIfNoEntry: false }) ?? null;
-      } catch {
-        return null;
-      }
-    },
-    async: () => deps.fs.promises.stat(configPath).catch(() => null),
-  };
-}
-
-function createConfigBackupReadEffect(
-  deps: ObserveRecoveryDeps,
-  backupPath: string,
-): ConfigRecoveryEffect<string | null> {
-  return {
-    sync: () => {
-      try {
-        return deps.fs.readFileSync(backupPath, "utf-8");
-      } catch {
-        return null;
-      }
-    },
-    async: () => deps.fs.promises.readFile(backupPath, "utf-8").catch(() => null),
-  };
-}
-
 function* planSuspiciousConfigRead(
   params: ConfigReadRecoveryParams,
 ): ConfigRecoveryOperation<SuspiciousConfigRecoveryPlan | null> {
   const { deps, configPath, raw, parsed } = params;
   // External owners also own recovery; do not substitute backup bytes or create sidecars.
   if (resolveIsConfigReadOnly(deps.env)) {
+    return null;
+  }
+  const backupPath = `${configPath}.bak`;
+  // Missing backups cannot recover config; avoid opening the health worker just to confirm that.
+  if (yield createConfigBackupMissingEffect(deps, backupPath)) {
     return null;
   }
   const stat = (yield createConfigRecoveryStatEffect(deps, configPath)) as fs.Stats | null;
@@ -351,7 +325,6 @@ function* planSuspiciousConfigRead(
   }
   const healthState = healthSnapshot.state;
   const entry = readConfigHealthEntry(healthState, configPath);
-  const backupPath = `${configPath}.bak`;
   const backupBaseline =
     entry.lastKnownGood ??
     ((yield {
@@ -374,7 +347,9 @@ function* planSuspiciousConfigRead(
     return null;
   }
   const backupParse = parseBackupConfigRaw(deps, backupRaw);
-  if (!backupParse) {
+  // Reject ineligible backup bytes before migration and validation; a stale healthy
+  // fingerprint cannot make them recoverable.
+  if (!backupParse || !resolveGatewayMode(backupParse.parsed)) {
     return null;
   }
   const backupCandidate = { raw: backupRaw, parsed: backupParse.parsed };
@@ -387,16 +362,12 @@ function* planSuspiciousConfigRead(
     return null;
   }
   const preparedCandidate = prepared.candidate;
-  // Eligibility must describe the approved backup bytes, never an older healthy config.
   const backupStat = (yield createConfigRecoveryStatEffect(deps, backupPath)) as fs.Stats | null;
   const backup = createConfigHealthFingerprint({
     raw: backupRaw,
     parsed: backupParse.parsed,
     stat: backupStat,
   });
-  if (!backup.gatewayMode) {
-    return null;
-  }
   const currentObservation: ConfigRecoveryEffect<boolean> = {
     sync: () => true,
     async: (health) => health.isCurrent(),

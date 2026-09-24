@@ -7,8 +7,6 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
-import { clearDurableTabAliases } from "./session-tab-ephemeral-aliases.js";
-import { activeDurableStorageKeys } from "./session-tab-process-state.js";
 import type { BrowserSessionTabRoute } from "./session-tab-route.js";
 import {
   type BrowserSessionTabRecord,
@@ -17,12 +15,9 @@ import {
   parseBrowserSessionTabRecord,
   sameBrowserSessionTabRecord,
   updateBrowserSessionTab,
+  withoutBrowserSessionTabCleanup,
 } from "./session-tab-store.js";
-
-type DurableTab = BrowserSessionTabRecord & {
-  kind: "durable";
-  storageKey: string;
-};
+import type { DurableTab } from "./session-tab-tracking.js";
 
 export type CleanupKind = "lifecycle" | "sweep";
 
@@ -37,6 +32,8 @@ type CloseTab = (tab: {
   profile?: string;
 }) => Promise<void>;
 export type CloseParams = {
+  /** Gates new cleanup claims, without revoking an already admitted close. */
+  isCurrent?: () => boolean;
   closeTab?: CloseTab;
   closeDurableTab?: (
     tab: DurableTab,
@@ -110,24 +107,17 @@ function deleteClaimedTab(tab: DurableTab, onWarn?: (message: string) => void): 
         if (!matchesCleanupAttempt(record, tab) || !record.dashboard) {
           return undefined;
         }
-        const {
-          cleanupRequestedAt: _requested,
-          cleanupAttemptToken: _token,
-          cleanupKind: _kind,
-          ...settled
-        } = record;
-        return { ...settled, dashboard: { ...record.dashboard, state: "stopped" } };
+        return {
+          ...withoutBrowserSessionTabCleanup(record),
+          dashboard: { ...record.dashboard, state: "stopped" },
+        };
       });
       return;
     }
-    const deleted = deleteBrowserSessionTabIf(tab.storageKey, (current) => {
+    deleteBrowserSessionTabIf(tab.storageKey, (current) => {
       const record = parseBrowserSessionTabRecord(current);
       return matchesCleanupAttempt(record, tab);
     });
-    if (deleted) {
-      clearDurableTabAliases(tab.storageKey);
-      activeDurableStorageKeys().delete(tab.storageKey);
-    }
   } catch (error) {
     onWarn?.(`failed to delete tracked browser tab ${tab.nativeTargetId}: ${String(error)}`);
   }
@@ -141,7 +131,7 @@ async function closeCurrentDurableTab(
   // Empty session cleanup must not initialize Browser control or its CDP graph.
   const [{ getRuntimeConfig }, { resolveCdpControlPolicy }, { closeTrackedCdpTarget }, config] =
     await Promise.all([
-      import("../config/config.js"),
+      import("openclaw/plugin-sdk/runtime-config-snapshot"),
       import("./cdp-reachability-policy.js"),
       import("./cdp.helpers.js"),
       import("./config.js"),
@@ -183,7 +173,11 @@ export async function closeDurableTab(
   now: number,
   cleanupKind: CleanupKind,
 ): Promise<number> {
-  if (candidate.dashboard?.state === "active" || candidate.dashboard?.state === "stopped") {
+  if (
+    params.isCurrent?.() === false ||
+    candidate.dashboard?.state === "active" ||
+    candidate.dashboard?.state === "stopped"
+  ) {
     return 0;
   }
   const tab = claimCleanup(candidate, now, cleanupKind);

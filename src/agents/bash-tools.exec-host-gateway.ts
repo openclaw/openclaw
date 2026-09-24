@@ -49,9 +49,7 @@ import {
   formatExecAutoReviewAssessment,
   resolveExecAutoReviewDecision,
   type ExecAutoReviewDecision,
-  type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
-import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
 import {
   prepareSystemRunMutableFileBinding,
@@ -78,6 +76,10 @@ import {
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import type {
+  ProcessGatewayAllowlistParams,
+  ProcessGatewayAllowlistResult,
+} from "./bash-tools.exec-host-gateway.types.js";
 import {
   buildHeadlessExecApprovalDeniedMessage,
   buildExecApprovalFollowupTarget,
@@ -94,7 +96,6 @@ import {
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import type {
-  ExecElevatedDefaults,
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
   ExecToolApprovalReview,
@@ -102,68 +103,6 @@ import type {
 } from "./bash-tools.exec-types.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
-
-/** Full input bundle for gateway-host allowlist and approval processing. */
-type ProcessGatewayAllowlistParams = {
-  command: string;
-  workdir: string;
-  env: Record<string, string>;
-  githubProfileDir?: string;
-  pathPrepend?: string[];
-  requestedEnv?: Record<string, string>;
-  pty: boolean;
-  timeoutSec?: number;
-  defaultTimeoutSec: number;
-  security: ExecSecurity;
-  ask: ExecAsk;
-  bypassHostApprovalFloors?: boolean;
-  autoReview?: boolean;
-  autoReviewer?: ExecAutoReviewer;
-  signal?: AbortSignal;
-  safeBins: Set<string>;
-  safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
-  strictInlineEval?: boolean;
-  commandHighlighting?: boolean;
-  trigger?: string;
-  agentId?: string;
-  sessionKey?: string;
-  runId?: string;
-  toolCallId?: string;
-  onApprovalReview?: (review: ExecToolApprovalReview) => void;
-  /** Session UUID active when the approval was requested; pins the followup. */
-  sessionId?: string;
-  /** Session-store template, so the direct/denied followup can detect a rebind. */
-  sessionStore?: string;
-  bashElevated?: ExecElevatedDefaults;
-  approvalReviewerDeviceId?: string;
-  nonInteractiveApproval?: boolean;
-  turnSourceChannel?: string;
-  turnSourceTo?: string;
-  turnSourceAccountId?: string;
-  turnSourceThreadId?: string | number;
-  scopeKey?: string;
-  approvalFollowupText?: string;
-  approvalFollowup?: ExecApprovalFollowupFactory;
-  approvalFollowupMode?: "agent" | "direct";
-  warnings: string[];
-  notifySessionKey?: string;
-  approvalRunningNoticeMs: number;
-  maxOutput: number;
-  pendingMaxOutput: number;
-  cleanupMs?: number;
-  processContinuationAvailable?: boolean;
-  trustedSafeBinDirs?: ReadonlySet<string>;
-};
-
-/** Gateway allowlist outcome before command execution continues. */
-type ProcessGatewayAllowlistResult = {
-  execCommandOverride?: string;
-  allowWithoutEnforcedCommand?: boolean;
-  revalidateBeforeExecution?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
-  assertCurrent?: () => void;
-  pendingResult?: AgentToolResult<ExecToolDetails>;
-  deniedResult?: AgentToolResult<ExecToolDetails>;
-};
 
 const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
   kind: "one-shot",
@@ -1634,6 +1573,7 @@ export async function processGatewayAllowlist(
               execCommand: approvalDecision.execCommandOverride,
               workdir: params.workdir,
               env: params.env,
+              secretEgressBindings: params.secretEgressBindings,
               githubProfileDir: params.githubProfileDir,
               pathPrepend: params.pathPrepend,
               sandbox: undefined,

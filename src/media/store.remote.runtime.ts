@@ -30,11 +30,12 @@ export async function saveRemoteMediaForStore(params: {
   headers?: Record<string, string>;
   subdir: string;
   maxBytes: number;
+  abortSignal?: AbortSignal;
 }): Promise<SavedMedia> {
   const { id, path, size, contentType } = await saveRemoteMedia({
     url: params.source,
     fetchImpl: fetchWithoutIgnoredBody,
-    requestInit: params.headers ? { headers: params.headers } : undefined,
+    requestInit: { headers: params.headers, signal: params.abortSignal },
     filePathHint: params.source,
     // The store discards this synthetic underscore stem but keeps its extension,
     // preserving the URL-suffix fallback without embedding the remote basename.

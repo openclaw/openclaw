@@ -53,13 +53,21 @@ describe("iMessage send SQLite receipt recovery", () => {
   });
 
   it("retains the reader across polling and joins cleanup before publishing the receipt", async () => {
-    vi.useFakeTimers({ now: 10_000 });
     const sqliteRuntime = await import("openclaw/plugin-sdk/sqlite-runtime");
+    const firstRead = createDeferred<void>();
+    const firstResult = createDeferred<null>();
+    const closing = createDeferred<void>();
     const closed = createDeferred<void>();
     const execute = vi
       .fn(async (): Promise<string | null> => "recovered-guid")
-      .mockResolvedValueOnce(null);
-    const close = vi.fn(() => closed.promise);
+      .mockImplementationOnce(() => {
+        firstRead.resolve();
+        return firstResult.promise;
+      });
+    const close = vi.fn(() => {
+      closing.resolve();
+      return closed.promise;
+    });
     const store = { execute, close } satisfies SqliteWorkerStore<SqliteWorkerOperations>;
     const open = vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockResolvedValue(store);
     const client = new IMessageRpcClient({ dbPath });
@@ -79,16 +87,20 @@ describe("iMessage send SQLite receipt recovery", () => {
       return result;
     });
     try {
-      await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+      // Send persistence uses real workers; synchronize on reads without freezing their timers.
+      await Promise.race([firstRead.promise, sending]);
+      expect(execute).toHaveBeenCalledOnce();
       expect(close).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(250);
-      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+      firstResult.resolve(null);
+      await Promise.race([closing.promise, sending]);
+      expect(close).toHaveBeenCalledOnce();
       expect(execute).toHaveBeenCalledTimes(2);
       expect(open).toHaveBeenCalledOnce();
       expect(settled).toBe(false);
       closed.resolve();
       await expect(sending).resolves.toMatchObject({ guid: "recovered-guid" });
     } finally {
+      firstResult.resolve(null);
       closed.resolve();
       await sending;
     }

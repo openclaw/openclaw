@@ -200,7 +200,7 @@ async function assertRecordsOnlyUpdateConfigFresh(params: {
 }
 
 type RunPluginUpdateCommandParams = {
-  id?: string;
+  ids: string[];
   opts: {
     all?: boolean;
     acceptCapabilities?: boolean;
@@ -212,6 +212,11 @@ type RunPluginUpdateCommandParams = {
 
 /** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
 export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
+  if (params.opts.all && params.ids.length > 0) {
+    defaultRuntime.error("Use either plugin or hook-pack ids or --all, not both.");
+    defaultRuntime.exit(1);
+    return;
+  }
   if (params.opts.dryRun) {
     const exitCode = await runPluginUpdateCommandUnlocked(params);
     if (exitCode !== 0) {
@@ -362,11 +367,30 @@ async function runPluginUpdateCommandUnlocked(
     installs: pluginInstallRecords,
     installOwnerByPluginId,
     rejectedPluginIds,
-    rawId: params.id,
+    rawIds: params.ids,
     all: params.opts.all,
   });
   if (pluginSelection.error) {
     defaultRuntime.error(pluginSelection.error);
+    return 1;
+  }
+  const selectedHooks = readHookInstalls();
+  const hookSelection = resolveHookPackUpdateSelection({
+    installs: selectedHooks,
+    rawIds: params.ids,
+    all: params.opts.all,
+  });
+  if (hookSelection.error) {
+    defaultRuntime.error(hookSelection.error);
+    return 1;
+  }
+  const unmatchedId = pluginSelection.unmatchedIds?.find((id) =>
+    hookSelection.unmatchedIds?.includes(id),
+  );
+  if (unmatchedId !== undefined) {
+    defaultRuntime.error(
+      `No tracked plugin or hook pack found for "${unmatchedId}". Run "${formatCliCommand("openclaw plugins list")}" or "${formatCliCommand("openclaw hooks list")}" to inspect installed packages.`,
+    );
     return 1;
   }
   // Dormant records still reach the updater for notices, but no package mutation.
@@ -386,23 +410,12 @@ async function runPluginUpdateCommandUnlocked(
       [...ownership.pluginIds],
     ]),
   );
-  const selectedHooks = readHookInstalls();
-  const hookSelection = resolveHookPackUpdateSelection({
-    installs: selectedHooks,
-    rawId: params.id,
-    all: params.opts.all,
-  });
-
   if (pluginSelection.pluginIds.length === 0 && hookSelection.hookIds.length === 0) {
     if (params.opts.all) {
       defaultRuntime.log("No tracked plugins or hook packs to update.");
       return 0;
     }
-    defaultRuntime.error(
-      params.id
-        ? `No tracked plugin or hook pack found for "${params.id}". Run "${formatCliCommand("openclaw plugins list")}" or "${formatCliCommand("openclaw hooks list")}" to inspect installed packages.`
-        : "Provide a plugin or hook-pack id, or use --all.",
-    );
+    defaultRuntime.error("Provide plugin or hook-pack ids, or use --all.");
     return 1;
   }
 

@@ -719,6 +719,13 @@ function requireExpectedBinding(params) {
     runStatePolicy === "same-run-producer-success"
       ? assertTrimmedString(expected.producerJobName, "producer job name")
       : undefined;
+  const producerStepName =
+    expected.producerStepName === undefined
+      ? undefined
+      : assertTrimmedString(expected.producerStepName, "producer step name");
+  if (producerStepName && runStatePolicy !== "same-run-producer-success") {
+    throw new Error("Producer step binding requires the same-run producer policy.");
+  }
   if (consumerRunAttempt !== undefined && runAttempt > consumerRunAttempt) {
     throw new Error("Producer workflow run attempt must not be newer than the consumer attempt.");
   }
@@ -726,6 +733,7 @@ function requireExpectedBinding(params) {
     ...identity,
     consumerRunAttempt,
     producerJobName,
+    ...(producerStepName ? { producerStepName } : {}),
     runStatePolicy,
     runAttempt,
     workflowEvent,
@@ -821,9 +829,24 @@ export function validateActionsArtifactProducerJob(params) {
     producerJob.run_attempt !== expected.runAttempt ||
     producerJob.head_sha !== expected.workflowSha ||
     producerJob.status !== "completed" ||
-    producerJob.conclusion !== "success"
+    (expected.producerStepName
+      ? !["success", "failure"].includes(producerJob.conclusion)
+      : producerJob.conclusion !== "success")
   ) {
     throw new Error("Actions artifact producer job did not complete successfully.");
+  }
+  if (expected.producerStepName) {
+    // A later publication/readback failure does not erase a completed immutable
+    // artifact upload. Require its exact successful step, not inferred progress.
+    const steps = producerJob.steps?.filter((step) => step.name === expected.producerStepName);
+    if (
+      !Array.isArray(steps) ||
+      steps.length !== 1 ||
+      steps[0].status !== "completed" ||
+      steps[0].conclusion !== "success"
+    ) {
+      throw new Error("Actions artifact producer step did not complete successfully.");
+    }
   }
   return expected;
 }

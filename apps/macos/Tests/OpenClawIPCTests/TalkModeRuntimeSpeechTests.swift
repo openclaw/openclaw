@@ -472,6 +472,28 @@ private actor RuntimeTestBootstrapSequence {
     }
 }
 
+private func runtimeRecoveryState(
+    _ runtime: isolated TalkModeRuntime,
+    _ oldSession: RealtimeTalkRelaySession,
+    _ requests: RuntimeTestRelayRequestLog,
+    _ recoveryRequests: RuntimeTestRelayRequestLog) async -> String
+{
+    let oldRequests = await requests.snapshot()
+    let newRequests = await recoveryRequests.snapshot()
+    let sharedOptIn = await MainActor.run { AppStateStore.shared.talkRealtimeRelayEnabled }
+    return """
+    Post-failure RPC observations before cleanup: old=\(oldRequests), new=\(newRequests)
+    Post-failure runtime: sharedOptIn=\(sharedOptIn), enabled=\(runtime.isEnabled), paused=\(runtime.isPaused), \
+    phase=\(runtime.phase.rawValue), \
+    localOptIn=\(runtime.macOSRealtimeRelayOptIn), gatewayTuple=\(runtime.hasGatewayRealtimeRelayTuple), \
+    lifecycle=\(runtime.lifecycleGeneration), relay=\(runtime.realtimeRelayGeneration), \
+    startingRelay=\(String(describing: runtime.realtimeRelayStartGeneration)), \
+    restart=\(runtime.realtimeRestartGeneration), restartCount=\(runtime.rapidRealtimeRestartCount), \
+    restartPending=\(runtime.realtimeRestartTask != nil), hasSession=\(runtime.realtimeSession != nil), \
+    ownsOldSession=\(runtime.realtimeSession === oldSession)
+    """
+}
+
 @Suite(.serialized)
 struct TalkModeRuntimeSpeechTests {
     @Test func `macOS realtime relay requires local opt in and exact Gateway tuple`() {
@@ -571,12 +593,26 @@ struct TalkModeRuntimeSpeechTests {
 
             let requests = RuntimeTestRelayRequestLog()
             let recoveryRequests = RuntimeTestRelayRequestLog()
+            let recoveryMilestones = RuntimeCommitProbe()
+            let recoveryStartedAt = ContinuousClock.now
+            let recordRecovery: @Sendable (String) -> Void = { event in
+                recoveryMilestones.record("\(recoveryStartedAt.duration(to: ContinuousClock.now)): \(event)")
+            }
             let bootstrap = try makeRuntimeTestBootstrap(requests: recoveryRequests)
-            let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: { bootstrap })
+            let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: {
+                recordRecovery("bootstrap")
+                return bootstrap
+            })
             let recoveryStarted = RuntimeTestSignal<Void>()
             let recoveryCapture = RuntimeTestAudioCapture()
-            recoveryCapture.onStart = { recoveryStarted.send(()) }
-            await runtime._test_setRealtimeAudioCaptureProvider { recoveryCapture }
+            recoveryCapture.onStart = {
+                recordRecovery("microphone-started")
+                recoveryStarted.send(())
+            }
+            await runtime._test_setRealtimeAudioCaptureProvider {
+                recordRecovery("capture-created")
+                return recoveryCapture
+            }
             await runtime._test_setVoiceWakeReadiness(supported: true, permissionGranted: true)
             let audioCapture = RuntimeTestAudioCapture()
             let session = makeRecordingRelaySession(requests: requests, audioCapture: audioCapture)
@@ -608,6 +644,7 @@ struct TalkModeRuntimeSpeechTests {
                 let recorded = try await waitForRelayClose(requests)
                 #expect(recorded == ["talk.session.close"])
                 #expect(await requests.snapshot().sessionIds == ["relay-1"])
+                recordRecovery("awaiting microphone signal")
                 _ = try await recoveryStarted.next("replacement realtime microphone")
                 #expect(recoveryCapture.startCount == 1)
                 #expect(await runtime.rapidRealtimeRestartCount == (source == "selected microphone" ? 0 : 1))
@@ -615,6 +652,9 @@ struct TalkModeRuntimeSpeechTests {
                 let replacement = try #require(await runtime.realtimeSession)
                 #expect(replacement !== session)
             } catch {
+                recordRecovery("catch; old/new capture starts=\(audioCapture.startCount)/\(recoveryCapture.startCount)")
+                await print(runtimeRecoveryState(runtime, session, requests, recoveryRequests))
+                print("Talk recovery failure (\(source)): \(error); milestones=\(recoveryMilestones.values())")
                 await runtime.setEnabled(false)
                 throw error
             }
@@ -1172,7 +1212,11 @@ struct TalkModeRuntimeSpeechTests {
         sessionB.stop()
     }
 
-    @Test @MainActor func `current relay failure owner can transition to native fallback`() async throws {
+    @Test(arguments: [false, true]) @MainActor
+    func `current relay failure owner can transition to native fallback`(aggregateInput: Bool) async throws {
+        let recovery = aggregateInput
+            ? MacRealtimeTalkInputChannels.MappingError.aggregateInputSelected.recoverySuggestion
+            : nil
         let runtime = TalkModeRuntime()
         let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
         let recognitionGeneration = try #require(await runtime._test_beginRecognitionAttempt(
@@ -1184,13 +1228,21 @@ struct TalkModeRuntimeSpeechTests {
             lifecycleGeneration: lifecycleGeneration,
             recognitionGeneration: recognitionGeneration,
             relayGeneration: relayGeneration,
-            status: "native"))
-        #expect(TalkModeController.shared.partialTranscript == "native")
+            status: "native",
+            recoverySuggestion: recovery))
+        let expected = ["native", recovery].compactMap { $0 }.joined(separator: " ")
+        #expect(TalkModeController.shared.partialTranscript == expected)
+        #expect(await runtime.phase == .listening)
+        #expect(TalkModeController.shared.phase == .listening)
 
         await runtime.setEnabled(false)
     }
 
-    @Test @MainActor func `failed native fallback start publishes terminal status`() async throws {
+    @Test(arguments: [false, true]) @MainActor
+    func `failed native fallback start publishes terminal status`(aggregateInput: Bool) async throws {
+        let recovery = aggregateInput
+            ? MacRealtimeTalkInputChannels.MappingError.aggregateInputSelected.recoverySuggestion
+            : nil
         let runtime = TalkModeRuntime()
         let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
         let recognitionGeneration = try #require(await runtime._test_beginRecognitionAttempt(
@@ -1202,11 +1254,13 @@ struct TalkModeRuntimeSpeechTests {
             lifecycleGeneration: lifecycleGeneration,
             recognitionGeneration: recognitionGeneration,
             relayGeneration: relayGeneration,
-            status: "unused"))
+            status: "unused",
+            recoverySuggestion: recovery))
         #expect(await runtime.phase == .idle)
         #expect(TalkModeController.shared.phase == .idle)
-        #expect(TalkModeController.shared.partialTranscript ==
-            String(localized: "Realtime unavailable — native speech could not start"))
+        let expected = [String(localized: "Realtime unavailable — native speech could not start"), recovery]
+            .compactMap { $0 }.joined(separator: " ")
+        #expect(TalkModeController.shared.partialTranscript == expected)
 
         await runtime.setEnabled(false)
     }

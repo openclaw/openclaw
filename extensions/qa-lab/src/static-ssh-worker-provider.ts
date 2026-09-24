@@ -78,9 +78,17 @@ export function createStaticSshWorkerProvider(): WorkerProvider {
     id: STATIC_SSH_WORKER_PROVIDER_ID,
     supportedExecutionModes: ["remote-exec"],
     resolveAllocation,
-    async provision(profile, opId) {
+    async provision(profile, opId, options) {
+      if (!options?.assertCurrent) {
+        throw new WorkerProviderError(
+          "Static SSH provisioning requires current Gateway allocation authority",
+        );
+      }
+      options.assertCurrent();
+      const allocation = await resolveAllocation(profile, opId);
+      options.assertCurrent();
       return {
-        ...(await resolveAllocation(profile, opId)),
+        ...allocation,
         ssh: parseStaticSshWorkerSettings(profile),
       };
     },

@@ -565,9 +565,9 @@ a.activity-current-work__row:hover {
   transform: rotate(90deg);
 }
 
-.activity-feed__session:hover,
+.activity-feed__session[href]:hover,
 .activity-feed__session:focus-visible,
-.activity-feed__session-row:hover .activity-feed__session,
+.activity-feed__session-row:hover .activity-feed__session[href],
 .activity-feed__session-row:focus-within .activity-feed__session {
   background: var(--bg-hover);
 }

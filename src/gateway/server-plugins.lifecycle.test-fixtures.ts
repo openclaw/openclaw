@@ -3,10 +3,11 @@ import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { vi } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import type { PluginRegistrationMode } from "../plugins/types.js";
 
 const probeSubscriptions: Array<() => void> = [];
 
@@ -46,6 +47,7 @@ export type InstanceBindingProbeCoordinator = {
   identify: (value: object) => number;
   nextRegistryId: number;
   runtimes: PluginRuntime[];
+  registrationModes: PluginRegistrationMode[];
   serviceStarts: number;
   serviceStops: number;
   gatewayStops: number[];
@@ -61,19 +63,13 @@ export type InstanceBindingProbeCoordinator = {
 export async function withPluginServiceStopDeadline<T>(
   coordinator: InstanceBindingProbeCoordinator,
   run: () => Promise<T>,
+  afterStopDeadline: () => Promise<void>,
 ): Promise<T> {
   if (coordinator.serviceStopFailure !== "timeout") {
     return await run();
   }
   const started = createDeferred();
-  coordinator.onServiceStop = () => {
-    // Keep startup and request admission on real clocks.
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout"],
-      shouldClearNativeTimers: true,
-    });
-    started.resolve();
-  };
+  coordinator.onServiceStop = started.resolve;
   const result = run();
   try {
     await Promise.race([
@@ -82,15 +78,20 @@ export async function withPluginServiceStopDeadline<T>(
         throw new Error("plugin operation settled before plugin cleanup started");
       }),
     ]);
-    // Best-effort replacement observes service stop, active-call drain, then instance disposal.
-    await vi.advanceTimersByTimeAsync(5_000);
-    await vi.advanceTimersByTimeAsync(5_000);
-    await vi.advanceTimersByTimeAsync(5_000);
+    // Use one real clock for the existing stop deadline and recovery backoff.
+    await delay(5_000);
+    await afterStopDeadline();
+    coordinator.serviceStopCompletion.resolve();
+    return await result;
   } finally {
-    coordinator.onServiceStop = undefined;
-    vi.useRealTimers();
+    coordinator.serviceStopCompletion.resolve();
+    try {
+      // Join the reload even when a pending-state assertion fails.
+      await result;
+    } finally {
+      coordinator.onServiceStop = undefined;
+    }
   }
-  return await result;
 }
 
 export function installInstanceBindingProbeCoordinator(options?: {
@@ -115,6 +116,7 @@ export function installInstanceBindingProbeCoordinator(options?: {
     },
     nextRegistryId: 1,
     runtimes: [],
+    registrationModes: [],
     serviceStarts: 0,
     serviceStops: 0,
     gatewayStops: [],
@@ -170,6 +172,7 @@ export async function writeInstanceBindingProbePlugin(
     const reportReloadSettlement = Boolean(coordinator.reportReloadSettlement || coordinator.channelProof || coordinator.channel);
     const registryId = coordinator.nextRegistryId++;
     coordinator.runtimes.push(api.runtime);
+    coordinator.registrationModes.push(api.registrationMode);
     api.on("gateway_stop", () => { coordinator.gatewayStops.push(registryId); });
     if (coordinator.channel) {
       api.registerChannel({ plugin: coordinator.channel });

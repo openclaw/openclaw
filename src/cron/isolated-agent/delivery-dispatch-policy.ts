@@ -194,23 +194,18 @@ export function logCronDeliveryErrorDeferred(message: string): void {
   });
 }
 
-export function resolveCronDeliveryScheduledAtMs(params: {
+export function resolveStaleCronDeliveryError(params: {
   job: CronJob;
   runStartedAt: number;
-}): number {
+}): string | undefined {
   const scheduledAt = params.job.state?.nextRunAtMs;
-  return hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
-}
-
-export function resolveCronDeliveryStartDelayMs(params: {
-  job: CronJob;
-  runStartedAt: number;
-}): number {
-  return params.runStartedAt - resolveCronDeliveryScheduledAtMs(params);
-}
-
-export function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
-  return resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS;
+  const scheduledAtMs = hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
+  const startDelayMs = params.runStartedAt - scheduledAtMs;
+  if (startDelayMs > STALE_CRON_DELIVERY_MAX_START_DELAY_MS) {
+    const nowMs = Date.now();
+    return `skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, started ${Math.round(startDelayMs / 60_000)}m late, current age ${Math.round((nowMs - scheduledAtMs) / 60_000)}m`;
+  }
+  return undefined;
 }
 
 export async function maybeApplyTtsToCronPayloads(params: {

@@ -1,5 +1,5 @@
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
@@ -16,7 +16,7 @@ import type {
   ChatMetadataResult,
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayModelCatalogContext } from "./models-list-context.js";
 
 export type ChatMetadataProjectionFacts = {
   agentId: string;
@@ -33,7 +33,7 @@ export type PreparedAgentProjection<T = ChatMetadataResult> = {
 };
 
 export async function prepareChatMetadataModelProjection(params: {
-  context: GatewayRequestContext;
+  context: GatewayModelCatalogContext;
   facts: ChatMetadataProjectionFacts;
   requesterProfileId?: string;
   preferredProfileId?: string;

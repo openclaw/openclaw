@@ -1,11 +1,13 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
+import { repeat } from "lit/directives/repeat.js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
   WorktreesBranchesResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
@@ -151,6 +153,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     .watch(
       () => this.context?.agentIdentity,
       (agentIdentity, notify) => agentIdentity.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.theme,
+      (theme, notify) => theme.subscribe(notify),
     )
     .watch(
       () => this.context?.config,
@@ -392,7 +398,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   toggleSessionPin(session: SidebarRecentSession): void {
-    void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
+    void this.sessionOrganizer.patchSession(
+      session,
+      { pinned: !session.pinned },
+      {
+        sessionScope: true,
+      },
+    );
   }
 
   toggleSessionMenu(
@@ -592,6 +604,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       empty: visibleSessions.length === 0,
       sections,
       nativeSessionsHaveMore: this.sessionData.sessionsResult?.hasMore === true,
+      nativeSessionsLoading: this.sessionData.sessionsLoading,
       catalogRenderer: this.catalogRenderer,
       catalogs: {
         catalogs,
@@ -634,37 +647,39 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               : nothing,
           )}
           <div class="sidebar-shell__content">
-            <nav class="sidebar-nav" @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}>
-              ${renderAppSidebarPagesHead(this)}
-              <div
-                class="nav-section__items"
-                @dragover=${(event: DragEvent) =>
-                  this.sessionOrganizer.handleSidebarZoneDragOver(event)}
-                @dragleave=${(event: DragEvent) =>
-                  this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
-                @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
-              >
-                ${renderAppSidebarHomeRow(this)}
-                ${sidebarZone.entries
-                  .filter(
-                    (entry) => this.sidebarAgentsMode !== "roster" || entry.type !== "session",
-                  )
-                  .map((entry) =>
-                    renderAppSidebarZoneEntry(
-                      this,
-                      entry,
-                      sidebarZone.sessionRows,
-                      sidebarZone.pluginTabs,
-                    ),
-                  )}
-              </div>
-            </nav>
             <div
-              class="sidebar-shell__body sidebar-shell__body--scroll-${
-                this.contextualSidebar ? "none" : this.sessionData.sessionsScrollState
-              }"
+              class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData.sessionsScrollState}"
               @scroll=${(event: Event) => this.sidebarContext.handleScroll(event)}
             >
+              <nav
+                class="sidebar-nav"
+                @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}
+              >
+                ${renderAppSidebarPagesHead(this)}
+                <div
+                  class="nav-section__items"
+                  @dragover=${(event: DragEvent) =>
+                    this.sessionOrganizer.handleSidebarZoneDragOver(event)}
+                  @dragleave=${(event: DragEvent) =>
+                    this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
+                  @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
+                >
+                  ${renderAppSidebarHomeRow(this)}
+                  ${repeat(
+                    sidebarZone.entries.filter(
+                      (entry) => this.sidebarAgentsMode !== "roster" || entry.type !== "session",
+                    ),
+                    serializeSidebarEntry,
+                    (entry) =>
+                      renderAppSidebarZoneEntry(
+                        this,
+                        entry,
+                        sidebarZone.sessionRows,
+                        sidebarZone.pluginTabs,
+                      ),
+                  )}
+                </div>
+              </nav>
               <div class="sidebar-session-content" ?hidden=${Boolean(this.contextualSidebar)}>
                 ${renderAppSidebarOnline(this)} ${this.renderSessions()}
               </div>

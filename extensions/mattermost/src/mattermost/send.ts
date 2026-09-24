@@ -1,4 +1,5 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
+import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 // Mattermost plugin module implements send behavior.
 import {
@@ -46,7 +47,10 @@ import {
   type MattermostTarget,
 } from "./target-resolution.js";
 
-type MattermostSendOpts = {
+type MattermostSendOpts = Pick<
+  ChannelOutboundContext,
+  "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
+> & {
   cfg: OpenClawConfig;
   botToken?: string;
   baseUrl?: string;
@@ -343,13 +347,8 @@ async function resolveMattermostSendContext(
     baseUrl,
     botToken: token,
     allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    assertRequestCurrent: opts.assertDirectAdapterHandoff,
   });
-  const trimmedTo = normalizeOptionalString(to) ?? "";
-  const opaqueTarget = await resolveMattermostOpaqueTarget({
-    input: trimmedTo,
-    client,
-  });
-  const target = parseMattermostTarget(opaqueTarget?.to ?? trimmedTo);
   // Build retry options from account config, allowing opts to override
   const accountRetryConfig: CreateDmChannelRetryOptions | undefined = account.config.dmChannelRetry
     ? {
@@ -361,12 +360,25 @@ async function resolveMattermostSendContext(
     : undefined;
   const dmRetryOptions = mergeDmRetryOptions(accountRetryConfig, opts.dmRetryOptions);
 
-  const channelId = await resolveTargetChannelId({
-    target,
-    client,
-    dmRetryOptions,
-    logger: core.logging.shouldLogVerbose() ? logger : undefined,
-  });
+  let channelId: string;
+  try {
+    const trimmedTo = normalizeOptionalString(to) ?? "";
+    const opaqueTarget = await resolveMattermostOpaqueTarget({
+      input: trimmedTo,
+      client,
+    });
+    channelId = await resolveTargetChannelId({
+      target: parseMattermostTarget(opaqueTarget?.to ?? trimmedTo),
+      client,
+      dmRetryOptions,
+      logger: core.logging.shouldLogVerbose() ? logger : undefined,
+    });
+  } catch (error) {
+    // Target preparation cannot have posted a message. Recheck outside its
+    // retry history before returning the failure to delivery settlement.
+    client.assertRequestCurrent?.();
+    throw error;
+  }
 
   return {
     cfg,
@@ -392,6 +404,7 @@ export async function sendMessageMattermost(
     to,
     opts,
   );
+  client.assertRequestCurrent?.();
 
   let props = opts.props;
   if (!props && Array.isArray(opts.buttons) && opts.buttons.length > 0) {
@@ -430,6 +443,7 @@ export async function sendMessageMattermost(
       });
       fileIds = [fileInfo.id];
     } catch (err) {
+      client.assertRequestCurrent?.();
       uploadError = err instanceof Error ? err : new Error(String(err));
       // An unchecked URL fallback would bypass an explicit operator media cap.
       if (opts.requireMediaUpload || mediaMaxBytes !== undefined) {
@@ -464,6 +478,13 @@ export async function sendMessageMattermost(
     throw new Error("Mattermost message is empty");
   }
 
+  client.assertRequestCurrent?.();
+  try {
+    await opts.onPlatformSendDispatch?.();
+  } catch (error) {
+    client.assertRequestCurrent?.();
+    throw error;
+  }
   const post = await createMattermostPost(client, {
     channelId,
     message,

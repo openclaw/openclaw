@@ -1,4 +1,3 @@
-// Discord plugin module implements components.modal behavior.
 import {
   buildDiscordModalCustomId as buildDiscordModalCustomIdImpl,
   parseDiscordModalCustomIdForInteraction as parseDiscordModalCustomIdForInteractionImpl,
@@ -17,10 +16,6 @@ import {
   TextInput,
   UserSelectMenu,
 } from "./internal/discord.js";
-
-// Some test-only module graphs partially mock `./internal/discord.js` and can drop `Modal`.
-// Keep dynamic form definitions loadable instead of crashing unrelated suites.
-const ModalBase: typeof Modal = Modal ?? (function ModalFallback() {} as unknown as typeof Modal);
 
 function createModalFieldComponent(
   field: DiscordModalFieldDefinition,
@@ -66,7 +61,7 @@ function createModalFieldComponent(
   return new DynamicRadioGroup();
 }
 
-export class DiscordFormModal extends ModalBase {
+export class DiscordFormModal extends Modal {
   override title: string;
   override customId: string;
   override components: Array<Label | TextDisplay>;

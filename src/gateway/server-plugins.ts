@@ -8,7 +8,11 @@ import { allowsProcessHomeSessionScan } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import type { ChannelPluginLoadIntent } from "../plugins/loader-types.js";
+import type {
+  ChannelPluginLoadIntent,
+  PluginLoadOptions,
+  PluginRuntimeRecovery,
+} from "../plugins/loader-types.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -267,6 +271,10 @@ export function loadGatewayPlugins(params: {
   previousRegistry?: import("../plugins/registry-types.js").PluginRegistry;
   replacePluginIds?: ReadonlySet<string>;
   expectedSourceDigests?: Readonly<Record<string, string>>;
+  /** Metadata-only replacement preflight; never executes plugin registration. */
+  loadModules?: boolean;
+  moduleRecoveries?: ReadonlyMap<string, PluginRuntimeRecovery>;
+  prepareRegistrationFailureCleanup?: PluginLoadOptions["prepareRegistrationFailureCleanup"];
   env?: NodeJS.ProcessEnv;
 }) {
   const started = performance.now();
@@ -333,6 +341,9 @@ export function loadGatewayPlugins(params: {
           throwOnLoadError: params.loadIntent === "replacement",
           previousRegistry: params.previousRegistry,
           replacePluginIds: params.replacePluginIds ? [...params.replacePluginIds] : undefined,
+          loadModules: params.loadModules,
+          moduleRecoveries: params.moduleRecoveries,
+          prepareRegistrationFailureCleanup: params.prepareRegistrationFailureCleanup,
           // Startup registration stays scoped; later capability loads use the complete bound generation.
           manifestRegistry:
             params.pluginLookUpTable?.manifestRegistry ?? loadContext.manifestRegistry,

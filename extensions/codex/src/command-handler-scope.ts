@@ -11,6 +11,7 @@ import {
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
+import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
@@ -64,6 +65,8 @@ export type PreparedCodexCommandAuthority = {
   storePath: string | undefined;
   assertHostCurrent: () => void;
   assertCurrent: () => void;
+  assertMutationCurrent: () => void;
+  assertHostMutationCurrent: () => void;
 };
 
 export async function resolvePreparedCodexCommandAuthority(
@@ -126,6 +129,14 @@ export async function resolvePreparedCodexCommandAuthority(
     storePath,
     assertHostCurrent,
     assertCurrent,
+    assertMutationCurrent: () => {
+      assertCodexHostOwnerCurrent(ctx);
+      assertCurrent();
+    },
+    assertHostMutationCurrent: () => {
+      assertCodexHostOwnerCurrent(ctx);
+      assertHostCurrent();
+    },
   };
 }
 
@@ -146,10 +157,13 @@ export async function resolveCommandAppServerContext(
           agentDir,
           config: ctx.config,
         });
-  const connection = resolveCodexBindingAppServerConnection({
+  const connection = await resolveCodexBindingAppServerConnection({
     binding,
     authProfileId,
     pluginConfig,
+    agentDir,
+    config: ctx.config,
+    assertCurrent: authority.assertCurrent,
   });
   const scope: CommandAppServerScope = {
     agentId: target?.agentId ?? fallback.agentId,

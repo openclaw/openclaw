@@ -5,7 +5,11 @@ import { AUTH_STORE_VERSION } from "./constants.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
 import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
-import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
+import {
+  loadPersistedAuthProfileStore,
+  loadPersistedAuthProfileStoreAtDatabasePath,
+  loadPersistedSharedAuthProfileStore,
+} from "./persisted.js";
 import {
   deletePersistedAuthProfileStoreRaw,
   inspectPersistedAuthProfileStateRaw,
@@ -357,7 +361,6 @@ export async function upsertAuthProfileWithLock(
   const observed = loadAuthProfileWriteAuthority(params, params.profileId);
   let rejectedFencedGeneration = false;
   const update = async () => {
-    const currentAuthority = loadAuthProfileWriteAuthority(params, params.profileId);
     return await updateAuthProfileStoreWithLock({
       agentDir: params.agentDir,
       sharedStoreWrite: true,
@@ -366,7 +369,15 @@ export async function upsertAuthProfileWithLock(
         filterExternalAuthProfiles: false,
         syncExternalCli: false,
       },
-      updater: (store) => {
+      updater: (store, owner) => {
+        const currentAuthority =
+          store.profiles[params.profileId] ??
+          (owner && owner.databasePath !== owner.sharedDatabasePath
+            ? loadPersistedAuthProfileStoreAtDatabasePath(
+                owner.sharedDatabasePath,
+                owner.location === "state-db" ? "shared-state" : "agent",
+              )?.profiles[params.profileId]
+            : undefined);
         // Consumers can reject a changed profile kind under the same lock as the write.
         params.validateCurrentCredential?.(store.profiles[params.profileId]);
         if (

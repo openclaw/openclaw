@@ -50,6 +50,7 @@ import {
   type GatewayRequestFunction,
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
+import { assertGatewayCliMessageContext } from "../gateway/operator-cli-message-input.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "../gateway/operator-scopes.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
@@ -192,9 +193,6 @@ const embeddedAgentCommandLoader = createLazyPromiseLoader(
   () => import("./agent.js").then((module) => module.agentCommand),
   { cacheRejections: true },
 );
-const localAuditModuleLoader = createLazyPromiseLoader(() => import("./agent-local-audit.js"), {
-  cacheRejections: true,
-});
 const agentSessionModuleCache = createLazyPromiseLoader(
   () => import("./agent/session.runtime.js"),
   { cacheRejections: true },
@@ -266,7 +264,8 @@ async function runEmbeddedAgentCommand(
   let stopLocalAuditWriter: (() => Promise<void>) | undefined;
   if (isExecutionIdentityCollectionEnabled(config)) {
     try {
-      stopLocalAuditWriter = (await localAuditModuleLoader.load()).startAgentLocalAuditWriter();
+      const { startAgentLocalAuditWriter } = await import("./agent-local-audit.js");
+      stopLocalAuditWriter = startAgentLocalAuditWriter(config);
     } catch {
       // Admission emits one bounded warning if evidence cannot be queued.
     }
@@ -350,7 +349,6 @@ const loadReplyPayloadModule = replyPayloadModuleLoader.load;
 export const agentViaGatewayTesting = {
   resetLazyImportsForTests(): void {
     embeddedAgentCommandLoader.clear();
-    localAuditModuleLoader.clear();
     agentSessionModuleCache.clear();
     runtimeConfigModuleLoader.clear();
     embeddedStateLockModuleLoader.clear();
@@ -1060,21 +1058,16 @@ async function agentViaGatewayCommand(
 
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
-  const hasModelOverride = Boolean(modelOverride);
-  const needsAdminGatewayIdentity = hasModelOverride || isSessionResetCommand(body);
-  const gatewayIdentity: AgentGatewayCallIdentity = needsAdminGatewayIdentity
-    ? {
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-        scopes: [ADMIN_SCOPE],
-      }
-    : {
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-        // The local CLI is the Gateway owner. Keep owner-only run tools available;
-        // remote clients retain the agent method's least-privilege scope.
-        ...(remoteGateway ? {} : { scopes: [ADMIN_SCOPE] }),
-      };
+  const needsAdminGatewayIdentity = Boolean(modelOverride) || isSessionResetCommand(body);
+  const gatewayIdentity: AgentGatewayCallIdentity = {
+    clientName: needsAdminGatewayIdentity
+      ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+      : GATEWAY_CLIENT_NAMES.CLI,
+    mode: needsAdminGatewayIdentity ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    // Overrides/resets require admin; otherwise only the local operator requests
+    // owner scope, and remote callers keep the agent method's least-privilege scope.
+    ...(needsAdminGatewayIdentity || !remoteGateway ? { scopes: [ADMIN_SCOPE] } : {}),
+  };
 
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
@@ -1182,8 +1175,7 @@ async function agentViaGatewayCommand(
     return response;
   }
 
-  const result = response?.result;
-  const payloads = result?.payloads ?? [];
+  const payloads = response.result?.payloads ?? [];
 
   if (isInFlightGatewayAgentResponse(response)) {
     runtime.error?.(formatInFlightGatewayAgentMessage(response));
@@ -1242,6 +1234,11 @@ export async function agentCliCommand(
   runtime: RuntimeEnv,
   deps?: AgentCliDeps,
 ) {
+  if (opts.local !== true) {
+    // Check the operator entry before model overrides select a backend identity
+    // or target resolution reads another session. Embedded one-shot runs are separate.
+    assertGatewayCliMessageContext("agent");
+  }
   // A present blank selector must not become an omitted target during normalization.
   for (const [flag, value] of [
     ["--agent", opts.agent],

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { loadMediaToolReferences } from "./tools/media-tool-shared.js";
@@ -105,36 +106,74 @@ describe("media references in task workspaces", () => {
     );
   });
 
-  it("reads session-root bytes before PDF validation while rejecting outside files", async () => {
-    const workspaceDir = tempDirs.make("openclaw-media-canonical-");
-    const sessionRoot = tempDirs.make("openclaw-media-worktree-");
-    const cwd = path.join(sessionRoot, "task");
-    await fs.mkdir(cwd);
-    const imagePath = path.join(sessionRoot, "reference.png");
-    const outsidePath = path.join(workspaceDir, "reference.png");
-    await fs.writeFile(imagePath, png);
-    await fs.writeFile(outsidePath, png);
-    const tool = createMediaTool("pdf", {
-      config: {
-        plugins: { allow: [] },
-        tools: { allow: ["pdf"] },
-        agents: { defaults: { pdfModel: { primary: "fixture/pdf-model" } } },
+  it("discards an image when the run is cancelled during a sandbox read", async () => {
+    const sandboxRoot = tempDirs.make("openclaw-media-sandbox-");
+    await fs.writeFile(path.join(sandboxRoot, "screenshot.png"), png);
+    const bridge = createHostSandboxFsBridge(sandboxRoot);
+    const readStarted = createDeferredCore();
+    const finishRead = createDeferredCore();
+    const controller = new AbortController();
+    const tool = createMediaTool("view_image", {
+      sandboxRoot,
+      sandboxFsBridge: {
+        ...bridge,
+        readFile: async (params) => {
+          readStarted.resolve();
+          await finishRead.promise;
+          return await bridge.readFile(params);
+        },
       },
-      workspaceDir,
-      cwd,
-      fsPolicy: { workspaceOnly: true, root: sessionRoot },
     });
 
-    // Reaching content validation proves file access without invoking a PDF provider.
-    for (const pdf of [imagePath, "../reference.png"]) {
-      await expect(tool.execute("read-reference", { pdf })).rejects.toThrow(
-        "Expected PDF but got image/png",
-      );
-    }
-    await expect(tool.execute("outside-reference", { pdf: outsidePath })).rejects.toThrow(
-      /not under an allowed directory/i,
-    );
+    const result = tool.execute("cancelled-image", { path: "screenshot.png" }, controller.signal);
+    const rejected = expect(result).rejects.toThrow("cancelled image inspection");
+    await readStarted.promise;
+    controller.abort(new Error("cancelled image inspection"));
+    finishRead.resolve();
+    await rejected;
   });
+
+  it.each([
+    { name: "reference.png", bytes: png, mime: "image/png" },
+    {
+      name: "reference.txt",
+      bytes: Buffer.from("This is a text document, not a PDF."),
+      mime: "text/plain",
+    },
+    { name: "reference.json", bytes: Buffer.from('{"format":"json"}'), mime: "application/json" },
+  ])(
+    "rejects $mime as a PDF after reading within the session root",
+    async ({ name, bytes, mime }) => {
+      const workspaceDir = tempDirs.make("openclaw-media-canonical-");
+      const sessionRoot = tempDirs.make("openclaw-media-worktree-");
+      const cwd = path.join(sessionRoot, "task");
+      await fs.mkdir(cwd);
+      const imagePath = path.join(sessionRoot, name);
+      const outsidePath = path.join(workspaceDir, name);
+      await fs.writeFile(imagePath, bytes);
+      await fs.writeFile(outsidePath, bytes);
+      const tool = createMediaTool("pdf", {
+        config: {
+          plugins: { allow: [] },
+          tools: { allow: ["pdf"] },
+          agents: { defaults: { pdfModel: { primary: "fixture/pdf-model" } } },
+        },
+        workspaceDir,
+        cwd,
+        fsPolicy: { workspaceOnly: true, root: sessionRoot },
+      });
+
+      // Reaching content validation proves file access without invoking a PDF provider.
+      for (const pdf of [imagePath, `../${name}`]) {
+        await expect(tool.execute("read-reference", { pdf })).rejects.toThrow(
+          `Expected PDF but got ${mime}`,
+        );
+      }
+      await expect(tool.execute("outside-reference", { pdf: outsidePath })).rejects.toThrow(
+        /not under an allowed directory/i,
+      );
+    },
+  );
 
   it.each(["image_generate", "video_generate", "music_generate"] as const)(
     "%s shared reference loader follows the task cwd and session boundary",

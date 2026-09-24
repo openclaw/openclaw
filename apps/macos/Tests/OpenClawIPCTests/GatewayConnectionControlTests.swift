@@ -549,12 +549,6 @@ private func assertConfigLookupCannotRecreateRoute(
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         let storeKey = "autoqa-185-tls-recovery"
         GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
-        let route = try #require(GatewayTLSRoute.resolve(
-            url: url,
-            connectionMode: .remote,
-            configuredFingerprint: nil,
-            storedFingerprint: "old",
-            storeKey: storeKey))
         let failure = GatewayTLSValidationFailure(
             kind: .pinMismatch,
             host: "gateway.example.ts.net",
@@ -577,7 +571,12 @@ private func assertConfigLookupCannotRecreateRoute(
         })
         let connection = GatewayConnection(
             testEndpointProvider: {
-                GatewayConnection.EndpointSnapshot(
+                let route = try #require(GatewayTLSRoute.resolve(
+                    url: url,
+                    connectionMode: .remote,
+                    configuredFingerprint: nil,
+                    storeKey: storeKey))
+                return GatewayConnection.EndpointSnapshot(
                     config: (url: url, token: nil, password: nil),
                     tls: route,
                     routeAuthority: nil)
@@ -1321,12 +1320,36 @@ extension GatewayConnectionControlTests {
             [{"id":"main","model":{"primary":"   "}}]}
             """#,
             nil),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","utilityModel":" apple-fm/on-device "}]}
+            """#,
+            "apple-fm/on-device"),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","model":{"primary":"openai/gpt-5.5"},"utilityModel":"apple-fm/on-device"}]}
+            """#,
+            "openai/gpt-5.5"),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main"},{"id":"other","utilityModel":"apple-fm/on-device"}]}
+            """#,
+            nil),
+        (
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","model":{"primary":"   "},"utilityModel":"   "}]}
+            """#,
+            nil),
     ])
     func `configured inference model follows the default agent`(
         json: String,
         expected: String?) throws
     {
-        #expect(try GatewayConnection.decodeConfiguredInferenceModel(Data(json.utf8)) == expected)
+        #expect(try GatewayConnection.decodeConfiguredInferenceModels(Data(json.utf8)).setupModel == expected)
     }
 
     static func messageData(_ message: URLSessionWebSocketTask.Message) -> Data? {

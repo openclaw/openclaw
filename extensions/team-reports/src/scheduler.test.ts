@@ -637,8 +637,8 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(await store.listPeriods()).toEqual([]);
   });
 
-  it("makes collected evidence readable while model summaries are still pending", async () => {
-    const { scheduler, store, complete, nextRun } = await setup({ summaries: true });
+  it("publishes evidence before model completion and reuses stored prose on regeneration", async () => {
+    const { scheduler, store, complete, github, nextRun } = await setup({ summaries: true });
     const blocked = createDeferred<Awaited<ReturnType<Complete>>>();
     const summarizing = createDeferred<void>();
     complete.mockImplementation(() => {
@@ -654,8 +654,27 @@ describe("Team Reports scheduler lifecycle", () => {
     expect((await store.listRuns()).find((run) => run.id === id)?.status).toBe("running");
     blocked.resolve(modelResponse());
     await nextRun();
-    expect((await store.getPeriod("day", "2026-08-19"))?.summary?.source).toBe("model");
+    const stored = await store.getPeriod("day", "2026-08-19");
+    expect(stored?.summary?.source).toBe("model");
     expect((await store.listRuns()).find((run) => run.id === id)?.status).toBe("ok");
+    if (!stored) {
+      throw new Error("Generated report is missing");
+    }
+    await store.upsertPeriod({ ...stored, markdown: stored.markdown + "é".repeat(128 * 1024) });
+    workerReads.calls = 0;
+    workerReads.bytes = 0;
+    workerReads.enabled = true;
+    try {
+      await scheduler.generate();
+      await nextRun();
+    } finally {
+      workerReads.enabled = false;
+    }
+    expect(workerReads.calls).toBeGreaterThan(0);
+    expect.soft(workerReads.bytes).toBeLessThan(16 * 1024);
+    expect(complete).toHaveBeenCalledOnce();
+    expect(github.collect).toHaveBeenCalledTimes(2);
+    expect(await store.getPeriod("day", "2026-08-19")).toEqual(stored);
   });
 
   it("surfaces the latest day's model fallback in status, storage, Markdown, and logs", async () => {

@@ -2,6 +2,7 @@
 import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -227,14 +228,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   if (!account.enabled) {
     runtime.log?.(`[${account.accountId}] slack account disabled; monitor startup skipped`);
-    if (opts.abortSignal?.aborted) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      opts.abortSignal?.addEventListener("abort", () => resolve(), {
-        once: true,
-      });
-    });
+    await waitUntilAbort(opts.abortSignal);
     return;
   }
 
@@ -278,11 +272,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   } else {
     if (!botToken || (slackMode === "socket" && !appToken)) {
       const missing =
-        slackMode === "http"
-          ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
-          : slackMode === "relay"
-            ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
-            : `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`;
+        slackMode === "socket"
+          ? `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`
+          : `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`;
       throw new Error(missing);
     }
     if (slackMode === "http" && !signingSecret) {
@@ -800,24 +792,20 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }
       }
     } else if (slackMode === "relay" && relayConfig) {
+      const relaySource = await loadSlackRelaySource();
       runtime.log?.(
         `slack relay mode connecting to ${relayConfig.url} gateway_id:${relayConfig.gatewayId}`,
       );
-      // Send identity flows through the account default (relay hello ->
-      // setIdentity); resolveSlackSendIdentity falls back to it, so claimed
-      // relay events replayed after a restart dispatch with correct identity
-      // once the relay reattaches.
+      // Keep relay identity on the account default so claimed events retain it after restart.
       durableIngress.attachRelayDispatch(async (message, turnAdoptionLifecycle) => {
-        await handleSlackMessage(message as Parameters<typeof handleSlackMessage>[0], {
+        await handleSlackMessage(relaySource.requireSlackMessageEvent(message), {
           source: "message",
           wasMentioned: true,
           awaitDispatch: true,
           turnAdoptionLifecycle,
         });
       });
-      await (
-        await loadSlackRelaySource()
-      ).monitorSlackRelaySource({
+      await relaySource.monitorSlackRelaySource({
         config: relayConfig,
         acceptRelayEvent: durableIngress.acceptRelayEvent,
         runtime,
@@ -828,13 +816,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       });
     } else {
       runtime.log?.(`slack http mode listening at ${slackWebhookPath}`);
-      if (!opts.abortSignal?.aborted) {
-        await new Promise<void>((resolve) => {
-          opts.abortSignal?.addEventListener("abort", () => resolve(), {
-            once: true,
-          });
-        });
-      }
+      await waitUntilAbort(opts.abortSignal);
     }
   } finally {
     installationState.release();

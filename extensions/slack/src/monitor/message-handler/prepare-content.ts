@@ -1,4 +1,3 @@
-// Slack plugin module implements prepare content behavior.
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
@@ -53,7 +52,6 @@ export function formatSlackUnavailableMedia(params: {
 
 function collectUniqueSlackMentionIds(texts: Array<string | undefined>): string[] {
   const seen = new Set<string>();
-  const mentionIds: string[] = [];
   for (const text of texts) {
     if (!text) {
       continue;
@@ -61,14 +59,12 @@ function collectUniqueSlackMentionIds(texts: Array<string | undefined>): string[
     SLACK_USER_MENTION_RE.lastIndex = 0;
     for (const match of text.matchAll(SLACK_USER_MENTION_RE)) {
       const userId = match[1];
-      if (!userId || seen.has(userId)) {
-        continue;
+      if (userId) {
+        seen.add(userId);
       }
-      seen.add(userId);
-      mentionIds.push(userId);
     }
   }
-  return mentionIds;
+  return [...seen];
 }
 
 function renderSlackUserMentions(
@@ -119,6 +115,7 @@ export async function resolveSlackMessageContent(params: {
   mediaReadIdleTimeoutMs?: number;
   mediaTotalTimeoutMs?: number;
   abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
@@ -139,6 +136,7 @@ export async function resolveSlackMessageContent(params: {
             readIdleTimeoutMs: params.mediaReadIdleTimeoutMs,
             totalTimeoutMs: params.mediaTotalTimeoutMs,
             abortSignal: params.abortSignal,
+            assertCurrent: params.assertCurrent,
             preloadedMedia: params.preloadedMedia,
           }),
         )
@@ -190,14 +188,11 @@ export async function resolveSlackMessageContent(params: {
     }
   }
 
-  const renderedMessageText = renderSlackUserMentions(textParts[0], renderedMentions);
-  const renderedAttachmentText = renderSlackUserMentions(textParts[1], renderedMentions);
-  const renderedBotAttachmentText = renderSlackUserMentions(textParts[2], renderedMentions);
   const commandSourceText =
     renderSlackUserMentions(normalizeOptionalString(params.message.text), renderedMentions) ?? "";
 
   const body =
-    [renderedMessageText, renderedAttachmentText, renderedBotAttachmentText, mediaPlaceholder]
+    [...textParts.map((text) => renderSlackUserMentions(text, renderedMentions)), mediaPlaceholder]
       .filter(Boolean)
       .join("\n") || "";
   const rawBody = formatSlackUnavailableMedia({

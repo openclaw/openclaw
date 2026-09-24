@@ -1,6 +1,7 @@
 // Control UI content-security-policy helpers.
 // Computes inline script hashes and builds the Gateway-served CSP header.
 import { createHash } from "node:crypto";
+import type { ServerResponse } from "node:http";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
@@ -90,10 +91,23 @@ export function buildControlUiCspHeader(opts?: {
     "frame-src 'self' http: https:",
     `script-src ${scriptTokens.join(" ")}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: blob: https://gravatar.com https://avatars.githubusercontent.com",
+    "img-src 'self' data: blob: https:",
     "media-src 'self' data: blob:",
     "font-src 'self' https://fonts.gstatic.com",
     "worker-src 'self'",
     `connect-src ${connectTokens.join(" ")}`,
   ].join("; ");
+}
+
+export function applyControlUiSecurityHeaders(res: ServerResponse) {
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  // Browser Talk is owned by this same-origin Control UI document. Keep camera
+  // access here; the Gateway's default policy continues to deny it elsewhere.
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
+  );
 }

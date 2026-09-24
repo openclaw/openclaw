@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import type { PluginPage } from "../pages/plugin/plugin-page.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -148,7 +149,15 @@ suite.define(() => {
       { ...createControlUiE2eContextOptions(), colorScheme: "light" },
       async ({ page }) => {
         const { frameRequests } = await installReports(page);
-        await page.goto(`${suite.server.baseUrl}reports`);
+        await page.goto(`${suite.server.baseUrl}chat`);
+        // Bootstrap must publish the script policy before the scripted fixture mounts.
+        await page.waitForFunction(() => {
+          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+            "openclaw-app",
+          );
+          return app?.runtime?.context.config.current.embedSandboxMode === "scripts";
+        });
+        await page.getByRole("link", { name: "Reports", exact: true }).click();
         const frame = page.frameLocator("openclaw-plugin-page iframe");
         const receivedTheme = frame.getByLabel("Received OpenClaw theme");
         expect(await page.evaluate(() => matchMedia("(prefers-color-scheme: light)").matches)).toBe(
@@ -156,14 +165,18 @@ suite.define(() => {
         );
         const sidebar = page.locator("openclaw-app-sidebar");
         const identityMenu = sidebar.getByRole("button", { name: /^Identity and app menu for / });
-        if (!(await sidebar.locator(".theme-mode-toggle").isVisible())) {
-          await identityMenu.click();
-        }
+        await identityMenu.click();
+        // The menu loads lazily, and each mode click renders its next label asynchronously.
         for (const currentMode of ["System", "Light"] as const) {
-          const toggle = sidebar.getByRole("button", { name: `Color mode: ${currentMode}` });
-          if (await toggle.isVisible()) {
-            await toggle.click();
-          }
+          await sidebar
+            .getByRole("menuitem", { name: `Color mode: ${currentMode}`, exact: true })
+            .click();
+          await sidebar
+            .getByRole("menuitem", {
+              name: `Color mode: ${currentMode === "System" ? "Light" : "Dark"}`,
+              exact: true,
+            })
+            .waitFor();
         }
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
         await expect
@@ -178,11 +191,7 @@ suite.define(() => {
           JSON.parse((await receivedTheme.textContent()) ?? "{}").messages,
         );
 
-        const toggle = sidebar.getByRole("button", { name: "Color mode: Dark" });
-        if (!(await toggle.isVisible())) {
-          await identityMenu.click();
-        }
-        await toggle.click();
+        await sidebar.getByRole("menuitem", { name: "Color mode: Dark", exact: true }).click();
 
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
         await expect

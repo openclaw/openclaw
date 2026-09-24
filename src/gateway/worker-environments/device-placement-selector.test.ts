@@ -53,6 +53,7 @@ function nodeProof(environment: EnvironmentSummary): NodeWorkerSupervisorNodePro
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
       enabled: true,
+      capturedExecPolicy: true,
       capacity: environment.workerSlots ?? { total: 1, available: 0 },
     },
     commands: ["runtime.exec"],
@@ -63,6 +64,7 @@ async function selectNodes(
   environments: EnvironmentSummary[],
   options: {
     requirement?: DevicePlacementRequirement;
+    executionMode?: "worker-turn" | "remote-exec";
     availability?: (deviceId: string) => Promise<DeviceWorkerAvailability>;
     admittedSessions?: ReadonlyMap<string, number>;
   } = {},
@@ -90,12 +92,45 @@ async function selectNodes(
     environmentService,
     requirement: options.requirement ?? WORKER_REQUIREMENT,
     runtimeId: "test-runtime",
+    executionMode:
+      options.executionMode ??
+      (options.requirement === REMOTE_REQUIREMENT ? "remote-exec" : "worker-turn"),
     config: CONFIG,
     getAdmittedSessionCounts: () => options.admittedSessions,
   });
 }
 
 describe("paired-device automatic placement selection", () => {
+  it.each([0, 2])(
+    "reports the required node update before capacity when %s slots are free",
+    async (available) => {
+      const environment = nodeEnvironment("outdated", available);
+      const node = nodeProof(environment);
+      delete node.workerHost.capturedExecPolicy;
+      expect(
+        await selectNodes([environment], {
+          availability: async () => ({ available: true, node }),
+        }),
+      ).toEqual({
+        ok: false,
+        error: expect.stringContaining("run openclaw update, then reconnect"),
+      });
+    },
+  );
+
+  it("keeps remote-exec independent of captured policy even when its harness consumes a slot", async () => {
+    const environment = nodeEnvironment("remote", 2);
+    const node = nodeProof(environment);
+    delete node.workerHost.capturedExecPolicy;
+    expect(
+      await selectNodes([environment], {
+        executionMode: "remote-exec",
+        requirement: { ...REMOTE_REQUIREMENT, consumesWorkerSlot: true },
+        availability: async () => ({ available: true, node }),
+      }),
+    ).toEqual({ ok: true, candidates: [{ deviceId: "remote", availableSlots: 2 }] });
+  });
+
   it.each([1, 2])(
     "prefers lower admitted demand while a third host still advertises %s free slots",
     async (available) => {
@@ -300,6 +335,7 @@ describe("paired-device automatic placement selection", () => {
       environmentService: {},
       requirement: undefined,
       runtimeId: "cloud-only",
+      executionMode: "remote-exec",
       config: CONFIG,
     });
 

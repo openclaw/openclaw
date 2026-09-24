@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import type { IncomingHttpHeaders } from "node:http";
+import { CANCEL_SYMBOL } from "@clack/prompts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import type {
@@ -30,14 +31,12 @@ import {
 } from "./accounts.js";
 
 const mocks = vi.hoisted(() => ({
-  cancellation: Symbol("clack:cancel"),
   password: vi.fn<typeof import("@clack/prompts").password>(),
   autocomplete: vi.fn<typeof import("@clack/prompts").autocomplete>(),
   openUrl: vi.fn(async () => false),
 }));
 vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
-  isCancel: (value: unknown) => value === mocks.cancellation,
   password: mocks.password,
   autocomplete: mocks.autocomplete,
 }));
@@ -210,9 +209,9 @@ function waitForPromptAbort(): void {
     ({ signal }) =>
       new Promise((resolve) => {
         if (signal?.aborted) {
-          resolve(mocks.cancellation);
+          resolve(CANCEL_SYMBOL);
         } else {
-          signal?.addEventListener("abort", () => resolve(mocks.cancellation), { once: true });
+          signal?.addEventListener("abort", () => resolve(CANCEL_SYMBOL), { once: true });
         }
       }),
   );
@@ -697,7 +696,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
   );
 
   it("waits for exact cancellation acknowledgment before closing the initiating socket", async () => {
-    mocks.password.mockResolvedValue(mocks.cancellation);
+    mocks.password.mockResolvedValue(CANCEL_SYMBOL);
     const received = createDeferredCore<Request>();
     const acknowledged = createDeferredCore<UsersAuthConnectStatusResult>();
     const output = runtime();

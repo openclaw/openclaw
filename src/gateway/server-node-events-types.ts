@@ -52,6 +52,7 @@ export type NodeEventContext = {
     nodeId: string;
     connId?: string;
     idleSeconds: number;
+    source?: "app" | "system";
     saturated?: boolean;
   }) => { lastActiveAtMs: number; presenceUpdatedAtMs: number } | null;
   clearNodePresenceActivity?: (params: { nodeId: string; connId?: string }) => boolean | null;

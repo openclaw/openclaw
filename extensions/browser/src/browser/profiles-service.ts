@@ -6,10 +6,13 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import {
+  getRuntimeConfig,
+  getRuntimeConfigSourceSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../config/config.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { assertCdpEndpointAllowed, redactCdpUrl } from "./cdp.helpers.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import {
@@ -287,6 +290,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         terminal: "deleted",
         advanceConfigRevision: true,
         closeRelay: resolved.driver === "extension",
+        managedChrome: "release-profile-data",
         afterCleanup: persistDelete,
         rollbackTerminalOnFailure: true,
       });

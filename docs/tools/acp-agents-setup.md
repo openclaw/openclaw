@@ -38,17 +38,21 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 | `droid`      | [Factory Droid](https://www.factory.ai)                                                                |
 | `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                    |
 | `gemini`     | [Gemini CLI](https://github.com/google-gemini/gemini-cli)                                              |
+| `grok-build` | Grok Build (`grok agent stdio`)                                                                        |
 | `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                     |
 | `kilocode`   | [Kilocode](https://kilocode.ai)                                                                        |
 | `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                     |
 | `kiro`       | [Kiro CLI](https://kiro.dev)                                                                           |
+| `mcode`      | MiniMax Code (`mcode acp`; install and authenticate its CLI on the Gateway host)                       |
 | `mux`        | [Mux](https://mux.coder.com)                                                                           |
 | `opencode`   | [OpenCode](https://opencode.ai)                                                                        |
 | `openclaw`   | OpenClaw ACP bridge (native `openclaw acp`)                                                            |
 | `pi`         | [Pi Coding Agent](https://github.com/earendil-works/pi)                                                |
+| `pool`       | Pool (`pool acp`)                                                                                      |
 | `qoder`      | [Qoder CLI](https://docs.qoder.com/cli/acp)                                                            |
 | `qwen`       | [Qwen Code](https://github.com/QwenLM/qwen-code)                                                       |
 | `trae`       | [Trae CLI](https://docs.trae.cn/cli)                                                                   |
+| `zeroclaw`   | ZeroClaw (`zeroclaw acp`)                                                                              |
 
 `factory-droid` and `factorydroid` also resolve to the built-in `droid` adapter.
 
@@ -58,9 +62,83 @@ If your local Cursor install still exposes ACP as `agent acp`, override the `cur
 Direct acpx CLI usage can also target arbitrary adapters via `--agent <command>`, but that raw escape hatch is an acpx CLI feature (not the normal OpenClaw `agentId` path).
 
 Model control is adapter-capability dependent. Codex ACP model refs are
-normalized by OpenClaw before startup. Other harnesses need ACP `models` plus
-`session/set_model` support; if a harness exposes neither that ACP capability
-nor its own startup model flag, OpenClaw/acpx cannot force a model selection.
+normalized by OpenClaw before startup. Other harnesses need an advertised model
+config option with `session/set_config_option`, or legacy ACP `models` with
+`session/set_model`. Without supported ACP model control or an adapter-specific
+startup model flag, OpenClaw/acpx cannot force a model selection.
+
+## GitHub Copilot CLI in native chat
+
+GitHub Copilot CLI can serve ordinary OpenClaw chat through the installed-agent
+model picker, including web chat and channels. This route uses the local
+`copilot --acp --stdio` process, not an OpenClaw API-provider credential.
+
+Install an ACP-capable CLI and sign in under the same OS account that runs the
+Gateway. Copilot CLI 1.0.86 supports model discovery and selection over ACP:
+
+```bash
+npm install -g @github/copilot
+copilot --version
+copilot login
+```
+
+Refresh the model catalog, then choose an `acp-copilot/<model-id>` entry. OpenClaw
+uses only the models advertised by that CLI; it does not supply a static model
+list. Installation detection alone does not prove authentication or model access.
+To prevent new native Copilot turns and catalog discovery, set
+`plugins.entries.acpx.config.nativeAgents.copilot` to `false`. Classic
+`/acp spawn copilot` sessions and `acp.allowedAgents` are separate.
+
+Copilot owns authentication and billing:
+
+- Native GitHub authentication uses the CLI's OAuth login or its supported GitHub
+  token routes, including an authenticated `gh` fallback. Environment tokens
+  (`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`) can override a stored login.
+- Copilot model usage consumes the account's plan allowance. Do not assume a
+  model is free because its catalog entry is available; check the account's
+  included usage and additional-usage budget.
+- Explicit CLI BYOK configuration (`COPILOT_PROVIDER_*`,
+  `COPILOT_PROVIDERS_CONFIG`, or the CLI's `providers.json`) can route model
+  requests to a separately billed provider even when GitHub login is available.
+  Configure that route deliberately. OpenClaw does not choose it or copy an
+  OpenClaw API credential into the native harness.
+
+See GitHub's [CLI authentication guide](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli)
+and [Copilot billing guide](https://docs.github.com/en/copilot/concepts/billing-and-usage/individuals/billing)
+for account and plan requirements. Native chat permission and sandbox boundaries
+below still apply.
+
+Installed native agents keep their own sign-in. During discovery, `/models` can
+report **Checking native agent** without requiring an OpenClaw API key. If
+availability is unconfirmed, check the native app on the Gateway host and run
+`/models` again.
+
+<a id="tool-profiles-for-native-chat-runtimes" />
+
+## Permissions for native chat runtimes
+
+When a native runtime cannot enforce the chat's optional OpenClaw tool, sandbox,
+or workspace restrictions, the Control UI offers **Continue for this chat** to
+an administrator. The same confirmation applies when selecting the runtime or
+sending a message with an existing selection.
+
+Confirming selects **Full access**, turns off optional sandboxing for that chat,
+and records consent for the exact native runtime. The native agent then uses its
+own permissions on the Gateway host. OpenClaw does not claim to enforce its
+optional tool restrictions inside that agent. Other chats and global settings
+stay unchanged, and tools hosted by OpenClaw retain their existing policy.
+
+Declining leaves permissions unchanged and keeps the message unsent. A first send
+can create an empty chat so confirmation is bound to that chat, but no message is
+saved or run before you confirm. Confirmation saves the permissions and retries
+that message once, including a chat's first message, without pinning its default model.
+Selection-only confirmation does not send the draft. Consent is not inherited by
+another chat and is cleared when the session resets or the selected runtime changes.
+Older hosts that do not recognize consent retain their previous restriction checks.
+
+Required sandboxes, required workspace boundaries, and incompatible remote
+execution placement cannot be waived by this confirmation. A restricted user
+must ask an administrator or choose a compatible runtime.
 
 ## Required config
 

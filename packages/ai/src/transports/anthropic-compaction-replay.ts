@@ -12,6 +12,7 @@ const ANTHROPIC_COMPACTION_SUPPRESSION_DATA = "rejected";
 type AnthropicCompactionReplayState = ProviderReplayState & {
   type: typeof ANTHROPIC_COMPACTION_REPLAY_TYPE;
   baseUrlHash: string;
+  encryptedContent?: string | null;
 };
 
 type AnthropicCompactionSuppressionState = ProviderReplayState & {
@@ -23,6 +24,13 @@ type AnthropicCompactionSuppressionState = ProviderReplayState & {
 export type AnthropicCompactionBlock = {
   type: "compaction";
   content: string;
+  encrypted_content?: string | null;
+};
+
+type PendingCompaction = {
+  content: string;
+  replayIndex: number;
+  encryptedContent?: string | null;
 };
 
 type AnthropicCompactionReplayPlan = {
@@ -34,14 +42,20 @@ type ReplayOpts = { authProfileId?: string; sessionId?: string };
 type ReplayOut = Pick<AssistantMessage, "providerReplay">;
 
 export function createCompactionCapture(output: ReplayOut, model: Model, options?: ReplayOpts) {
-  const pending = new Map<number, { content: string; replayIndex: number }>();
+  const pending = new Map<number, PendingCompaction>();
   return {
     begin(index: number, block: Record<string, unknown> | undefined, replayIndex: number): boolean {
       if (block?.type !== "compaction") {
         return false;
       }
       const content = typeof block.content === "string" ? block.content : "";
-      pending.set(index, { content, replayIndex });
+      pending.set(index, {
+        content,
+        replayIndex,
+        ...(typeof block.encrypted_content === "string" || block.encrypted_content === null
+          ? { encryptedContent: block.encrypted_content }
+          : {}),
+      });
       return true;
     },
     delta(index: number, delta: Record<string, unknown> | undefined): boolean {
@@ -49,7 +63,12 @@ export function createCompactionCapture(output: ReplayOut, model: Model, options
       if (!capture || delta?.type !== "compaction_delta") {
         return false;
       }
-      capture.content = typeof delta.content === "string" ? delta.content : capture.content;
+      if (typeof delta.content === "string") {
+        capture.content += delta.content;
+      }
+      if (typeof delta.encrypted_content === "string" || delta.encrypted_content === null) {
+        capture.encryptedContent = delta.encrypted_content;
+      }
       return true;
     },
     complete(index: number): boolean {
@@ -58,7 +77,7 @@ export function createCompactionCapture(output: ReplayOut, model: Model, options
         return false;
       }
       pending.delete(index);
-      captureAnthropicCompaction(output, capture.content, capture.replayIndex, model, options);
+      captureAnthropicCompaction(output, capture, model, options);
       return true;
     },
   };
@@ -86,6 +105,9 @@ function isAnthropicCompactionState(
   return (
     state.type === ANTHROPIC_COMPACTION_REPLAY_TYPE &&
     state.data.length > 0 &&
+    (state.encryptedContent === undefined ||
+      state.encryptedContent === null ||
+      typeof state.encryptedContent === "string") &&
     (state.replayIndex === undefined ||
       (typeof state.replayIndex === "number" &&
         Number.isSafeInteger(state.replayIndex) &&
@@ -101,23 +123,25 @@ function readAnthropicCompactionState(
 
 function captureAnthropicCompaction(
   output: ReplayOut,
-  summary: string,
-  replayIndex: number,
+  capture: PendingCompaction,
   model: Model,
   options?: ReplayOpts,
 ): void {
+  const { content: summary, replayIndex, encryptedContent } = capture;
   const context = buildProviderReplayContext(model, options);
   if (!summary || !context.baseUrlHash || !Number.isSafeInteger(replayIndex) || replayIndex < 0) {
     return;
   }
-  output.providerReplay = {
+  const replay: AnthropicCompactionReplayState = {
     v: 1,
     type: ANTHROPIC_COMPACTION_REPLAY_TYPE,
     data: summary,
+    ...(encryptedContent !== undefined ? { encryptedContent } : {}),
     replayIndex,
     ...context,
     baseUrlHash: context.baseUrlHash,
   };
+  output.providerReplay = replay;
 }
 
 export function suppressAnthropicCompaction(
@@ -142,7 +166,14 @@ export function resolveNewestAnthropicCompaction(
   messages: Context["messages"],
   model: Model,
   options?: ReplayOpts,
-): { owner: AssistantMessage; replayIndex: number; summary: string } | undefined {
+):
+  | {
+      owner: AssistantMessage;
+      replayIndex: number;
+      summary: string;
+      encryptedContent?: string | null;
+    }
+  | undefined {
   const context = buildProviderReplayContext(model, options);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -169,6 +200,9 @@ export function resolveNewestAnthropicCompaction(
       owner: message,
       replayIndex: replayState.replayIndex ?? 0,
       summary: replayState.data,
+      ...(replayState.encryptedContent !== undefined
+        ? { encryptedContent: replayState.encryptedContent }
+        : {}),
     };
   }
   return undefined;
@@ -193,7 +227,13 @@ export function buildAnthropicReplayPlan(
   };
   return {
     messages: [owner, ...messages.slice(ownerIndex + 1)],
-    compaction: { type: "compaction", content: checkpoint.summary },
+    compaction: {
+      type: "compaction",
+      content: checkpoint.summary,
+      ...(checkpoint.encryptedContent !== undefined
+        ? { encrypted_content: checkpoint.encryptedContent }
+        : {}),
+    },
   };
 }
 

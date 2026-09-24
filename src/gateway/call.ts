@@ -8,8 +8,6 @@ import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-cli
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   ConnectErrorDetailCodes,
@@ -32,17 +30,7 @@ import {
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import {
-  loadDeviceAuthToken,
-  loadDeviceAuthTokenReadOnly,
-  loadOriginDeviceToken,
-  loadOriginDeviceTokenReadOnly,
-} from "../infra/device-auth-store.js";
-import {
-  loadDeviceIdentityIfPresent,
-  loadOrCreateDeviceIdentity,
-  type DeviceIdentity,
-} from "../infra/device-identity.js";
+import type { DeviceIdentity } from "../infra/device-identity.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
@@ -50,6 +38,11 @@ import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { resolveGatewayAuth } from "./auth-resolve.js";
+import {
+  loadStoredOperatorDeviceAuthToken,
+  resolveDeviceIdentityForGatewayCall,
+  shouldOmitDeviceIdentityForGatewayCall,
+} from "./call-device-auth.js";
 import {
   ensureExplicitGatewayAuth,
   GatewayExplicitAuthRequiredError,
@@ -59,6 +52,7 @@ import {
 import {
   GatewayClient,
   isGatewayConnectAssemblyError,
+  prepareGatewayClientDeviceAuth,
   type GatewayClientCloseInfo,
   type GatewayClientOptions,
   type GatewayClientRequestOptions,
@@ -94,10 +88,12 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { isLoopbackGatewayUrl } from "./net.js";
+import { assertGatewayCliMessageContext } from "./operator-cli-message-input.js";
 import {
   GatewayTransportError,
   type GatewayTransportErrorKind,
+  createGatewayCloseTransportError,
+  createGatewayTimeoutTransportError,
   isGatewayTransportError,
 } from "./transport-error.js";
 export type { GatewayConnectionDetails };
@@ -113,7 +109,10 @@ export type GatewayRequestFunction = <T = Record<string, unknown>>(
   opts?: GatewayClientRequestOptions,
 ) => Promise<T>;
 
-type CallGatewayBaseOptions = {
+type CallGatewayBaseOptions = Pick<
+  GatewayClientOptions,
+  "caps" | "clientName" | "mode" | "preparedDeviceAuth"
+> & {
   url?: string;
   /** Require this resolved endpoint without overriding target selection or authentication. */
   expectUrl?: string;
@@ -130,11 +129,9 @@ type CallGatewayBaseOptions = {
   assertDispatchCurrent?: () => void;
   onAccepted?: GatewayClientRequestOptions["onAccepted"];
   onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
-  clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
   platform?: string;
-  mode?: GatewayClientMode;
   approvalRuntimeToken?: string;
   agentRuntimeIdentityToken?: string;
   useStoredDeviceAuth?: boolean;
@@ -170,9 +167,7 @@ type CallGatewayBaseOptions = {
   serviceTargetUrl?: string;
 };
 
-export type CallGatewayCliOptions = CallGatewayBaseOptions & {
-  scopes?: OperatorScope[];
-};
+export type CallGatewayCliOptions = CallGatewayOptions;
 
 export type CallGatewayOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
@@ -469,80 +464,6 @@ export function buildGatewayConnectionDetails(
   });
 }
 
-function shouldOmitDeviceIdentityForGatewayCall(params: {
-  opts: CallGatewayBaseOptions;
-  url: string;
-  authMode: ReturnType<typeof resolveGatewayAuth>["mode"];
-  token?: string;
-  password?: string;
-  allowAuthNone?: boolean;
-}): boolean {
-  const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
-  const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
-  // Inactive ambient credentials must not turn an auth-none CLI call device-less.
-  // Omit identity only when the Gateway will actually authenticate the supplied secret.
-  const hasSharedSecretAuth =
-    (params.authMode === "token" && Boolean(params.token)) ||
-    (params.authMode === "password" && Boolean(params.password));
-  const isLoopback = isLoopbackGatewayUrl(params.url);
-  const isLocalBackendSharedAuth =
-    mode === GATEWAY_CLIENT_MODES.BACKEND &&
-    clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
-    (hasSharedSecretAuth || params.allowAuthNone === true) &&
-    isLoopback;
-  const isLocalCliSharedAuth =
-    mode === GATEWAY_CLIENT_MODES.CLI &&
-    clientName === GATEWAY_CLIENT_NAMES.CLI &&
-    hasSharedSecretAuth &&
-    isLoopback;
-  return isLocalBackendSharedAuth || isLocalCliSharedAuth;
-}
-
-export function resolveDeviceIdentityForGatewayCall(
-  sharedStateMode?: "read-only",
-): DeviceIdentity | null {
-  try {
-    return sharedStateMode === "read-only"
-      ? loadDeviceIdentityIfPresent()
-      : loadOrCreateDeviceIdentity();
-  } catch {
-    // Read-only or restricted environments should still be able to call the
-    // gateway with token/password auth without crashing before the RPC.
-    return null;
-  }
-}
-
-function loadStoredOperatorDeviceAuthToken(
-  deviceIdentity: DeviceIdentity | null,
-  deviceAuthScope?: string,
-  sharedStateMode?: "read-only",
-): DeviceAuthEntry | null {
-  if (!deviceIdentity) {
-    return null;
-  }
-  try {
-    if (deviceAuthScope) {
-      const loadToken =
-        sharedStateMode === "read-only" ? loadOriginDeviceTokenReadOnly : loadOriginDeviceToken;
-      return loadToken({
-        gatewayScope: deviceAuthScope,
-        deviceId: deviceIdentity.deviceId,
-        role: "operator",
-        env: process.env,
-      });
-    }
-    const loadToken =
-      sharedStateMode === "read-only" ? loadDeviceAuthTokenReadOnly : loadDeviceAuthToken;
-    return loadToken({
-      deviceId: deviceIdentity.deviceId,
-      role: "operator",
-      env: process.env,
-    });
-  } catch {
-    return null;
-  }
-}
-
 function resolveGatewayCallAuth(config: OpenClawConfig) {
   return resolveGatewayAuth({
     authConfig: config.gateway?.auth,
@@ -551,7 +472,7 @@ function resolveGatewayCallAuth(config: OpenClawConfig) {
   });
 }
 
-function ensureGatewayCallCanAuthenticate(params: {
+async function ensureGatewayCallCanAuthenticate(params: {
   opts: CallGatewayBaseOptions;
   context: ResolvedGatewayCallContext;
   token?: string;
@@ -559,7 +480,7 @@ function ensureGatewayCallCanAuthenticate(params: {
   deviceIdentity: DeviceIdentity | null;
   deviceAuthScope?: string;
   storedAuth?: DeviceAuthEntry | null;
-}): void {
+}): Promise<void> {
   const resolvedAuth = resolveGatewayCallAuth(params.context.config);
   const authMode = resolvedAuth.mode;
   if (authMode !== "token" && authMode !== "password") {
@@ -571,17 +492,15 @@ function ensureGatewayCallCanAuthenticate(params: {
   if (resolvedAuth.allowTailscale) {
     return;
   }
-  const hasStoredAuth =
-    params.storedAuth !== undefined
-      ? Boolean(params.storedAuth?.token)
-      : Boolean(
-          loadStoredOperatorDeviceAuthToken(
-            params.deviceIdentity,
-            params.deviceAuthScope,
-            params.opts.sharedStateMode,
-          )?.token,
-        );
-  if (hasStoredAuth) {
+  const storedAuth =
+    params.storedAuth === undefined
+      ? await loadStoredOperatorDeviceAuthToken(
+          params.deviceIdentity,
+          params.deviceAuthScope,
+          params.opts.sharedStateMode,
+        )
+      : params.storedAuth;
+  if (storedAuth?.token) {
     return;
   }
   throw new GatewayCredentialsRequiredError({
@@ -705,36 +624,6 @@ function ensureRemoteModeUrlConfigured(params: {
 
 export { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 
-function formatGatewayCloseError(
-  code: number,
-  reason: string,
-  connectionDetails: GatewayConnectionDetails,
-): string {
-  const reasonText = normalizeOptionalString(reason) || "no close reason";
-  const hint =
-    code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
-  const suffix = hint ? ` ${hint}` : "";
-  let message = `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
-  // Add troubleshooting hints for common issues
-  if (code === 1006) {
-    message +=
-      "\n\nPossible causes:" +
-      "\n- Connection dropped without a close frame (retry; check network and gateway load)" +
-      "\n- Gateway not yet ready to accept connections (retry after a moment)" +
-      "\n- TLS mismatch (connecting with ws:// to a wss:// gateway, or vice versa)" +
-      "\n- Gateway process stopped or became unreachable (confirm it is still running)" +
-      "\nRun `openclaw doctor` for diagnostics.";
-  }
-  return message;
-}
-
-function formatGatewayTimeoutError(
-  timeoutMs: number,
-  connectionDetails: GatewayConnectionDetails,
-): string {
-  return `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
-}
-
 /** Wrap raw socket-level connect failures (ECONNREFUSED etc.) into one actionable message. */
 function createGatewayUnreachableTransportError(params: {
   cause: Error;
@@ -750,33 +639,6 @@ function createGatewayUnreachableTransportError(params: {
       "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
       params.connectionDetails.message,
     ].join("\n"),
-  });
-}
-
-function createGatewayCloseTransportError(params: {
-  code: number;
-  reason: string;
-  connectionDetails: GatewayConnectionDetails;
-}): GatewayTransportError {
-  const reasonText = normalizeOptionalString(params.reason) || "no close reason";
-  return new GatewayTransportError({
-    kind: "closed",
-    code: params.code,
-    reason: reasonText,
-    connectionDetails: params.connectionDetails,
-    message: formatGatewayCloseError(params.code, params.reason, params.connectionDetails),
-  });
-}
-
-function createGatewayTimeoutTransportError(params: {
-  timeoutMs: number;
-  connectionDetails: GatewayConnectionDetails;
-}): GatewayTransportError {
-  return new GatewayTransportError({
-    kind: "timeout",
-    timeoutMs: params.timeoutMs,
-    connectionDetails: params.connectionDetails,
-    message: formatGatewayTimeoutError(params.timeoutMs, params.connectionDetails),
   });
 }
 
@@ -962,6 +824,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: resolveGatewayClientDisplayName(opts),
       clientVersion: opts.clientVersion ?? VERSION,
+      caps: opts.caps,
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
@@ -1054,6 +917,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
             code,
             reason,
             connectionDetails: params.connectionDetails,
+            requestDispatched: primaryRequestStarted,
           }),
         );
       },
@@ -1082,6 +946,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
         createGatewayTimeoutTransportError({
           timeoutMs: wrapperTimeoutMs,
           connectionDetails: params.connectionDetails,
+          requestDispatched: primaryRequestStarted,
         }),
       );
     }, safeTimerTimeoutMs);
@@ -1099,6 +964,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           createGatewayTimeoutTransportError({
             timeoutMs: startupTimeoutMs,
             connectionDetails: params.connectionDetails,
+            requestDispatched: false,
           }),
         );
       })
@@ -1115,6 +981,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
 async function callGatewayWithScopes<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
   scopes: OperatorScope[] | undefined,
+  localCliAbort = false,
 ): Promise<T> {
   const context = await resolveGatewayCallContext(opts);
   const { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
@@ -1189,9 +1056,9 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
         ? null
         : resolveDeviceIdentityForGatewayCall(opts.sharedStateMode)
       : opts.deviceIdentity;
-  let storedAuth: DeviceAuthEntry | null | undefined;
+  let storedAuth: DeviceAuthEntry | null | undefined = opts.preparedDeviceAuth;
   if (useStoredDeviceAuth) {
-    storedAuth = loadStoredOperatorDeviceAuthToken(
+    storedAuth ??= await loadStoredOperatorDeviceAuthToken(
       deviceIdentity,
       deviceAuthScope,
       opts.sharedStateMode,
@@ -1235,7 +1102,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       );
     }
   }
-  ensureGatewayCallCanAuthenticate({
+  await ensureGatewayCallCanAuthenticate({
     opts,
     context,
     token,
@@ -1244,12 +1111,39 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     deviceAuthScope,
     storedAuth,
   });
-  const effectiveScopes =
+  try {
+    await prepareGatewayClientDeviceAuth(
+      {
+        url,
+        token,
+        password,
+        edgeAuthHeaders,
+        tlsFingerprint,
+        deviceIdentity,
+        deviceAuthScope,
+        sharedStateMode: opts.sharedStateMode,
+        preparedDeviceAuth: storedAuth ?? undefined,
+        approvalRuntimeToken: opts.approvalRuntimeToken,
+        agentRuntimeIdentityToken: opts.agentRuntimeIdentityToken,
+      },
+      opts.signal,
+    );
+  } catch (error) {
+    if (opts.signal?.aborted) {
+      throw createGatewayRequestAbortError(opts.method);
+    }
+    throw error;
+  }
+  // A one-shot shared-auth CLI connection cannot match an earlier run's owner.
+  // Request admin authority for cancellation; the Gateway still validates it.
+  const effectiveScopes: OperatorScope[] | undefined =
     requestedStoredDeviceAuth && hasExplicitAuth && opts.requiredStoredDeviceAuthScopes
       ? opts.requiredStoredDeviceAuthScopes
       : useStoredDeviceAuth
         ? undefined
-        : scopes;
+        : localCliAbort && omitDeviceIdentity && !deviceIdentity
+          ? [ADMIN_SCOPE]
+          : scopes;
   return await executeGatewayRequestWithScopes<T>({
     opts,
     scopes: effectiveScopes,
@@ -1357,12 +1251,16 @@ async function callGatewayWithScopeEscalation<T>(
 export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {
+  assertGatewayCliMessageContext(opts.method, opts.params);
   if (Array.isArray(opts.scopes)) {
     return await callGatewayWithScopes(opts, opts.scopes);
   }
   const scopes = isGatewayMethodClassified(opts.method)
     ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params)
     : CLI_DEFAULT_OPERATOR_SCOPES;
+  if (opts.method === "chat.abort" || opts.method === "sessions.abort") {
+    return await callGatewayWithScopes(opts, scopes, true);
+  }
   return await callGatewayWithScopeEscalation(opts, scopes);
 }
 

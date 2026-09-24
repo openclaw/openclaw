@@ -1,12 +1,12 @@
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   buildChannelInboundEventContext,
+  createChannelInboundEnvelopeBuilder,
   formatInboundMediaUnavailableText,
   resolveChannelInboundRouteEnvelope,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 // Qa Channel plugin module implements inbound behavior.
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
@@ -15,6 +15,7 @@ import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   buildQaTarget,
   deleteQaBusMessage,
@@ -319,10 +320,9 @@ export async function handleQaInbound(params: {
   const target = buildQaTarget({
     chatType: inbound.conversation.kind,
     conversationId: inbound.conversation.id,
-    threadId: inbound.threadId,
   });
   const toolCalls: QaBusToolCall[] = [];
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const { route } = resolveChannelInboundRouteEnvelope({
     cfg: params.config,
     channel: params.channelId,
     accountId: params.account.accountId,
@@ -345,6 +345,15 @@ export async function handleQaInbound(params: {
     mediaLocalRoots: getAgentScopedMediaLocalRoots(params.config, route.agentId),
   });
   const isGroup = inbound.conversation.kind !== "direct";
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey: route.sessionKey,
+    threadId: inbound.threadId,
+    parentSessionKey: isGroup ? route.sessionKey : undefined,
+  });
+  const buildEnvelope = createChannelInboundEnvelopeBuilder({
+    cfg: params.config,
+    route: { agentId: route.agentId, sessionKey: threadKeys.sessionKey },
+  });
   const wasMentioned = isGroup
     ? channelRuntime.mentions.matchesMentionPatterns(
         inbound.text,
@@ -364,11 +373,11 @@ export async function handleQaInbound(params: {
         agentId: route.agentId,
         sessionPrefix: "qa-channel:slash",
         userId: inbound.senderId,
-        targetSessionKey: route.sessionKey,
+        targetSessionKey: threadKeys.sessionKey,
       })
     : undefined;
-  const sessionKey = commandTargets?.sessionKey ?? route.sessionKey;
-  const access = await resolveStableChannelMessageIngress({
+  const sessionKey = commandTargets?.sessionKey ?? threadKeys.sessionKey;
+  const access = await channelRuntime.inbound.ingress.resolveStable({
     cfg: params.config,
     channelId: params.channelId,
     accountId: params.account.accountId,
@@ -384,6 +393,7 @@ export async function handleQaInbound(params: {
     contextBinding: {
       agentId: route.agentId,
       sessionKey,
+      nativeChannelId: inbound.conversation.id,
       messageId: inbound.id,
       inboundEventKind: "user_request",
     },
@@ -450,6 +460,7 @@ export async function handleQaInbound(params: {
       accountId: route.accountId,
       routeSessionKey: sessionKey,
       dispatchSessionKey: sessionKey,
+      parentSessionKey: threadKeys.parentSessionKey,
     },
     reply: {
       to: target,
@@ -487,7 +498,7 @@ export async function handleQaInbound(params: {
     cfg: params.config,
     channel: params.channelId,
     accountId: params.account.accountId,
-    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
+    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: threadKeys.sessionKey },
     ctxPayload,
     delivery: {
       deliver: async (payload, info) => {

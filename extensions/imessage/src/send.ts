@@ -1,4 +1,3 @@
-// Imessage plugin module implements send behavior.
 import { constants, accessSync } from "node:fs";
 import { basename } from "node:path";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
@@ -15,7 +14,6 @@ import {
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   extractOriginalFilename,
@@ -25,10 +23,7 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
-import {
-  asOptionalRecord,
-  normalizeOptionalString as stringValue,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString as stringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
   convertMarkdownTables,
@@ -44,13 +39,10 @@ import {
   registerIMessageApprovalReactionTarget,
 } from "./approval-reactions.js";
 import { chatContextFromIMessageTarget, resolveIMessageDirectChatService } from "./chat-context.js";
+import { withIMessageReceiptGuidReader } from "./chat-db.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
-import {
-  createIMessageRpcClient,
-  IMessageRpcRequestError,
-  type IMessageRpcClient,
-} from "./client.js";
+import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { resolveAuthorizedIMessageReplyReference } from "./message-resource.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
@@ -64,7 +56,7 @@ import {
 } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
-import { withIMessageReceiptGuidReader } from "./send-receipt-db.js";
+import { requestIMessageRpcSend, type IMessageSendHandoff } from "./send-transport.js";
 import {
   formatIMessageChatTarget,
   type IMessageService,
@@ -83,7 +75,7 @@ type IMessageApprovalPromptBinding = {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 };
 
-type IMessageSendOpts = {
+type IMessageSendOpts = IMessageSendHandoff & {
   cliPath?: string;
   dbPath?: string;
   service?: IMessageService;
@@ -437,46 +429,9 @@ function resolveIMessageSendFailure(result: Record<string, unknown>): string | n
     : "iMessage action failed";
 }
 
-function normalizeIMessageRpcSendError(error: unknown): unknown {
-  if (!(error instanceof IMessageRpcRequestError)) {
-    return error;
-  }
-  const data = asOptionalRecord(error.data);
-  return data?.disposition === "not_started" && data.retry_safe === true
-    ? new PlatformMessageNotDispatchedError(error.message, { cause: error })
-    : error;
-}
-
-async function requestIMessageRpcSend(
-  client: IMessageRpcClient,
-  method: string,
-  params: Record<string, unknown>,
-  timeoutMs: number,
-): Promise<Record<string, unknown>> {
-  try {
-    return await client.request<Record<string, unknown>>(method, params, { timeoutMs });
-  } catch (error) {
-    throw normalizeIMessageRpcSendError(error);
-  }
-}
-
 function isIMessageRpcSendTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /imsg rpc timeout \(send\)/i.test(message);
-}
-
-async function runIMessageCliJson(
-  cliPath: string,
-  dbPath: string | undefined,
-  args: readonly string[],
-  timeoutMs?: number,
-): Promise<Record<string, unknown>> {
-  return await runIMessageCliJsonCommand({
-    args,
-    cliPath,
-    dbPath,
-    timeoutMs,
-  });
 }
 
 function resultService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
@@ -561,6 +516,8 @@ async function trySendAttachmentForTarget(params: {
   ) => Promise<Record<string, unknown>>;
   withRemoteFile: typeof withIMessageRemoteFile;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
+  assertDirectAdapterHandoff?: () => void;
+  onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<IMessageSendResult | null> {
   if (params.audioAsVoice && params.sendTransport === "applescript") {
     throw new Error(
@@ -615,6 +572,7 @@ async function trySendAttachmentForTarget(params: {
     }
     return null;
   }
+  params.assertDirectAdapterHandoff?.();
 
   const echoScope = resolveOutboundEchoScope({
     accountId: params.accountId,
@@ -624,7 +582,7 @@ async function trySendAttachmentForTarget(params: {
   let pendingEchoKey: string | undefined;
   try {
     if (echoScope) {
-      pendingEchoKey = rememberPersistedIMessageEcho({
+      pendingEchoKey = await rememberPersistedIMessageEcho({
         scope: echoScope,
         text: params.echoText,
         media: params.echoMedia,
@@ -642,6 +600,7 @@ async function trySendAttachmentForTarget(params: {
           remoteHost: params.remoteHost,
           localPath: attachmentPath,
           timeoutMs: params.timeoutMs,
+          assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
           use: async (remotePath) => {
             const rpcParams: Record<string, unknown> = {
               file: remotePath,
@@ -659,6 +618,9 @@ async function trySendAttachmentForTarget(params: {
           },
         });
       }
+      params.assertDirectAdapterHandoff?.();
+      await params.onPlatformSendDispatch?.();
+      params.assertDirectAdapterHandoff?.();
       return await params.runCliJson([
         "send-attachment",
         "--chat",
@@ -673,7 +635,7 @@ async function trySendAttachmentForTarget(params: {
       ]);
     });
   } catch (error) {
-    forgetPersistedIMessageEchoKey(pendingEchoKey);
+    await forgetPersistedIMessageEchoKey(pendingEchoKey);
     if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;
     }
@@ -682,7 +644,7 @@ async function trySendAttachmentForTarget(params: {
   const failure = resolveIMessageSendFailure(result);
   if (failure) {
     const error = new Error(failure);
-    forgetPersistedIMessageEchoKey(pendingEchoKey);
+    await forgetPersistedIMessageEchoKey(pendingEchoKey);
     if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;
     }
@@ -698,7 +660,7 @@ async function trySendAttachmentForTarget(params: {
   });
   const messageId = resolvedId ?? (result.ok || result.success ? "ok" : "unknown");
   if (echoScope) {
-    rememberPersistedIMessageEcho({
+    await rememberPersistedIMessageEcho({
       scope: echoScope,
       text: params.echoText,
       media: params.echoMedia,
@@ -706,7 +668,7 @@ async function trySendAttachmentForTarget(params: {
     });
   }
   if (resolvedId && isConcreteIMessageMessageId(resolvedId)) {
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: params.accountId,
       messageId: resolvedId,
       chatGuid:
@@ -745,6 +707,7 @@ export async function sendMessageIMessage(
   opts: IMessageSendOpts,
 ): Promise<IMessageSendResult> {
   const cfg = requireRuntimeConfig(opts.config, "iMessage send");
+  opts.assertDirectAdapterHandoff?.();
   const account =
     opts.account ??
     resolveIMessageAccount({
@@ -757,6 +720,7 @@ export async function sendMessageIMessage(
     cliPath,
     remoteHost: account.config.remoteHost,
   });
+  opts.assertDirectAdapterHandoff?.();
   const chatDbLookupPath = resolveIMessageChatDbLookupPath({
     cliPath,
     dbPath,
@@ -768,7 +732,7 @@ export async function sendMessageIMessage(
     resolveTargetService(target) ??
     (account.config.service as IMessageService | undefined);
   const sendTransport = (account.config.sendTransport ?? "auto") as IMessageSendTransport;
-  const resolvedReplyToId = resolveAuthorizedIMessageReplyReference({
+  const resolvedReplyToId = await resolveAuthorizedIMessageReplyReference({
     account,
     target,
     cliPath,
@@ -785,6 +749,7 @@ export async function sendMessageIMessage(
     replyToId: opts.replyToId,
     conversationReadOrigin: opts.conversationReadOrigin,
   });
+  opts.assertDirectAdapterHandoff?.();
   // Sends use a dedicated longer floor (not the 10s probe timeout) so macOS 26
   // bridge stalls aren't aborted mid-send. A configured probe timeout may extend
   // sends, but only an explicit per-call timeout may shorten them.
@@ -819,6 +784,7 @@ export async function sendMessageIMessage(
     });
     filePath = resolved.path;
     mediaContentType = resolved.contentType ?? undefined;
+    opts.assertDirectAdapterHandoff?.();
   }
 
   if (!message.trim() && !filePath) {
@@ -857,15 +823,21 @@ export async function sendMessageIMessage(
   // so the receipt and approval binding report the unthreaded send it became,
   // not the threaded reply the transport rejected (#99638).
   let effectiveReplyToId = resolvedReplyToId;
-  const runCliJson =
+  const runCli =
     opts.runCliJson ??
-    ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
+    ((args: readonly string[]) => runIMessageCliJsonCommand({ args, cliPath, dbPath, timeoutMs }));
+  const runCliJson = async (args: readonly string[]) => {
+    // Lookup commands need current authority without recording visible dispatch.
+    opts.assertDirectAdapterHandoff?.();
+    return await runCli(args);
+  };
   const requestOwnedRpc = async (method: string, rpcParams: Record<string, unknown>) => {
+    opts.assertDirectAdapterHandoff?.();
     const rpcClient = opts.createClient
       ? await opts.createClient({ cliPath, dbPath, remoteHost })
       : await createIMessageRpcClient({ cliPath, dbPath, remoteHost });
     try {
-      return await requestIMessageRpcSend(rpcClient, method, rpcParams, timeoutMs);
+      return await requestIMessageRpcSend(rpcClient, method, rpcParams, timeoutMs, opts);
     } finally {
       await rpcClient.stop();
     }
@@ -890,6 +862,8 @@ export async function sendMessageIMessage(
       requestRpc: requestOwnedRpc,
       withRemoteFile,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
+      assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
+      onPlatformSendDispatch: opts.onPlatformSendDispatch,
     });
     if (attachmentResult) {
       if (!message.trim()) {
@@ -971,23 +945,16 @@ export async function sendMessageIMessage(
 
   const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
 
+  opts.assertDirectAdapterHandoff?.();
   const client =
     opts.client ??
     (opts.createClient
       ? await opts.createClient({ cliPath, dbPath, remoteHost })
       : await createIMessageRpcClient({ cliPath, dbPath, remoteHost }));
   const shouldClose = !opts.client;
-  let closedClient = false;
-  const stopOwnedClient = async () => {
-    if (!shouldClose || closedClient) {
-      return;
-    }
-    closedClient = true;
-    await client.stop();
-  };
   const requestSuccessfulSend = async (sendParams: Record<string, unknown>) => {
     const request = async (nativeParams: Record<string, unknown>) =>
-      await requestIMessageRpcSend(client, "send", nativeParams, timeoutMs);
+      await requestIMessageRpcSend(client, "send", nativeParams, timeoutMs, opts);
     const response = filePath
       ? await withOriginalIMessageAttachmentPath(filePath, async (attachmentPath) => {
           if (remoteHost) {
@@ -995,6 +962,7 @@ export async function sendMessageIMessage(
               remoteHost,
               localPath: attachmentPath,
               timeoutMs,
+              assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
               use: async (remotePath) => request({ ...sendParams, file: remotePath }),
             });
           }
@@ -1013,7 +981,7 @@ export async function sendMessageIMessage(
   try {
     try {
       if (echoScope) {
-        pendingEchoKey = rememberPersistedIMessageEcho({
+        pendingEchoKey = await rememberPersistedIMessageEcho({
           scope: echoScope,
           text: echoText,
           media: echoMedia,
@@ -1092,7 +1060,7 @@ export async function sendMessageIMessage(
       });
     }
     if (echoScope) {
-      rememberPersistedIMessageEcho({
+      await rememberPersistedIMessageEcho({
         scope: echoScope,
         text: echoText,
         media: echoMedia,
@@ -1110,7 +1078,7 @@ export async function sendMessageIMessage(
     );
     if (resolvedId && isConcreteIMessageMessageId(resolvedId)) {
       const chatContext = chatContextFromIMessageTarget(target, confirmedService ?? service);
-      rememberIMessageReplyCache({
+      await rememberIMessageReplyCache({
         accountId: account.accountId,
         messageId: resolvedId,
         ...chatContext,
@@ -1153,10 +1121,12 @@ export async function sendMessageIMessage(
       }),
     };
   } catch (error) {
-    forgetPersistedIMessageEchoKey(pendingEchoKey);
+    await forgetPersistedIMessageEchoKey(pendingEchoKey);
     throw error;
   } finally {
-    await stopOwnedClient();
+    if (shouldClose) {
+      await client.stop();
+    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -342,30 +342,77 @@ describe("handleFileWrite — symlink protection", () => {
     await expect(fs.readFile(moved, "utf8")).resolves.toBe("approved");
   });
 
-  it("writes through the preflight binding when the existing file is unchanged", async () => {
+  it("checks hard links on the bound write handle after path validation", async () => {
     const target = path.join(tmpRoot, "target.txt");
+    const alias = path.join(tmpRoot, "outside-alias.txt");
     await fs.writeFile(target, "before");
-    const preflight = await handleFileWrite({
+    const params = {
       path: target,
       contentBase64: b64("after"),
       overwrite: true,
-      preflightOnly: true,
-    });
+      rejectHardlinks: true,
+    };
+    const preflight = await handleFileWrite({ ...params, preflightOnly: true });
     if (!preflight.ok) {
       throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
     }
-
-    const result = await handleFileWrite({
-      path: target,
-      contentBase64: b64("after"),
-      overwrite: true,
-      expectedCanonicalPath: preflight.path,
-      expectedBinding: preflight.binding,
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      if (args[0] === target && args[1] === "r+") {
+        await fs.link(target, alias);
+      }
+      return handle;
     });
-
-    expectSuccessFields(result, { path: target, size: 5 });
-    await expect(fs.readFile(target, "utf8")).resolves.toBe("after");
+    try {
+      const result = await handleFileWrite({
+        ...params,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      });
+      expectFailure(result, "HARDLINK_TARGET_DENIED");
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("before");
+      await expect(fs.readFile(alias, "utf8")).resolves.toBe("before");
+    } finally {
+      openSpy.mockRestore();
+    }
   });
+
+  it.each(["", "after", "after!", "a longer replacement"])(
+    "preserves the preflight-bound inode and hardlinks for payload %j",
+    async (content) => {
+      const target = path.join(tmpRoot, "target.txt");
+      const alias = path.join(tmpRoot, "alias.txt");
+      await fs.writeFile(target, "before");
+      await fs.link(target, alias);
+      const identity = await fs.stat(target, { bigint: true });
+      const preflight = await handleFileWrite({
+        path: target,
+        contentBase64: b64(content),
+        overwrite: true,
+        preflightOnly: true,
+      });
+      if (!preflight.ok) {
+        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+      }
+
+      const result = await handleFileWrite({
+        path: target,
+        contentBase64: b64(content),
+        overwrite: true,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      });
+
+      expectSuccessFields(result, { path: target, size: Buffer.byteLength(content) });
+      await expect(fs.readFile(target, "utf8")).resolves.toBe(content);
+      await expect(fs.readFile(alias, "utf8")).resolves.toBe(content);
+      await expect(fs.stat(target, { bigint: true })).resolves.toMatchObject({
+        dev: identity.dev,
+        ino: identity.ino,
+      });
+    },
+  );
 
   it("rejects a parent replacement before creating a new file", async () => {
     const parent = path.join(tmpRoot, "parent");

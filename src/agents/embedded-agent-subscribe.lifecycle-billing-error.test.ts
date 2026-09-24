@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import { onAgentEventForRun } from "../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
   createDiagnosticEmbeddedRunOwner,
@@ -63,6 +64,46 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
     expect(lifecycleError?.stream).toBe("lifecycle");
     expect(lifecycleError?.data?.phase).toBe("error");
     expect(lifecycleError?.data?.error).toContain("Anthropic (claude-3-5-sonnet)");
+  });
+
+  it("refines the requested model once when the provider reports the executing model", () => {
+    const runId = "run-response-model";
+    const emitted = vi.fn();
+    const unlisten = onAgentEventForRun(runId, emitted);
+    registerAgentRunContext(runId, {
+      agentId: "main",
+      sessionKey: "agent:main:response-model",
+      sessionId: "session-response-model",
+      projectSessionActive: true,
+    });
+    const { emit } = createAgentEventHarness({
+      runId,
+      sessionKey: "agent:main:response-model",
+    });
+    const requested = createAssistant(testModel, []);
+    const rerouted = { ...requested, responseModel: "provider-executing-model" };
+    try {
+      emit({ type: "message_start", message: requested });
+      emit({
+        type: "message_update",
+        message: rerouted,
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "done" },
+      });
+      emit({ type: "message_end", message: rerouted });
+
+      expect(
+        emitted.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === "lifecycle" && event.data.phase === "model")
+          .map((event) => event.data),
+      ).toEqual([
+        { phase: "model", provider: testModel.provider, model: testModel.id },
+        { phase: "model", provider: testModel.provider, model: "provider-executing-model" },
+      ]);
+    } finally {
+      unlisten();
+      clearAgentRunContext(runId);
+    }
   });
 
   it("defers error terminal ownership while preserving diagnostics", () => {
@@ -164,12 +205,22 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
             authProfileStore: { version: 1, profiles: {} },
             onAgentEvent,
           },
-          activeSession: session,
-          hookRunner: null,
+          agentSession: {
+            activeSession: session,
+            hookRunner: null,
+            clientToolCallSlots: [],
+            hasDeliveredSourceReply: () => false,
+            markSourceReplyDelivered: () => {},
+            trustedLocalMediaToolNames: new Set(),
+            builtinToolNames: new Set(),
+            coreBuiltinToolNames: new Set(),
+            replaySafeToolNames: new Set(),
+            codeModeExecToolNames: new Set(),
+            sideEffectToolOwners: new Map(),
+          },
           hookAgentId: "main",
           diagnosticTrace: { traceId: "11111111111111111111111111111111" },
           diagnosticOwner,
-          clientToolCallSlots: [],
           nestedToolActivities: [],
           isReplaySafeTool: () => false,
           runAbortController: new AbortController(),
@@ -183,14 +234,8 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
             timedOut: false,
             yieldDetected: false,
           }),
-          hasDeliveredSourceReply: () => false,
-          markSourceReplyDelivered: () => {},
           onBlockReply: undefined,
           onBlockReplyFlush: undefined,
-          sandboxSessionKey: sessionKey,
-          trustedLocalMediaToolNames: new Set(),
-          builtinToolNames: new Set(),
-          replaySafeToolNames: new Set(),
         });
         try {
           await session.prompt("exercise terminal provider failure");

@@ -188,8 +188,6 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
     | Promise<OpenAIResponsesRequestParams>;
 }): Promise<{
   stream: AsyncIterable<unknown>;
-  response: Response;
-  attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
 }> {
   const send = async (
     initialAttempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
@@ -260,7 +258,6 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
       : {}),
   });
   return {
-    ...result,
     stream: {
       async *[Symbol.asyncIterator]() {
         let current = result;

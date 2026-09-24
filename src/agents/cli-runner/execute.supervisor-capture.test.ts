@@ -31,7 +31,10 @@ import type { CliBackendParseJsonlEvent } from "../../plugins/cli-backend.types.
 import { getPluginModuleLoaderStats } from "../../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createChildAdapter } from "../../process/supervisor/adapters/child.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
+import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
+import { createStubChildAdapter } from "../../process/supervisor/supervisor.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
@@ -48,9 +51,13 @@ import {
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
-import type { PreparedCliRunContext } from "./types.js";
+import { captureCliRunStartTime, type PreparedCliRunContext } from "./types.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
+
+vi.mock("../../process/supervisor/adapters/child.js", () => ({
+  createChildAdapter: vi.fn(),
+}));
 
 // Gateway unit coverage owns quiet-admission timing. These integration cases only
 // need to drain calls already in flight, so skip the repeated 250 ms quiet window.
@@ -136,7 +143,7 @@ function buildPreparedCliRunContext(params: {
       timeoutMs: 1_000,
       runId,
     },
-    started: Date.now(),
+    ...captureCliRunStartTime(),
     workspaceDir: "/tmp",
     backendResolved: {
       id: provider,
@@ -688,14 +695,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
       input.onStdout?.(largeToolEvent);
       input.onStdout?.(resultEvent);
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : `${largeToolEvent}${resultEvent}`,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -738,14 +739,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
       input.onStdout?.(largeToolEvent);
       input.onStdout?.(resultEvent);
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : `${largeToolEvent}${resultEvent}`,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -799,14 +794,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
           );
         }
         return createManagedRun({
-          reason: "exit",
+          ...createSuccessfulProcessExit(),
           exitCode: 1,
-          exitSignal: null,
-          durationMs: 50,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
         });
       });
 
@@ -829,14 +818,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(stdout);
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -872,14 +855,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(stdout);
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -912,14 +889,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(stdout);
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -961,14 +932,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(stdout);
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
         stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1006,14 +972,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(stdout);
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
         stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1356,14 +1317,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
         input.onStdout?.(chunk);
       }
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: input.captureOutput === false ? "" : chunks.join(""),
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1922,14 +1877,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(toolStart);
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
         stderr: "failed",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -2313,14 +2263,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
         input.onStdout?.(chunk);
       }
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
         stderr: "failed",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -2360,14 +2305,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(chunk);
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
         stderr: "failed",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -2408,14 +2348,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(chunk);
       return createManagedRun({
-        reason: "exit",
+        ...createSuccessfulProcessExit(),
         exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
         stderr: "failed",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -2792,14 +2727,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
         });
         input.onStdout?.("done");
         return createManagedRun({
-          reason: "exit",
+          ...createSuccessfulProcessExit(),
           exitCode,
-          exitSignal: null,
-          durationMs: 50,
-          stdout: "",
           stderr: exitCode === 0 ? "" : "CLI failed after delivery",
-          timedOut: false,
-          noOutputTimedOut: false,
         });
       });
 
@@ -3051,8 +2981,12 @@ describe("executePreparedCliRun supervisor output capture", () => {
   it("captures non-Claude JSONL sends and fences every attempt with a unique key", async () => {
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "local-cli" });
     context.mcpDeliveryCapture = true;
-    const activateCapture = vi.fn<(captureKey: string) => void>();
-    const deactivateCapture = vi.fn<(captureKey: string) => void>();
+    const activateCapture = vi.fn<(captureKey: string, assertCurrent: () => void) => void>();
+    const deactivateCapture = vi.fn((_captureKey: string) => {
+      const assertion = activateCapture.mock.calls.at(-1)?.[1];
+      expect(assertion).toBeTypeOf("function");
+      expect(assertion).not.toThrow();
+    });
     context.preparedBackend.mcpClientGrantCapture = {
       transportToken: "capture-test-token",
       adoptProcessToken: vi.fn(),
@@ -3064,6 +2998,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
       const captureKey = input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "";
+      expect(activateCapture.mock.calls.at(-1)?.[1]).not.toThrow();
       captureKeys.push(captureKey);
       recordMcpLoopbackToolCallResult({
         captureKey,
@@ -3093,6 +3028,76 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(deactivateCapture.mock.invocationCallOrder[0]).toBeLessThan(
       activateCapture.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
     );
+  });
+
+  it("revokes MCP capture at the supervisor deadline before native exit", async () => {
+    vi.useFakeTimers();
+    const context = buildPreparedCliRunContext({ output: "text", provider: "local-cli" });
+    context.mcpDeliveryCapture = true;
+    const activateCapture = vi.fn<(captureKey: string, assertCurrent: () => void) => void>();
+    const deactivateCapture = vi.fn();
+    context.preparedBackend.mcpClientGrantCapture = {
+      transportToken: "capture-test-token",
+      adoptProcessToken: vi.fn(),
+      revokeProcessToken: vi.fn(),
+      activate: activateCapture,
+      deactivate: deactivateCapture,
+    };
+    const adapter = createStubChildAdapter();
+    vi.mocked(createChildAdapter).mockResolvedValueOnce({
+      adapter: {
+        ...adapter,
+        onExit: vi.fn(),
+        onError: vi.fn(),
+      },
+      ready: Promise.resolve(),
+    });
+    const supervisor = createProcessSupervisor();
+    const spawned = createDeferred<Awaited<ReturnType<ProcessSupervisor["spawn"]>>>();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      if (input.mode !== "child") {
+        throw new Error("Expected the CLI child transport");
+      }
+      // The shared execution fixture already expands the deferred arguments.
+      const { resolveArgs: _resolveArgs, ...spawnInput } = input;
+      const managed = await supervisor.spawn(spawnInput);
+      spawned.resolve(managed);
+      return managed;
+    });
+    const execution = executePreparedCliRun(context);
+    const settled = execution.catch(() => undefined);
+    try {
+      const managed = await Promise.race([
+        spawned.promise,
+        execution.then(() => {
+          throw new Error("CLI completed before the supervisor started");
+        }),
+      ]);
+      const assertCaptureCurrent = activateCapture.mock.calls[0]?.[1];
+      expect(assertCaptureCurrent).toBeTypeOf("function");
+      expect(assertCaptureCurrent).not.toThrow();
+      adapter.killMock.mockImplementation(() => {
+        expect(assertCaptureCurrent).toThrow("CLI process authority is no longer active");
+      });
+
+      await vi.advanceTimersByTimeAsync(context.params.timeoutMs);
+
+      expect(adapter.killMock).toHaveBeenCalledOnce();
+      expect(managed.activity.resultSettled).toBe(false);
+      expect(deactivateCapture).not.toHaveBeenCalled();
+      expect(assertCaptureCurrent).toThrow("CLI process authority is no longer active");
+      adapter.settle(null, "SIGTERM");
+      await expect(execution).rejects.toMatchObject({ reason: "timeout" });
+      expect(deactivateCapture).toHaveBeenCalledOnce();
+    } finally {
+      adapter.settle(0);
+      await settled;
+      await supervisor.shutdown();
+      vi.mocked(createChildAdapter).mockReset();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

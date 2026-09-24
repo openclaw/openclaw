@@ -80,22 +80,10 @@ import {
   type EmbeddedRunCompletionRegistration,
   type EmbeddedRunRegistration,
   type EmbeddedRunWaiter,
+  type EmbeddedAgentQueueFailureReason,
 } from "./run-state.js";
 
 export type { EmbeddedAgentQueueHandle, EmbeddedAgentQueueMessageOptions } from "./run-state.js";
-
-type EmbeddedAgentQueueFailureReason =
-  | "no_active_run"
-  | "not_streaming"
-  | "stale_run"
-  | "compacting"
-  | "tool_authority_mismatch"
-  | "image_input_unsupported"
-  | "source_reply_delivery_mode_mismatch"
-  | "task_suggestion_delivery_mode_mismatch"
-  | "transcript_commit_wait_unsupported"
-  | "guarded_injection_unsupported"
-  | "runtime_rejected";
 
 export type EmbeddedRunTimeoutRecoveryMarker = {
   sessionId: string;
@@ -390,13 +378,7 @@ export function restoreEmbeddedRunTimeoutAbandonment(
   return true;
 }
 
-function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): void {
-  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
-  if (normalizedSessionFile) {
-    if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile) === sessionId) {
-      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(normalizedSessionFile);
-    }
-  }
+function clearActiveRunSessionFiles(sessionId: string): void {
   // Always sweep every alias because callers may clear without the same
   // compatibility token used when the active run was registered.
   for (const [sessionFileKey, activeSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE) {
@@ -701,6 +683,7 @@ async function queueEmbeddedAgentMessageAsync(
     if (
       !prepared.outcome.queued &&
       (prepared.outcome.reason === "tool_authority_mismatch" ||
+        prepared.outcome.reason === "input_visibility_mismatch" ||
         prepared.outcome.reason === "image_input_unsupported") &&
       options?.isInboundUserMessage === true &&
       hasPromptImageInput(options) &&
@@ -716,7 +699,8 @@ async function queueEmbeddedAgentMessageAsync(
     }
     if (
       !prepared.outcome.queued &&
-      prepared.outcome.reason === "tool_authority_mismatch" &&
+      (prepared.outcome.reason === "tool_authority_mismatch" ||
+        prepared.outcome.reason === "input_visibility_mismatch") &&
       options?.isInboundUserMessage === true &&
       !hasPromptImageInput(options) &&
       prepared.pendingInput
@@ -852,12 +836,16 @@ function prepareEmbeddedAgentQueueMessage(
   );
   if (deliveryModeMismatch) {
     const activeFingerprint = normalizeOptionalString(handle.toolAuthorityFingerprint);
-    // Only the captured backend may claim a route-mismatched question answer.
+    // Projected caller authority takes precedence over raw route-mismatch proof.
     const pendingInputAuthorityProven =
-      !toolAuthorityOverlay &&
+      (!toolAuthorityOverlay || deliveryModeMismatch === "input_visibility_mismatch") &&
+      (deliveryModeMismatch !== "input_visibility_mismatch" ||
+        handle.messageInjectionV2?.version === 2) &&
       activeFingerprint &&
-      (normalizeOptionalString(options?.toolAuthorityFingerprint) === activeFingerprint ||
-        normalizeOptionalString(options?.pendingInputAuthorityFingerprint) === activeFingerprint);
+      (normalizeOptionalString(backendOptions.toolAuthorityFingerprint) === activeFingerprint ||
+        (!toolAuthorityOverlay &&
+          normalizeOptionalString(options?.pendingInputAuthorityFingerprint) ===
+            activeFingerprint));
     diag.debug(`queue message failed: sessionId=${sessionId} reason=${deliveryModeMismatch}`);
     return {
       kind: "complete",
@@ -932,66 +920,34 @@ export function abortEmbeddedAgentRun(
     return true;
   }
 
-  const abortActiveEmbeddedRunHandles = (params: {
-    shouldAbort: (handle: EmbeddedAgentQueueHandle) => boolean;
-    formatDebugMessage: (sessionId: string) => string;
-    skipSessionIds?: ReadonlySet<string>;
-  }): boolean => {
-    let aborted = false;
-    for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-      if (params.skipSessionIds?.has(id)) {
-        continue;
-      }
-      if (!params.shouldAbort(handle)) {
-        continue;
-      }
-      if (!isEmbeddedRunHandleAbortable(id, handle)) {
-        continue;
-      }
-      diag.debug(params.formatDebugMessage(id));
-      try {
-        handle.abort(opts?.reason);
-        revokeCompletionClaim(id, handle.runId);
-        aborted = true;
-      } catch (err) {
-        diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
-      }
-    }
-    return aborted;
-  };
-
   const mode = opts?.mode;
-  if (mode === "compacting") {
-    const replyOwnedSessionIds = new Set(listActiveReplyRunSessionIds());
-    const replyAborted = abortActiveReplyRuns({
-      mode,
-      onAbortError: (id, err) =>
-        diag.warn(`abort failed: sessionId=${id} owner=reply_run err=${String(err)}`),
-    });
-    const aborted = abortActiveEmbeddedRunHandles({
-      shouldAbort: (handle) => handle.isCompacting(),
-      formatDebugMessage: (id) => `aborting compacting run: sessionId=${id}`,
-      skipSessionIds: replyOwnedSessionIds,
-    });
-    return replyAborted || aborted;
+  if (mode !== "all" && mode !== "compacting") {
+    return false;
   }
-
-  if (mode === "all") {
-    const replyOwnedSessionIds = new Set(listActiveReplyRunSessionIds());
-    const replyAborted = abortActiveReplyRuns({
-      mode,
-      onAbortError: (id, err) =>
-        diag.warn(`abort failed: sessionId=${id} owner=reply_run err=${String(err)}`),
-    });
-    const aborted = abortActiveEmbeddedRunHandles({
-      shouldAbort: () => true,
-      formatDebugMessage: (id) => `aborting run: sessionId=${id}`,
-      skipSessionIds: replyOwnedSessionIds,
-    });
-    return replyAborted || aborted;
+  const replyOwnedSessionIds = new Set(listActiveReplyRunSessionIds());
+  const replyAborted = abortActiveReplyRuns({
+    mode,
+    onAbortError: (id, err) =>
+      diag.warn(`abort failed: sessionId=${id} owner=reply_run err=${String(err)}`),
+  });
+  let aborted = false;
+  for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
+    if (replyOwnedSessionIds.has(id) || (mode === "compacting" && !handle.isCompacting())) {
+      continue;
+    }
+    if (!isEmbeddedRunHandleAbortable(id, handle)) {
+      continue;
+    }
+    diag.debug(`aborting ${mode === "compacting" ? "compacting " : ""}run: sessionId=${id}`);
+    try {
+      handle.abort(opts?.reason);
+      revokeCompletionClaim(id, handle.runId);
+      aborted = true;
+    } catch (err) {
+      diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
+    }
   }
-
-  return false;
+  return replyAborted || aborted;
 }
 
 type EmbeddedHeartbeatPreemptionResult = "not-heartbeat" | "drained" | "timed-out";
@@ -1808,7 +1764,7 @@ export function clearActiveEmbeddedRun(
     clearEmbeddedRunAbortability(handle, { retainFinalizing: true });
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
-    clearActiveRunSessionFiles(sessionId, sessionFile);
+    clearActiveRunSessionFiles(sessionId);
     logSessionStateChange({
       sessionId,
       sessionKey,
