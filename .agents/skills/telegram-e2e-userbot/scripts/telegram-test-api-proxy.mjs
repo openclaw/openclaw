@@ -155,13 +155,28 @@ export async function startTelegramTestApiProxy({
       methodOrdinals.set(method, ordinal);
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
       let body = hasBody ? request : undefined;
+      const readBody = async () => {
+        if (Buffer.isBuffer(body) || !hasBody) return;
+        const chunks = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        body = Buffer.concat(chunks);
+      };
+      // Log only the chat kind (private or group), never the chat id, so cross-chat
+      // flood proof can tell deliveries apart. JSON bodies are small text calls.
+      if (logged && String(request.headers["content-type"] ?? "").includes("application/json")) {
+        await readBody();
+        try {
+          const chatId = Number(JSON.parse(body.toString("utf8")).chat_id);
+          if (Number.isFinite(chatId) && chatId !== 0) {
+            logged.chat = chatId < 0 ? "group" : "private";
+          }
+        } catch {
+          // Non-JSON or bodiless calls keep method and timing only.
+        }
+      }
       const rejection = requestRejection;
       if (rejection && rejection.method === method) {
-        if (rejection.bodyIncludes !== undefined && hasBody) {
-          const chunks = [];
-          for await (const chunk of request) chunks.push(Buffer.from(chunk));
-          body = Buffer.concat(chunks);
-        }
+        if (rejection.bodyIncludes !== undefined) await readBody();
         const matches =
           requestRejection === rejection &&
           (rejection.bodyIncludes === undefined ||

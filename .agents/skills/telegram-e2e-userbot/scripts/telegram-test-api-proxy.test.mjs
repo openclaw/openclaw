@@ -204,6 +204,13 @@ test("injects repeated flood waits with retry_after before forwarding", async (t
     proxy.getRequestLog().map(({ method }) => method),
     Array(5).fill("sendMessage"),
   );
+  await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chat_id: -1001, text: "group" }),
+  });
+  assert.equal(proxy.getRequestLog().at(-1).chat, "group");
+  assert.equal(JSON.stringify(proxy.getRequestLog()).includes("1001"), false);
   assert.deepEqual(
     proxy.getRequestRejectionEvents().map(({ errorCode, retryAfter }) => [errorCode, retryAfter]),
     [

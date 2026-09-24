@@ -108,7 +108,8 @@ For flood control, add `retryAfter` (seconds): the proxy answers with Bot API
 rejects that many consecutive matching requests before the control disarms.
 `retryAfter: 0` returns a bare 429 without `parameters.retry_after`. The summary's
 `scenario.telegramApiRequestLog` lists every proxied Bot API call except
-`getUpdates` as `{ method, at, status }`, so a run can show that no call reached Telegram
+`getUpdates` as `{ method, at, status, chat }`, where `chat` is only
+`private` or `group` (never an id), so a run can show that no call reached Telegram
 inside a flood window.
 
 ```json
