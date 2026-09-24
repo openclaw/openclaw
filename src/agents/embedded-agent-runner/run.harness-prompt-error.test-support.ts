@@ -69,11 +69,14 @@ describe("harness prompt failure presentation", () => {
       expect(result.payloads?.[0]?.isError).toBe(true);
       const text = result.payloads?.[0]?.text;
       expect(text).toContain(
-        known
-          ? "configured model is unavailable from the provider"
-          : "couldn't generate a response",
+        known ? "selected model is unavailable from the provider" : "couldn't generate a response",
       );
       expect(text).not.toContain(error.message);
+      if (known) {
+        expect(text).toContain(
+          "Select an available model or update the model configuration, then try again.",
+        );
+      }
       if (hadPotentialSideEffects) {
         expect(text).toContain("some tool actions may have already been executed");
         expect(text).toContain("verify before retrying");

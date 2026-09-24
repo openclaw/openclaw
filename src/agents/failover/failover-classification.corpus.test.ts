@@ -245,7 +245,12 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     // MOVED(refactor-02): model availability copy consumes the canonical typed reason.
     expect(classification).toEqual({ kind: "reason", reason: "model_not_found" });
     expect(facet).toBeNull();
-    expect(classifyReplyRequest({ message })).toMatchObject({ code: "provider_model_unavailable" });
+    expect(classifyReplyRequest({ message })).toMatchObject({
+      code: "provider_model_unavailable",
+      userMessage: expect.stringContaining(
+        "Select an available model or update the model configuration, then try again.",
+      ),
+    });
   });
 
   it.each([
