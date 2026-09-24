@@ -198,7 +198,7 @@ See [Timezones](/concepts/timezone) and [Date & Time](/date-time) for full behav
 
 When eligible skills exist, OpenClaw injects a compact `<available_skills>` list (`formatSkillsForPrompt`) with the **file path** for each skill. The prompt instructs the model to use `read` to load the SKILL.md at the listed location (workspace, managed, or bundled). If no skills are eligible, the Skills section is omitted.
 
-Managed native Codex turns receive this list through parent-local model request instructions instead of per-turn user input, except lightweight cron turns that preserve the exact scheduled prompt. Other harnesses keep the normal prompt section.
+Managed native Codex turns receive this list through parent-local model request instructions instead of per-turn user input, except lightweight cron turns that preserve the exact scheduled prompt. Connections without that relay use thread developer instructions so model-owned collaboration instructions cannot replace the catalog. Other harnesses keep the normal prompt section.
 
 The location can point at a nested skill, such as `skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt uses the flat skill name from `SKILL.md` frontmatter.
 

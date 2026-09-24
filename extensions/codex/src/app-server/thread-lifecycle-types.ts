@@ -1,5 +1,8 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexAppServerLiveThreadOwnership } from "./client-runtime.js";
+import type {
+  CodexAppServerLiveThreadOwnership,
+  CodexEphemeralThreadPolicy,
+} from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import type { CodexInferenceProxy } from "./inference-proxy.js";
@@ -31,8 +34,8 @@ type CodexAppServerThreadLifecycle = {
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
   liveThreadConfigFingerprint?: string;
-  /** Creation-time policy for a live ephemeral thread; never persisted in the binding. */
-  liveThreadEphemeralPolicy?: string;
+  /** Policy a live ephemeral thread was told; never persisted in the binding. */
+  liveThreadEphemeralPolicy?: CodexEphemeralThreadPolicy;
   /** Process-local claim proof; never write this callback into durable binding state. */
   liveThreadOwnership?: CodexAppServerLiveThreadOwnership;
   clearInheritedServiceTier?: true;
@@ -79,6 +82,8 @@ export type CodexStartOrResumeThreadParams = {
   webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  /** Skill catalog carried with thread developer instructions; refreshable, never generic policy. */
+  skillsInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
   config?: JsonObject;
   shellEnvironment?: Readonly<Record<string, string>>;

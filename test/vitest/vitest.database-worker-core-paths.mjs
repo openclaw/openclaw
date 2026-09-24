@@ -26,6 +26,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/mcp-oauth-writes.test.ts",
   "src/infra/sqlite-worker-operation-attachment.test.ts",
   "src/state/openclaw-state-lease-async.test.ts",
+  "src/state/openclaw-state-db.coordinator.test.ts",
   "src/state/openclaw-state-lease-heartbeat.activation.test.ts",
   "src/plugins/diffs-cleanup.lifecycle.test.ts",
   "src/agents/agent-tools-agent-config.exec.test.ts",

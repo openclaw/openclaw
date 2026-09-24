@@ -110,7 +110,7 @@ describe("native task event custody", () => {
   ] as const)("keeps original assignment ownership through %s completion", async (ordering) => {
     const fixture = await loadCodexNativeSubagentMonitorTestFixture();
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
       using notifications = captureTaskDeliveryWork();
       const requesterSessionKey = "agent:main:main";
       const context = createContext();
@@ -351,7 +351,7 @@ describe("native task event custody", () => {
     async (historyOutcome) => {
       const fixture = await loadCodexNativeSubagentMonitorTestFixture();
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         using deliveries = captureTaskDeliveryWork();
         const history = fixture.nativeHistoryOwner();
         const requesterSessionKey = "agent:main:main";
@@ -556,7 +556,7 @@ describe("native task event custody", () => {
     async (deliveryMode) => {
       const fixture = await loadCodexNativeSubagentMonitorTestFixture();
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         using deliveries = captureTaskDeliveryWork();
         const requesterSessionKey = "agent:main:main";
         const context = createContext();
@@ -724,7 +724,7 @@ describe("native task event custody", () => {
     "rejects an old event producer after same-id %s replacement",
     async (field) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const context = createContext();
         const resolver = () => context;
         context.resolveGatewayContext = resolver;

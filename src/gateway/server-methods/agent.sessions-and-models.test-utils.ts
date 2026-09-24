@@ -15,9 +15,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
-import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, listTaskRecords } from "../../tasks/task-registry.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dispatchAgentRunFromGateway } from "../agent-turn/agent-run-dispatch.js";
@@ -30,7 +28,10 @@ import {
   spyDetachedCreateRunningTaskRun,
   withPluginSubagentTestState,
 } from "./agent-task-tracking.test-helpers.js";
-import { registerNativeSubagentTaskTrackingTests } from "./agent.native-subagent-task-tracking.test-utils.js";
+import {
+  registerHostOwnedSubagentTaskTrackingTest,
+  registerNativeSubagentTaskTrackingTests,
+} from "./agent.native-subagent-task-tracking.test-utils.js";
 import {
   confirmedAcpMeta,
   createPluginSubagentTestLifetime,
@@ -2830,38 +2831,7 @@ describe("gateway agent handler", () => {
       });
     });
 
-    it("keeps a host-owned subagent run to its pre-registered task row", async () => {
-      await withPluginSubagentTestState("openclaw-gateway-subagent-owner-", async (state) => {
-        const root = state.stateDir;
-        // The Gateway worker must read the same durable task that the host registered.
-        resetTaskRegistryForTests({ persist: false });
-        const childSessionKey = "agent:main:subagent:owned";
-        const runId = "host-owned-subagent-run";
-        mockSpawnedChildSessionEntry(childSessionKey, root);
-        getDetachedTaskLifecycleRuntime().createRunningTaskRun({
-          runtime: "subagent",
-          requesterSessionKey: "agent:main:main",
-          ownerKey: "agent:main:main",
-          scopeKind: "session",
-          childSessionKey,
-          runId,
-          task: "Run one owned subagent",
-          deliveryStatus: "pending",
-        });
-        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
-
-        await invokeAgent(
-          { message: "host-owned child turn", sessionKey: childSessionKey, idempotencyKey: runId },
-          { reqId: runId, client: backendGatewayClient() },
-        );
-        await waitForAgentCommandCall();
-
-        expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
-        expect(listTaskRecords().filter((task) => task.runId === runId)).toEqual([
-          expect.objectContaining({ runtime: "subagent", childSessionKey }),
-        ]);
-      });
-    });
+    registerHostOwnedSubagentTaskTrackingTest();
 
     it("keeps CLI tracking when a non-backend operator-write caller sets acpTurnSource", async () => {
       await withTestDir({ prefix: "openclaw-gateway-acp-operator-write-" }, async (root) => {

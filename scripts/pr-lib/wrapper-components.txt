@@ -370,6 +370,7 @@ src/config/future-version-guard.ts
 src/config/gateway-control-ui-origins.ts
 src/config/gateway-env-selection.ts
 src/config/gateway-portal-ingress.ts
+src/config/gateway-public-origin.ts
 src/config/github-identity-profile-id.ts
 src/config/include-write-boundary.ts
 src/config/includes.ts
@@ -1248,6 +1249,7 @@ src/state/openclaw-state-db-audit-migration.ts
 src/state/openclaw-state-db-borrow.ts
 src/state/openclaw-state-db-cache.idle.ts
 src/state/openclaw-state-db-cache.ts
+src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts

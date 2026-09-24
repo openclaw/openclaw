@@ -20,8 +20,9 @@ import { resolveCodexBindingAppServerConnection } from "./binding-connection.js"
 import {
   consumeCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
-  type CodexAppServerLiveThreadOwnership,
+  revertCodexAppServerLiveThreadSkillsCatalog,
 } from "./client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerIndeterminateRequestCancellationError,
@@ -259,6 +260,7 @@ export async function maybeCompactCodexAppServerSession(
         let releaseThreadSubscription: (() => Promise<void>) | undefined;
         let retainedThreadOwnership: CodexAppServerLiveThreadOwnership | undefined;
         let canRetainThreadOwnership = false;
+        let compactionSucceeded = false;
         let compactionRequestDefinitelyRejected = false;
         let tokensAfter: number | undefined;
         const releaseCompactionThread = async (threadId: string) => {
@@ -505,6 +507,7 @@ export async function maybeCompactCodexAppServerSession(
           if (!completion.completed) {
             throw new Error(completion.reason);
           }
+          compactionSucceeded = true;
           tokensAfter = completion.tokensAfter;
           if (completion.turnId && completion.itemId) {
             await persistCodexContextCompactionActivity({
@@ -546,6 +549,12 @@ export async function maybeCompactCodexAppServerSession(
         } finally {
           completionWatch.cancel();
           try {
+            if (compactionSucceeded) {
+              // An incognito thread keeps its separately owned subscription, so
+              // it never reaches the re-retain below. Correct its record in place
+              // or the discarded catalog refresh is never delivered again.
+              revertCodexAppServerLiveThreadSkillsCatalog(client, binding.threadId);
+            }
             if (canRetainThreadOwnership && retainedThreadOwnership) {
               const ownership = retainedThreadOwnership;
               const currentBinding = options.bindingStore.read(bindingIdentity);
@@ -564,6 +573,18 @@ export async function maybeCompactCodexAppServerSession(
                     ownership.release,
                     ownership.configFingerprint,
                     ownership.serviceTier,
+                    // Creation policy has to survive standalone compaction, or the
+                    // next turn reads a live ephemeral thread as policy drift. A
+                    // completed compaction rebuilt initial context from the
+                    // creation-time developer instructions and discarded the
+                    // injected catalog refresh, so record that reversion and let
+                    // the next turn deliver the current catalog again.
+                    ownership.ephemeralPolicy && compactionSucceeded
+                      ? {
+                          ...ownership.ephemeralPolicy,
+                          skillsInstructions: ownership.ephemeralPolicy.nativeSkillsInstructions,
+                        }
+                      : ownership.ephemeralPolicy,
                   );
                 }));
               if (!retained) {
