@@ -43,13 +43,25 @@ function makeDistributionFixture(layout: "native" | "xcode", missingArch?: strin
   executable(path.join(tools, "xcrun"), "echo 'Xcode 26.4'");
   executable(path.join(tools, "node"), "echo 2608000290");
   const contents = path.join(root, "dist", "OpenClaw.app", "Contents");
-  mkdirSync(contents, { recursive: true });
+  mkdirSync(path.join(contents, "MacOS"), { recursive: true });
+  const auditScript = path.join(root, "apps/macos/scripts/audit-async-sleep-frames.py");
+  mkdirSync(path.dirname(auditScript), { recursive: true });
+  writeFileSync(
+    auditScript,
+    `from pathlib import Path
+import sys
+binary = Path(sys.argv[1])
+assert binary.is_file()
+Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text(str(binary))
+`,
+  );
   writeFileSync(
     path.join(contents, "Info.plist"),
     `<plist version="1.0"><dict>
 <key>CFBundleShortVersionString</key><string>2026.8.2</string>
 <key>CFBundleVersion</key><string>2608000290</string>
 <key>CFBundleIdentifier</key><string>ai.openclaw.mac</string>
+<key>CFBundleExecutable</key><string>OpenClaw</string>
 <key>SUFeedURL</key><string>https://example.com/appcast.xml</string>
 </dict></plist>`,
   );
@@ -79,9 +91,13 @@ function makeDistributionFixture(layout: "native" | "xcode", missingArch?: strin
     const uuid = spawnSync("xcrun", ["dwarfdump", "--uuid", binary], { encoding: "utf8" });
     expect(uuid.status, uuid.stderr).toBe(0);
     expectedUUIDs.push(uuid.stdout.trim().split(" ").slice(0, 3).join(" "));
+    if (arch === "arm64") {
+      copyFileSync(binary, path.join(contents, "MacOS/OpenClaw"));
+    }
   }
   return {
     root,
+    auditScript,
     expectedUUIDs,
     run: (options: { resume?: boolean; notarize?: boolean } = {}) =>
       spawnSync(
@@ -488,19 +504,6 @@ describe("package-mac-dist plist validation", () => {
     () => {
       const fixture = makeDistributionFixture("native");
       const app = path.join(fixture.root, "dist/OpenClaw.app");
-      const plist = path.join(app, "Contents/Info.plist");
-      writeFileSync(
-        plist,
-        readFileSync(plist, "utf8").replace(
-          "</dict>",
-          "<key>CFBundleExecutable</key><string>OpenClaw</string></dict>",
-        ),
-      );
-      mkdirSync(path.join(app, "Contents/MacOS"));
-      copyFileSync(
-        path.join(fixture.root, "apps/macos/.build/arm64/release/OpenClaw"),
-        path.join(app, "Contents/MacOS/OpenClaw"),
-      );
       const signed = spawnSync("/usr/bin/codesign", ["--force", "--sign", "-", app], {
         encoding: "utf8",
       });
@@ -625,6 +628,9 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
       const fixture = makeDistributionFixture(layout);
       const result = fixture.run();
       expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(path.join(fixture.root, "async-frame-audit.log"), "utf8")).toBe(
+        path.join(fixture.root, "dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
+      );
       const archive = path.join(fixture.root, "dist", "OpenClaw-2026.8.2.dSYM.zip");
       const extracted = path.join(fixture.root, "extracted");
       const unpack = spawnSync("ditto", ["-x", "-k", archive, extracted], { encoding: "utf8" });
@@ -645,6 +651,26 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
       expect(existsSync(path.join(fixture.root, "dist", "OpenClaw.dSYM"))).toBe(false);
     },
   );
+
+  it("rejects a failed async frame audit before archiving or notarizing", () => {
+    const fixture = makeDistributionFixture("native");
+    writeFileSync(
+      fixture.auditScript,
+      'import sys\nsys.stderr.write("async frame allocation is undersized\\n")\nsys.exit(1)\n',
+    );
+
+    const result = fixture.run({ notarize: true });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("async frame allocation is undersized");
+    for (const artifact of [
+      "OpenClaw-2026.8.2.zip",
+      "OpenClaw-2026.8.2.dSYM.zip",
+      "macos-notarization-recovery",
+    ]) {
+      expect(existsSync(path.join(fixture.root, "dist", artifact))).toBe(false);
+    }
+  });
 
   it("refuses a universal archive when one architecture has no symbols", () => {
     const fixture = makeDistributionFixture("xcode", "x86_64");

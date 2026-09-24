@@ -198,6 +198,17 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
+if [[ "$BUILD_CONFIG" == "release" && "$RESUME_NOTARIZATION" == "0" ]]; then
+  # Check the ARM64 async-frame contract before archiving or notarizing a release.
+  APP_ARCHS="$(/usr/bin/lipo -archs "$APP/Contents/MacOS/$PRODUCT")"
+  case " $APP_ARCHS " in
+    *" arm64 "*)
+      python3 "$ROOT_DIR/apps/macos/scripts/audit-async-sleep-frames.py" "$APP/Contents/MacOS/$PRODUCT"
+      ;;
+    *) echo "ARM64 async sleep frame audit: not applicable to this architecture." ;;
+  esac
+fi
+
 VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleShortVersionString)"
 BUNDLE_VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleVersion)"
 ACTUAL_BUNDLE_ID="$(plist_print_required "$APP/Contents/Info.plist" CFBundleIdentifier)"
