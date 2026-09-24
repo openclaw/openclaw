@@ -52,7 +52,10 @@ list_sessions() {
   local label="$1"; shift
   local tmux_cmd=(tmux "$@")
 
-  if ! sessions="$("${tmux_cmd[@]}" list-sessions -F '#{session_name}\t#{session_attached}\t#{session_created_string}' 2>/dev/null)"; then
+  # $'\t' is a real tab byte: tmux emits it verbatim and escapes any tab appearing
+  # in a session name, so the field separator cannot be produced by a session name
+  # (unlike a printable delimiter, which tmux allows in names).
+  if ! sessions="$("${tmux_cmd[@]}" list-sessions -F '#{session_name}'$'\t''#{session_attached}'$'\t''#{t:session_created}' 2>/dev/null)"; then
     echo "No tmux server found on $label" >&2
     return 1
   fi
