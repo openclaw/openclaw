@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CronPayload, CronPayloadPatch } from "../types.js";
+import { normalizeCronPayload } from "../normalize-payload.js";
 import { mergeCronPayload } from "./payload-merge.js";
 
 type MergeCase = {
@@ -168,6 +169,20 @@ describe("mergeCronPayload trigger tool caps", () => {
         { kind: "agentTurn", message: "after", toolsAllow: undefined },
       ),
     ).toEqual({ kind: "agentTurn", message: "after", toolsAllow: ["read", "cron"] });
+  });
+
+  it("does not produce env: undefined as an own key when switching agentTurn → command without env", () => {
+    // Regression: buildPayloadFromPatch used to spread `env: patch.env` directly,
+    // which left env: undefined as an own property.  structuredClone preserves
+    // own-key undefineds, so normalizeCronJobForSqlite would later pass undefined
+    // to normalizeCommandEnv and throw "command env must be an object…".
+    const merged = mergeCronPayload(
+      { kind: "agentTurn", message: "run daily", toolsAllow: ["*"] },
+      { kind: "command", argv: ["sh", "-lc", "bash /path/to/script.sh"] },
+    );
+    expect(Object.hasOwn(merged, "env")).toBe(false);
+    // normalizeCronPayload must not throw for a payload produced by mergeCronPayload
+    expect(() => normalizeCronPayload(merged as Record<string, unknown>)).not.toThrow();
   });
 
   it("preserves default-cap provenance across a kind change", () => {
