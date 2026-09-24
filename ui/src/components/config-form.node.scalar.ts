@@ -279,8 +279,11 @@ export function renderTextInput(
       optionalEmpty ? "" : stringConstraintMessage(raw, schema, effectiveValue, editHint),
     );
   };
+  // Input and change may run before the patched draft is rendered.
+  let patchedValue = value;
   const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
     if (onPatch(path, candidate) !== false) {
+      patchedValue = candidate;
       return true;
     }
     target.value = renderedValue;
@@ -294,7 +297,7 @@ export function renderTextInput(
     }
     // Change follows input on blur; only a newly normalized value needs another patch.
     const commit = (candidate: unknown) =>
-      configValuesEqual(value, candidate) || commitScalarValue(target, candidate);
+      configValuesEqual(patchedValue, candidate) || commitScalarValue(target, candidate);
     if (inputType === "number") {
       applyNumericInputState(target, resolveNumericInputState(target, schema), params, commit);
       return;
@@ -475,8 +478,11 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       numericRevalidateMessage(target, schema, params.isRequired === true),
     );
   };
+  // Input and change may run before the patched draft is rendered.
+  let patchedValue = value;
   const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
     if (onPatch(path, candidate) !== false) {
+      patchedValue = candidate;
       return true;
     }
     target.value = renderedValue;
@@ -579,7 +585,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
         target.value = formatConfigValueText(normalized);
         if (
           setControlValidity(target, numericConstraintMessage(normalized, schema)) &&
-          !configValuesEqual(value, normalized)
+          !configValuesEqual(patchedValue, normalized)
         ) {
           commitScalarValue(target, normalized);
         }
@@ -597,7 +603,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           target.value = formatConfigValueText(state.parsed);
         }
         applyNumericInputState(target, state, params, (candidate) => {
-          if (!configValuesEqual(value, candidate)) {
+          if (!configValuesEqual(patchedValue, candidate)) {
             commitScalarValue(target, candidate);
           }
         });
