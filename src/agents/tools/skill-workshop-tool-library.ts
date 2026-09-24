@@ -31,10 +31,10 @@ export function createLibrarySkillWorkshopTool(
   return {
     ...createLibrarySkillWorkshopDescriptor(capability.multipleProfiles, workspace),
     parameters: workspace ? Type.Union([workspace.parameters, schema]) : schema,
-    execute: async (id, raw) => {
+    execute: async (id, raw, signal, onUpdate) => {
       if (workspace && (!raw || typeof raw !== "object" || !("target" in raw))) {
         capability.assertWorkspaceCurrent?.();
-        return workspace.execute(id, raw);
+        return workspace.execute(id, raw, signal, onUpdate);
       }
       if (!Value.Check(schema, raw)) {
         throw new ToolInputError("Invalid personal Skill Workshop arguments.");

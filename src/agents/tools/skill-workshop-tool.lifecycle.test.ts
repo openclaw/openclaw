@@ -5,11 +5,18 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
+import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { createAgentToolExecutionBudget } from "../agent-tool-source-execution-guard.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -47,6 +54,95 @@ afterEach(async () => {
 });
 
 describe("skill_workshop terminal lifecycle", () => {
+  it.each(["abort", "closed-run", "budget"] as const)(
+    "rejects %s during execution loading before reserving a mutation",
+    async (loss) => {
+      const proposalMutationBudget = { remaining: 1 };
+      const tool = createSkillWorkshopTool({
+        workspaceDir: testState.workspaceDir,
+        env: testState.env,
+        proposalMutationBudget,
+      });
+      const admission = prepareSystemAgentRunAdmission({}, `workshop-${loss}`, "main", "test");
+      const context = await admission.admit("embedded");
+      const controller = new AbortController();
+      let current = true;
+      const budget = createAgentToolExecutionBudget({
+        signal: controller.signal,
+        abort: (reason) => controller.abort(reason),
+        isCurrent: () => current,
+      });
+      try {
+        const result = budget.run(() =>
+          withGatewayToolCallerIdentity(
+            createAdmittedGatewayToolCallerIdentity({
+              admittedRunContext: context,
+              agentId: "main",
+              sessionKey: "agent:main:workshop",
+            }),
+            () =>
+              tool.execute(
+                "create",
+                {
+                  action: "create",
+                  name: "revoked",
+                  description: "Must not be persisted",
+                  proposal_content: "# Revoked\n",
+                },
+                controller.signal,
+              ),
+          ),
+        );
+        if (loss === "abort") {
+          controller.abort(new Error("workshop call aborted"));
+        } else if (loss === "closed-run") {
+          admission.close();
+        } else {
+          current = false;
+        }
+        await expect(result).rejects.toThrow(
+          loss === "abort" ? "workshop call aborted" : "no longer active",
+        );
+        expect(proposalMutationBudget.remaining).toBe(1);
+        await expect(
+          fs.access(path.join(testState.stateDir, "skill-workshop", "proposals")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        admission.close();
+      }
+    },
+  );
+
+  it("shares one mutation reservation across simultaneous first calls and retry tools", async () => {
+    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
+    const tools = [0, 1].map(() =>
+      createSkillWorkshopTool({
+        workspaceDir: testState.workspaceDir,
+        env: testState.env,
+        proposalMutationBudget,
+      }),
+    );
+    const results = await Promise.allSettled(
+      tools.map((tool, index) =>
+        tool.execute(`create-${index}`, {
+          action: "create",
+          name: `parallel-${index}`,
+          description: "One shared proposal reservation",
+          proposal_content: "# Parallel\n",
+        }),
+      ),
+    );
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: expect.objectContaining({ message: expect.stringContaining("mutation limit") }),
+    });
+    expect(proposalMutationBudget.remaining).toBe(0);
+    expect(proposalMutationBudget.mutatedProposalIds?.size).toBe(1);
+    expect(await tools[0]!.execute("list", { action: "list" })).toMatchObject({
+      details: { proposals: [expect.objectContaining({ status: "pending" })] },
+    });
+  });
+
   it("disposes of proposals without reading damaged draft artifacts", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-damaged-drafts-");
     const tool = createSkillWorkshopTool({ workspaceDir, agentId: "main", env: testState.env });

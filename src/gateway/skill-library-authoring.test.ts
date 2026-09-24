@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
+import { createSkillWorkshopTool } from "../agents/tools/skill-workshop-tool.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
@@ -66,6 +67,72 @@ async function admitted(
 }
 
 describe("human personal namespace authority", () => {
+  it.each(["abort", "closed-run", "permission"] as const)(
+    "fences workspace delegation after %s while loading its execution owner",
+    async (loss) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", temps.make("workspace-authoring-"));
+      const alice = ensureProfileForEmail("alice@example.test");
+      const scopes = ["operator.admin"];
+      const owner: SkillLibraryRequestOwner = {
+        client: {
+          authenticatedUserProfile: { profileId: alice.id },
+          connect: { scopes },
+        } as SkillLibraryRequestOwner["client"],
+        context: { getRuntimeConfig: () => ({}) } as SkillLibraryRequestOwner["context"],
+      };
+      const capability = prepareGatewaySkillAuthoring(owner, "agent:main:workspace", true)!;
+      expect(capability.defaultTarget).toBe("workspace");
+      const proposalMutationBudget = { remaining: 1 };
+      const tool = createSkillWorkshopTool({
+        config: {},
+        agentId: "main",
+        workspaceDir: temps.make("workshop-workspace-"),
+        libraryAuthoring: capability,
+        proposalMutationBudget,
+      });
+      const run = await admitted(capability);
+      const controller = new AbortController();
+      try {
+        const result = withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:workspace",
+            operationalRunInstance: run.context.operationalRunInstance,
+            receiptAuthority: () => true,
+          },
+          () =>
+            tool.execute(
+              "create",
+              {
+                action: "create",
+                name: "revoked-workspace",
+                description: "Must not be persisted",
+                proposal_content: "# Revoked\n",
+              },
+              controller.signal,
+            ),
+        );
+        if (loss === "abort") {
+          controller.abort(new Error("workspace call aborted"));
+        } else if (loss === "closed-run") {
+          run.close();
+        } else {
+          scopes.splice(0, 1, "operator.read");
+        }
+        await expect(result).rejects.toThrow(
+          loss === "abort"
+            ? "workspace call aborted"
+            : loss === "closed-run"
+              ? "authoring authority expired"
+              : "administrator authority",
+        );
+        expect(proposalMutationBudget.remaining).toBe(1);
+      } finally {
+        run.close();
+      }
+    },
+  );
+
   it("returns the actual slug and personal namespace edit permissions while retaining operator administration", async () => {
     const { alice, bob, request } = setup();
     const owner = request(alice.id);
