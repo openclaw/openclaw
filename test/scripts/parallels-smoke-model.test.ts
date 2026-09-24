@@ -436,7 +436,7 @@ setInterval(() => {}, 1000);
 `;
 }
 
-function writeDrainDeadlinePreload(tempDir: string): string {
+function writeDrainDeadlinePreload(tempDir: string, timeoutMs = 100): string {
   const preload = join(tempDir, "deadline.cjs");
   writeFileSync(
     preload,
@@ -450,7 +450,7 @@ catch (error) { if (error.code !== 'EEXIST') throw error; }
 if (fs.readFileSync(owner, 'utf8') === String(process.pid)) {
   const schedule = globalThis.setTimeout;
   globalThis.setTimeout = (callback, ms, ...args) => {
-    if (ms !== 100) return schedule(callback, ms, ...args);
+    if (ms !== ${timeoutMs}) return schedule(callback, ms, ...args);
     globalThis.setTimeout = schedule;
     return schedule(() => {
       let released = false;
@@ -2253,6 +2253,8 @@ if (commandArgs[0] === "list") {
     async () => {
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-");
       const grandchildPidPath = join(tempDir, "grandchild.pid");
+      const deadlineFile = join(tempDir, "deadline");
+      const preload = writeDrainDeadlinePreload(tempDir, 200);
       let grandchildPid = 0;
 
       try {
@@ -2262,11 +2264,15 @@ if (commandArgs[0] === "list") {
             ...process.env,
             OPENCLAW_TEST_GRANDCHILD_PID: grandchildPidPath,
             OPENCLAW_TEST_READY_FILE: join(tempDir, "ready"),
+            READY_FILE: grandchildPidPath,
+            DEADLINE_FILE: deadlineFile,
+            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
           },
           timeoutMs: 200,
         });
 
         expect(result.status).toBe(124);
+        expect(readFileSync(deadlineFile, "utf8")).toBe("elapsed");
         grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
         expect(Number.isInteger(grandchildPid)).toBe(true);
         await waitFor(() => !isProcessAlive(grandchildPid));
