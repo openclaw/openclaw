@@ -218,8 +218,9 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const gitLabel = formatGitInstallLabel(update);
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
   const tableWidth = getTerminalTableWidth();
-  const installLabel =
-    update.installKind === "git"
+  const installLabel = update.systemPackage
+    ? `pacman (${update.systemPackage.packageName})`
+    : update.installKind === "git"
       ? `git (${update.root ?? "unknown"})`
       : update.installKind === "package"
         ? update.packageManager

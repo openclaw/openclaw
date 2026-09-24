@@ -100,6 +100,29 @@ beforeEach(() => {
 });
 
 describe("update status installation replacement history", () => {
+  it.each([true, false])("preserves ownership diagnostics (JSON: %s)", async (json) => {
+    const error = {
+      status: "failed" as const,
+      code: "pacman-ownership-unavailable" as const,
+      message: "Pacman ownership could not be verified. Check access to the pacman database.",
+    };
+    vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
+      root: "/fixture/openclaw",
+      installKind: "package",
+      packageManager: "unknown",
+      error,
+    });
+    await updateStatusCommand({ json });
+    if (json) {
+      expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
+        update: { error },
+        availability: { available: false },
+      });
+    } else {
+      expect(runtime.log.mock.calls.flat().join("\n")).toContain(error.message);
+    }
+  });
+
   it.each([true, false])(
     "reports the recorded replacement while the Gateway is unavailable (JSON: %s)",
     async (json) => {

@@ -21,6 +21,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
 import { updateStatusCommand } from "./status.js";
 import * as finalization from "./update-command-finalize.js";
@@ -318,3 +319,44 @@ it.skipIf(process.platform === "win32").each([false, true])(
     expect(triage).not.toHaveBeenCalled();
   },
 );
+
+it("skips a pacman-owned install before npm staging or background handoff", async () => {
+  vi.spyOn(container, "isContainerEnvironment").mockReturnValue(false);
+  vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
+  const metadata = vi
+    .spyOn(packageMetadata, "fetchNpmPackageTargetStatus")
+    .mockRejectedValue(new Error("pacman-owned installs must not fetch an npm candidate"));
+  const access = fs.access.bind(fs);
+  vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+    if (file === "/usr/bin/pacman") {
+      return;
+    }
+    return access(file, mode);
+  });
+  const command = vi.mocked(processRunner.runCommandWithTimeout);
+  command.mockImplementation(async (argv) => ({
+    stdout:
+      argv[0] === "/usr/bin/pacman"
+        ? "openclaw\n"
+        : argv[0] === "npm"
+          ? `${path.dirname(root)}\n`
+          : "",
+    stderr: "",
+    code: argv[0] === "git" ? 1 : 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  }));
+  await withMockedPlatform("linux", async () => {
+    await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 0 });
+  });
+  expect(output[0]).toMatchObject({ status: "skipped", reason: "unmanaged-package-install" });
+  expect(lines.join("\n")).toContain("pacman");
+  expect(lines.join("\n")).toContain("sudo pacman -Syu");
+  expect(metadata).not.toHaveBeenCalled();
+  expect(command.mock.calls.some(([argv]) => argv[0] === "npm")).toBe(false);
+  await expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toContain('"2026.9.4"');
+});

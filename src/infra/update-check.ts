@@ -23,6 +23,11 @@ import { readBuiltRuntimeCommit } from "./update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
+import {
+  inspectPacmanOwnership,
+  PacmanOwnershipError,
+  type PacmanOwnership,
+} from "./update-pacman.js";
 import { createUpdatePreflightFailure } from "./update-preflight-details.js";
 import type { UpdateFetchFailure } from "./update-run-record.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
@@ -104,6 +109,7 @@ export type UpdateCheckResult = {
   root: string | null;
   installKind: "git" | "package" | "unknown";
   packageManager: PackageManager;
+  systemPackage?: PacmanOwnership;
   git?: GitUpdateStatus;
   deps?: DepsStatus;
   registry?: RegistryStatus;
@@ -111,7 +117,7 @@ export type UpdateCheckResult = {
     status: "unknown" | "failed";
     message: string;
     timeoutMs?: number;
-    code?: "installation-unclassified";
+    code?: "installation-unclassified" | "pacman-ownership-unavailable";
   };
 };
 
@@ -663,6 +669,25 @@ export async function checkUpdateStatus(params: {
       packageManager: "unknown",
       error: { status: "unknown", code: "installation-unclassified", message: failure.message },
     };
+  }
+  let systemPackage: PacmanOwnership | null;
+  try {
+    systemPackage = await inspectPacmanOwnership(root, timeoutMs, params.signal);
+  } catch (error) {
+    params.signal?.throwIfAborted();
+    if (!(error instanceof PacmanOwnershipError)) {
+      throw error;
+    }
+    return {
+      root,
+      installKind,
+      packageManager: "unknown",
+      error: { status: "failed", code: "pacman-ownership-unavailable", message: error.message },
+    };
+  }
+  params.signal?.throwIfAborted();
+  if (systemPackage) {
+    return { root, installKind, packageManager: "unknown", systemPackage };
   }
   const packageManager = isGit
     ? await detectPackageManager(root)

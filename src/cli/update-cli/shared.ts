@@ -28,6 +28,7 @@ import {
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
 import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
+import { assertPacmanUnowned, PacmanOwnershipError } from "../../infra/update-pacman.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
@@ -533,6 +534,14 @@ export async function resolveGlobalManager(params: {
   await (
     params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs)
   ).assertUnowned(params.root);
+  try {
+    await assertPacmanUnowned(params.root, params.timeoutMs);
+  } catch (error) {
+    if (error instanceof PacmanOwnershipError && error.ownership) {
+      throw new UpdatePreMutationError(error.reason, error.message, { failureFacts: [] });
+    }
+    throw error;
+  }
   if (params.installKind !== "git") {
     if (await resolveBrewOpenClawPath(params.root)) {
       const reason = resolveUnmanagedUpdateInstallReason();

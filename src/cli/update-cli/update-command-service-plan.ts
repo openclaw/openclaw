@@ -45,6 +45,7 @@ import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import { assertPacmanUnowned } from "../../infra/update-pacman.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -589,6 +590,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   const pkgOwnership =
     params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
   await pkgOwnership.assertUnowned(params.root);
+  await assertPacmanUnowned(params.root, UPDATE_RUNNER_TIMEOUT_MS);
   if (!isGatewayServiceManagementAllowedForUpdate(process.env)) {
     return {
       rootRedirect: null,
@@ -606,6 +608,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   }
   const serviceRoot = layout?.packageRoot;
   await pkgOwnership.assertUnowned(serviceRoot);
+  await assertPacmanUnowned(serviceRoot, UPDATE_RUNNER_TIMEOUT_MS);
   const serviceNode = resolveManagedServiceNodeRunner(command);
   if (
     layout.entrypointSourceCheckout &&

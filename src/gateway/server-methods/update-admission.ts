@@ -9,8 +9,10 @@ import {
   FreeBsdPkgOwnershipError,
 } from "../../infra/update-freebsd-pkg-ownership.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
+import { assertPacmanUnowned, PacmanOwnershipError } from "../../infra/update-pacman.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
 import {
+  getUpdateRun,
   recordUpdateRunDiagnostics,
   recordUpdateRunPhase,
   recordUpdateRunStep,
@@ -57,6 +59,7 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
   // Status discovery is read-only; admit ownership before campaign adoption
   // or a managed handoff can select and launch an updater.
   await createFreeBsdPkgOwnershipInspection(timeoutMs).assertUnowned(root);
+  await assertPacmanUnowned(root, timeoutMs);
   const installSurface = await resolveUpdateInstallSurface({
     root,
     installKind: status.installKind,
@@ -115,7 +118,7 @@ export function recordHandoffFailure(
   return { ...previous, status: "error", reason, steps: [...previous.steps, step] };
 }
 
-export function createUnexpectedUpdateFailureResult(
+function createUnexpectedUpdateFailureResult(
   current: UpdateRunRecord,
   previous: UpdateRunResult,
   error: unknown,
@@ -123,7 +126,10 @@ export function createUnexpectedUpdateFailureResult(
 ): UpdateRunResult {
   const activeStep = current.steps.findLast((step) => step.status === "in_progress");
   const name = activeStep?.step ?? current.phase;
-  const reason = error instanceof FreeBsdPkgOwnershipError ? error.reason : "unexpected-error";
+  const reason =
+    error instanceof FreeBsdPkgOwnershipError || error instanceof PacmanOwnershipError
+      ? error.reason
+      : "unexpected-error";
   const step = {
     name,
     command: "",
@@ -163,4 +169,23 @@ export function createUnexpectedUpdateFailureResult(
     warn,
   );
   return result;
+}
+
+export function recordUnexpectedUpdateFailure(
+  captured: UpdateRunRecord,
+  previous: UpdateRunResult,
+  error: unknown,
+  warn: (message: string) => void,
+): UpdateRunResult {
+  let current = captured;
+  try {
+    current = getUpdateRun(captured.runId) ?? captured;
+  } catch {
+    warn(
+      "Update history could not be read; preserving the original update failure with captured admission facts.",
+    );
+  }
+  return error instanceof PacmanOwnershipError && error.ownership
+    ? { ...previous, status: "skipped", root: error.root, reason: error.reason }
+    : createUnexpectedUpdateFailureResult(current, previous, error, warn);
 }

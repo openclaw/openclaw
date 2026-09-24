@@ -62,3 +62,13 @@ export async function readInstalledPackageVersion(dir: string): Promise<string |
   const manifest = readInstalledPackageManifest(dir);
   return typeof manifest?.version === "string" ? manifest.version : undefined;
 }
+
+export function normalizePackageVersionForComparison(
+  value: string | null | undefined,
+): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.replace(/^[vV](?=\d)/, "");
+}
