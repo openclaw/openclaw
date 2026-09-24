@@ -7,6 +7,7 @@ import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import "../../plugins/control-ui-contributions.ts";
@@ -161,11 +162,20 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const desktopPresented =
       this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "desktop");
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
+    const discoveredDesktopSource = this.activeSessionResources.desktopSource(
+      state.client,
+      state.sessionKey,
+      scopedAgentParamsForSession(state, state.sessionKey).agentId,
+      state.connectionEpoch,
+      this.resourceSessionObservation()?.row ?? undefined,
+    );
     const desktopSource =
       sidebarLayout.columns
         .flatMap((column) => column.panels)
         .find((panel) => panel.slot === "desktop")?.environmentId ??
-      resolveChatPaneDesktopTarget(selectedSession);
+      (discoveredDesktopSource !== undefined
+        ? discoveredDesktopSource
+        : resolveChatPaneDesktopTarget(selectedSession));
     const desktopFocusKey = JSON.stringify([
       state.sessionKey,
       this.connectionGeneration,

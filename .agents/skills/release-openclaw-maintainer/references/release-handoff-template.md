@@ -80,13 +80,13 @@ reference for commands rather than redispatching the release parent.
 ## Phase
 
 - conceptual phase: `<beta-publish | postpublish-confidence | stable-publish>`
-- current input mapping: `<beta + no soak | published package + soak/focused groups | stable>`
+- current input mapping: `<beta + no soak (stable needs approved waiver) | published package + soak/focused groups | explicit stable/full>`
 - completed: `<phases that stay complete>`
 - current: `<one phase>`
 - next action: `<one concrete action>`
 - roles: `<one operator | one transition watcher | zero or one current-failure investigator>`
-- retry budget: `<per-child failed-job reruns used: n/2 | then one diagnosis/fix/narrow retry, then reassess>`
-- wall-clock budget: `<stable on npm by cut time + 6h | elapsed h:mm | if exceeded: blocking lane and decision taken>`
+- retry budget: `<declared automatic wave used: n/1 | diagnosis/fix/narrow retry, then reassess>`
+- wall-clock objectives: `<seal by cut time + 20m, publish by + 1h | actual elapsed h:mm | blockers and next action>`
 
 ## Failure policy
 
@@ -94,8 +94,9 @@ reference for commands rather than redispatching the release parent.
   path, publish bytes, or another required gate proven by diagnosis): fix the
   release branch, freeze a new Code SHA, and invalidate downstream product
   evidence; any other failure keeps the Code SHA
-- flaky lane (fails twice on a test the candidate did not touch, no product
-  cause in the delta): record it, fix `main` in parallel, never re-cut
+- advisory test failure or diagnosed flaky lane: record actual results and
+  investigate the owner in parallel, without holding publication for green;
+  an untouched test or passing replay alone establishes neither a flake nor a fix
 - regular changelog-only failure before tagging: change the selected release entry and only
   its permitted record/index paths, freeze a new Release SHA, and reuse green
   Code SHA evidence after `split-changelog-release-v1` delta proof

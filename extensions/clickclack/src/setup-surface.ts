@@ -16,7 +16,6 @@ import {
   applyClickClackSetupConfigPatch,
   normalizeClickClackBaseUrl,
 } from "./setup-core.js";
-import { checkClickClackSetupConnection } from "./setup-verify.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const t = createSetupTranslator();
@@ -142,6 +141,7 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
     },
   ],
   finalize: async ({ cfg, accountId, credentialValues, prompter }) => {
+    const { checkClickClackSetupConnection } = await import("./setup-verify.js");
     const result = await checkClickClackSetupConnection({
       cfg: cfg as CoreConfig,
       accountId,

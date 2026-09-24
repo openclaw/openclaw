@@ -20,12 +20,14 @@ import {
   isWorktreeRegistryReadCommand,
   executeWorktreeRegistryReadCommand,
 } from "../agents/worktrees/registry-read.worker.js";
+import { retireMissingWorktreeInWorker } from "../agents/worktrees/registry-retirement.worker.js";
 import { executeWorktreeRunLeaseCommand } from "../agents/worktrees/run-lease-store.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
 import { readWorkshopMigrationRecordsInDatabase } from "../commands/doctor-skill-workshop-read.kernel.js";
+import { upsertConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
 import {
   patchConfigHealthEntryInDatabase,
   readConfigHealthSnapshotInDatabase,
@@ -85,8 +87,6 @@ import { isNodeWorkerJournalCommand } from "../node-host/node-worker-journal.wor
 import { executeNodeWorkerJournalCommand } from "../node-host/node-worker-journal.worker.js";
 import { executePluginBlobCommand } from "../plugin-state/plugin-blob-store.worker.js";
 import { isPluginBlobWorkerCommand } from "../plugin-state/plugin-blob-worker-contract.js";
-import { isPluginStateWorkerCommand } from "../plugin-state/plugin-state-worker-contract.js";
-import { executePluginStateCommand } from "../plugin-state/plugin-state.worker.js";
 import {
   readPluginBindingApprovalsInDatabase,
   upsertPluginBindingApprovalInDatabase,
@@ -155,7 +155,6 @@ export function executeSharedStateCommand(
   command: OpenClawStateWorkerRuntimeCommand,
   context: { databasePath: string },
   open: () => OpenClawStateDatabase,
-  hasNativeDatabase: boolean,
 ): Operations[keyof Operations]["output"] {
   // Dispatch preparation has loaded this module; do not open or observe token state.
   if (command.type === "deviceAuth.prepare") {
@@ -388,17 +387,6 @@ export function executeSharedStateCommand(
   if (isPluginBlobWorkerCommand(command)) {
     return executePluginBlobCommand(command, context.databasePath, open);
   }
-  if (isPluginStateWorkerCommand(command)) {
-    return executePluginStateCommand(
-      command,
-      {
-        path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
-      },
-      open,
-      hasNativeDatabase,
-    );
-  }
   if (command.type === "config.health.read") {
     const read = command.input.artifactPreserving
       ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly
@@ -617,6 +605,9 @@ export function executeSharedStateCommand(
   if (isWorktreeRegistryReadCommand(command)) {
     return executeWorktreeRegistryReadCommand(database.db, command);
   }
+  if (command.type === "worktrees.retireMissing") {
+    return retireMissingWorktreeInWorker(command.input, writeOptions);
+  }
   if (command.type === "worktrees.releaseRunLease" || command.type === "worktrees.reapRunLeases") {
     return executeWorktreeRunLeaseCommand(command, writeOptions);
   }
@@ -634,6 +625,12 @@ export function executeSharedStateCommand(
     return runOpenClawStateWriteTransaction(({ db }) => {
       createSqliteAuditRecordKernel(db, { scope, maxEntries }).register(record);
     }, writeOptions);
+  }
+  if (command.type === "config.snapshot.upsert") {
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => upsertConfigSnapshotAuditRecordInDatabase(db, command.input),
+      writeOptions,
+    );
   }
   throw new Error("Unknown shared-state SQLite command");
 }

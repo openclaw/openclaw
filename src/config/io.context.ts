@@ -90,7 +90,6 @@ export type ConfigIoContext = {
     assertCurrent?: () => void,
   ) => Promise<OpenClawConfig>;
   createValidationPluginMetadataSnapshotLoader: (params: {
-    effectiveConfigRaw: unknown;
     env: NodeJS.ProcessEnv;
     allowCurrentPluginMetadata?: boolean;
   }) => ValidationPluginMetadataSnapshotLoader;
@@ -223,7 +222,6 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
   }
 
   function createValidationPluginMetadataSnapshotLoader(params: {
-    effectiveConfigRaw: unknown;
     env: NodeJS.ProcessEnv;
     allowCurrentPluginMetadata?: boolean;
   }): ValidationPluginMetadataSnapshotLoader {
@@ -353,7 +351,6 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
           authoredCandidate,
           effectiveConfigRaw,
           pluginMetadata: createValidationPluginMetadataSnapshotLoader({
-            effectiveConfigRaw,
             env: candidateEnv,
           }),
           validationOptions: {

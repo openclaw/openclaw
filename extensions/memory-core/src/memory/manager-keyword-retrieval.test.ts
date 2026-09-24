@@ -51,6 +51,15 @@ describe("memory index", () => {
     const results = await manager.search("Alpha");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.snippet).toMatch(/Alpha/i);
+    expect(Object.keys(results[0] ?? {}).slice(0, 7)).toEqual([
+      "path",
+      "startLine",
+      "endLine",
+      "score",
+      "textScore",
+      "snippet",
+      "source",
+    ]);
 
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);

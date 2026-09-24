@@ -251,7 +251,6 @@ const allowedRuntimeMigrationPaths = [
   "src/infra/state-migrations.web-push.ts",
   "src/infra/state-migrations.node-host.ts",
   "src/infra/state-migrations.device-identity.ts",
-  "src/infra/state-migrations.subagent-registry.ts",
   "src/infra/state-migrations.rescue-pending.ts",
   "src/commands/session-state-migration.ts",
   "src/commands/doctor-state-migrations.test.ts",

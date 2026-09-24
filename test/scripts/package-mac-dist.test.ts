@@ -15,9 +15,238 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const scriptPath = "scripts/package-mac-dist.sh";
+const checkpointDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function makeCheckpointFixture() {
+  const root = checkpointDirs.make("openclaw-dist-checkpoint-");
+  const tools = path.join(root, "tools");
+  mkdirSync(tools);
+  mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
+  for (const file of [
+    "package-mac-dist.sh",
+    "lib/mac-notarization-recovery.py",
+    "lib/swift-toolchain.sh",
+    "lib/plistbuddy.sh",
+  ]) {
+    writeFileSync(
+      path.join(root, "scripts", file),
+      readFileSync(path.join("scripts", file), "utf8")
+        .replaceAll("/usr/bin/codesign", path.join(tools, "codesign"))
+        .replaceAll("/usr/bin/lipo", path.join(tools, "lipo"))
+        .replaceAll("/usr/libexec/PlistBuddy", path.join(tools, "PlistBuddy")),
+    );
+  }
+  const fake = path.join(tools, "fake");
+  writeFileSync(
+    fake,
+    `#!/usr/bin/env python3
+import json, os, pathlib, shutil, sys, zipfile
+root = pathlib.Path(__file__).resolve().parents[1]
+name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
+with (root / "events").open("a") as log:
+    log.write(name + " " + " ".join(args) + "\\n")
+def archive(source, target):
+    with zipfile.ZipFile(target, "w") as z:
+        for p in source.rglob("*"):
+            if p.is_file(): z.write(p, p.relative_to(source.parent))
+if name == "swift": print("Apple Swift version 6.3")
+elif name == "xcrun": print("Xcode 26.4")
+elif name == "node": print("2608000290")
+elif name == "git": print("a" * 40)
+elif name == "lipo": print("arm64")
+elif name == "PlistBuddy":
+    print(json.loads(pathlib.Path(args[2]).read_text())[args[1].split(":")[1]])
+elif name == "package-mac-app.sh":
+    app = root / "dist/OpenClaw.app/Contents"
+    app.mkdir(parents=True, exist_ok=True)
+    (app / "Info.plist").write_text(json.dumps(dict(CFBundleShortVersionString="2026.8.2", CFBundleVersion="2608000290", CFBundleIdentifier="ai.openclaw.mac", SUFeedURL="https://example.com/appcast.xml")))
+    (app / "signature").write_text("adhoc" if os.environ.get("ALLOW_ADHOC_SIGNING") == "1" else "developer")
+elif name == "codesign":
+    target = pathlib.Path(args[-1])
+    if "--sign" in args:
+        if os.environ.get("SIGN_IDENTITY") == "unavailable": sys.exit("unexpected signing during resume")
+        with target.open("ab") as out: out.write(b"signed")
+    elif "--verify" in args:
+        if target.is_file(): assert target.read_bytes().endswith((b"signed", b"stapled"))
+        else: assert (target / "Contents/signature").exists()
+        if any(a.startswith("-R=") for a in args) and os.environ.get("ALLOW_ADHOC_SIGNING") == "1":
+            sys.exit("ad-hoc signatures have no Developer Team ID")
+    else:
+        print("Signature=" + (target / "Contents/signature").read_text(), file=sys.stderr)
+elif name == "ditto":
+    source, target = map(pathlib.Path, args[-2:])
+    if "-x" in args:
+        with zipfile.ZipFile(source) as z: z.extractall(target)
+    else: archive(source, target)
+elif name == "create-dmg.sh": pathlib.Path(args[1]).write_bytes(b"dmg")
+elif name == "hdiutil":
+    if args[0] == "attach":
+        mount = pathlib.Path(args[args.index("-mountpoint") + 1])
+        with zipfile.ZipFile(root / "dist/macos-notarization-recovery/app.zip") as z: z.extractall(mount)
+    else: shutil.rmtree(pathlib.Path(args[1]) / "OpenClaw.app")
+elif name == "audit-async-sleep-frames.py":
+    if (root / "reject-audit").exists(): sys.exit("async frame allocation is undersized")
+elif name == "notarize-mac-artifact.sh":
+    artifact = pathlib.Path(args[-1])
+    if artifact.suffix == ".dmg":
+        with artifact.open("ab") as out: out.write(b"stapled")
+    else: pathlib.Path(os.environ["STAPLE_APP_PATH"], "Contents/stapled").touch()
+else: sys.exit("unexpected fake tool: " + name)
+`,
+    { mode: 0o755 },
+  );
+  for (const name of [
+    "swift",
+    "xcrun",
+    "node",
+    "git",
+    "lipo",
+    "PlistBuddy",
+    "codesign",
+    "ditto",
+    "hdiutil",
+  ]) {
+    symlinkSync(fake, path.join(tools, name));
+  }
+  for (const name of ["package-mac-app.sh", "create-dmg.sh", "notarize-mac-artifact.sh"]) {
+    symlinkSync(fake, path.join(root, "scripts", name));
+  }
+  const audit = path.join(root, "apps/macos/scripts/audit-async-sleep-frames.py");
+  mkdirSync(path.dirname(audit), { recursive: true });
+  symlinkSync(fake, audit);
+  const symbols = path.join(root, "apps/macos/.build/arm64/release/OpenClaw.dSYM");
+  mkdirSync(symbols, { recursive: true });
+  writeFileSync(path.join(symbols, "symbols"), "debug symbols");
+  const checkpoint = path.join(root, "dist/macos-notarization-recovery");
+  return {
+    root,
+    checkpoint,
+    events: () => readFileSync(path.join(root, "events"), "utf8"),
+    run: (mode: string, env: NodeJS.ProcessEnv = {}) =>
+      spawnSync("/bin/bash", [path.join(root, scriptPath), mode], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${tools}${path.delimiter}${process.env.PATH}`,
+          APP_VERSION: "2026.8.2",
+          APP_BUILD: "2608000290",
+          BUILD_CONFIG: "release",
+          BUILD_ARCHS: "arm64",
+          SIGN_IDENTITY: "fixture",
+          ALLOW_ADHOC_SIGNING: "0",
+          SKIP_NOTARIZE: "0",
+          SKIP_DMG: "0",
+          SKIP_DSYM: "0",
+          EXPECTED_DEVELOPER_TEAM_ID: "",
+          ...env,
+        },
+      }),
+  };
+}
+
+describe("macOS packaging checkpoint boundary", () => {
+  it("retains a signed DMG before notarization and resumes without build or signing credentials", () => {
+    const f = makeCheckpointFixture();
+    const built = f.run("--checkpoint-only");
+    expect(built.status, built.stderr).toBe(0);
+    const manifest = JSON.parse(readFileSync(path.join(f.checkpoint, "manifest.json"), "utf8"));
+    expect(manifest).toMatchObject({
+      sourceSha: "a".repeat(40),
+      version: "2026.8.2",
+      build: "2608000290",
+      completed: false,
+    });
+    expect(Object.keys(manifest.files).toSorted()).toEqual(["app.dmg", "app.zip", "symbols.zip"]);
+    expect(readFileSync(path.join(f.checkpoint, "app.dmg"), "utf8")).toBe("dmgsigned");
+    expect(f.events()).not.toContain("notarize-mac-artifact.sh");
+    expect(f.events().indexOf("audit-async-sleep-frames.py")).toBeLessThan(
+      f.events().indexOf("create-dmg.sh"),
+    );
+    rmSync(path.join(f.root, "apps/macos/.build"), { recursive: true });
+    rmSync(path.join(f.root, "scripts/package-mac-app.sh"));
+    rmSync(path.join(f.root, "scripts/create-dmg.sh"));
+    const resumed = f.run("--resume-notarization", { SIGN_IDENTITY: "unavailable" });
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(f.events().match(/notarize-mac-artifact.sh/g)).toHaveLength(2);
+    expect(existsSync(path.join(f.root, "dist/OpenClaw.app/Contents/stapled"))).toBe(true);
+    expect(readFileSync(path.join(f.root, "dist/OpenClaw-2026.8.2.dmg"), "utf8")).toBe(
+      "dmgsignedstapled",
+    );
+    for (const suffix of ["zip", "dSYM.zip"]) {
+      expect(existsSync(path.join(f.root, `dist/OpenClaw-2026.8.2.${suffix}`))).toBe(true);
+    }
+    expect(
+      JSON.parse(readFileSync(path.join(f.checkpoint, "manifest.json"), "utf8")).completed,
+    ).toBe(true);
+  });
+
+  it("allows explicitly ad-hoc smoke resume without notarization", () => {
+    const f = makeCheckpointFixture();
+    const smoke = {
+      ALLOW_ADHOC_SIGNING: "1",
+      SIGN_IDENTITY: "-",
+      SKIP_NOTARIZE: "1",
+      EXPECTED_DEVELOPER_TEAM_ID: "FIXTURE",
+    };
+    expect(f.run("--checkpoint-only", smoke).status).toBe(0);
+    const resumed = f.run("--resume-notarization", smoke);
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(f.events()).not.toContain("notarize-mac-artifact.sh");
+    expect(existsSync(path.join(f.root, "dist/OpenClaw.app/Contents/stapled"))).toBe(false);
+    expect(existsSync(path.join(f.root, "appcast.xml"))).toBe(false);
+  });
+
+  it.each(["release", "release with smoke flag", "tampered app", "missing DMG", "audit"])(
+    "refuses %s recovery before notarization",
+    (failure) => {
+      const f = makeCheckpointFixture();
+      const built = f.run("--checkpoint-only");
+      expect(built.status, built.stderr).toBe(0);
+      if (failure === "tampered app") {
+        writeFileSync(path.join(f.checkpoint, "app.zip"), "tampered");
+      }
+      if (failure === "missing DMG") {
+        rmSync(path.join(f.checkpoint, "app.dmg"));
+      }
+      if (failure === "audit") {
+        writeFileSync(path.join(f.root, "reject-audit"), "");
+      }
+      const resumed = f.run(
+        "--resume-notarization",
+        failure.startsWith("release")
+          ? {
+              SKIP_NOTARIZE: "1",
+              ALLOW_ADHOC_SIGNING: failure === "release with smoke flag" ? "1" : "0",
+            }
+          : {},
+      );
+      expect(resumed.status).not.toBe(0);
+      expect(resumed.stderr).toContain(
+        failure.startsWith("release")
+          ? "smoke"
+          : failure === "audit"
+            ? "undersized"
+            : "SHA-256 mismatch",
+      );
+      expect(f.events()).not.toContain("notarize-mac-artifact.sh");
+    },
+  );
+
+  it("fails the frame audit before creating a checkpoint", () => {
+    const f = makeCheckpointFixture();
+    writeFileSync(path.join(f.root, "reject-audit"), "");
+    const result = f.run("--checkpoint-only");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("async frame allocation is undersized");
+    expect(existsSync(f.checkpoint)).toBe(false);
+    expect(f.events()).not.toContain("create-dmg.sh");
+  });
+});
 
 function makeDistributionFixture(layout: "native" | "xcode", missingArch?: string) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-dist-symbols-"));
@@ -82,7 +311,7 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
     const binary = path.join(products, "OpenClaw");
     const symbols = `${binary}.dSYM`;
     for (const args of [
-      ["clang", "-arch", arch, "-g", source, "-o", binary],
+      ["clang", "-arch", arch, "-g", "-Wl,-adhoc_codesign", source, "-o", binary],
       ["dsymutil", binary, "-o", symbols],
     ]) {
       const result = spawnSync("xcrun", args, { encoding: "utf8" });
@@ -117,6 +346,8 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
             BUILD_CONFIG: "release",
             BUILD_ARCHS: options.archs ?? "all",
             SKIP_NOTARIZE: options.notarize ? "0" : "1",
+            ALLOW_ADHOC_SIGNING: "1",
+            SIGN_IDENTITY: "-",
             NOTARYTOOL_PROFILE: "test-profile",
             SKIP_DMG: options.dmg ? "0" : "1",
             SKIP_DSYM: "0",
@@ -535,15 +766,15 @@ describe("package-mac-dist plist validation", () => {
         `#!/bin/bash
 set -eu
 root="$(dirname "$0")/.."
+if [[ "$1" == stapler && "$2" == staple && ! -f "$root/staple-failed" && $(wc -l < "$root/submissions") -eq ${artifact === "app" ? 1 : 2} ]]; then
+  touch "$root/staple-failed"
+  echo 'stapling interrupted' >&2
+  exit 7
+fi
 if [[ "$1" != notarytool ]]; then echo 'Xcode 26.4'; exit 0; fi
 if [[ "$2" == submit ]]; then
   echo submit >> "$root/submissions"
-  if [[ "$*" == *" --wait "* ]]; then echo 'network disconnected' >&2; exit 7; fi
   echo '{"id":"11111111-2222-3333-4444-555555555555"}'
-elif [[ ! -f "$root/wait-failed" && $(wc -l < "$root/submissions") -eq ${artifact === "app" ? 1 : 2} ]]; then
-  touch "$root/wait-failed"
-  echo 'network disconnected' >&2
-  exit 7
 else
   echo '{"id":"11111111-2222-3333-4444-555555555555","status":"Accepted"}'
 fi
@@ -566,7 +797,7 @@ hdiutil create -fs HFS+ -format UDZO -srcfolder "$stage" "$2" >/dev/null
       const options = { notarize: true, dmg: artifact === "dmg" };
       const failed = fixture.run(options);
       expect(failed.status).not.toBe(0);
-      expect(failed.stderr).toContain("network disconnected");
+      expect(failed.stderr).toContain("stapling interrupted");
       const checkpoint = path.join(fixture.root, "dist/macos-notarization-recovery");
       expect(existsSync(path.join(checkpoint, "app.zip"))).toBe(true);
       expect(existsSync(path.join(checkpoint, "symbols.zip"))).toBe(true);
@@ -743,7 +974,7 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
 
     const result = fixture.run({ archs: "x86_64" });
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain("Async frame audit not applicable: x86_64-only build");
   });
 

@@ -9,7 +9,6 @@ import type {
   GatewayServiceEnv,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
-  SystemdServiceIdentity,
 } from "./service-types.js";
 import {
   assertSystemdAvailable,
@@ -42,18 +41,18 @@ function isRunningAsRoot(): boolean {
   return false;
 }
 
-async function runSystemdServiceAction(params: {
-  stdout: NodeJS.WritableStream;
-  env?: GatewayServiceEnv;
-  action: "start" | "stop" | "restart";
-  label: string;
-  onMutation?: () => void;
-  assertCurrent?: () => void;
-  systemdIdentity?: SystemdServiceIdentity;
-  warn?: (message: string) => void;
-}) {
+async function runSystemdServiceAction(
+  params: GatewayServiceControlArgs,
+  action: "start" | "stop" | "restart",
+) {
   const env = params.env ?? process.env;
-  if (params.systemdIdentity && params.action !== "stop") {
+  const label = { start: "Started", stop: "Stopped", restart: "Restarted" }[action];
+  const reportMutation = createGatewayLifecycleMutationReporter(params.onMutation);
+  const report = (unitName: string) => {
+    reportMutation(`systemctl-${action}`);
+    params.stdout.write(`${formatLine(`${label} systemd service`, unitName)}\n`);
+  };
+  if (params.systemdIdentity && action !== "stop") {
     if (params.systemdIdentity.scope === "user") {
       const scopedEnv = { ...env, OPENCLAW_SYSTEMD_UNIT: params.systemdIdentity.unitName };
       try {
@@ -64,12 +63,12 @@ async function runSystemdServiceAction(params: {
     }
     if (params.systemdIdentity.scope === "system" && !isRunningAsRoot()) {
       throw new Error(
-        `${params.systemdIdentity.unitName} is a system-scope unit (${params.systemdIdentity.unitPath}); run \`sudo systemctl ${params.action} ${params.systemdIdentity.unitName}\` to ${params.action} it`,
+        `${params.systemdIdentity.unitName} is a system-scope unit (${params.systemdIdentity.unitPath}); run \`sudo systemctl ${action} ${params.systemdIdentity.unitName}\` to ${action} it`,
       );
     }
     await activateSystemdServiceIdentity({
       identity: params.systemdIdentity,
-      action: params.action,
+      action,
       assertCurrent: params.assertCurrent,
       warn:
         params.warn ??
@@ -77,8 +76,7 @@ async function runSystemdServiceAction(params: {
           params.stdout.write(`${formatLine("Warning", message)}\n`);
         }),
     });
-    params.onMutation?.();
-    params.stdout.write(`${formatLine(params.label, params.systemdIdentity.unitName)}\n`);
+    report(params.systemdIdentity.unitName);
     return;
   }
   const installed = await findInstalledSystemdGatewayScope(env);
@@ -87,7 +85,7 @@ async function runSystemdServiceAction(params: {
   if (installed?.scope === "system") {
     if (!isRunningAsRoot()) {
       throw new Error(
-        `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
+        `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${action} ${unitName}\` to ${action} it`,
       );
     }
     runSystemctl = (args) => {
@@ -96,7 +94,7 @@ async function runSystemdServiceAction(params: {
     };
   } else {
     await assertSystemdAvailable(env);
-    if (params.action !== "stop") {
+    if (action !== "stop") {
       try {
         await assertNoSystemGatewayOwnership(env);
       } catch (error) {
@@ -105,78 +103,32 @@ async function runSystemdServiceAction(params: {
     }
     runSystemctl = (args) => execSystemctlUser(env, args, undefined, params.assertCurrent);
   }
-  if (params.action !== "stop") {
+  if (action !== "stop") {
     // Clear crash-loop start-limit latches only after scope ownership is proven;
     // otherwise resetting a conflicting manager could mutate the wrong service.
     params.assertCurrent?.();
     await runSystemctl(["reset-failed", unitName]);
   }
   params.assertCurrent?.();
-  const res = await runSystemctl([params.action, unitName]);
+  const res = await runSystemctl([action, unitName]);
   if (res.code !== 0) {
-    throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(`systemctl ${action} failed: ${res.stderr || res.stdout}`.trim());
   }
-  params.onMutation?.();
-  params.stdout.write(`${formatLine(params.label, unitName)}\n`);
+  report(unitName);
 }
 
-export async function startSystemdService({
-  stdout,
-  env,
-  onMutation,
-  assertCurrent,
-  systemdIdentity,
-  warn,
-}: GatewayServiceControlArgs): Promise<void> {
-  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
-  await runSystemdServiceAction({
-    stdout,
-    env,
-    action: "start",
-    assertCurrent,
-    systemdIdentity,
-    warn,
-    label: "Started systemd service",
-    onMutation: () => reportMutation("systemctl-start"),
-  });
+export async function startSystemdService(args: GatewayServiceControlArgs): Promise<void> {
+  await runSystemdServiceAction(args, "start");
 }
 
-export async function stopSystemdService({
-  stdout,
-  env,
-  onMutation,
-  assertCurrent,
-}: GatewayServiceControlArgs): Promise<void> {
-  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
-  await runSystemdServiceAction({
-    stdout,
-    env,
-    action: "stop",
-    assertCurrent,
-    label: "Stopped systemd service",
-    onMutation: () => reportMutation("systemctl-stop"),
-  });
+export async function stopSystemdService(args: GatewayServiceControlArgs): Promise<void> {
+  await runSystemdServiceAction(args, "stop");
 }
 
-export async function restartSystemdService({
-  stdout,
-  env,
-  onMutation,
-  assertCurrent,
-  systemdIdentity,
-  warn,
-}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
-  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
-  await runSystemdServiceAction({
-    stdout,
-    env,
-    action: "restart",
-    assertCurrent,
-    systemdIdentity,
-    warn,
-    label: "Restarted systemd service",
-    onMutation: () => reportMutation("systemctl-restart"),
-  });
+export async function restartSystemdService(
+  args: GatewayServiceControlArgs,
+): Promise<GatewayServiceRestartResult> {
+  await runSystemdServiceAction(args, "restart");
   return { outcome: "completed" };
 }
 

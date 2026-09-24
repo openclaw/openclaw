@@ -6,6 +6,10 @@ import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import {
+  isPluginStateWorkerCommand,
+  pluginStateWorkerOperations,
+} from "../plugin-state/plugin-state-worker-contract.js";
 import { readPluginMetadataStateRowSync } from "../plugins/installed-plugin-index-row.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
@@ -29,6 +33,11 @@ const loadAgentCleanup = createLazyRuntimeModule(
 );
 let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") | undefined;
 
+const loadPluginState = createLazyRuntimeModule(
+  () => import("../plugin-state/plugin-state.worker.js"),
+);
+let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undefined;
+
 const loadRuntime = createLazyRuntimeModule(() => import("./openclaw-state-worker-runtime.js"));
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
 
@@ -51,6 +60,7 @@ export function createSqliteWorkerBackend(
   const database = openOpenClawStateDatabase({
     path: context.databasePath,
     env: stateDatabaseInitializationEnvironment(),
+    initializationAgentPaths: getSqliteWorkerStateContext().initializationAgentPaths,
   });
   return createSharedStateWorkerBackend(context, database);
 }
@@ -74,6 +84,7 @@ function createSharedStateWorkerBackend(
       const opened = openOpenClawStateDatabase({
         path: context.databasePath,
         env: stateDatabaseInitializationEnvironment(),
+        initializationAgentPaths: getSqliteWorkerStateContext().initializationAgentPaths,
       });
       borrow = retainOpenClawStateDatabase(opened);
       nativeDatabase = opened;
@@ -99,6 +110,14 @@ function createSharedStateWorkerBackend(
         }
         return loadAgentCleanup().then((loaded) => {
           agentCleanup = loaded;
+        });
+      }
+      if (Object.hasOwn(pluginStateWorkerOperations, commandType)) {
+        if (pluginState) {
+          return undefined;
+        }
+        return loadPluginState().then((loaded) => {
+          pluginState = loaded;
         });
       }
       if (
@@ -189,15 +208,24 @@ function createSharedStateWorkerBackend(
         assertOpenClawStateDatabaseOwner(nativeDatabase.db, { pathname: nativeDatabase.path });
         return nativeDatabase.walMaintenance.inspectIdle?.() ?? "retire";
       }
+      if (isPluginStateWorkerCommand(command)) {
+        if (!pluginState) {
+          throw new Error("Plugin-state worker command runtime is not prepared");
+        }
+        return pluginState.executePluginStateCommand(
+          command,
+          {
+            path: context.databasePath,
+            env: getSqliteWorkerStateContext().environment,
+          },
+          open,
+          nativeDatabase?.db.isOpen === true,
+        );
+      }
       if (!runtime) {
         throw new Error("Shared-state worker command runtime is not prepared");
       }
-      return runtime.executeSharedStateCommand(
-        command,
-        context,
-        open,
-        nativeDatabase?.db.isOpen === true,
-      );
+      return runtime.executeSharedStateCommand(command, context, open);
     },
     assertSettled() {
       if (nativeDatabase) {

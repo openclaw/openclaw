@@ -992,6 +992,11 @@ img.chat-avatar {
   animation: chat-typing-pulse 1s step-end infinite;
 }
 
+.agent-chat__typing-preview-text[data-paused]::after {
+  animation: none;
+  opacity: 0;
+}
+
 .agent-chat__typing-bubble {
   display: inline-flex;
   align-items: center;

@@ -30,7 +30,7 @@ import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginLoadDiagnostics } from "../plugins/load-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
@@ -107,6 +107,10 @@ async function runDoctorHealthFlowWithResult(
   writeAuthority?: UpdateDoctorWriteAuthority,
 ) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
+  const repairRuntime: RuntimeEnv = {
+    ...effectiveRuntime,
+    exit: createNonExitingRuntime().exit,
+  };
   // Config loading can initialize SQLite-backed state before integrity runs.
   // Preserve the entry fact so doctor can report that automatic initialization.
   const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
@@ -160,14 +164,19 @@ async function runDoctorHealthFlowWithResult(
     maintenance = await beginDoctorMaintenance({
       options,
       root,
-      runtime: effectiveRuntime,
+      runtime: repairRuntime,
       assertCurrent: writeAuthority?.assertCurrent,
     });
     const runChecks = async () => {
+      const doctorRuntime = maintenance ? repairRuntime : effectiveRuntime;
       const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
       const { prepareDoctorDatabasePreflight } =
         await import("../commands/doctor-database-preflight.js");
-      const prompter = createDoctorPrompter({ runtime: effectiveRuntime, options });
+      const prompter = createDoctorPrompter({
+        runtime: doctorRuntime,
+        options,
+        signal: maintenance?.signal,
+      });
       // Explicit repair never offers an update. Acquire its owners before any
       // snapshot; diagnostic Doctor still checks state before update admission.
       if (!maintenance) {
@@ -204,7 +213,7 @@ async function runDoctorHealthFlowWithResult(
         await import("../commands/doctor-update-schema-guard.js");
       await guardUpdateDoctorSchemaUpgrade({
         schemas,
-        runtime: effectiveRuntime,
+        runtime: doctorRuntime,
         json: options.json,
         postCoreSchemaRepair: writeAuthority?.postCoreSchemaRepair,
       });
@@ -244,7 +253,7 @@ async function runDoctorHealthFlowWithResult(
       const { noteStalePluginRuntimeSymlinks } =
         await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
       const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
-      await maybeRepairUiProtocolFreshness(effectiveRuntime, prompter);
+      await maybeRepairUiProtocolFreshness(doctorRuntime, prompter);
       noteSourceInstallIssues(root);
       await noteStalePluginRuntimeSymlinks(root);
       noteStartupOptimizationHints();
@@ -254,7 +263,7 @@ async function runDoctorHealthFlowWithResult(
         options,
         agentDatabaseMigrationDiscovery: schemas.agentDatabaseMigrationDiscovery,
         confirm: (p) => prompter.confirm(p),
-        runtime: effectiveRuntime,
+        runtime: doctorRuntime,
         prompter,
       });
       // Relocation changes the inspected scope; unchanged fleets retain their prepared facts.
@@ -282,7 +291,7 @@ async function runDoctorHealthFlowWithResult(
       recordAgentDatabaseAdmissions(agentDatabaseRefusals);
       const { CONFIG_PATH } = await loadConfigModule();
       const ctx: DoctorHealthFlowContext = {
-        runtime: effectiveRuntime,
+        runtime: doctorRuntime,
         options,
         prompter,
         configResult,
@@ -309,51 +318,40 @@ async function runDoctorHealthFlowWithResult(
         return undefined;
       }
       if (options.repair === true || options.yes === true) {
-        // Contributions can report optional migration warnings, but repair must not
-        // complete while required state still blocks runtime access.
-        const { assertSessionStoreMigrationComplete } =
-          await import("../config/sessions/startup-migration.js");
-        assertSessionStoreMigrationComplete({
-          cfg: ctx.cfg,
-          env: process.env,
-          operation: "doctor",
-        });
-        const { assertOpenClawDatabasesReady } =
-          await import("../state/openclaw-database-preflight.js");
-        const { resolveConfiguredAgentDatabaseTargets } =
-          await import("../config/sessions/targets.js");
-        await assertOpenClawDatabasesReady({
-          env: process.env,
-          config: ctx.cfg,
-          operation: "doctor",
-          onDeferredSchemaPublication: (publication) => effectiveRuntime.log(publication.message),
-          configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(ctx.cfg, {
-            env: process.env,
-          }),
-        });
-        const { assertConfiguredWorkspaceStateReady } =
-          await import("../agents/workspace-state-dirs.js");
-        await assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg, operation: "doctor" });
-        const { assertNoPendingLegacyExecApprovals } =
-          await import("../infra/exec-approvals-migration-gate.js");
-        assertNoPendingLegacyExecApprovals({ operation: "doctor" });
+        const { assertDoctorMaintenanceReady } =
+          await import("../commands/doctor-maintenance-inspection.js");
+        await assertDoctorMaintenanceReady(ctx.cfg, process.env, effectiveRuntime.log);
         const { repairGatewayMaintenanceStartupFailures } =
           await import("../infra/gateway-boot-lifecycle.js");
         repairGatewayMaintenanceStartupFailures();
       }
       return ctx;
     };
-    const ctx = await (maintenance ? maintenance.run(runChecks) : runChecks());
-    if (!ctx) {
-      return;
-    }
-    if (maintenance) {
-      const { writeDoctorGatewayConfig } =
-        await import("./doctor-health-contribution-runners.gateway.js");
-      await maintenance.finish(ctx.cfg, (nextConfig) => writeDoctorGatewayConfig(ctx, nextConfig));
-      if (recordConfigWriteRefusal(ctx)) {
-        return;
+    let ctx: DoctorHealthFlowContext | undefined;
+    let failure: unknown;
+    try {
+      ctx = await (maintenance ? maintenance.run(runChecks) : runChecks());
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
+      if (maintenance) {
+        const completed = ctx;
+        await maintenance.finish(
+          completed?.cfg,
+          completed
+            ? async (nextConfig) => {
+                const { writeDoctorGatewayConfig } =
+                  await import("./doctor-health-contribution-runners.gateway.js");
+                return writeDoctorGatewayConfig(completed, nextConfig);
+              }
+            : undefined,
+          failure,
+        );
       }
+    }
+    if (!ctx || recordConfigWriteRefusal(ctx)) {
+      return;
     }
     const pluginWarnings: string[] = [];
     if (diagnostics.length > 0) {

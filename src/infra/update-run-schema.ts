@@ -16,6 +16,96 @@ import { UpdateRunDriverSchema as driver } from "./update-run-driver-schema.js";
 import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
 
+export const UPDATE_ADMISSION_PROTOCOL = 1;
+
+const admissionText = z.string().min(1);
+const admissionIdentifier = (maxBytes: number) =>
+  admissionText.refine((value) => Buffer.byteLength(value) <= maxBytes);
+const admissionReasonCode = admissionIdentifier(80);
+const admissionVersion = admissionIdentifier(128);
+
+const UpdateAdmissionCheckSchema = z.object({
+  name: admissionIdentifier(128),
+  status: z.enum(["ok", "warn", "refuse"]),
+  detail: admissionText.optional(),
+});
+
+const UpdateAdmissionVerdictSchema = z
+  .object({
+    protocol: z.literal(UPDATE_ADMISSION_PROTOCOL),
+    verdict: z.enum(["admit", "refuse"]),
+    reasons: z
+      .array(
+        z.object({
+          code: admissionReasonCode,
+          message: admissionText,
+          nextAction: admissionText.optional(),
+        }),
+      )
+      .max(UPDATE_RUN_DIAGNOSTIC_LIMIT),
+    warnings: z.array(z.object({ code: admissionText, message: admissionText })),
+    facts: z.object({
+      candidateVersion: admissionVersion,
+      installedVersion: admissionVersion.nullable(),
+      nodeEngines: z.string().optional(),
+      checks: z.array(UpdateAdmissionCheckSchema).max(UPDATE_RUN_DIAGNOSTIC_LIMIT),
+    }),
+  })
+  .refine(
+    (value) =>
+      new Set(value.facts.checks.map((check) => check.name)).size === value.facts.checks.length,
+  )
+  .refine((value) =>
+    value.verdict === "refuse"
+      ? value.reasons.length > 0
+      : value.reasons.length === 0 &&
+        value.facts.checks.every((check) => check.status !== "refuse"),
+  )
+  .refine((value) => {
+    const checks = value.facts.checks.map((check) => ({
+      ...check,
+      ...(check.detail !== undefined ? { detail: "" } : {}),
+    }));
+    const identity = {
+      admission: {
+        owner: "candidate",
+        protocol: value.protocol,
+        candidateVersion: value.facts.candidateVersion,
+        checks,
+      },
+      candidateAdmission: {
+        ...value,
+        reasons: value.reasons.map((reason) => ({
+          ...reason,
+          message: "",
+          ...(reason.nextAction !== undefined ? { nextAction: "" } : {}),
+        })),
+        warnings: [],
+        facts: { ...value.facts, checks },
+      },
+    };
+    // Leave room in origin's 16 KiB for eight maximally escaped driver
+    // identities and the remaining origin field names, even after all prose shrinks.
+    return Buffer.byteLength(JSON.stringify(identity)) <= 2 * UPDATE_RUN_TEXT_LIMIT;
+  });
+
+export type UpdateAdmissionVerdict = z.infer<typeof UpdateAdmissionVerdictSchema>;
+
+export function parseUpdateAdmissionVerdict(value: unknown): UpdateAdmissionVerdict | null {
+  const parsed = UpdateAdmissionVerdictSchema.safeParse(value);
+  if (!parsed.success) {
+    return null;
+  }
+  const verdict = parsed.data;
+  return {
+    ...verdict,
+    // Warnings cannot invalidate a decision or spend authoritative receipt capacity.
+    warnings: verdict.warnings
+      .filter((warning) => admissionReasonCode.safeParse(warning.code).success)
+      .slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT),
+  };
+}
+
 const destinationPath = z.string().max(240);
 export const UpdateDestinationFailureSchema = z.strictObject({
   ownership: z.enum(["foreign", "unknown"]),
@@ -54,6 +144,34 @@ const UpdateRollbackOutcomeSchema = z.object({
 export type UpdateRollbackOutcome = z.infer<typeof UpdateRollbackOutcomeSchema>;
 
 const text = z.string().max(UPDATE_RUN_TEXT_LIMIT);
+const admissionCheck = z.object({
+  name: text,
+  status: UpdateAdmissionCheckSchema.shape.status,
+  detail: text.optional(),
+});
+const admissionChecks = z.array(admissionCheck).max(UPDATE_RUN_DIAGNOSTIC_LIMIT);
+const admission = z.object({
+  owner: z.enum(["candidate", "installed"]),
+  protocol: UpdateAdmissionVerdictSchema.shape.protocol.optional(),
+  candidateVersion: text.optional(),
+  checks: admissionChecks.optional(),
+  fallbackReason: text.optional(),
+});
+// The ledger bounds diagnostic text independently of the command's wire verdict.
+const candidateAdmission = z.object({
+  protocol: UpdateAdmissionVerdictSchema.shape.protocol,
+  verdict: UpdateAdmissionVerdictSchema.shape.verdict,
+  reasons: z
+    .array(z.object({ code: text, message: text, nextAction: text.optional() }))
+    .max(UPDATE_RUN_DIAGNOSTIC_LIMIT),
+  warnings: z.array(z.object({ code: text, message: text })).max(UPDATE_RUN_DIAGNOSTIC_LIMIT),
+  facts: z.object({
+    candidateVersion: text,
+    installedVersion: text.nullable(),
+    nodeEngines: text.optional(),
+    checks: admissionChecks,
+  }),
+});
 const timestamp = z.number().int().nonnegative();
 const version = z.object({
   version: text.nullable().optional(),
@@ -104,7 +222,10 @@ export const UpdateRunRecordSchema = z.object({
   phase: z.enum(UPDATE_RUN_PHASES),
   status: z.enum(UPDATE_RUN_STATUSES),
   reason: text.nullable(),
+  admission: admission.optional(),
   origin: z.object({
+    admission: admission.optional(),
+    candidateAdmission: candidateAdmission.optional(),
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
     driver: driver.optional(),
     previousDrivers: z

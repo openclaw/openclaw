@@ -287,6 +287,23 @@ describe("Plugin SDK API baseline", () => {
     expect(listPluginSdkApiBaselineEntrypoints()).toEqual(publicPluginSdkEntrypoints);
   });
 
+  it("preserves empty tuple defaults in public function signatures", async () => {
+    const baseline = await renderSourceFixture({
+      "fixture.ts": 'export { emptyDefault as publicEmptyDefault } from "./functions.js";\n',
+      "functions.ts":
+        "export declare function emptyDefault<const T extends readonly string[] = []>(value?: T): T;\n",
+    });
+
+    expect(baseline.modules[0]?.exports).toEqual([
+      expect.objectContaining({
+        exportName: "publicEmptyDefault",
+        declaration: expect.stringMatching(
+          /export function publicEmptyDefault<const T extends readonly string\[\] = \[\s*\]>\(value\?: T\): T;/u,
+        ),
+      }),
+    ]);
+  });
+
   it("reports same-entrypoint closure changes without a committed merge unit", async () => {
     const render = (optionsExtra: string, resultExtra: string) =>
       renderSourceFixture({

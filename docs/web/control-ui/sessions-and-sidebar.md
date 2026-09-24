@@ -360,6 +360,9 @@ of the new session; they never share a session, invite people, or grant access.
 - **Command+Enter** on macOS or **Ctrl+Enter** on Windows/Linux starts a new session
   in the background. You can also choose **New session** beside the input.
 
+Selecting an installed plugin search result opens that plugin's overview, including
+disabled plugins. The **Plugins** navigation command opens the catalog hub.
+
 Open **New session settings** beside the input to choose the agent, workspace and
 machine, or whether to use a new worktree. These controls reuse the permissions
 and device/cloud availability rules of the full New session page. Model,
@@ -371,7 +374,9 @@ the checkbox restores your usual choices immediately and leaves the prompt
 intact. One-off choices are not remembered for the next palette session.
 
 Accepted creation closes the palette and offers **Open session** without changing
-the foreground view or its draft. A failed submission retains the prompt, selected mentions, images, and
+the foreground view or its draft. Creation and completion notices can open a session
+only while the original Gateway and account remain selected; reconnecting to the
+same account keeps the action available. A failed submission retains the prompt, selected mentions, images, and
 choices with an error. These settings do not affect sessions opened from search,
 and the existing conversation composer keeps its own send and steer/queue
 shortcuts. Long prompts remain intact for session creation and are never sent as

@@ -17,12 +17,7 @@ import {
   extractExactReplyDirective,
   extractFinishExactlyDirective,
   extractExactMarkerDirective,
-  extractWhatsAppLocationMarkerDirective,
-  extractWhatsAppContactMarkerDirective,
-  extractWhatsAppStickerMarkerDirective,
-  shouldUseWhatsAppLocationMarker,
-  shouldUseWhatsAppContactMarker,
-  shouldUseWhatsAppStickerMarker,
+  resolveWhatsAppStructuredReply,
   extractToolErrorForNamedCall,
   resolveHeartbeatPromptReply,
   readFirstMediaPath,
@@ -177,15 +172,6 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const currentImageRequest = extractCurrentImageRequest(input, body);
-  const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
-    ? extractWhatsAppLocationMarkerDirective(allInputText)
-    : "";
-  const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
-    ? extractWhatsAppContactMarkerDirective(allInputText)
-    : "";
-  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(input)
-    ? extractWhatsAppStickerMarkerDirective(allInputText)
-    : "";
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
@@ -231,14 +217,9 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   ) {
     return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
-  if (whatsAppLocationMarker) {
-    return whatsAppLocationMarker;
-  }
-  if (whatsAppContactMarker) {
-    return whatsAppContactMarker;
-  }
-  if (whatsAppStickerMarker) {
-    return whatsAppStickerMarker;
+  const whatsAppStructuredReply = resolveWhatsAppStructuredReply(prompt, input, allInputText);
+  if (whatsAppStructuredReply) {
+    return whatsAppStructuredReply;
   }
   if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
     return promptExactMarkerDirective;
@@ -289,9 +270,6 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
-  }
-  if (toolOutput && promptExactReplyDirective) {
-    return promptExactReplyDirective;
   }
   if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");
