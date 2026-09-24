@@ -247,7 +247,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  // grammY's webhook deadline does not cancel the underlying update handler.
+  // A webhook deadline does not cancel handleUpdate; abort its transport before joining.
+  for (const { abort } of bots) {
+    abort.abort();
+  }
   await settleUpdates();
   for (const botId of menuOwnerIds) {
     await new Promise<void>((resolve, reject) => {
@@ -259,12 +262,7 @@ afterEach(async () => {
     });
   }
   menuOwnerIds.clear();
-  await Promise.all(
-    bots.splice(0).map(async ({ bot, abort }) => {
-      abort.abort();
-      await bot.stop();
-    }),
-  );
+  await Promise.all(bots.splice(0).map(({ bot }) => bot.stop()));
   clearRuntimeConfigSnapshot();
   clearTelegramRuntimeForTest();
   resetPluginRuntimeStateForTest();

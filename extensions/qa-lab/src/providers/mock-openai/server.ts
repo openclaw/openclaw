@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { format as formatUrl } from "node:url";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -15,6 +16,7 @@ import {
   listMockCodexModelInfos,
   listMockOpenAiServerModelIds,
 } from "../shared/mock-model-config.js";
+import { registerQaSessionObserver } from "../shared/session-observer-registry.js";
 import {
   buildMessagesPayload,
   normalizeAnthropicMessagesRequest,
@@ -69,8 +71,6 @@ import {
   QA_SLACK_CHART_PRESENTATION_PROMPT_RE,
   QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE,
   QA_MESSAGE_DECISION_SEND_PROMPT_RE,
-  QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE,
-  QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
   QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER,
@@ -204,6 +204,7 @@ import {
   extractScenarioPlannedTool,
 } from "./mock-openai-tool-routing.js";
 import {
+  buildWhatsAppAgentActionArgs,
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
   buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
@@ -216,10 +217,17 @@ import {
   isSnackRecallPrompt,
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
+import { createQaMockScenarioStateStore } from "./scenario-state.js";
 import type { QaMockOpenAiServerOptions } from "./server-options.js";
+import {
+  createQaSessionIdentityResolver,
+  resolveAcceptedChildSessionKey,
+  resolveQaChildSessionKey,
+} from "./session-identity.js";
 import { createTerminalRequesterSettleGate } from "./terminal-requester-settlement.js";
 
 const MOCK_HTTP_POST_ROUTES = new Map([
+  ["/debug/session", "QA session observation"],
   ["/v1/images/generations", "OpenAI Images"],
   ["/v1/audio/transcriptions", "OpenAI Audio"],
   ["/v1/embeddings", "OpenAI Embeddings"],
@@ -332,33 +340,14 @@ const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
 const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
 
-function resolveQaRuntimeSessionId(input: ResponsesInputItem[], body: Record<string, unknown>) {
-  return /\bRuntime:\s*[^\n]*\bsessionId=([^\s|]+)/u.exec(extractAllRequestTexts(input, body))?.[1];
-}
-
 function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
   if (Array.isArray(value)) {
-    return value as ResponsesInputItem[];
+    return value.map(asOptionalRecord).filter((item) => item !== undefined);
   }
   if (typeof value === "string") {
     return [{ role: "user", content: [{ type: "input_text", text: value }] }];
   }
   return [];
-}
-
-function resolveQaChildSessionKey(input: ResponsesInputItem[], body: Record<string, unknown>) {
-  const systemPrompt = extractAllRequestTexts(
-    input.filter((item) => item.role === "developer" || item.role === "system"),
-    body,
-  );
-  return /^- Your session:\s*(.+?)\.\s*$/mu.exec(systemPrompt)?.[1]?.trim();
-}
-
-function resolveAcceptedChildSessionKey(input: ResponsesInputItem[]) {
-  const output = parseToolOutputJson(unwrapScenarioCatalogOutput(input));
-  return output?.status === "accepted" && typeof output.childSessionKey === "string"
-    ? output.childSessionKey.trim() || undefined
-    : undefined;
 }
 
 function resolveCompactionSummaryFaultMode(params: {
@@ -649,7 +638,7 @@ async function buildResponsesPayload(
   const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
     ? extractWhatsAppContactMarkerDirective(allInputText)
     : "";
-  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
+  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(input)
     ? extractWhatsAppStickerMarkerDirective(allInputText)
     : "";
   const blockStreamingPrompt = scenarioFamilyPrompt || prompt || allInputText;
@@ -1155,7 +1144,7 @@ async function buildResponsesPayload(
   if (whatsAppGroupDispatchReply) {
     return buildAssistantEvents(whatsAppGroupDispatchReply);
   }
-  const whatsAppBatchedReply = buildWhatsAppBatchedReply(allInputText);
+  const whatsAppBatchedReply = buildWhatsAppBatchedReply(prompt);
   if (whatsAppBatchedReply) {
     return buildAssistantEvents(whatsAppBatchedReply);
   }
@@ -1209,30 +1198,13 @@ async function buildResponsesPayload(
       return buildAssistantEvents("NO_REPLY");
     }
   }
-  if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "react",
-        emoji: "👍",
-      });
-    }
+  const whatsAppActionArgs = buildWhatsAppAgentActionArgs(allInputText);
+  if (whatsAppActionArgs) {
     if (hasCompletedToolOutput) {
-      return buildAssistantEvents("");
+      return buildAssistantEvents("NO_REPLY");
     }
-  }
-  const whatsAppUploadMatch = QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE.exec(allInputText);
-  if (whatsAppUploadMatch?.[1]) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "upload-file",
-        buffer: TINY_PNG_BASE64,
-        caption: whatsAppUploadMatch[1],
-        contentType: "image/png",
-        filename: "whatsapp-qa-agent-upload.png",
-      });
-    }
-    if (hasCompletedToolOutput) {
-      return buildAssistantEvents("");
+    if (canCallMessage) {
+      return buildToolCallEventsWithArgs("message", whatsAppActionArgs);
     }
   }
   if (
@@ -2092,6 +2064,7 @@ async function buildResponsesPayload(
 }
 
 export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions) {
+  const sessionIdentity = createQaSessionIdentityResolver();
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const repeatedRequestResponsePauseMs =
@@ -2099,28 +2072,8 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
   const repeatedRequestStalledResponsePauseMs =
     params?.repeatedRequestStalledResponsePauseMs ?? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS;
   const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
-  const scenarioStates = new Map<string, MockScenarioState>();
   const servedCompactionSummaryFaultMarkers = new Set<string>();
-  const scenarioStateFor = (body: Record<string, unknown>): MockScenarioState => {
-    const input = normalizeResponsesInput(body.input);
-    const sessionId =
-      resolveQaRuntimeSessionId(input, body) ??
-      (body.client_metadata as { session_id?: unknown } | undefined)?.session_id;
-    const key = typeof sessionId === "string" ? sessionId : "";
-    // Runtime session identity survives provider switches and cache-boundary changes.
-    const state = scenarioStates.get(key) ?? {
-      anthropicThinkingErrorScenarioKeys: new Set<string>(),
-      compactionOverflowInjected: false,
-      compactionRetryActive: false,
-      subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
-      subagentFanoutPhase: 0,
-      subagentHandoffSpawned: false,
-      repeatedRequestRecoveryAttempts: 0,
-      toolLoopReadAttempts: 0,
-    };
-    scenarioStates.set(key, state);
-    return state;
-  };
+  const scenarioStateFor = createQaMockScenarioStateStore();
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
   let nextRequestCursor = 1;
@@ -2160,7 +2113,8 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     const subagentTurn = resolveMockSubagentTurn(input);
     const prompt = extractLastUserText(input);
     const allInputText = extractAllRequestTexts(input, body);
-    const scenarioState = scenarioStateFor(body);
+    const sessionId = sessionIdentity.resolve(request);
+    const scenarioState = scenarioStateFor(sessionId);
     const compactionSummaryFaultMode = resolveCompactionSummaryFaultMode({
       allInputText,
       requestKind,
@@ -2174,6 +2128,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       ? QA_COMPACTION_OUTPUT_RECOVERY_OVERFLOW_THRESHOLD_BYTES
       : QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES;
     const requestSnapshotBase = {
+      sessionId,
       raw: request.raw,
       body,
       prompt,
@@ -2265,20 +2220,19 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     const runtime = /\bRuntime:\s*([^\n]+)/u.exec(extractAllRequestTexts(input, body))?.[1];
     const requesterAgentId = runtime && /\bagent=([^\s|]+)/u.exec(runtime)?.[1];
     const requesterSessionKey = runtime && /\bsession=([^\s|]+)/u.exec(runtime)?.[1];
-    const requesterSessionId = resolveQaRuntimeSessionId(input, body);
     const childSessionKey = resolveAcceptedChildSessionKey(input);
     const terminalRequester =
       terminalRequesterCase &&
       requesterAgentId &&
       requesterSessionKey &&
-      requesterSessionId &&
+      sessionId &&
       childSessionKey
         ? {
             caseName: terminalRequesterCase,
             childSessionKey,
             agentId: requesterAgentId,
             sessionKey: requesterSessionKey,
-            sessionId: requesterSessionId,
+            sessionId,
           }
         : undefined;
     const failure =
@@ -2434,6 +2388,15 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         });
         return;
       }
+      if (url.pathname === "/debug/session") {
+        if (typeof body.sessionId !== "string" || !body.sessionId.trim()) {
+          writeJson(res, 400, { error: "QA session observation requires a nonempty sessionId" });
+          return;
+        }
+        sessionIdentity.observe(body.sessionId);
+        writeJson(res, 200, { ok: true });
+        return;
+      }
       if (url.pathname === "/v1/images/generations") {
         imageGenerationRequests.push(body);
         if (imageGenerationRequests.length > 20) {
@@ -2470,7 +2433,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         return;
       }
       if (url.pathname === "/v1/responses") {
-        const dispatched = await dispatchResponses({ body, raw });
+        const dispatched = await dispatchResponses({ body, raw, headers: req.headers });
         if (dispatched.failure) {
           if (dispatched.failure.retryAfterSeconds !== undefined) {
             res.setHeader("retry-after", String(dispatched.failure.retryAfterSeconds));
@@ -2502,7 +2465,12 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         dispatched.onResponseSent?.();
         return;
       }
-      const dispatched = await dispatchProvider({ route: "anthropic-messages", body, raw });
+      const dispatched = await dispatchProvider({
+        route: "anthropic-messages",
+        body,
+        raw,
+        headers: req.headers,
+      });
       const { status, responseBody, streamEvents } = buildMessagesPayload(dispatched);
       if (!streamEvents) {
         writeJson(res, status, responseBody);
@@ -2528,10 +2496,15 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     throw new Error("qa mock openai failed to bind");
   }
 
+  const baseUrl = formatUrl({ protocol: "http", hostname: host, port: address.port });
+  const sessionObserverUrl = `${baseUrl}/debug/session`;
+  const unregisterSessionObserver = registerQaSessionObserver(baseUrl, sessionObserverUrl);
   return {
-    baseUrl: formatUrl({ protocol: "http", hostname: host, port: address.port }),
+    baseUrl,
+    sessionObserverUrl,
     terminalRequesters: { settle: terminalRequesterSettleGate.settle },
     async stop() {
+      unregisterSessionObserver();
       terminalRequesterSettleGate.stop();
       await responsesWebSocket.close();
       await closeQaHttpServer(server);

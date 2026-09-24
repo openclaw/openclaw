@@ -14,6 +14,7 @@ import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { captureEnv, deleteTestEnvValue } from "../../test-utils/env.js";
@@ -111,6 +112,7 @@ const captureForegroundUpdateHandoffStop =
     typeof import("../../infra/update-managed-service-handoff.js").captureForegroundUpdateHandoffStop
   >();
 const requestManagedServiceUpdateHandoffPark = vi.fn(async (_identity: ManagedUpdateOwner) => true);
+const waitForSystemServiceUpdateHandoffs = vi.fn<() => Promise<void> | undefined>();
 const commitManagedServiceUpdateHandoff = vi.fn(
   async (_identity: ManagedUpdateOwner, _outcome?: "update" | "restore") => true,
 );
@@ -278,6 +280,7 @@ vi.mock("../../infra/restart-intent.js", () => ({
 }));
 
 vi.mock("../../infra/update-managed-service-handoff.js", () => ({
+  waitForSystemServiceUpdateHandoffs: () => waitForSystemServiceUpdateHandoffs(),
   captureForegroundUpdateHandoffStop: (
     params: Parameters<typeof captureForegroundUpdateHandoffStop>[0],
   ) => captureForegroundUpdateHandoffStop(params),
@@ -390,15 +393,10 @@ vi.mock("./shutdown-hard-exit.js", () => ({
 }));
 
 type GatewayCloseFn = GatewayServer["close"];
-type LoopRuntime = {
-  log: (...args: unknown[]) => void;
-  error: (...args: unknown[]) => void;
-  exit: (code: number) => void;
-};
 
 async function runLoopWithStart(params: {
   start: ReturnType<typeof vi.fn>;
-  runtime: LoopRuntime;
+  runtime: RuntimeEnv;
   ownsProcessLifecycle?: boolean;
   lockPort?: number;
   healthHost?: string;
@@ -527,6 +525,7 @@ beforeEach(async () => {
   captureForegroundUpdateHandoffStop.mockReset().mockReturnValue(undefined);
   requestManagedServiceUpdateHandoffPark.mockReset();
   requestManagedServiceUpdateHandoffPark.mockResolvedValue(true);
+  waitForSystemServiceUpdateHandoffs.mockReset().mockReturnValue(undefined);
   commitManagedServiceUpdateHandoff.mockReset();
   commitManagedServiceUpdateHandoff.mockResolvedValue(true);
 });
@@ -561,6 +560,7 @@ describe("runGatewayLoop", () => {
     peekGatewayRestartReason,
     managedUpdateSuccessorOwner,
     commitManagedServiceUpdateHandoff,
+    waitForSystemServiceUpdateHandoffs,
     isGatewayWorkAdmissionClosed: () => gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed(),
     gatewayLog,
   });

@@ -331,16 +331,10 @@ async function stageAuditRecoveryRestore(params: {
       size: params.snapshot.size,
     },
   });
-  await params.root.create(stagingRelativePath, journalRaw, { mode: 0o600 });
-  const staged = await params.root.openWritable(stagingRelativePath, {
-    writeMode: "update",
+  await params.root.create(stagingRelativePath, journalRaw, {
+    mode: 0o600,
+    durable: "file",
   });
-  try {
-    await staged.handle.chmod(0o600);
-    await staged.handle.sync();
-  } finally {
-    await staged.handle.close();
-  }
   await params.root.move(stagingRelativePath, restoreRelativePath);
   await syncAuditRecoveryDirectory(params.root, params.relativePath);
   const journal = parseAuditRecoveryRestoreJournal(journalRaw);

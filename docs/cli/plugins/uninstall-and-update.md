@@ -132,8 +132,10 @@ or manifest, including plugins selected through `plugins.load.paths`. The comman
 requires a running Gateway and waits for the replacement to finish without
 restarting it. Configured enablement is preserved, and unchanged
 plugins keep their runtime instances. JSON output includes `pluginIds`,
-`restartRequired: false`, and the applied runtime receipt with its generation
-and source digests when available. Multiple IDs use one Gateway reload request
+`restartRequired`, and the applied runtime receipt with its generation
+and source digests when available. The receipt's `selectedEntries` names the files
+the loader selected. CLI and tool output remind you to rebuild compiled output
+after editing its source; reload does not run the build. Multiple IDs use one Gateway reload request
 and one applied runtime generation. Repeated IDs are collapsed, and the Gateway
 resolves package siblings together. The request supports up to 64 distinct IDs.
 
@@ -148,8 +150,15 @@ remain loaded after their registrations are removed. Inspect the warning before
 retrying; restart the Gateway if residual plugin behavior causes problems.
 
 Bundled plugins can reload while preserving their enabled or disabled policy.
-Reload does not rebuild compiled bundled code; changed compiled code still needs
-a build and Gateway restart. Reloading a discovered source does not create an
+Compiled bundled plugins reuse their process-loaded code when their registrations
+reload. If the plugin's files changed while its original module remains loaded,
+the result reports `restartRequired: true` with a warning, and CLI and tool
+output explain that a Gateway restart is needed to load edited code. Reload does
+not rebuild compiled bundled code; source installations also need a build.
+External captured sources return `restartRequired: false` after replacement.
+Reloading unchanged bundled files also returns `restartRequired: false`; channel
+and service registrations can be replaced without restarting the Gateway.
+Reloading a discovered source does not create an
 install record or grant permission to install, replace, or remove its files.
 
 Reload also works with externally managed config (`OPENCLAW_CONFIG_READONLY=1`)

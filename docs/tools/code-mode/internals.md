@@ -193,6 +193,12 @@ bridge as QuickJS. Suspension retains the worker, context, and pending promises;
 `wait` continues that context without replaying the source. Cancellation,
 expiry, terminal results, and shutdown release the retained execution.
 
+After successful completion, Node keeps up to four idle workers warm for five
+minutes each, reusing only workers with the same runtime entry and heap limit.
+Each new cell still gets a fresh VM context. Runtime-entry changes and critical
+memory pressure retire idle workers; memory pressure does not discard suspended
+continuations. Failed, timed-out, or aborted cells retire their worker.
+
 Worker supervision keeps runaway computation out of the main event loop.
 Neither a worker thread nor `node:vm` supplies an operating-system security
 boundary. Use the [executor guide](/tools/code-mode/executors) to choose the

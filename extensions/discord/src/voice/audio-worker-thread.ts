@@ -4,9 +4,13 @@ import {
   resolveRuntimeWorkerUrl,
   resolveRuntimeWorkerArgv,
 } from "openclaw/plugin-sdk/process-runtime";
-import type { DiscordAudioWorkerOptions } from "./audio-worker-protocol.js";
+import type { DiscordAudioEvent, DiscordAudioWorkerOptions } from "./audio-worker-protocol.js";
 
-export type DiscordAudioWorkerThread = Pick<Worker, "on" | "once" | "postMessage" | "terminate">;
+export type DiscordAudioWorkerThread = Pick<Worker, "postMessage" | "terminate"> & {
+  on(event: "message", listener: (event: DiscordAudioEvent) => void): void;
+  on(event: "error", listener: (error: Error) => void): void;
+  once(event: "exit", listener: (code: number) => void): void;
+};
 
 /** Source, core-bundled and standalone plugin workers use the same launch owner. */
 export function createDiscordAudioWorkerThread(

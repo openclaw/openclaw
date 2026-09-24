@@ -54,6 +54,55 @@ describe("release publication state", () => {
     );
   });
 
+  it.each([
+    {
+      published: true,
+      status: "WARN",
+      message: "already published; dist-tag latest stays at 2026.9.7 (superseded)",
+    },
+    { published: false, status: "FAIL", message: 'cannot be safely moved to "2026.9.5" (ahead)' },
+  ])(
+    "gates a plugin behind an ahead latest selector: %j",
+    async ({ published, status, message }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            name: "@openclaw/example",
+            versions: {
+              "2026.9.7": { name: "@openclaw/example", version: "2026.9.7" },
+              ...(published ? { [version]: { name: "@openclaw/example", version } } : {}),
+            },
+            "dist-tags": { latest: "2026.9.7", beta: "2026.9.7" },
+          }),
+        ),
+      );
+      const result = await observeReleaseNpmState({
+        version,
+        npmDistTag: "latest",
+        publishOpenclawNpm: false,
+        plugins: [
+          {
+            extensionId: "example",
+            packageDir: "extensions/example",
+            packageName: "@openclaw/example",
+            version,
+            channel: "stable",
+            publishTag: "latest",
+          },
+        ],
+      });
+      expect(result.gates).toContainEqual(
+        expect.objectContaining({
+          id: "npm.package.@openclaw/example",
+          status,
+          message: expect.stringContaining(message),
+        }),
+      );
+      expect(result.publishedPackages.length).toBe(published ? 1 : 0);
+    },
+  );
+
   it("reads plugin and opted-in core packages from the exact source commit, ignoring checkout changes", () => {
     const rootDir = temps.make("release-publish-state-");
     const git = (...args: string[]) =>

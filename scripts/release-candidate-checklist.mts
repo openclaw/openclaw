@@ -173,7 +173,6 @@ Options:
   --plugin-sdk-api-acknowledgement <digest>
                                       8-character digest from the Plugin SDK API diff report.
   --windows-node-tag <tag>            Optional exact Windows Node tag for postpublish asset promotion.
-  --stable-soak-waiver <reason>       Operator-approved reason to publish stable from beta-profile validation without soak.
   --skip-dispatch                    Require Full Release Validation run; separate npm run only for historical recovery.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
@@ -229,7 +228,6 @@ export function parseArgs(argv: string[]) {
     pluginSdkApiAcknowledgement: "",
     windowsNodeTag: "",
     windowsNodeInstallerDigests: "",
-    stableSoakWaiver: "",
     outputDir: "",
   };
   const helpIndex = cliArgs.findIndex((arg) => arg === "-h" || arg === "--help");
@@ -249,7 +247,6 @@ export function parseArgs(argv: string[]) {
           ["--npm-preflight-run", "npmPreflightRunId"],
           ["--plugin-sdk-api-acknowledgement", "pluginSdkApiAcknowledgement"],
           ["--windows-node-tag", "windowsNodeTag"],
-          ["--stable-soak-waiver", "stableSoakWaiver"],
           ["--telegram-provider-mode", "telegramProviderMode"],
           ["--provider", "provider"],
           ["--mode", "mode"],
@@ -335,6 +332,13 @@ export function parseArgs(argv: string[]) {
     options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
   if (!["beta", "stable", "full"].includes(options.releaseProfile)) {
     throw new Error("--release-profile must be beta, stable, or full");
+  }
+  if (
+    !options.tag.includes("-alpha.") &&
+    !options.tag.includes("-beta.") &&
+    options.releaseProfile === "beta"
+  ) {
+    throw new Error("stable release candidates require --release-profile stable or full");
   }
   if (options.runParallels && options.skipParallels) {
     throw new Error("--run-parallels and --skip-parallels cannot be combined");
@@ -1643,9 +1647,6 @@ export function buildPublishCommand(
   if (options.plugins.trim()) {
     fields.push(["plugins", options.plugins]);
   }
-  if (options.stableSoakWaiver.trim()) {
-    fields.push(["stable_soak_waiver", options.stableSoakWaiver]);
-  }
   if (
     mode === "prepare" &&
     (!/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(workflowRef) ||
@@ -2379,7 +2380,6 @@ async function main() {
       npmDistTag: options.npmDistTag,
       pluginPublishScope: publicationSelection.pluginPublishScope,
       plugins: options.plugins,
-      stableSoakWaiver: options.stableSoakWaiver,
       workflowRef:
         options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef,
       releaseProfile: "from-validation",

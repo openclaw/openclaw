@@ -11,7 +11,7 @@ import {
   validatePrepublishPluginRegistryArtifact,
 } from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
-import { readPostCoreSnapshot, recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
+import { recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
 import {
   assertExecApprovalPolicySurvived,
   seedLegacyExecApprovalPolicy,
@@ -84,46 +84,11 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-function readUpdateJson(file, observationRoot) {
+function readUpdateJson(file) {
   const raw = fs.readFileSync(file, "utf8");
-  // April baselines print a pretty-printed core result before their fresh child
-  // inherits stdout and prints finalization. Never discard a failed/truncated child.
   const jsonStart = raw.indexOf("{");
   assert(jsonStart !== -1, "update reported no JSON result");
-  const reports = raw
-    .slice(jsonStart)
-    .trim()
-    .split(/\n(?=\{)/u)
-    .map((text) => JSON.parse(text));
-  assert(reports.length <= 2, "update reported unexpected extra results");
-  const [core, continuation] = reports;
-  let result = core;
-  if (continuation) {
-    assert(core.status === "ok", "historical core update did not succeed");
-    assert(continuation.mode === "unknown", "unexpected historical continuation mode");
-    assert(
-      Array.isArray(continuation.steps) && continuation.steps.length === 0,
-      "unexpected historical continuation steps",
-    );
-    assert(continuation.after === undefined, "historical continuation replaced the core result");
-    result = {
-      ...core,
-      status: continuation.status,
-      reason: continuation.reason,
-      postUpdate: continuation.postUpdate,
-    };
-  }
-  if (result.postUpdate !== undefined || !observationRoot) {
-    return result;
-  }
-  // April 23 omits the child result from stdout. Consume only this invocation's
-  // complete exit snapshot; explicit CLI results and nonzero child exits win.
-  const snapshot = readPostCoreSnapshot(observationRoot);
-  if (snapshot === null) {
-    return result;
-  }
-  assert(snapshot.childExitCode === 0, "historical post-core child did not exit successfully");
-  return { ...result, postUpdate: { plugins: snapshot.result } };
+  return JSON.parse(raw.slice(jsonStart));
 }
 
 function isCapabilityConsentReason(value) {
@@ -357,11 +322,7 @@ function acceptsIntent(coverage, id) {
   if (!coverage) {
     return true;
   }
-  return (
-    Array.isArray(coverage.acceptedIntents) &&
-    coverage.acceptedIntents.includes(id) &&
-    !coverage.skippedIntents?.includes(id)
-  );
+  return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
 }
 
 function hasCoverage(coverage) {
@@ -555,9 +516,7 @@ function assertConfigSurvived() {
       config.agents?.entries?.ops ?? legacyAgents.find((agent) => agent?.id === "ops");
     assert(mainAgent, "main agent missing");
     assert(opsAgent, "ops agent missing");
-    if (!hasCoverage(coverage) || !coverage.skippedIntents?.includes("agent-modern-preferences")) {
-      assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
-    }
+    assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
   }
 
   if (acceptsIntent(coverage, "skills")) {
@@ -1577,8 +1536,8 @@ function assertStatusJson([file]) {
   assert(/running|connected|ok|ready/u.test(text), "gateway status did not report a healthy state");
 }
 
-function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, baselineVersion]) {
-  const result = readUpdateJson(file, observationRoot);
+function assertRecoverableUpdateJson([file, expectedVersion, , baselineVersion]) {
+  const result = readUpdateJson(file);
   assertStrict.ok(baselineVersion, "Expected baseline version is required.");
   assertStrict.ok(result.status === "error" || result.status === "ok");
   assertStrict.equal(result.mode, "npm");
@@ -1713,7 +1672,7 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
   let message;
   try {
     assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
-    result = readUpdateJson(file, observationRoot);
+    result = readUpdateJson(file);
     assertSuccessfulUpdateResult(result, expectedVersion);
     outcome = "passed";
   } catch (error) {

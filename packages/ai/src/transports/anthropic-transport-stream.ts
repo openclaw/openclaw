@@ -471,6 +471,11 @@ function createAnthropicTransportClient(params: {
       accept: "application/json",
       "anthropic-dangerous-direct-browser-access": "true",
       ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
+      ...(options?.sessionId &&
+      options.cacheRetention !== "none" &&
+      model.compat?.sendSessionAffinityHeaders === true
+        ? { "x-session-affinity": options.sessionId }
+        : {}),
     },
     model.headers,
     optionHeaders,

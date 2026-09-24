@@ -22,7 +22,6 @@ import {
   coerceConfig,
   containsConfigIncludeDirective,
   hashConfigRaw,
-  maybeLoadDotEnvForConfig,
   parseConfigJson5,
   resolveConfigForRead,
   resolveConfigIncludesForRead,
@@ -30,6 +29,7 @@ import {
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
+import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
 import {
   materializeConfigSnapshotDefaults,
   prepareConfigSnapshotValidation,

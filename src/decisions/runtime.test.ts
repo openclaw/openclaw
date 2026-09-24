@@ -17,6 +17,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import * as diagnostics from "./diagnostics.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
 import type {
   DecisionBatch,
@@ -96,6 +97,71 @@ afterEach(() => {
 });
 
 describe("registered decision capability", () => {
+  it("keeps ordinary input rejection recoverable without retries or circuit poisoning", async () => {
+    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => ({
+      status: "unavailable",
+      reason: "unsupported-input",
+      retryAfterMs: 60_000,
+    }));
+    const host = registered(call);
+    setRuntimeConfigSnapshot(config);
+    const runtime = host.api.runtime.decisions;
+    const baseline = ["normal-tool"];
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      const outcome = await runtime.evaluate(batch, options());
+      expect(outcome).toEqual({ status: "unavailable", reason: "unsupported-input" });
+      const retained = outcome.status === "unavailable" ? baseline : [];
+      expect(retained).toBe(baseline);
+      expect(call).toHaveBeenCalledTimes(attempt);
+    }
+    call.mockResolvedValueOnce(answer);
+    expect(await runtime.evaluate(batch, options())).toMatchObject({ status: "ok" });
+    expect(call).toHaveBeenCalledTimes(5);
+    expect(host.registry.decisionProviders[0]?.host.inspect(config).callable).toBe(true);
+  });
+
+  it("does no extra input serialization with DEBUG disabled", async () => {
+    const debug = vi.spyOn(diagnostics, "decisionDebugEnabled").mockReturnValue(false);
+    const stringify = vi.spyOn(JSON, "stringify");
+    onTestFinished(() => {
+      debug.mockRestore();
+      stringify.mockRestore();
+    });
+    const host = registered();
+    expect(await host.run()).toMatchObject({ status: "ok" });
+    // The preexisting host JSON resource guard serializes once; diagnostics add none.
+    expect(
+      stringify.mock.calls.filter(
+        ([value]) =>
+          value &&
+          typeof value === "object" &&
+          Object.hasOwn(value, "state") &&
+          Object.hasOwn(value, "questions"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("reuses the validated provider snapshots for safe usage, diagnostics and outcomes", async () => {
+    let resultReads = 0;
+    let reasonReads = 0;
+    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () =>
+      Object.defineProperty({ status: "ok", result: answer.result }, "result", {
+        get: () =>
+          ++resultReads === 1 ? answer.result : { usage: { inputTokens: "private-provider-body" } },
+      }),
+    );
+    const host = registered(call);
+    expect(await host.run()).toMatchObject({ status: "ok", result: answer.result });
+    expect(resultReads).toBe(1);
+    call.mockImplementationOnce(async () =>
+      Object.defineProperty({ status: "unavailable", reason: "unsupported-input" }, "reason", {
+        get: () => (++reasonReads === 1 ? "unsupported-input" : "private-provider-body"),
+      }),
+    );
+    expect(await host.run()).toEqual({ status: "unavailable", reason: "unsupported-input" });
+    expect(reasonReads).toBe(1);
+  });
+
   it("requires a current Gateway binding for scoped operator decisions", async () => {
     const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     const host = registered(evaluate);

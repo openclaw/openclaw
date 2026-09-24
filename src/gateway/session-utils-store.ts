@@ -39,6 +39,7 @@ import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
 import { loadExecApprovals } from "../infra/exec-approvals-store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { listAgentProvenance } from "../state/agent-provenance.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 import type { GatewayAgentOwnership } from "./agent-list.js";
@@ -178,6 +179,8 @@ function loadSessionEntryWithMode(
     storePath,
     store,
     ...(target.readSource ? { readSource: target.readSource } : {}),
+    ...(target.capturedReadSource ? { capturedReadSource: target.capturedReadSource } : {}),
+    ...(target.capturedReadSources ? { capturedReadSources: target.capturedReadSources } : {}),
     entry,
     canonicalKey: target.canonicalKey,
     storeKeys: target.storeKeys,
@@ -256,24 +259,6 @@ export function isGroupOrChannelDisplaySession(
   );
 }
 
-function normalizeFallbackList(values: readonly string[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const key = normalizeLowercaseStringOrEmpty(trimmed);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(trimmed);
-  }
-  return out;
-}
-
 function resolveGatewayAgentModel(
   cfg: OpenClawConfig,
   agentId: string,
@@ -287,8 +272,11 @@ function resolveGatewayAgentModel(
     readUtilityModelSetting(cfg, agentId).kind === "explicit";
   const fallbackOverride = resolveAgentModelFallbacksOverride(cfg, agentId);
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
-  const fallbacks = normalizeFallbackList(
-    (fallbackOverride ?? defaultFallbacks).map((value) => splitTrailingAuthProfile(value).model),
+  const fallbacks = dedupeByKey(
+    (fallbackOverride ?? defaultFallbacks)
+      .map((value) => splitTrailingAuthProfile(value).model.trim())
+      .filter(Boolean),
+    normalizeLowercaseStringOrEmpty,
   );
   return {
     ...(utilityOnly ? {} : { primary }),

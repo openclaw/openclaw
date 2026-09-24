@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 // Doctor enumeration cold-loads this closure for every operator running `openclaw
 // doctor` or a startup migration scan, so it must reach only leaf modules. Each
@@ -18,17 +22,18 @@ const SOURCE_DIR = path.dirname(new URL(import.meta.url).pathname);
 
 function listStaticRelativeImports(filePath: string): string[] {
   const source = fs.readFileSync(filePath, "utf8");
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(filePath, source);
   const specifiers: string[] = [];
   for (const statement of sourceFile.statements) {
     const isTypeOnly =
-      (ts.isImportDeclaration(statement) && statement.importClause?.isTypeOnly === true) ||
+      (ts.isImportDeclaration(statement) &&
+        statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword) ||
       (ts.isExportDeclaration(statement) && statement.isTypeOnly);
     const moduleSpecifier =
       ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)
         ? statement.moduleSpecifier
         : undefined;
-    if (!isTypeOnly && moduleSpecifier && ts.isStringLiteralLike(moduleSpecifier)) {
+    if (!isTypeOnly && moduleSpecifier && ts.isStringLiteralLikeNode(moduleSpecifier)) {
       specifiers.push(moduleSpecifier.text);
     }
   }

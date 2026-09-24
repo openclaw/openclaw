@@ -35,12 +35,9 @@ function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>): Gra
 }
 
 function readGradiumProviderConfig(config: SpeechProviderConfig): GradiumProviderConfig {
-  const defaults = normalizeGradiumProviderConfig({});
-  return {
-    apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeGradiumBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
-    voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
-  };
+  return normalizeGradiumProviderConfig({
+    gradium: { ...config, apiKey: trimToUndefined(config.apiKey) },
+  });
 }
 
 function resolveGradiumApiKey(configApiKey: unknown): string | undefined {

@@ -9,7 +9,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -38,6 +37,7 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
+import { readNativeTypeScriptConfig } from "./lib/native-typescript-config.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
 import type { createChangedCoreTestCheck } from "./run-tsgo-core-test-shards.mts";
@@ -504,22 +504,10 @@ export function createChangedCheckPlan(
     if (rootTestTargets.length > 0) {
       // --tsconfig affects import resolution, not native semantic discovery or
       // target selection. Expand the canonical roots before passing explicit files.
-      const ts = createRequire(import.meta.url)("typescript") as typeof import("typescript");
-      const config = ts.getParsedCommandLineOfConfigFile(
-        path.resolve(ROOT_TEST_TS_CONFIG),
-        {},
-        {
-          ...ts.sys,
-          onUnRecoverableConfigFileDiagnostic(diagnostic) {
-            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
-          },
-        },
-      );
-      if (!config || config.errors.length > 0) {
-        throw new Error(
-          `Invalid ${ROOT_TEST_TS_CONFIG}: ${config?.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, "\n")).join("\n")}`,
-        );
-      }
+      const config = readNativeTypeScriptConfig({
+        cwd: process.cwd(),
+        configFileName: ROOT_TEST_TS_CONFIG,
+      });
       const roots = new Set(config.fileNames.map((file) => path.resolve(file)));
       rootTestTargets = rootTestTargets.filter((file) => roots.has(path.resolve(file)));
     }

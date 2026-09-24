@@ -22,7 +22,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { constants as osConstants, homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -654,7 +654,7 @@ type WrapperCleanupProof =
   | { kind: "removal"; target: "script" | "source"; exitCode: 0 | 23 };
 
 type WrapperFixtureIdentity = { pid: number; parentPid: number; cwd: string };
-type WrapperReadinessPhase = { phase: string; at: number; pid?: number };
+type WrapperReadinessPhase = { phase: string; at: number; pid?: number; parentPid?: number };
 
 async function runWrapperCleanupProof(proof: WrapperCleanupProof): Promise<void> {
   const entrypoint = proof.kind === "signal" ? proof.entrypoint : "node";
@@ -695,7 +695,7 @@ const entry = path.resolve(process.argv[1] || ".");
 const phasesPath = ${JSON.stringify(phasesPath)};
 const phases = fs.existsSync(phasesPath) ? JSON.parse(fs.readFileSync(phasesPath, "utf8")) : [];
 const phase = (name) => {
-  phases.push({ phase: name, at: Date.now(), pid: process.pid });
+  phases.push({ phase: name, at: Date.now(), pid: process.pid, parentPid: process.ppid });
   const temporary = phasesPath + "." + process.pid;
   fs.writeFileSync(temporary, JSON.stringify(phases));
   fs.renameSync(temporary, phasesPath);
@@ -849,6 +849,8 @@ if (entry === ${JSON.stringify(implementationPath)}) {
       let entrypointClosed: Promise<unknown> | undefined;
       let finishTerminal: (() => Promise<void>) | undefined;
       let entrypointPid = 0;
+      let pnpmRetainsShell = false;
+      const pnpmOwnerChain: Array<{ pid: number; parentPid: number; command: string }> = [];
       let identity: WrapperFixtureIdentity | undefined;
       let preparationIdentity: WrapperFixtureIdentity | undefined;
       let descendantPid = 0;
@@ -900,7 +902,6 @@ if (entry === ${JSON.stringify(implementationPath)}) {
             `
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
-const { constants } = require("node:os");
 process.on("SIGINT", () => {});
 setInterval(() => {}, 1000);
 const child = spawn(${JSON.stringify(command.command)}, ${JSON.stringify(command.args)}, { stdio: "inherit" });
@@ -910,8 +911,7 @@ if (child.pid) {
 }
 child.once("error", (error) => { console.error(error); process.exit(1); });
 child.once("exit", (code, signal) => {
-  const status = signal ? 128 + constants.signals[signal] : code;
-  process.stdout.write("\\nopenclaw-pnpm-exit:" + status + "\\n");
+  process.stdout.write("\\nopenclaw-pnpm-exit:" + JSON.stringify({ status: code, signal }) + "\\n");
 });
 `,
           );
@@ -938,10 +938,10 @@ child.once("exit", (code, signal) => {
           });
           terminal.onData((data) => {
             output += data;
-            const receipt = /\r?\nopenclaw-pnpm-exit:(\d+)\r?\n/u.exec(output);
-            if (receipt) {
+            const receipt = /\r?\nopenclaw-pnpm-exit:(\{[^\r\n]+\})\r?\n/u.exec(output);
+            if (receipt?.[1]) {
               output = output.replace(receipt[0], "");
-              reportExit({ status: Number(receipt[1]), signal: null });
+              reportExit(JSON.parse(receipt[1]));
             }
           });
           entrypointClosed = new Promise<void>((resolve) => {
@@ -1000,6 +1000,43 @@ child.once("exit", (code, signal) => {
           expect(JSON.parse(readFileSync(claimPath, "utf8")).repoRoot).toBe(identity!.cwd);
           expect(existsSync(identity!.cwd)).toBe(true);
           if (proof.kind === "signal") {
+            if (entrypoint === "pnpm") {
+              const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
+              const shim = phases.find(({ phase }) => phase === "entrypoint started")!;
+              const pnpmPid = Number(readFileSync(terminalCommandPidPath, "utf8"));
+              expect(shim.parentPid).toBeGreaterThan(1);
+              expect(pnpmPid).toBeGreaterThan(1);
+              let ownerPid = shim.parentPid;
+              const visited = new Set<number>();
+              while (ownerPid !== pnpmPid) {
+                if (
+                  ownerPid === undefined ||
+                  !Number.isSafeInteger(ownerPid) ||
+                  ownerPid <= 1 ||
+                  visited.has(ownerPid)
+                ) {
+                  throw new Error(
+                    `Wrapper shim is not owned by pnpm ${pnpmPid}: ${JSON.stringify(pnpmOwnerChain)}`,
+                  );
+                }
+                visited.add(ownerPid);
+                const owner = spawnSync(
+                  "ps",
+                  ["-o", "ppid=", "-o", "comm=", "-p", String(ownerPid)],
+                  { encoding: "utf8" },
+                );
+                expect(owner.status, owner.stderr).toBe(0);
+                const [parentPid, ...command] = owner.stdout.trim().split(/\s+/u);
+                const commandName = command.join(" ");
+                pnpmOwnerChain.push({
+                  pid: ownerPid,
+                  parentPid: Number(parentPid),
+                  command: commandName,
+                });
+                pnpmRetainsShell ||= ["sh", "dash", "bash"].includes(path.basename(commandName));
+                ownerPid = Number(parentPid);
+              }
+            }
             stop();
             if (proof.repeated) {
               await delay(20);
@@ -1021,7 +1058,6 @@ child.once("exit", (code, signal) => {
               : proof.kind === "stdin" || entrypoint === "pnpm"
                 ? 130
                 : 143;
-        expect(result, output).toEqual({ status: expectedStatus, signal: null });
         const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
         const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")!.pid!;
         // A pnpm interruption status is not the implementation's cleanup receipt.
@@ -1117,6 +1153,20 @@ child.once("exit", (code, signal) => {
         }
         expect(readFileSync(path.join(producer, "fixture.txt"), "utf8")).toBe("original source\n");
         expect(git("ls-files", "--stage", "-z")).toBe(sourceIndex);
+        // pnpm 12.4.2 escalates the second interrupt to TERM on its immediate child.
+        // Corepack can translate a retained shell's TERM into a numeric exit code.
+        if (entrypoint === "pnpm") {
+          const exitStatus = result.signal
+            ? 128 + osConstants.signals[result.signal]
+            : result.status;
+          const expectedLauncherStatus =
+            proof.kind === "signal" && proof.repeated && pnpmRetainsShell ? 143 : expectedStatus;
+          expect(exitStatus, `${output}\npnpm ownership: ${JSON.stringify(pnpmOwnerChain)}`).toBe(
+            expectedLauncherStatus,
+          );
+        } else {
+          expect(result, output).toEqual({ status: expectedStatus, signal: null });
+        }
         if (finishTerminal) {
           await finishTerminal();
         }

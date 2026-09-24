@@ -13,6 +13,7 @@ import { requestContext } from "./server-methods/sessions-read-cache.test-suppor
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import * as databaseFactsRead from "./session-row-projection-read.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { projectWorkerSessionPlacement } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
@@ -250,6 +251,50 @@ it.each([
       fixture.dispose();
       fixture.release.resolve();
       await Promise.all(pending);
+    }
+  });
+});
+
+it("reuses settled exact placement facts while archived row preparation is completing", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const fixture = await heldPlacementReads(1);
+    const row = fixture.rows[0]!;
+    const prepared = createDeferredCore();
+    const releasePreparation = createDeferredCore();
+    const readFacts = databaseFactsRead.withSessionRowDatabaseFacts;
+    const reads = vi
+      .spyOn(databaseFactsRead, "withSessionRowDatabaseFacts")
+      .mockImplementation(async (...args) => {
+        await readFacts(...args);
+        if (args[0].selected?.size) {
+          prepared.resolve();
+          await releasePreparation.promise;
+        }
+      });
+    const request = fixture.describe(row);
+    const completed = Promise.allSettled([request.completion]);
+    try {
+      await fixture.entered.promise;
+      fixture.release.resolve();
+      await withTestTimeout(prepared.promise, 2_000, "Exact row preparation did not enter");
+      expect(request.respond).not.toHaveBeenCalled();
+      await fixture.projection.ensureMaterialized();
+      expect(fixture.readProjection.mock.calls).toEqual([[[row.sessionId]]]);
+      releasePreparation.resolve();
+      expect(await completed).toEqual([{ status: "fulfilled", value: undefined }]);
+      expect(request.respond).toHaveBeenCalledExactlyOnceWith(true, {
+        session: expect.objectContaining({
+          key: row.key,
+          sessionId: row.sessionId,
+          placement: projectWorkerSessionPlacement(row.placement),
+        }),
+      });
+    } finally {
+      fixture.release.resolve();
+      releasePreparation.resolve();
+      await completed;
+      reads.mockRestore();
+      fixture.dispose();
     }
   });
 });

@@ -354,12 +354,9 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.emit).toHaveBeenCalledWith("abcdef");
   });
 
-  it("does not touch native stream on reply start before text or progress work", async () => {
+  it("keeps replies without partial text or progress work on block delivery", async () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });
-
-    await ctrl.onReplyStart();
-    await ctrl.onReplyStart();
 
     expect(stream.update).not.toHaveBeenCalled();
     expect(stream.emit).not.toHaveBeenCalled();

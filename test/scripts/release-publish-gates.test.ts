@@ -41,35 +41,19 @@ describe("release publication control admission", () => {
       overrides: { controls: { performanceBlocking: false } },
       failures: ["performance"],
     },
+    { name: "full evidence", overrides: { releaseProfile: "full" }, failures: [] },
     {
-      name: "waived advisory and soak",
-      overrides: { controls: { performanceBlocking: false }, runReleaseSoak: "false" },
-      waiver: "Approved after infrastructure failure",
-      failures: [],
+      name: "beta profile cannot publish stable even with soak",
+      overrides: { releaseProfile: "beta" },
+      failures: ["stable-profile"],
     },
-    {
-      name: "blank waiver",
-      overrides: { runReleaseSoak: "false" },
-      waiver: " \n\t",
-      failures: ["soak"],
-    },
-    {
-      name: "failed waived performance",
-      overrides: {
-        controls: { performanceBlocking: false },
-        childRuns: { productPerformance: { conclusion: "failure" } },
-      },
-      waiver: "Approved",
-      failures: ["performance"],
-    },
-  ])("evaluates every parent and core gate for $name", ({ overrides, waiver, failures }) => {
-    for (const consumer of ["publisher", "core-npm"] as const) {
+  ])("evaluates every parent and core gate for $name", ({ overrides, failures }) => {
+    for (const consumer of ["publisher", "core-npm", "stable-closeout"] as const) {
       const gates = evaluateReleasePublishGates({
         manifest: { ...manifest, ...overrides },
         consumer,
         releaseTag: "v2026.9.5",
         npmDistTag: "latest",
-        stableSoakWaiver: waiver,
         expectedSha: targetSha,
       });
       expect(gates.filter((gate) => gate.status === "FAIL").map((gate) => gate.id)).toEqual(
@@ -78,25 +62,21 @@ describe("release publication control admission", () => {
     }
   });
 
-  it.each([
-    { npmDistTag: "latest", failures: ["core-npm.performance"] },
-    { npmDistTag: "beta", failures: [] },
-  ])("preserves beta-profile parent and $npmDistTag core admission", ({ npmDistTag, failures }) => {
-    const input = {
-      manifest: { ...manifest, releaseProfile: "beta", controls: { performanceBlocking: false } },
-      releaseTag: "v2026.9.5",
-      npmDistTag,
-    };
-    expect(
-      evaluateReleasePublishGates({ ...input, consumer: "publisher" }).some(
-        (gate) => gate.status === "FAIL",
-      ),
-    ).toBe(false);
-    expect(
-      evaluateReleasePublishGates({ ...input, consumer: "core-npm" })
-        .filter((gate) => gate.status === "FAIL")
-        .map((gate) => gate.id),
-    ).toEqual(failures);
+  it("preserves beta publication without soak or blocking performance", () => {
+    for (const consumer of ["publisher", "core-npm"] as const) {
+      const gates = evaluateReleasePublishGates({
+        manifest: {
+          ...manifest,
+          releaseProfile: "beta",
+          runReleaseSoak: "false",
+          controls: { performanceBlocking: false },
+        },
+        releaseTag: "v2026.9.5-beta.1",
+        npmDistTag: "beta",
+        consumer,
+      });
+      expect(gates.some((gate) => gate.status === "FAIL")).toBe(false);
+    }
   });
 
   it.each([
@@ -145,20 +125,23 @@ describe("release publication control admission", () => {
     ]);
   });
 
-  it("runs without installed dependencies and preserves escaped workflow waiver outputs", () => {
+  it.each([
+    { name: "qualified stable", overrides: {}, exitCode: 0 },
+    {
+      name: "unsoaked stable with a legacy waiver",
+      overrides: { runReleaseSoak: "false" },
+      exitCode: 1,
+    },
+    {
+      name: "advisory performance with a legacy waiver",
+      overrides: { controls: { performanceBlocking: false } },
+      exitCode: 1,
+    },
+  ])("runs without installed dependencies: $name", ({ overrides, exitCode }) => {
     const root = tempRoots.make("release-publish-gates-");
     const manifestPath = join(root, "manifest.json");
     const output = join(root, "output");
-    const summary = join(root, "summary");
-    const waiver = 'Infrastructure 100% unavailable\nOperator "approved"';
-    writeFileSync(
-      manifestPath,
-      JSON.stringify({
-        ...manifest,
-        runReleaseSoak: "false",
-        controls: { performanceBlocking: false },
-      }),
-    );
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, ...overrides }));
     const result = spawnSync(
       process.execPath,
       [
@@ -177,21 +160,22 @@ describe("release publication control admission", () => {
           RELEASE_NPM_DIST_TAG: "latest",
           EXPECTED_SHA: targetSha,
           EXPECTED_RELEASE_PROFILE: "from-validation",
-          STABLE_SOAK_WAIVER: waiver,
+          STABLE_SOAK_WAIVER: "Approved",
           GITHUB_OUTPUT: output,
-          GITHUB_STEP_SUMMARY: summary,
         },
       },
     );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('Infrastructure 100%25 unavailable%0AOperator "approved"');
-    expect(readFileSync(output, "utf8").split("\n")).toEqual([
-      `stable_soak_waiver=${JSON.stringify(waiver)}`,
-      `stable_soak_waiver=${JSON.stringify(waiver)}`,
-      "release_profile=stable",
-      "coverage_policy=full",
-      "",
-    ]);
-    expect(readFileSync(summary, "utf8")).toBe(`- Stable soak waived by operator: ${waiver}\n`);
+    expect(result.status, result.stderr).toBe(exitCode);
+    if (exitCode === 0) {
+      expect(readFileSync(output, "utf8").split("\n")).toEqual([
+        "release_profile=stable",
+        "coverage_policy=full",
+        "",
+      ]);
+    } else {
+      expect(result.stderr).toMatch(
+        /require.*runReleaseSoak=true|does not record blocking product performance/u,
+      );
+    }
   });
 });

@@ -253,7 +253,9 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       liveSeq:
         "liveSeq" in cursor
           ? Math.max(currentTurn?.liveSeq ?? 0, cursor.liveSeq)
-          : (currentTurn?.liveSeq ?? 0),
+          : (currentTurn?.liveSeq ??
+            options.placementStore?.readWorkerTurnLiveAckCursor(binding.turnClaim) ??
+            0),
     };
     observedAckCursors.set(binding.turnClaim.sessionId, next);
     return next;
@@ -517,19 +519,32 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       }
       const placement = placementClaim(identity);
       const processTurn = processTurnBinding(identity);
-      if (!placement || !processTurn) {
+      const placementStore = options.placementStore;
+      if (!placement || !processTurn || !placementStore) {
         return { ok: false, closeReason: "placement-mismatch" };
       }
+      let durableAckedSeq: number | undefined;
+      const readAckedSeq = () =>
+        (durableAckedSeq ??= placementStore.readWorkerTurnLiveAckCursor(placement));
       const observed = observedAckCursorFor(processTurn);
-      const wasNewSequence = request.seq > (observed?.liveSeq ?? 0);
+      const wasNewSequence = request.seq > (observed?.liveSeq ?? readAckedSeq());
       // The environment lock owns trajectory settlement along with transcript
       // commits and terminal fences. Revocation remains immediate during this wait.
-      const result = await options.liveEvents.apply({ identity, request, source });
+      const result = await options.liveEvents.apply({ identity, request, source, readAckedSeq });
       const stale = validateLiveEvent(identity, request);
       if (stale) {
         return stale;
       }
       if (!result.ok) {
+        if (result.details.reason === "resync-required") {
+          // The receiver discarded its speculative suffix, including any buffered terminal.
+          observedAckCursors.set(placement.sessionId, {
+            ...processTurn,
+            transcriptSeq: observed?.transcriptSeq ?? 0,
+            liveSeq: result.details.ackedSeq,
+          });
+          pendingTerminalTurnFences.delete(placement.sessionId);
+        }
         return result;
       }
       recordAckCursor(processTurn, { liveSeq: result.result.ackedSeq });
