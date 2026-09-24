@@ -16,6 +16,18 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
+For pacman-owned installations (including Arch-based distributions such as
+Omarchy), use your distribution's update workflow instead. `openclaw update`
+skips package replacement and leaves the Gateway running. On Arch Linux, run
+`sudo pacman -Syu`, then `openclaw gateway restart`. Update status identifies the
+pacman owner; it does not treat a newer npm release as an available distribution
+package or schedule an npm auto-update.
+
+Older installed updaters, including 2026.9.4, do not have this ownership check.
+They must receive the fix through the distribution package manager: a candidate
+cannot repair an updater that fails before staging it. Do not run the npm updater
+as root or change ownership of distribution-managed files to work around it.
+
 Custom npm prefixes such as `~/.npm-global` are recognized from npm's configured
 prefix and the installed OpenClaw launcher. A prefix configured in `~/.npmrc`
 does not need a matching `NPM_CONFIG_PREFIX` environment variable. If no owner

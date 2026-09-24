@@ -97,6 +97,15 @@ type UpdateAvailability = {
 
 /** Determines whether git and/or registry data indicate an available update. */
 export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
+  if (update.systemPackage) {
+    return {
+      available: false,
+      hasGitUpdate: false,
+      hasRegistryUpdate: false,
+      latestVersion: null,
+      gitBehind: null,
+    };
+  }
   const latestVersion = update.registry?.latestVersion ?? null;
   const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
   const hasRegistryUpdate = !update.error && registryCmp != null && registryCmp < 0;
@@ -137,6 +146,9 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
 
 /** Formats a compact one-line update summary for overview rows. */
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
+  if (update.systemPackage) {
+    return `Update: pacman (${update.systemPackage.packageName}) · repository availability not checked · ${update.systemPackage.nextAction}`;
+  }
   if (update.error) {
     return `Update: update status ${update.error.status}: ${update.error.message}; run ${formatCliCommand("openclaw update status")}`;
   }

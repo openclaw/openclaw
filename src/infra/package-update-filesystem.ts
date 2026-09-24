@@ -310,3 +310,12 @@ export async function removePackageUpdatePath(targetPath: string): Promise<boole
     return false;
   }
 }
+
+export async function findPackedTarball(packDir: string): Promise<string | null> {
+  const entries = await fs.readdir(packDir).catch((): string[] => []);
+  const tarballs = entries.filter((entry) => entry.endsWith(".tgz"));
+  if (tarballs.length !== 1) {
+    return null;
+  }
+  return path.join(packDir, tarballs[0] ?? "");
+}

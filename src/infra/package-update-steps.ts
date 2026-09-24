@@ -11,6 +11,7 @@ import { formatErrorMessage } from "./errors.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
+import { findPackedTarball } from "./package-update-filesystem.js";
 import { readPackageVersionIfPresent } from "./package-update-integrity.js";
 import type { PackageUpdateStepRunner } from "./package-update-lifecycle.js";
 import {
@@ -64,6 +65,7 @@ import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
 } from "./update-npm-prefix.js";
+import { assertPacmanUnowned, PacmanOwnershipError } from "./update-pacman.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
@@ -182,15 +184,6 @@ async function createStagedPackageInstall(
       packageRoot: path.join(layout.globalRoot, packageName),
     },
   };
-}
-
-async function findPackedTarball(packDir: string): Promise<string | null> {
-  const entries = await fs.readdir(packDir).catch((): string[] => []);
-  const tarballs = entries.filter((entry) => entry.endsWith(".tgz"));
-  if (tarballs.length !== 1) {
-    return null;
-  }
-  return path.join(packDir, tarballs[0] ?? "");
 }
 
 async function prepareNpmGitSourceInstallSpec(params: {
@@ -439,6 +432,8 @@ export async function runGlobalPackageUpdateSteps(params: {
   };
 
   try {
+    await assertPacmanUnowned(params.packageRoot, params.timeoutMs);
+    await assertPacmanUnowned(params.installTarget.packageRoot, params.timeoutMs);
     const permissions = await checkGlobalPackageUpdatePermissions(params.installTarget, params.env);
     if (permissions) {
       return await packageUpdateFailure(permissions);
@@ -916,7 +911,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     if (error instanceof PackageUpdateActivationError) {
       throw error.cause;
     }
-    if (error instanceof FreeBsdPkgOwnershipError) {
+    if (error instanceof FreeBsdPkgOwnershipError || error instanceof PacmanOwnershipError) {
       throw error;
     }
     const failedStep = await classifyPackageUpdatePermissionFailure(

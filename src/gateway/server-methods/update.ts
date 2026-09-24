@@ -48,6 +48,7 @@ import {
   transferManagedServiceUpdateHandoff,
   startManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
+import { PacmanOwnershipError } from "../../infra/update-pacman.js";
 import {
   buildUpdateRestartSentinelPayload,
   type UpdateRestartSentinelMeta,
@@ -82,7 +83,7 @@ import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import {
   retainUpdateRequesterAuthority,
-  createUnexpectedUpdateFailureResult,
+  recordUnexpectedUpdateFailure,
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
 } from "./update-admission.js";
@@ -602,19 +603,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         }
       }
     } catch (error) {
-      if (error instanceof FreeBsdPkgOwnershipError) {
+      if (error instanceof FreeBsdPkgOwnershipError || error instanceof PacmanOwnershipError) {
         outcomeMessage = error.message;
       }
       context?.logGateway?.warn(`update.run failed error=${formatErrorMessage(error)}`);
-      let recorded = run;
-      try {
-        recorded = getUpdateRun(runId) ?? run;
-      } catch {
-        context?.logGateway?.warn(
-          "Update history could not be read; preserving the original update failure with captured admission facts.",
-        );
-      }
-      result = createUnexpectedUpdateFailureResult(recorded, result, error, warn);
+      result = recordUnexpectedUpdateFailure(run, result, error, warn);
     }
 
     let outcomeRun = recordUpdateRunPhase(runId, "requested", {

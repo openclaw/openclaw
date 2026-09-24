@@ -25,6 +25,7 @@ import {
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
 import { FreeBsdPkgOwnershipError } from "../../infra/update-freebsd-pkg-ownership.js";
+import { PacmanOwnershipError } from "../../infra/update-pacman.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
 import {
@@ -241,7 +242,8 @@ export function createUpdateCommandFailureResult(
   const { failure, admission, phase, ...result } = params;
   const { cause, detail } = failure;
   const preMutationFailure = cause instanceof UpdatePreMutationError;
-  const pkgOwnershipFailure = cause instanceof FreeBsdPkgOwnershipError;
+  const pkgOwnershipFailure =
+    cause instanceof FreeBsdPkgOwnershipError || cause instanceof PacmanOwnershipError;
   const admissionFailure =
     admission === true && cause instanceof GatewayServiceUpdateOwnershipError;
   const reason =
@@ -326,6 +328,35 @@ export async function withUpdateAdmissionReporting<T>(
   try {
     return await admit();
   } catch (error) {
+    if (error instanceof PacmanOwnershipError && error.ownership && mode === "unknown") {
+      if (opts.json) {
+        defaultRuntime.error(error.message);
+      }
+      await printResult(
+        {
+          status: "skipped",
+          mode,
+          root: error.root,
+          reason: error.reason,
+          steps: [
+            {
+              name: "installation-inspection",
+              command: "",
+              cwd: error.root,
+              durationMs: 0,
+              exitCode: 0,
+              failureFacts: [
+                { check: "installation-inspection", code: error.reason, message: error.message },
+              ],
+            },
+          ],
+          durationMs: Date.now() - startedAt,
+        },
+        opts,
+        { readHistory: false, nextAction: error.message },
+      );
+      return exitCliAfterOutput(defaultRuntime, 0);
+    }
     if (error instanceof UpdateRunAdmissionBusyError) {
       const result = {
         status: "skipped",
@@ -349,12 +380,13 @@ export async function withUpdateAdmissionReporting<T>(
     }
     if (
       !(error instanceof GatewayServiceUpdateOwnershipError) &&
-      !(error instanceof FreeBsdPkgOwnershipError)
+      !(error instanceof FreeBsdPkgOwnershipError) &&
+      !(error instanceof PacmanOwnershipError)
     ) {
       throw error;
     }
     const message =
-      error instanceof FreeBsdPkgOwnershipError
+      error instanceof FreeBsdPkgOwnershipError || error instanceof PacmanOwnershipError
         ? error.message
         : `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`;
     if (opts.json) {

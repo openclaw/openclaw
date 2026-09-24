@@ -30,6 +30,7 @@ import {
 import { preparePackageSwapLocalOverrides } from "./package-update-local-overrides.js";
 import {
   createNpmPackageRootLinkLifecycle,
+  resolvePackageSwapPaths,
   verifyNpmRootRecovery,
 } from "./package-update-npm-root.js";
 import {
@@ -50,7 +51,7 @@ import {
   finalizeNativePackageStage,
   NativePackageRollbackError,
 } from "./update-native-package-stage.js";
-import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "./update-npm-prefix.js";
+import { assertPacmanUnowned, PacmanOwnershipError } from "./update-pacman.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
@@ -68,21 +69,8 @@ export async function swapStagedPackageInstall(
 ): Promise<StagedPackageSwapResult> {
   const startedAt = Date.now();
   let activePackageRoot = params.installTarget.packageRoot;
-  const native = params.stage.native;
-  const targetLayout = native
-    ? {
-        prefix: native.liveProjectRoot,
-        globalRoot: path.dirname(native.liveProjectRoot),
-        binDir: native.liveBinDir,
-      }
-    : resolveNpmGlobalPrefixLayoutFromGlobalRoot(params.installTarget.globalRoot, {
-        allowDirectNodeModulesRoot: params.installTarget.directNodeModulesRoot === true,
-      });
-  const targetPackageRoot = native
-    ? path.join(native.liveProjectRoot, path.relative(native.projectRoot, params.stage.packageRoot))
-    : params.installTarget.packageRoot;
-  const targetSwapRoot = native?.liveProjectRoot ?? targetPackageRoot;
-  const stagedSwapRoot = native?.projectRoot ?? params.stage.packageRoot;
+  const { native, targetLayout, targetPackageRoot, targetSwapRoot, stagedSwapRoot } =
+    resolvePackageSwapPaths(params);
   const warnings: string[] = [];
   let baselineError: Error | undefined;
   const step = (
@@ -155,6 +143,7 @@ export async function swapStagedPackageInstall(
   let projectActivated = false;
   let activationCompleted = false;
   const assertReplacementUnowned = async () => {
+    await assertPacmanUnowned(targetPackageRoot, params.timeoutMs);
     // A fresh observation, not an atomic lock against an external pkg writer.
     const inspection = createFreeBsdPkgOwnershipInspection(
       params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
@@ -187,7 +176,10 @@ export async function swapStagedPackageInstall(
         ];
       }
     }
-    if (process.platform === "freebsd" && (packageBackedUp || rollback.length > 0)) {
+    if (
+      (process.platform === "freebsd" || process.platform === "linux") &&
+      (packageBackedUp || rollback.length > 0)
+    ) {
       try {
         await assertReplacementUnowned();
         assertCurrent();
@@ -373,7 +365,7 @@ export async function swapStagedPackageInstall(
     const assertProjectUnchanged = native
       ? await finalizeNativePackageStage(native, params.packageName)
       : undefined;
-    if (process.platform === "freebsd") {
+    if (process.platform === "freebsd" || process.platform === "linux") {
       await assertReplacementUnowned();
     }
     try {
@@ -385,7 +377,7 @@ export async function swapStagedPackageInstall(
       // Service preparation can wait for drain; revalidate the project copied before that wait.
       await native.assertUnchanged();
     }
-    if (process.platform === "freebsd") {
+    if (process.platform === "freebsd" || process.platform === "linux") {
       // Draining and project validation may outlive package ownership. Refuse
       // before registering a transaction or replacing any live entry.
       await assertReplacementUnowned();
@@ -706,7 +698,8 @@ export async function swapStagedPackageInstall(
     }
     if (
       error instanceof PackageUpdateActivationError ||
-      error instanceof FreeBsdPkgOwnershipError
+      error instanceof FreeBsdPkgOwnershipError ||
+      error instanceof PacmanOwnershipError
     ) {
       await discardPackageLauncherBackup(launchers, targetLayout.globalRoot);
       throw error instanceof PackageUpdateActivationError

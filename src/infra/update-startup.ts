@@ -48,25 +48,15 @@ import { resolveStartupInstallStatus, withUpdateInstallStatus } from "./update-i
 import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
 import {
   getUpdateSchedule,
+  clearAvailabilityState,
+  clearAutoState,
+  withoutCampaign,
+  withoutTarget,
+  type UpdateCheckState,
   resetUpdateStatusState,
   setUpdateAvailableCache,
   setUpdateScheduleCache,
 } from "./update-status-state.js";
-
-type UpdateCheckState = {
-  lastCheckedAt?: string;
-  lastCheckedChannel?: UpdateChannel;
-  lastNotifiedVersion?: string;
-  lastNotifiedTag?: string;
-  lastAvailableVersion?: string;
-  lastAvailableTag?: string;
-  autoInstallId?: string;
-  autoFirstSeenVersion?: string;
-  autoFirstSeenTag?: string;
-  autoFirstSeenAt?: string;
-  autoLastAttemptVersion?: string;
-  autoLastAttemptAt?: string;
-};
 
 export async function getUpdateEffectiveChannel(): Promise<UpdateChannel> {
   const { status } = await initializeGatewayUpdateStatus();
@@ -111,16 +101,6 @@ function writeState(state: UpdateCheckState): void {
   writeConfigMachineState(UPDATE_CHECK_STATE_KEY, state);
 }
 
-function withoutCampaign(schedule: UpdateScheduleState): UpdateScheduleState {
-  const { campaign: _campaign, ...rest } = schedule;
-  return rest;
-}
-
-function withoutTarget(schedule: UpdateScheduleState): UpdateScheduleState {
-  const { target: _target, campaign: _campaign, ...rest } = schedule;
-  return rest;
-}
-
 function isPersistedAvailabilityForChannel(params: {
   state: UpdateCheckState;
   channel: UpdateChannel;
@@ -156,11 +136,6 @@ function resolvePersistedUpdateAvailable(
     latestVersion,
     channel: persistedTag,
   };
-}
-
-function clearAvailabilityState(nextState: UpdateCheckState): void {
-  delete nextState.lastAvailableVersion;
-  delete nextState.lastAvailableTag;
 }
 
 function resolveStableJitterMs(params: {
@@ -230,12 +205,6 @@ function resolveStableAutoApplyAtMs(params: {
   });
 
   return firstSeenMs + baseDelayMs + jitterMs;
-}
-
-function clearAutoState(nextState: UpdateCheckState): void {
-  delete nextState.autoFirstSeenVersion;
-  delete nextState.autoFirstSeenTag;
-  delete nextState.autoFirstSeenAt;
 }
 
 /** Caches only the fast local install probe; remote Git refresh remains post-ready. */
@@ -389,7 +358,8 @@ async function runGatewayUpdateCheckOwned(
       configuredChannel === "beta" ||
       configuredChannel === "dev") &&
     autoEnabled &&
-    !autoDisabledByExternalSupervisor;
+    !autoDisabledByExternalSupervisor &&
+    !installStatus.status.systemPackage;
 
   if (updateCampaign.getState()?.state === "applying") {
     return;
@@ -423,6 +393,21 @@ async function runGatewayUpdateCheckOwned(
   });
   if (!autoDesired) {
     updateCampaign.clear();
+  }
+  if (installStatus.status.systemPackage) {
+    const state = readState();
+    clearAvailabilityState(state);
+    clearAutoState(state);
+    writeState(state);
+    setUpdateAvailableCache({
+      next: null,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
+    setUpdateScheduleCache({
+      next: withoutTarget({ ...initialSchedule, autoEnabled: false }),
+      onUpdateScheduleChange: params.onUpdateScheduleChange,
+    });
+    return;
   }
   const onCampaignChange = (campaign: UpdateScheduleState["campaign"] | undefined) => {
     const current = getUpdateSchedule();

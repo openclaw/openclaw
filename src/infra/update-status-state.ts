@@ -2,6 +2,7 @@ import type {
   UpdateAvailable,
   UpdateScheduleState,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { UpdateChannel } from "./update-channels.js";
 
 export type { UpdateAvailable } from "../../packages/gateway-protocol/src/index.js";
 
@@ -65,4 +66,40 @@ export function setUpdateAvailableCache(params: {
 export function resetUpdateStatusState(): void {
   updateAvailableCache = null;
   updateScheduleCache = null;
+}
+
+export type UpdateCheckState = {
+  lastCheckedAt?: string;
+  lastCheckedChannel?: UpdateChannel;
+  lastNotifiedVersion?: string;
+  lastNotifiedTag?: string;
+  lastAvailableVersion?: string;
+  lastAvailableTag?: string;
+  autoInstallId?: string;
+  autoFirstSeenVersion?: string;
+  autoFirstSeenTag?: string;
+  autoFirstSeenAt?: string;
+  autoLastAttemptVersion?: string;
+  autoLastAttemptAt?: string;
+};
+
+export function withoutCampaign(schedule: UpdateScheduleState): UpdateScheduleState {
+  const { campaign: _campaign, ...rest } = schedule;
+  return rest;
+}
+
+export function withoutTarget(schedule: UpdateScheduleState): UpdateScheduleState {
+  const { target: _target, campaign: _campaign, ...rest } = schedule;
+  return rest;
+}
+
+export function clearAvailabilityState(nextState: UpdateCheckState): void {
+  delete nextState.lastAvailableVersion;
+  delete nextState.lastAvailableTag;
+}
+
+export function clearAutoState(nextState: UpdateCheckState): void {
+  delete nextState.autoFirstSeenVersion;
+  delete nextState.autoFirstSeenTag;
+  delete nextState.autoFirstSeenAt;
 }

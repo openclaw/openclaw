@@ -9,6 +9,8 @@ import {
   type PackageLauncherFingerprint,
   packageLauncherDifferences,
 } from "./package-update-integrity.js";
+import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
+import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "./update-npm-prefix.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 
 /** The retained package link owns this baseline; its checkout remains operator-owned. */
@@ -164,4 +166,23 @@ export async function verifyNpmRootRecovery(
         (!previousRoot && params.previousIdentity !== undefined))
     );
   });
+}
+
+export function resolvePackageSwapPaths(params: StagedPackageSwapParams) {
+  const native = params.stage.native;
+  const targetLayout = native
+    ? {
+        prefix: native.liveProjectRoot,
+        globalRoot: path.dirname(native.liveProjectRoot),
+        binDir: native.liveBinDir,
+      }
+    : resolveNpmGlobalPrefixLayoutFromGlobalRoot(params.installTarget.globalRoot, {
+        allowDirectNodeModulesRoot: params.installTarget.directNodeModulesRoot === true,
+      });
+  const targetPackageRoot = native
+    ? path.join(native.liveProjectRoot, path.relative(native.projectRoot, params.stage.packageRoot))
+    : params.installTarget.packageRoot;
+  const targetSwapRoot = native?.liveProjectRoot ?? targetPackageRoot;
+  const stagedSwapRoot = native?.projectRoot ?? params.stage.packageRoot;
+  return { native, targetLayout, targetPackageRoot, targetSwapRoot, stagedSwapRoot };
 }

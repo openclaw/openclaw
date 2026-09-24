@@ -21,6 +21,7 @@ import {
   readPackageDistInventoryIfPresent,
 } from "./package-dist-inventory.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
+import { normalizePackageVersionForComparison } from "./package-update-utils.js";
 import { applyPathPrepend } from "./path-prepend.js";
 import { parseSemver } from "./runtime-guard.js";
 import {
@@ -38,6 +39,7 @@ import {
   readPackageManagerProbeValue,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
 } from "./update-npm-prefix.js";
+import { assertPacmanUnowned } from "./update-pacman.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 
 /** Supported package managers for OpenClaw global install and update flows. */
@@ -134,14 +136,6 @@ async function resolveNpmOwner(params: {
     lifecyclePolicy: version ? resolveNpmLifecyclePolicy(version) : null,
     ...(result.code === 0 || !result.stderr ? {} : { probeError: result.stderr }),
   };
-}
-
-function normalizePackageVersionForComparison(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.replace(/^[vV](?=\d)/, "");
 }
 
 /** Returns true when a user target requests the moving main-branch package spec. */
@@ -1066,6 +1060,7 @@ export async function resolveGlobalInstallTarget(params: {
 }): Promise<ResolvedGlobalInstallTarget> {
   const pkgOwnership = params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs);
   await pkgOwnership.assertUnowned(params.pkgRoot);
+  await assertPacmanUnowned(params.pkgRoot, params.timeoutMs);
   const requestedCommand = normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
   const requestedPnpmGlobalRoot =
     requestedCommand.manager === "pnpm"
@@ -1148,6 +1143,7 @@ export async function resolveGlobalInstallTarget(params: {
   // Manager discovery can outlive the planning snapshot. The selected
   // destination starts a fresh inspection before its runtime is selected.
   await createFreeBsdPkgOwnershipInspection(params.timeoutMs).assertUnowned(packageRoot);
+  await assertPacmanUnowned(packageRoot, params.timeoutMs);
   const npmOwner =
     command.manager === "npm"
       ? await resolveNpmOwner({
