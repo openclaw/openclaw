@@ -8,6 +8,7 @@ import type { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramPlainCaption, splitTelegramCaption } from "./caption.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import type { TelegramOutboundPromptContextMessage } from "./outbound-message-context.js";
+import { recordTelegramUploadBytes } from "./request-timeouts.js";
 import { isTelegramEmptyContentError, isTelegramHtmlParseError } from "./rich-plain-fallback.js";
 import type { TelegramApi } from "./send-context.js";
 import { isTelegramPhotoLimitError } from "./send-error-predicates.js";
@@ -121,7 +122,10 @@ export function prepareTelegramOutboundMedia(params: {
     isGif,
     isVideoNote,
     fileName,
-    file: new InputFile(params.media.buffer, fileName),
+    file: recordTelegramUploadBytes(
+      new InputFile(params.media.buffer, fileName),
+      params.media.buffer.byteLength,
+    ),
     caption,
     htmlCaption,
     plainCaption: resolveTelegramPlainCaption(
