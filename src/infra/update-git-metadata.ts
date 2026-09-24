@@ -1,26 +1,83 @@
 import hostedGitInfo from "hosted-git-info";
 import { executeGitCommand } from "./git-exec.js";
 
-export type GitTrackingTarget = {
-  revision: string;
-  display: string;
-  fetch: "prune" | { remote: string; mergeRef: string };
-};
+export type GitFetchTarget = { remote: string; mergeRef: string };
 
 const DEV_COMMIT_LIMIT = 5;
 const DEV_COMMIT_SUBJECT_MAX_LENGTH = 120;
 const DEV_COMMIT_LOG_MAX_OUTPUT_BYTES = 8 * 1024;
 
+/** Select source authority before requiring its local tracking ref to exist. */
+export async function readGitBranchFetchTarget(
+  readGit: (...args: string[]) => Promise<string | null>,
+  branch: string,
+  fallbackRemote?: string,
+): Promise<GitFetchTarget | null> {
+  const [remote, mergeRefs] = await Promise.all([
+    readGit("config", "--get", `branch.${branch}.remote`),
+    readGit("config", "--get-all", `branch.${branch}.merge`),
+  ]);
+  const mergeRef = mergeRefs?.split("\n")[0];
+  if (remote && mergeRef) {
+    return { remote, mergeRef };
+  }
+  return fallbackRemote && (await readGit("remote", "get-url", "--", fallbackRemote))
+    ? { remote: fallbackRemote, mergeRef: `refs/heads/${branch}` }
+    : null;
+}
+
+function matchRefspec(pattern: string, ref: string): string | undefined {
+  const star = pattern.indexOf("*");
+  if (star < 0) {
+    return pattern === ref ? "" : undefined;
+  }
+  const prefix = pattern.slice(0, star);
+  const suffix = pattern.slice(star + 1);
+  return ref.startsWith(prefix) &&
+    ref.endsWith(suffix) &&
+    ref.length >= prefix.length + suffix.length
+    ? ref.slice(prefix.length, ref.length - suffix.length)
+    : undefined;
+}
+
+/** Receipts retain only a destination; require one configured source before fetching it. */
+export async function readGitReceiptFetchTarget(
+  readGit: (...args: string[]) => Promise<string | null>,
+  display: string,
+): Promise<(GitFetchTarget & { revision: string }) | null> {
+  const revision = await readGit(
+    "rev-parse",
+    "--symbolic-full-name",
+    "--verify",
+    "--end-of-options",
+    display,
+  );
+  if (!revision) {
+    return null;
+  }
+  const targets =
+    (await readGit("config", "--get-regexp", "^remote\\..*\\.fetch$"))
+      ?.split("\n")
+      .flatMap((line) => {
+        const [, remote, source, destination] =
+          /^remote\.(.+)\.fetch \+?([^:]+):(.+)$/.exec(line) ?? [];
+        const matched = destination ? matchRefspec(destination, revision) : undefined;
+        return remote && source && matched !== undefined
+          ? [{ remote, mergeRef: source.replace("*", matched), revision }]
+          : [];
+      }) ?? [];
+  const unique = [...new Map(targets.map((target) => [JSON.stringify(target), target])).values()];
+  if (unique.length === 0 && revision.startsWith("refs/heads/")) {
+    return { remote: ".", mergeRef: revision, revision };
+  }
+  return unique.length === 1 ? (unique[0] ?? null) : null;
+}
+
 export async function resolveGitRepositoryMetadata(
   readGit: (...args: string[]) => Promise<string | null>,
-  tracking: GitTrackingTarget | null,
-  branch: string | null,
+  target: GitFetchTarget | null,
 ): Promise<{ repositoryUrl?: string }> {
-  const remote = tracking
-    ? tracking.fetch === "prune"
-      ? await readGit("config", "--get", `branch.${branch}.remote`)
-      : tracking.fetch.remote
-    : null;
+  const remote = target?.remote;
   const remoteUrl =
     remote && remote !== "." ? await readGit("remote", "get-url", "--", remote) : null;
   // Git accepts relative local remotes that hosted-git-info treats as npm shorthands.
