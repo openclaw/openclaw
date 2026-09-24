@@ -8,6 +8,7 @@ import {
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "../../config/gateway-env-selection.js";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
+import { describeConfigSnapshotInputChange } from "../../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
@@ -223,23 +224,18 @@ async function readGuardedGatewayRunConfig(
   });
 }
 
-async function isSameGatewayRunConfigSnapshot(
+function describeGatewayRunConfigChange(
   expected: ConfigFileSnapshot,
   current: ConfigFileSnapshot,
   options: { allowPathChange?: boolean } = {},
-): Promise<boolean> {
-  const { hashRuntimeConfigValue } = await import("../../config/runtime-snapshot.js");
-  return (
-    (options.allowPathChange || current.path === expected.path) &&
-    current.exists === expected.exists &&
-    current.valid === expected.valid &&
-    (current.hash ?? current.raw) === (expected.hash ?? expected.raw) &&
-    // Invalid snapshots have no resolved config facts. Reset admission uses
-    // their selected target and raw revision, never the valid-config hash cache.
-    (!current.valid ||
-      hashRuntimeConfigValue(current.sourceConfig) ===
-        hashRuntimeConfigValue(expected.sourceConfig))
-  );
+): string | undefined {
+  return current.valid !== expected.valid
+    ? "config validity changed"
+    : describeConfigSnapshotInputChange(expected, current, {
+        ...options,
+        // Invalid reset admission pins the selected target and authored revision.
+        compareResolvedConfig: current.valid,
+      });
 }
 
 function resolveGatewayConfigSelectionDeclarationSignature(
@@ -452,7 +448,7 @@ export async function recheckGatewayRunReset(params: GatewayRunGuardParams): Pro
   if (
     resolveGatewayConfigSelectionSignature(process.env) !== expected.selectionSignature ||
     !current ||
-    !(await isSameGatewayRunConfigSnapshot(expected.snapshot, current))
+    describeGatewayRunConfigChange(expected.snapshot, current)
   ) {
     return await rejectDrift();
   }
@@ -741,16 +737,14 @@ export async function recheckGatewayRunBootstrap(
   }
   // The writer-stamped repair is the only config mutation allowed between selection and launch;
   // accepting a broader difference here would turn the drift guard into an invalid-config bypass.
-  if (
-    (await isSameGatewayRunConfigSnapshot(expected, current, {
-      allowPathChange: params.snapshot !== undefined,
-    })) ||
-    startupRepair.isStartupConfigRepairResult(expected, current)
-  ) {
+  const change = describeGatewayRunConfigChange(expected, current, {
+    allowPathChange: params.snapshot !== undefined,
+  });
+  if (!change || startupRepair.isStartupConfigRepairResult(expected, current)) {
     return true;
   }
   params.runtime.error(
-    "Refusing to run automatic gateway startup migrations because the selected config changed during startup. Retry startup so the new config can be validated.",
+    `Refusing to run automatic gateway startup migrations because the selected config changed during startup (${change}). Retry startup so the new config can be validated.`,
   );
   throw new ExitError(1);
 }

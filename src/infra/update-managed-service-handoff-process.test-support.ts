@@ -1,18 +1,8 @@
 import type { ChildProcess } from "node:child_process";
-import fs from "node:fs/promises";
 import { vi } from "vitest";
 import { waitForChildClose } from "../../test/helpers/process-wait.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-
-export async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /** Start the stable parent process shared by the native service boundary fixtures. */
 export function createManagedServiceBoundaryParent(

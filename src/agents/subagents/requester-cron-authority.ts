@@ -2,17 +2,30 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
+import {
+  getAgentRunContext,
+  getAgentRunLifecycleGeneration,
+} from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../admitted-run-context.js";
 import {
   captureActiveCronManagementAuthority,
   type CronCreatorAuthorityCapability,
 } from "../cron-creator-authority-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "../tools/gateway-caller-context.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 
 type RequesterCronAuthority = {
-  managementEntitlement: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
+  managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  releaseOperatorAuthority?: () => void;
   requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
   requesterSessionKey: string;
   requesterSessionId: string;
@@ -41,6 +54,8 @@ const state = resolveGlobalSingleton<RequesterCronAuthorityState>(
     for (const entries of value.bySession.values()) {
       for (const entry of entries) {
         entry.active = false;
+        entry.releaseOperatorAuthority?.();
+        entry.releaseOperatorAuthority = undefined;
       }
     }
     value.byEntry = new WeakMap();
@@ -50,9 +65,17 @@ const state = resolveGlobalSingleton<RequesterCronAuthorityState>(
 
 function discard(authority: RequesterCronAuthority): void {
   authority.active = false;
-  for (const entry of authority.batch) {
-    if (state.byEntry.get(entry) === authority) {
-      state.byEntry.delete(entry);
+  const releaseOperatorAuthority = authority.releaseOperatorAuthority;
+  authority.releaseOperatorAuthority = undefined;
+  releaseOperatorAuthority?.();
+  // Pending rows must remember a revoked operator restriction. Forgetting it
+  // would let a later retry take the no-captured-operator dispatch path. The
+  // weak entry binding retires with its row or an explicitly captured successor.
+  if (!authority.operatorAuthority) {
+    for (const entry of authority.batch) {
+      if (state.byEntry.get(entry) === authority) {
+        state.byEntry.delete(entry);
+      }
     }
   }
   const session = state.bySession.get(authority.requesterSessionKey);
@@ -67,9 +90,14 @@ function sameBatch(left: readonly SubagentRunRecord[], right: readonly SubagentR
 }
 
 function isCurrent(authority: RequesterCronAuthority): boolean {
+  try {
+    authority.operatorAuthority?.assertCurrent();
+  } catch {
+    return false;
+  }
   if (
     !authority.active ||
-    (authority.managementEntitlement.source === "channel-owner" &&
+    (authority.managementEntitlement?.source === "channel-owner" &&
       !authority.managementEntitlement.isCurrent()) ||
     authority.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
     !state.bySession.get(authority.requesterSessionKey)?.has(authority)
@@ -127,13 +155,45 @@ export function captureRequesterCronAuthority(params: {
   if (!requesterAgentId || params.batch.length === 0) {
     return undefined;
   }
-  const capture = captureActiveCronManagementAuthority({
+  const cronCapture = captureActiveCronManagementAuthority({
     runId: params.requesterTurnRunId,
     sessionKey: params.requesterSessionKey,
     agentId: requesterAgentId,
   });
-  if (!capture) {
+  const caller = getGatewayToolCallerIdentity();
+  const operatorAuthority = caller?.operatorAuthority;
+  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const runContext = getAgentRunContext(params.requesterTurnRunId);
+  // A yield transfers an accepted user's restrictions, not just automation
+  // management permission. Keep its source alive even when no Cron tool exists.
+  const operatorCapture =
+    operatorAuthority &&
+    assertCallerCurrent &&
+    caller?.agentId === requesterAgentId &&
+    caller.sessionKey === params.requesterSessionKey &&
+    caller.operationalRunInstance?.runId === params.requesterTurnRunId &&
+    caller.approvalAuthority &&
+    runContext?.sessionId
+      ? {
+          sessionId: runContext.sessionId,
+          lifecycleGeneration: caller.approvalAuthority.lifecycleGeneration,
+          isActive: () => {
+            try {
+              assertCallerCurrent();
+              return getAgentRunContext(params.requesterTurnRunId) === runContext;
+            } catch {
+              return false;
+            }
+          },
+        }
+      : undefined;
+  const capture = cronCapture ?? operatorCapture;
+  if (!capture || (operatorAuthority && !operatorCapture)) {
     return undefined;
+  }
+  if (operatorAuthority) {
+    assertAdmittedRunOperatorAuthority(operatorAuthority);
+    operatorAuthority.assertCurrent();
   }
   const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
     agentId: requesterAgentId,
@@ -146,8 +206,10 @@ export function captureRequesterCronAuthority(params: {
     ...params,
     requesterAgentId,
     requesterSessionId: capture.sessionId,
-    managementEntitlement: capture.managementEntitlement,
-    requesterOwner: capture.requesterOwner,
+    managementEntitlement: cronCapture?.managementEntitlement,
+    requesterOwner: cronCapture?.requesterOwner,
+    operatorAuthority,
+    releaseOperatorAuthority: operatorAuthority?.retain?.(),
     lifecycleGeneration: capture.lifecycleGeneration,
     sessionLifecycleRevision: session.lifecycleRevision,
     storePath,
@@ -277,12 +339,18 @@ export async function withRequesterCronAuthority<T>(
     authority.rearmGeneration !== params.rearmGeneration ||
     !sameBatch(authority.batch, params.batch)
   ) {
+    if (authority?.operatorAuthority) {
+      throw new Error("Requester operator authority does not own this continuation");
+    }
     return await run();
   }
   const current = () =>
     isCurrent(authority) && (authority.runScopeBound === true || params.isCurrent());
   if (!current()) {
     discard(authority);
+    if (authority.operatorAuthority) {
+      throw new Error("Requester operator authority is no longer current");
+    }
     return await run();
   }
   const dispatch: RequesterCronAuthorityDispatch = {
@@ -292,7 +360,26 @@ export async function withRequesterCronAuthority<T>(
     consumed: false,
   };
   try {
-    return await activeDispatch.run(dispatch, run);
+    if (!authority.operatorAuthority) {
+      return await activeDispatch.run(dispatch, run);
+    }
+    const { withOperatorToolGatewayAuthority } =
+      await import("../../gateway/server-plugin-in-process-dispatch.js");
+    if (!current()) {
+      throw new Error("Requester operator authority is no longer current");
+    }
+    return await withOperatorToolGatewayAuthority(
+      {
+        operatorRunAuthority: authority.operatorAuthority,
+        scopes: authority.operatorAuthority.scopes,
+        assertCurrent: () => {
+          if (!current()) {
+            throw new Error("Requester operator authority is no longer current");
+          }
+        },
+      },
+      () => activeDispatch.run(dispatch, run),
+    );
   } finally {
     // The committed settlement owner retires this cohort. A returned delivery
     // failure can still need a retry, just like a thrown transport error.
@@ -320,6 +407,7 @@ export function consumeRequesterCronAuthorityAdmission(params: {
   const dispatch = activeDispatch.getStore();
   if (
     !dispatch ||
+    !dispatch.authority.managementEntitlement ||
     dispatch.consumed ||
     dispatch.authority.admittedRunId !== undefined ||
     dispatch.runId !== params.runId ||

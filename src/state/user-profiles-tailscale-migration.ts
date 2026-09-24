@@ -10,6 +10,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import {
+  publishUserProfileAuthorityChange,
+  stageUserProfileEmailBindingChange,
+} from "./user-profile-events.js";
 import { githubAuthenticationSubject } from "./user-profile-github-identity.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
@@ -53,7 +57,7 @@ export function migrateLegacyTailscaleProfileIdentities(
       for (const row of legacyRows) {
         const subject =
           row.provider === "github" ? githubAuthenticationSubject(row.subject) : row.subject;
-        executeSqliteQuerySync(
+        const inserted = executeSqliteQuerySync(
           db,
           transactionKysely
             .insertInto("user_profile_identities")
@@ -80,13 +84,19 @@ export function migrateLegacyTailscaleProfileIdentities(
           );
           continue;
         }
-        executeSqliteQuerySync(
+        const deleted = executeSqliteQuerySync(
           db,
           transactionKysely
             .deleteFrom("user_profile_emails")
             .where("email", "=", row.email)
             .where("profile_id", "=", row.profile_id),
         );
+        if ((deleted.numAffectedRows ?? 0n) > 0n) {
+          stageUserProfileEmailBindingChange(db, row.email, null);
+        }
+        if ((inserted.numAffectedRows ?? 0n) > 0n || (deleted.numAffectedRows ?? 0n) > 0n) {
+          publishUserProfileAuthorityChange(db, row.profile_id);
+        }
         migrated += 1;
       }
       return {

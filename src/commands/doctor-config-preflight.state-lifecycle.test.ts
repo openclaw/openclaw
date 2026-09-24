@@ -55,6 +55,10 @@ vi.mock("../infra/startup-migration-checkpoint.js", async (importActual) => {
   return {
     ...actual,
     readMigrationCheckpointStatus: pin(actual.readMigrationCheckpointStatus),
+    inspectStartupMigrationCheckpointWithLease: (
+      params: Parameters<typeof actual.inspectStartupMigrationCheckpointWithLease>[0],
+    ) =>
+      actual.inspectStartupMigrationCheckpointWithLease({ buildIdentity: "test-build", ...params }),
     recordSuccessfulStartupMigrations: pin(actual.recordSuccessfulStartupMigrations),
     recordSuccessfulStateMigrations: pin(actual.recordSuccessfulStateMigrations),
   };

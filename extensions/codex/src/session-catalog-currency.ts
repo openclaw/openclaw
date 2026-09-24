@@ -1,4 +1,9 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  findCodexAppServerSpawnError,
+  reportCodexCatalogSpawnFailure,
+  type CodexAppServerSpawnError,
+} from "./app-server/spawn-error.js";
 
 type CurrencyOptions = {
   local: boolean;
@@ -14,6 +19,8 @@ const SAFETY_INTERVAL_MS = 15 * 60_000;
 export class CodexCatalogCurrency {
   private timer: ReturnType<typeof setInterval> | undefined;
   private initial: ReturnType<typeof setTimeout> | undefined;
+  private hydration: NodeJS.Immediate | undefined;
+  private terminalFailure: CodexAppServerSpawnError | undefined;
   private running: Promise<void> | undefined;
   private closed = false;
   private nativeDirty = false;
@@ -23,7 +30,44 @@ export class CodexCatalogCurrency {
   constructor(private readonly options: CurrencyOptions) {}
 
   hasActiveWork(): boolean {
-    return this.initial !== undefined || this.running !== undefined;
+    return this.hydration !== undefined || this.initial !== undefined || this.running !== undefined;
+  }
+
+  assertRunnable(): void {
+    if (this.terminalFailure) {
+      throw this.terminalFailure;
+    }
+  }
+
+  stopForTerminalFailure(error: unknown): boolean {
+    const failure = findCodexAppServerSpawnError(error);
+    if (!failure) {
+      return false;
+    }
+    if (!this.closed) {
+      this.terminalFailure = failure;
+      void this.close();
+      reportCodexCatalogSpawnFailure(failure);
+    }
+    return true;
+  }
+
+  scheduleHydration(run: () => Promise<void>): void {
+    if (this.closed || this.hydration) {
+      return;
+    }
+    this.hydration = setImmediate(() => {
+      this.hydration = undefined;
+      void (this.options.runBackground ? this.options.runBackground(run) : run()).catch(
+        (error: unknown) => this.options.report(error),
+      );
+    });
+    this.hydration.unref();
+  }
+
+  cancelHydration(): void {
+    clearImmediate(this.hydration);
+    this.hydration = undefined;
   }
 
   requestNativeRefresh(): void {
@@ -90,6 +134,7 @@ export class CodexCatalogCurrency {
 
   close(): Promise<void> | undefined {
     this.closed = true;
+    this.cancelHydration();
     clearInterval(this.timer);
     this.timer = undefined;
     clearTimeout(this.initial);

@@ -54,6 +54,11 @@ export async function prepareAgentRequestRouting(params: {
   context: AgentTurnContext;
   respond: GatewayRequestHandlerOptions["respond"];
   reserveDedupe: (sessionKey?: string, agentId?: string) => void;
+  bindDedupeSessionTarget: (target: {
+    sessionKey: string;
+    agentId?: string;
+    sessionId?: string;
+  }) => void;
   clearDedupe: () => void;
 }): Promise<AgentRequestRouting | undefined> {
   const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
@@ -221,6 +226,13 @@ export async function prepareAgentRequestRouting(params: {
         projection: "list",
       })
     : undefined;
+  if (loaded) {
+    params.bindDedupeSessionTarget({
+      sessionKey: loaded.canonicalKey,
+      agentId,
+      sessionId: loaded.entry?.sessionId,
+    });
+  }
   return {
     normalizedAttachments,
     requestedBestEffortDeliver,

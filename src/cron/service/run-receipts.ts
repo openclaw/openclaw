@@ -30,11 +30,10 @@ import {
   readCronRunReceiptCurrentJob,
   trackCronRunReceiptSettlement,
   type PreparedCronRunReceiptClaim,
-  type CronRunReceiptHandle,
-  type CronRunReceiptStatus,
   type CronRunReceiptSettlementDisposition,
 } from "../store/run-receipt-store.js";
 import { retireCronRunTriggerStateInDatabase } from "../store/run-receipt-trigger-state.js";
+import type { CronRunReceiptHandle, CronRunReceiptStatus } from "../store/run-receipt.types.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronRunStatus, CronStoredJob } from "../types.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
@@ -367,7 +366,7 @@ export function cronRunReceiptPersistHooks(params: {
       const recordsUnavailableGuard =
         terminal?.status === "error" && params.terminal?.disposition === "owner-unavailable";
       if (
-        params.state.deps.isAgentAvailable?.(params.handle.agentId) === false &&
+        params.state.deps.isAgentAvailable?.(params.handle.agentId, database) === false &&
         !recordsUnavailableGuard
       ) {
         throw new CronRunReceiptRevisionError(

@@ -72,16 +72,6 @@ function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionCon
   return "channel";
 }
 
-function resolveDiscordComponentOriginatingTo(
-  interactionCtx: Pick<ComponentInteractionContext, "isDirectMessage" | "userId" | "channelId">,
-) {
-  return resolveDiscordConversationIdentity({
-    isDirectMessage: interactionCtx.isDirectMessage,
-    userId: interactionCtx.userId,
-    channelId: interactionCtx.channelId,
-  });
-}
-
 export async function dispatchDiscordComponentEvent(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -108,7 +98,6 @@ export async function dispatchDiscordComponentEvent(params: {
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
   const agentId = params.routeOverrides?.agentId ?? route.agentId;
   const accountId = params.routeOverrides?.accountId ?? route.accountId;
-  const inboundLastRouteSessionKey = sessionKey;
   const fromLabel = buildDiscordComponentConversationLabel({
     interactionCtx,
     interaction,
@@ -166,6 +155,11 @@ export async function dispatchDiscordComponentEvent(params: {
     storePath,
     sessionKey,
   });
+  const originatingTo = resolveDiscordConversationIdentity({
+    isDirectMessage: interactionCtx.isDirectMessage,
+    userId: interactionCtx.userId,
+    channelId: interactionCtx.channelId,
+  });
   const timestamp = Date.now();
   const combinedBody = formatInboundEnvelope({
     channel: "Discord",
@@ -183,12 +177,7 @@ export async function dispatchDiscordComponentEvent(params: {
     finalizeInboundContext,
     resolveChunkMode,
     resolveTextChunkLimit,
-  } = await (async () => {
-    const conversationRuntime = await loadConversationRuntime();
-    return {
-      ...conversationRuntime,
-    };
-  })();
+  } = await loadConversationRuntime();
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -235,8 +224,7 @@ export async function dispatchDiscordComponentEvent(params: {
     MessageSid: interaction.rawData.id,
     Timestamp: timestamp,
     OriginatingChannel: "discord" as const,
-    OriginatingTo:
-      resolveDiscordComponentOriginatingTo(interactionCtx) ?? `channel:${interactionCtx.channelId}`,
+    OriginatingTo: originatingTo ?? `channel:${interactionCtx.channelId}`,
   });
 
   const deliverTarget = `channel:${interactionCtx.channelId}`;
@@ -286,14 +274,12 @@ export async function dispatchDiscordComponentEvent(params: {
         record: {
           updateLastRoute: interactionCtx.isDirectMessage
             ? {
-                sessionKey: inboundLastRouteSessionKey,
+                sessionKey,
                 channel: "discord",
-                to:
-                  resolveDiscordComponentOriginatingTo(interactionCtx) ??
-                  `user:${interactionCtx.userId}`,
+                to: originatingTo ?? `user:${interactionCtx.userId}`,
                 accountId,
                 mainDmOwnerPin:
-                  inboundLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner
+                  sessionKey === route.mainSessionKey && pinnedMainDmOwner
                     ? {
                         ownerRecipient: pinnedMainDmOwner,
                         senderRecipient: interactionCtx.userId,

@@ -100,6 +100,12 @@ export async function runQaFlowSuiteStandard(
     adapterOptions: {
       ...params?.adapterOptions,
       scenarioIds: selectedScenarios.map((scenario) => scenario.id),
+      ...(selectedScenarios.some(
+        (scenario) =>
+          scenario.execution.kind === "flow" && scenario.execution.config?.agentE2e === true,
+      )
+        ? { agentE2e: true }
+        : {}),
     },
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir,
@@ -483,6 +489,7 @@ export async function runQaFlowSuiteStandard(
         activeGateway.stop({
           keepTemp,
           preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
+          beforeTempCleanup: transport.captureBeforeGatewayCleanup,
         }),
       disposeAgentHarnesses: () => disposeRegisteredAgentHarnesses(),
       stopProvider: activeMock ? () => activeMock.stop() : undefined,

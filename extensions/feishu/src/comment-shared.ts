@@ -87,29 +87,6 @@ export function formatFeishuApiError(
   });
 }
 
-function formatFeishuApiFailure(
-  error: unknown,
-  errorPrefix: string,
-  options: {
-    includeConfigParams?: boolean;
-    includeNestedErrorLogId?: boolean;
-  } = {},
-): string {
-  const details = formatFeishuApiError(error, options);
-  return `${errorPrefix}: ${details || "unknown error"}`;
-}
-
-function createFeishuApiError(
-  error: unknown,
-  errorPrefix: string,
-  options: {
-    includeConfigParams?: boolean;
-    includeNestedErrorLogId?: boolean;
-  } = {},
-): Error {
-  return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
-}
-
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
 
@@ -150,7 +127,8 @@ export async function requestFeishuApi<T>(
       },
     );
   } catch (error) {
-    throw createFeishuApiError(error, errorPrefix, options);
+    const details = formatFeishuApiError(error, options);
+    throw new Error(`${errorPrefix}: ${details || "unknown error"}`, { cause: error });
   }
 }
 
@@ -322,26 +300,15 @@ function resolveCommentLinkedDocumentFromUrl(params: {
     const { urlKind, token } = parsedPath;
     link.urlKind = urlKind;
     if (urlKind === "wiki") {
-      link.urlKind = "wiki";
       link.wikiNodeToken = token;
     } else {
       link.resolvedObjType = urlKind;
       link.resolvedObjToken = token;
     }
-    if (
-      link.resolvedObjType &&
-      link.resolvedObjToken &&
-      isCommentFileType(link.resolvedObjType) &&
-      params.currentDocument?.fileType === link.resolvedObjType &&
-      params.currentDocument.fileToken === link.resolvedObjToken
-    ) {
-      link.isCurrentDocument = true;
-    } else if (
-      link.resolvedObjType &&
-      link.resolvedObjToken &&
-      isCommentFileType(link.resolvedObjType)
-    ) {
-      link.isCurrentDocument = false;
+    if (link.resolvedObjType && link.resolvedObjToken && isCommentFileType(link.resolvedObjType)) {
+      link.isCurrentDocument =
+        params.currentDocument?.fileType === link.resolvedObjType &&
+        params.currentDocument.fileToken === link.resolvedObjToken;
     }
   } catch {
     return link;
@@ -373,19 +340,6 @@ export function parseCommentContentElements(params: {
     }
     const element = rawElement;
     const type = normalizeString(element.type);
-    const text =
-      (type === "text_run" ? readElementTextPreservingWhitespace(element) : undefined) ||
-      (type === "text" ? readElementTextPreservingWhitespace(element) : undefined) ||
-      (type === "docs_link" || type === "link" ? readDocsLinkUrl(element) : undefined) ||
-      (type === "mention" || type === "mention_user" || type === "person"
-        ? (() => {
-            const userId = readMentionUserId(element);
-            return userId ? readMentionDisplayText(element, userId) : undefined;
-          })()
-        : undefined) ||
-      readElementTextPreservingWhitespace(element) ||
-      undefined;
-
     if (type === "mention" || type === "mention_user" || type === "person") {
       const userId = readMentionUserId(element);
       if (userId) {
@@ -428,6 +382,7 @@ export function parseCommentContentElements(params: {
       }
     }
 
+    const text = readElementTextPreservingWhitespace(element);
     if (text) {
       plainTextParts.push(text);
       semanticTextParts.push(text);

@@ -2,12 +2,20 @@
 
 // Reports plugin SDK export surface metadata.
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type tsTypes from "typescript";
+import * as ts from "typescript/unstable/ast";
+import {
+  SignatureKind,
+  SymbolFlags,
+  type Checker,
+  type Project,
+  type Symbol,
+} from "typescript/unstable/sync";
 import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
+import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
+import { createNativeTypeScriptProject } from "./lib/native-typescript.mts";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -19,8 +27,6 @@ import {
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
-const require = createRequire(import.meta.url);
-let ts: typeof tsTypes;
 
 type ExportEntryStats = {
   callableExports: number;
@@ -207,7 +213,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved host-owned workspace access runtime entrypoint.
       // +1: passive docked link-reader contracts.
       // +1: typed decision provider contract.
-      157,
+      // +1: shared Code Mode executor contract for the bundled QuickJS owner.
+      158,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -396,7 +403,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved host workspace Skill resource reader.
       // +1: approved terminal-reply classifier for A2A task completion.
       // +1: approved native workspace worker argv resolver for node adapters.
-      4530,
+      // +35: shared Code Mode executor/guest protocol and source/output implementation helpers.
+      // +3: approved shared preview lifecycle factory and delivery/lifecycle types.
+      // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
+      // +1: supported read-only admitted operator scopes for tool presentation.
+      4570,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -552,7 +563,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved host workspace Skill resource reader.
       // +1: approved terminal-reply classifier for A2A task completion.
       // +1: approved native workspace worker argv resolver for node adapters.
-      2673,
+      // +6: shared Code Mode source preparation, output capture, and source-location helpers.
+      // +1: approved shared preview lifecycle factory.
+      // +1: approved canonical resolveConfigPath callable for pre-config native browser admission.
+      // +1: supported read-only readGatewayToolOperatorScopes callable.
+      2682,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -581,7 +596,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: infra-runtime excludes the internal system-event receipt API.
       // -1: infra-runtime re-exports number coercion directly from its canonical owner.
       // -1: channel-message pins its published compatibility exports explicitly.
-      49,
+      // -1: infra-runtime pins its existing diagnostics type-query surface.
+      48,
       env,
     ),
   };
@@ -605,23 +621,20 @@ function readPackageExportedSubpaths() {
     .toSorted();
 }
 
-function unwrapAlias(checker: tsTypes.TypeChecker, symbol: tsTypes.Symbol) {
-  return symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+function unwrapAlias(checker: Checker, symbol: Symbol) {
+  return symbol.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
 }
 
-function hasDeprecatedTag(symbol: tsTypes.Symbol) {
-  return symbol.getJsDocTags().some((tag) => tag.name === "deprecated");
+function hasDeprecatedTag(checker: Checker, symbol: Symbol) {
+  return checker.getJsDocTagsOfSymbol(symbol).some((tag) => tag.name === "deprecated");
 }
 
-function isCallableExport(
-  checker: tsTypes.TypeChecker,
-  symbol: tsTypes.Symbol,
-  sourceFile: tsTypes.SourceFile,
-) {
+function isCallableExport(checker: Checker, symbol: Symbol, sourceFile: ts.SourceFile) {
   const target = unwrapAlias(checker, symbol);
-  const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;
+  const declaration =
+    target.valueDeclaration?.resolve() ?? target.declarations[0]?.resolve() ?? sourceFile;
   const type = checker.getTypeOfSymbolAtLocation(target, declaration);
-  return checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0;
+  return checker.getSignaturesOfType(type, SignatureKind.Call).length > 0;
 }
 
 function countWildcardReexports(entrypoints: string[]) {
@@ -641,36 +654,8 @@ function countWildcardReexports(entrypoints: string[]) {
   return { count, matches };
 }
 
-// All three inventories overlap. Lazily reuse one module graph so --help and
-// invalid options avoid compiler work without tripling report time and heap.
-let exportStatsProgram: tsTypes.Program | undefined;
-
-function collectExportStats(entrypoints: string[]) {
-  // CLI validation and help do not need the compiler's startup cost.
-  const typescript = (ts ??= require("typescript"));
-  const configPath = path.join(repoRoot, "tsconfig.json");
-  const config = typescript.readConfigFile(configPath, (filePath) =>
-    typescript.sys.readFile(filePath),
-  );
-  if (config.error) {
-    throw new Error(typescript.flattenDiagnosticMessageText(config.error.messageText, "\n"));
-  }
-  exportStatsProgram ??= typescript.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
-    allowJs: false,
-    baseUrl: repoRoot,
-    declaration: true,
-    emitDeclarationOnly: true,
-    module: typescript.ModuleKind.ESNext,
-    moduleResolution: typescript.ModuleResolutionKind.Bundler,
-    noEmit: true,
-    paths: config.config.compilerOptions?.paths,
-    skipLibCheck: true,
-    strict: false,
-    target: typescript.ScriptTarget.ES2022,
-    types: [],
-  });
-  const program = exportStatsProgram;
-  const checker = program.getTypeChecker();
+function collectExportStats(project: Project, entrypoints: string[]) {
+  const { program, checker } = project;
   const byEntrypoint = new Map<string, ExportEntryStats>();
   const uniqueNames = new Set<string>();
   const uniqueCallableNames = new Set<string>();
@@ -693,13 +678,13 @@ function collectExportStats(entrypoints: string[]) {
     let deprecatedCallableExports = 0;
     const deprecatedEntrypoint = deprecatedPublicEntrypointSet.has(entrypoint);
     for (const symbol of symbols) {
-      const exportName = `${entrypoint}:${symbol.getName()}`;
+      const exportName = `${entrypoint}:${symbol.name}`;
       uniqueNames.add(exportName);
       const callable = isCallableExport(checker, symbol, sourceFile);
       const deprecated =
         deprecatedEntrypoint ||
-        hasDeprecatedTag(symbol) ||
-        hasDeprecatedTag(unwrapAlias(checker, symbol));
+        hasDeprecatedTag(checker, symbol) ||
+        hasDeprecatedTag(checker, unwrapAlias(checker, symbol));
       if (callable) {
         callableExports += 1;
         uniqueCallableNames.add(exportName);
@@ -806,53 +791,86 @@ export function collectPluginSdkSurfaceReport() {
       ...privateLocalOnlyPluginSdkEntrypoints,
     ]),
   ];
-  const scannedStats = collectExportStats(scannedEntrypoints);
-  const allStats = selectExportStats(scannedStats, pluginSdkEntrypoints);
-  const publicStats = selectExportStats(scannedStats, publicPluginSdkEntrypoints);
-  const localOnlyStats = selectExportStats(scannedStats, privateLocalOnlyPluginSdkEntrypoints);
-  const publicWildcards = countWildcardReexports(publicPluginSdkEntrypoints);
-  const leakedForbiddenExports = readPackageExportedSubpaths().filter((subpath) =>
-    forbiddenPublicSubpaths.has(subpath),
-  );
-  const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter(
-    (entrypoint) =>
-      publicEntrypointSet.has(entrypoint) && !packagedPrivateRuntimeEntrypointSet.has(entrypoint),
-  );
-  const localOnlyMissingFromInventory = [...localOnlyEntrypointSet].filter(
-    (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
-  );
-  const deprecatedMissingFromPublic = [...deprecatedPublicEntrypointSet].filter(
-    (entrypoint) => !publicEntrypointSet.has(entrypoint),
-  );
-  const deprecatedBarrelMissingFromInventory = [...deprecatedBarrelEntrypointSet].filter(
-    (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
-  );
-  const deprecatedBarrelWithoutReexports = [...deprecatedBarrelEntrypointSet].filter(
-    (entrypoint) => {
-      const source = exportStatsProgram?.getSourceFile(entrypointPath(entrypoint));
-      // Frozen facades retain named reexports without inheriting new APIs through a wildcard.
-      return !source?.statements.some(
-        (statement) =>
-          ts.isExportDeclaration(statement) &&
-          statement.moduleSpecifier !== undefined &&
-          (!statement.exportClause ||
-            ts.isNamespaceExport(statement.exportClause) ||
-            statement.exportClause.elements.length > 0),
-      );
+  // All inventories share one native graph; its handles never escape this report.
+  const configFileName = path.join(repoRoot, "tsconfig.plugin-sdk-surface-report.json");
+  const session = createNativeTypeScriptProject({
+    cwd: repoRoot,
+    configFileName,
+    files: {
+      [configFileName]: JSON.stringify({
+        extends: "./tsconfig.json",
+        compilerOptions: {
+          allowJs: false,
+          declaration: true,
+          emitDeclarationOnly: true,
+          module: "ESNext",
+          moduleResolution: "Bundler",
+          noEmit: true,
+          skipLibCheck: true,
+          strict: false,
+          target: "ES2022",
+          types: [],
+        },
+        files: scannedEntrypoints.map(entrypointPath),
+        include: [],
+      }),
     },
-  );
-  return {
-    allStats,
-    deprecatedBarrelMissingFromInventory,
-    deprecatedBarrelWithoutReexports,
-    deprecatedMissingFromPublic,
-    leakedForbiddenExports,
-    localOnlyMissingFromInventory,
-    localOnlyStats,
-    localOnlyStillPublic,
-    publicStats,
-    publicWildcards,
-  };
+  });
+  try {
+    const diagnostics = session.project.program.getConfigFileParsingDiagnostics();
+    if (diagnostics.length) {
+      throw new Error(formatNativeTypeScriptDiagnostics(diagnostics));
+    }
+    const scannedStats = collectExportStats(session.project, scannedEntrypoints);
+    const allStats = selectExportStats(scannedStats, pluginSdkEntrypoints);
+    const publicStats = selectExportStats(scannedStats, publicPluginSdkEntrypoints);
+    const localOnlyStats = selectExportStats(scannedStats, privateLocalOnlyPluginSdkEntrypoints);
+    const publicWildcards = countWildcardReexports(publicPluginSdkEntrypoints);
+    const leakedForbiddenExports = readPackageExportedSubpaths().filter((subpath) =>
+      forbiddenPublicSubpaths.has(subpath),
+    );
+    const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter(
+      (entrypoint) =>
+        publicEntrypointSet.has(entrypoint) && !packagedPrivateRuntimeEntrypointSet.has(entrypoint),
+    );
+    const localOnlyMissingFromInventory = [...localOnlyEntrypointSet].filter(
+      (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
+    );
+    const deprecatedMissingFromPublic = [...deprecatedPublicEntrypointSet].filter(
+      (entrypoint) => !publicEntrypointSet.has(entrypoint),
+    );
+    const deprecatedBarrelMissingFromInventory = [...deprecatedBarrelEntrypointSet].filter(
+      (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
+    );
+    const deprecatedBarrelWithoutReexports = [...deprecatedBarrelEntrypointSet].filter(
+      (entrypoint) => {
+        const source = session.project.program.getSourceFile(entrypointPath(entrypoint));
+        // Frozen facades retain named reexports without inheriting new APIs through a wildcard.
+        return !source?.statements.some(
+          (statement) =>
+            ts.isExportDeclaration(statement) &&
+            statement.moduleSpecifier !== undefined &&
+            (!statement.exportClause ||
+              ts.isNamespaceExport(statement.exportClause) ||
+              statement.exportClause.elements.length > 0),
+        );
+      },
+    );
+    return {
+      allStats,
+      deprecatedBarrelMissingFromInventory,
+      deprecatedBarrelWithoutReexports,
+      deprecatedMissingFromPublic,
+      leakedForbiddenExports,
+      localOnlyMissingFromInventory,
+      localOnlyStats,
+      localOnlyStillPublic,
+      publicStats,
+      publicWildcards,
+    };
+  } finally {
+    session.close();
+  }
 }
 
 export function evaluatePluginSdkSurfaceReport(

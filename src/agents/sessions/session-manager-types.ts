@@ -1,6 +1,6 @@
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
-import type { AgentMessage } from "../runtime/index.js";
 
 export interface SessionHeader {
   type: "session";

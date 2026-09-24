@@ -12,6 +12,115 @@ Reach the Gateway and paired nodes from plugin code, and the events a long-lived
 
 ## Gateway and node namespaces
 
+### Session resource methods
+
+A plugin can declare `sessionAccess` when registering an additive Gateway method:
+
+```typescript
+api.registerGatewayMethod("my-plugin.session.open", handleOpen, {
+  scope: "operator.write",
+  sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "my_tool" },
+});
+```
+
+This requires a current authenticated profile, an existing canonical top-level
+`sessionKey`, and, when supplied, its matching `agentId`. Broad writers retain
+the session's sharing rules. `allowOwnSessionScope` additionally admits
+`operator.sessions.write` only for the caller's own session. `requiredTool`
+checks the canonical effective session tool policy and an admitted agent run's
+tool limits. Agent callers are bound to their own conversation. Currently,
+resource tool-policy admission does not support locked model selection.
+
+The handler receives `sessionAccessAuthority`. Call `assertCurrent()` before
+and after awaited preparation and immediately before effects. The router closes
+this invocation handle when the handler finishes; it cannot be reused to adopt
+new resources afterward.
+
+Use `retain()` during the handler to obtain an original-person access borrow
+with `signal`, `assertCurrent()` and `release()`, for example for an interactive
+viewer. Use `retainSession()` for a resource shared by independently authorized
+collaborators. That second borrow checks only the exact session incarnation and
+store generation; it does not authorize operations. Each operation still needs
+its own person/run admission. Normal row progress preserves both lifetimes;
+reset, deletion or physical-store replacement invalidates the session borrow.
+Release every borrow on failed startup, replacement and service cleanup.
+
+`sandboxRequired` describes the admitted session/role constraint. A consumer
+must provide a compliant backend or report that its backend is unsupported.
+This metadata does not turn a Gateway-hosted process into a sandbox.
+
+For tool presentation, `readGatewayToolOperatorScopes()` from
+`openclaw/plugin-sdk/agent-harness-runtime` returns a copy of the current admitted
+operator's scopes after checking that authority. It returns `undefined` for
+system/local calls without an operator capture. It does not grant permissions;
+the selected Gateway method still authorizes the request.
+
+### Person access lifetimes
+
+`api.registerGatewayAccessPolicy({ authorize })` adds a plugin-owned access
+requirement to authenticated person admission. The callback receives the current
+configuration and the canonical profile's ID, email aliases, and assigned role.
+The Gateway resolves `requiredByRole` from the person's effective role and this
+plugin's ID; role-bound policies use that fact instead of inferring a binding
+from the default role's name.
+Return `undefined` when the policy does not govern that person. Otherwise return
+`{ assertCurrent, signal }`; reject admission when the required access is absent.
+
+A named Gateway role can set `accessPolicyPlugin` to your plugin ID. That role
+requires a current authority from your registered policy, including when the
+plugin cannot load or its manifest is unavailable. Returning `undefined` does
+not satisfy an explicit role binding. Roles without the binding retain their
+existing policy behavior, and the Gateway owner remains independent.
+
+The assertion must check the original access source immediately before an action.
+Abort its signal when that source expires or is revoked, including plugin service
+shutdown. An ended source must stay ended if a later grant is created. A renewal
+may extend an uninterrupted source. Keep the source in its existing lifecycle
+owner and initialize it before accepting person access.
+
+Return a native `AbortSignal`. Registration preserves native cancellation and
+cleanup while keeping the assertion and callable abort-reason values bound to
+the plugin instance. Plugin retirement also ends captured access.
+
+The Gateway binds the returned authority to the original person and carries it
+through WebSocket and HTTP requests, and through commands admitted for a linked
+channel sender. Linked administrators must satisfy the same role-bound person
+policy, including after awaited command preparation. Revoking an admitted grant
+ends that command's authority; a replacement grant applies only to new admission.
+Explicitly configured command owners retain their independent authority.
+Ordinary transport disconnect is distinct
+from revocation. A policy must preserve independent staff access; it must not
+infer the requesting person's authority from a session's creator, display name,
+or sandbox state. Shared-secret system authority remains outside person policies.
+
+### Durable person access grants
+
+A policy that supports deferred shared publication returns a stable UUID as
+`grantId` on its access authority and implements
+`resume({ config, profile, requiredByRole, grantId })`. The Gateway records the plugin ID and this
+original grant reference with the accepted requester and scope ceiling; it does
+not persist the authority callback, signal, credentials, or email aliases.
+
+The Gateway also retains opaque lifetime IDs for the person's original email
+bindings. Moving an original alias to another profile ends that publication
+authority, even if the alias is later restored. Display edits and changes to
+aliases added after admission preserve the original binding. The plugin's grant
+UUID remains independently checked; these identity facts cannot replace it.
+
+`resume` must check that exact original grant, even when the person's current role
+would otherwise be exempt. Return its current authority while it remains active,
+and `undefined` only when the grant is definitively ended, absent, or replaced.
+Throw while the service is starting or its state is unavailable, so recovery
+retains the pending request instead of treating an unreadable grant as revoked.
+A renewal can retain the UUID only if it commits before the old grant expires;
+reinvitation after expiry or revocation must use a new UUID.
+
+Policies without durable grant support still govern live admission. Their
+unclassified authority cannot be converted into a restartable shared publication
+request. Shared publication currently supports one original governing grant;
+multiple dependencies cannot be inferred from that single reference. A newly
+applicable policy also requires fresh publication admission.
+
 <AccordionGroup>
   <Accordion title="api.runtime.gateway">
     Call another Gateway method in process while preserving the current plugin's trusted runtime
@@ -217,6 +326,14 @@ before dispatch and each frame. Closing the service cancels open channels.
 Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operations
 already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
+
+Current service handles also expose `enqueueRun(id, mode)` for service-owned
+work. It uses the normal cron admission queue with the service's live authority,
+independently of a completed agent tool caller. Use `"if-enabled"` to request an
+immediate run without overriding a disabled job. Retained handles still reject
+when the service stops or the scheduler is replaced, including while waiting for
+admission. This optional method is absent on older hosts; it has no caller-scoped
+fallback.
 
 Current Gateway service handles also provide `await cron.isEnabled()` to observe
 whether automatic scheduling is enabled, including the `OPENCLAW_SKIP_CRON`

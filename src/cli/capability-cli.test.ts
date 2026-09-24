@@ -3396,7 +3396,7 @@ describe("capability cli", () => {
       ] as const)("rejects %s before provider dispatch", async (_name, argv) => {
         await expect(runCap(command, ...argv, "--timeout-ms", raw)).rejects.toThrow("exit 1");
 
-        expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
+        expectRuntimeErrorContains("Invalid --timeout-ms. Use a positive millisecond value");
         expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
         expect(mocks.generateImage).not.toHaveBeenCalled();
         expect(mocks.generateVideo).not.toHaveBeenCalled();

@@ -949,6 +949,61 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.waitForValue("All", of: menu)
     }
 
+    /// Real app onboarding, history decoder, artifact RPC, HTTP loader, and system share sheet.
+    /// Only the loopback Gateway is synthetic; no production UI state is injected.
+    func testManagedDocumentDownloadAndSystemShare() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["OPENCLAW_IOS_ATTACHMENT_FIXTURE_URL"] != nil,
+            "Run through scripts/test-ios-chat-attachments.sh with the owned loopback fixture")
+        let fixtureURL = try XCTUnwrap(ProcessInfo.processInfo.environment["OPENCLAW_IOS_ATTACHMENT_FIXTURE_URL"])
+        let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        // A fixture/history failure must never produce the expected baseline regression marker.
+        guard app.staticTexts["Your report is ready."].waitForExistence(timeout: 15) else {
+            XCTFail("Managed document fixture history did not load")
+            return
+        }
+        let download = app.buttons["chat-file-download"]
+        let available = download.waitForExistence(timeout: 5)
+        let stage = ProcessInfo.processInfo.environment["OPENCLAW_IOS_ATTACHMENT_BASELINE"] == "1"
+            ? "before" : "after"
+        self.attachScreenshot(named: "document-\(stage)")
+        XCTAssertTrue(available, "MANAGED_DOCUMENT_DOWNLOAD_MISSING")
+        XCTAssertTrue(download.isEnabled)
+        download.tap()
+        let saveToFiles = app.descendants(matching: .any)["Save to Files"].firstMatch
+        XCTAssertTrue(saveToFiles.waitForExistence(timeout: 10), "Downloaded file must reach the system exporter")
+        self.attachScreenshot(named: "document-system-share")
+
+        let statusURL = try XCTUnwrap(URL(string: fixtureURL))
+        let (statusData, _) = try await URLSession.shared.data(from: statusURL)
+        let status = try XCTUnwrap(JSONSerialization.jsonObject(with: statusData) as? [String: Any])
+        XCTAssertEqual(status["documentDownloads"] as? Int, 1)
+        let requests = try XCTUnwrap(status["requests"] as? [[String: Any]])
+        let artifacts = requests.filter { $0["method"] as? String == "artifacts.download" }
+        XCTAssertEqual(artifacts.count, 1)
+        XCTAssertEqual(
+            artifacts.first?["artifactId"] as? String,
+            "artifact_managed_media_11111111-1111-4111-8111-111111111111")
+        XCTAssertTrue(["main", "agent:main:main"].contains(artifacts.first?["sessionKey"] as? String ?? ""))
+
+        // Relaunch exercises persisted history plus fresh scoped retrieval, not a retained ticket.
+        let reloaded = self.relaunchConnectedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        let reloadedDownload = reloaded.buttons["chat-file-download"]
+        XCTAssertTrue(reloadedDownload.waitForExistence(timeout: 15))
+        let deniedURL = try XCTUnwrap(URL(string: fixtureURL + "/attachment-denied"))
+        _ = try await URLSession.shared.data(from: deniedURL)
+        reloadedDownload.tap()
+        XCTAssertTrue(reloaded.alerts["Unable to Download File"].waitForExistence(timeout: 10))
+        self.attachScreenshot(named: "document-expired")
+        let (reloadedStatusData, _) = try await URLSession.shared.data(from: statusURL)
+        let reloadedStatus = try XCTUnwrap(JSONSerialization.jsonObject(with: reloadedStatusData) as? [String: Any])
+        let reloadedRequests = try XCTUnwrap(reloadedStatus["requests"] as? [[String: Any]])
+        let refreshedArtifacts = reloadedRequests.filter { $0["method"] as? String == "artifacts.download" }
+        XCTAssertEqual(refreshedArtifacts.count, 2, "Relaunch must obtain fresh artifact access, not reuse a ticket")
+        XCTAssertEqual(refreshedArtifacts.last?["artifactId"] as? String, artifacts.first?["artifactId"] as? String)
+        XCTAssertEqual(refreshedArtifacts.last?["sessionKey"] as? String, artifacts.first?["sessionKey"] as? String)
+    }
+
     func testLiveGatewayFreshInstallSetupAndRelaunch() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone setup proof only")
         let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")

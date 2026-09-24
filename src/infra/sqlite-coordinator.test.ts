@@ -4,15 +4,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   ensurePrivateSqliteCoordinatorDirectory,
   tryAcquireExclusiveSqliteCoordinator,
 } from "./sqlite-coordinator.js";
 import { captureCoordinatorDatabase } from "./sqlite-coordinator.test-support.js";
+import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const loader = new URL("../../scripts/tsx.mjs", import.meta.url).href;
-const moduleUrl = new URL("./sqlite-coordinator.ts", import.meta.url).href;
+const moduleUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.sqliteCoordinator);
 
 function observeDirectory(directory: string) {
   // Stat only: opening and closing the coordinator in this process could drop
@@ -34,13 +35,19 @@ function observeDirectory(directory: string) {
 function runPeer(script: string, pathname: string) {
   return execFileSync(
     process.execPath,
-    ["--import", loader, "--input-type=module", "-e", script, pathname],
+    [
+      ...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1),
+      "--input-type=module",
+      "-e",
+      script,
+      pathname,
+    ],
     { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] },
   ).trim();
 }
 
 const acquirePeer = `
-  import { tryAcquireExclusiveSqliteCoordinator } from ${JSON.stringify(moduleUrl)};
+  import { tryAcquireExclusiveSqliteCoordinator } from ${JSON.stringify(moduleUrl.href)};
   const coordinator = tryAcquireExclusiveSqliteCoordinator(process.argv[1]);
   process.stdout.write(coordinator ? "held" : "blocked");
   coordinator?.release();
@@ -134,7 +141,7 @@ describe("data-free SQLite coordinator", () => {
     const before = observeDirectory(directory);
     expect(
       runPeer(
-        `import { tryAcquireExclusiveSqliteCoordinator } from ${JSON.stringify(moduleUrl)};
+        `import { tryAcquireExclusiveSqliteCoordinator } from ${JSON.stringify(moduleUrl.href)};
         if (!tryAcquireExclusiveSqliteCoordinator(process.argv[1])) process.exit(1);
         process.stdout.write("held");
         process.exit(0);`,

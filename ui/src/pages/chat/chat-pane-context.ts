@@ -31,6 +31,7 @@ import { syncSelectedSessionMessageSubscription } from "./chat-history-subscript
 import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
+import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
 import {
   applySelectedSessionProjection,
   dismissChatError,
@@ -64,6 +65,7 @@ import { maybeResetToolStream } from "./stream-reconciliation.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
+  private sessionPresentationKey: string | undefined;
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
   private outboxRecoveryReady = false;
   private sidebarLayoutSource?: { client: ApplicationGatewaySnapshot["client"]; ready: boolean };
@@ -98,6 +100,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   }
 
   override disconnectedCallback() {
+    this.sessionPresentationKey = undefined;
     this.continueInTerminalDialog = null;
     this.gatewayConnectionLifecycle?.dispose();
     this.gatewayConnectionLifecycle = undefined;
@@ -196,8 +199,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.sessionsResult = stateValue.result;
       state.sessionsResultAgentId = stateValue.agentId;
     }
+    this.projectObservedSessionRow();
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
+    if (state.connected && state.pendingAbort) {
+      void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+    }
     this.refreshSwarmRoster();
     const selectedSession = selectedChatSessionRow(state);
     const outboxState = selectedSession
@@ -253,9 +260,15 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       void resumeStoredChatOutboxes(state);
       return;
     }
-    if (this.presented) {
-      // Share the event handler's frame; synchronous roster publication must
-      // not force a transcript redraw for every incoming session update.
+    const presentation = chatSessionPresentationKey(
+      state,
+      stateValue,
+      selectedSession,
+      this.context.overlays?.snapshot?.approvalQueue,
+    );
+    const presentationChanged = presentation !== this.sessionPresentationKey;
+    this.sessionPresentationKey = presentation;
+    if (this.presented && presentationChanged) {
       requestChatPageUpdate(state, "animation-frame");
     }
     // First canonical idle and changed run/branch identity can release a queue.
@@ -451,6 +464,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.selfUser = snapshot.selfUser ?? null;
     state.assistantAgentId = assistantAgentId;
     this.reconcileTaskSuggestionConnection(sourceChanged);
+    this.synchronizeSessionObservation();
     if (wasConnected && !state.connected) {
       // Only the connected->disconnected transition may reshape loading state;
       // repeated disconnected snapshots must stay no-ops for pane ownership.

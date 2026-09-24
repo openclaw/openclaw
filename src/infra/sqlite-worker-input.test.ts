@@ -11,7 +11,11 @@ import {
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
-import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
+import {
+  openSqliteWorkerStore,
+  reserveSqliteWorkerInputPreparation,
+  type SqliteWorkerStore,
+} from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 import {
   SQLITE_WORKER_TRANSFER_FRAME_BYTES,
@@ -158,6 +162,9 @@ describe("SQLite worker staged input", () => {
 
   it("charges a queued 40 MiB command in full and frees its credits on cancellation", async () => {
     const store = await open(databasePath());
+    const concurrentInputs = Array.from({ length: 3 }, () =>
+      reserveSqliteWorkerInputPreparation(64 * 1024 * 1024),
+    );
     const hold = holdReply(() => true);
     const ahead = append(store, "ahead");
     const cancelQueued = new AbortController();
@@ -178,6 +185,9 @@ describe("SQLite worker staged input", () => {
       expect(await ahead).toMatchObject({ writes: 1 });
       await expectRows(store, ["ahead"]);
     } finally {
+      for (const prepared of concurrentInputs) {
+        prepared.release();
+      }
       cancelQueued.abort();
       replacementCancel.abort();
       hold.release();
@@ -187,6 +197,9 @@ describe("SQLite worker staged input", () => {
 
   it("reserves 32 MiB for active oversized input while preserving cancellation and queue credit", async () => {
     const store = await open(databasePath());
+    const concurrentInputs = Array.from({ length: 3 }, () =>
+      reserveSqliteWorkerInputPreparation(64 * 1024 * 1024),
+    );
     const hold = holdFirstStagedChunk();
     const activeCancel = new AbortController();
     const queuedCancel = new AbortController();
@@ -212,6 +225,9 @@ describe("SQLite worker staged input", () => {
       expect(await active).toMatchObject({ writes: 1 });
       await expectRows(store, [value]);
     } finally {
+      for (const prepared of concurrentInputs) {
+        prepared.release();
+      }
       queuedCancel.abort();
       replacementCancel.abort();
       hold.release();
@@ -249,7 +265,7 @@ describe("SQLite worker staged input", () => {
         { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
       ]);
       stores.delete(store);
-      await expect(store.close()).rejects.toMatchObject({ code: "unavailable" });
+      await expect(store.close()).resolves.toBeUndefined();
       const recovered = await open(file);
       await expectRows(recovered, []);
       expect(await append(recovered, value)).toMatchObject({ writes: 1 });

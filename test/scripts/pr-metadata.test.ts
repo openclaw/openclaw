@@ -16,6 +16,18 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const head = "a".repeat(40);
 const base = "c".repeat(40);
 
+function graphqlResponse(repository: unknown) {
+  return { data: { repository } };
+}
+
+function connectionPage(nodes: unknown[], hasNextPage: boolean) {
+  return {
+    nodes,
+    totalCount: 2,
+    pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
+  };
+}
+
 type Fixture = {
   changedFiles?: number | null;
   files?: unknown;
@@ -48,7 +60,11 @@ type Fixture = {
   graphqlQuota?: boolean;
 };
 
-function readPrMetadata(fixture: Fixture = {}, command = "pr_meta_json 42") {
+function readPrMetadata(
+  fixture: Fixture = {},
+  command = "pr_meta_json 42",
+  parentEnv: NodeJS.ProcessEnv = process.env,
+) {
   const dir = tempDirs.make("openclaw-pr-metadata-");
   const gh = join(dir, "gh");
   const trace = join(dir, "trace");
@@ -84,6 +100,7 @@ require("node:module").syncBuiltinESMExports();
   writeFileSync(trace, "");
   writeFileSync(join(dir, "count"), "0");
   writeFileSync(join(dir, "graphql-count"), "0");
+  writeFileSync(join(dir, "graphql-inputs"), "");
   writeFileSync(join(dir, "sleeps"), "");
   writeFileSync(join(dir, "notify"), "");
   writeFileSync(
@@ -116,7 +133,7 @@ if (args[0] === "pr" && args[1] === "view") {
   throw new Error("Top-level pr view can spend REST quota again; use the GraphQL endpoint");
 }
 if (args[0] === "api" && args.includes("graphql")) {
-  if (args.includes("--input")) JSON.parse(fs.readFileSync(0,"utf8"));
+  if (args.includes("--input")) fs.appendFileSync(path.join(root,"graphql-inputs"),JSON.stringify(JSON.parse(fs.readFileSync(0,"utf8")))+"\\n");
   if (fixture.graphqlQuota) {
     console.error("gh: API rate limit exceeded");
     process.exit(1);
@@ -168,7 +185,7 @@ const endpoint = args.find((arg) => arg.startsWith("repos/") || ["user", "rate_l
 if (args[0] !== "api" || !endpoint) throw new Error("Only explicit REST endpoints are supported");
 const hostFlag = args.indexOf("--hostname");
 const apiHost = hostFlag >= 0 ? args[hostFlag + 1] : defaultHost;
-const repoURL = "https://" + apiHost + "/base-owner/base-repo";
+const repoURL = "https://" + apiHost.toLowerCase() + "/base-owner/base-repo";
 if (fixture.notify) fs.writeSync(3, endpoint + "\\n");
 if (endpoint.startsWith("repos/base-owner/base-repo/commits?")) {
   const count = Number(fs.readFileSync(path.join(root, "count"), "utf8"));
@@ -204,15 +221,19 @@ if (fixture.failure && fail && (fixture.failureCount === undefined || count <= f
   if (fixture.failure === "null") out(null);
   process.exit(0);
 }
-if (endpoint === "repos/base-owner/base-repo") {
+if (endpoint === "user") {
+  process.stdout.write('HTTP/2.0 200 OK\\n\\n');
+  out({login:"contributor"});
+} else if (endpoint === "repos/base-owner/base-repo") {
   out({id:1,full_name:"base-owner/base-repo",html_url:repoURL,node_id:"R_base"});
 } else if (isPull) {
   const record = {number:42,html_url:repoURL+"/pull/42",state:"open",draft:false,
-    base:{sha:"${base}",ref:"main",repo:{id:1}},
+    base:{sha:"${base}",ref:"main",repo:{id:1,node_id:"R_base",full_name:"base-owner/base-repo",html_url:repoURL}},
     head:{sha:"${head}",ref:"topic",repo:{id:2,name:"fork-repo",full_name:"fork-owner/fork-repo",html_url:"https://"+apiHost+"/fork-owner/fork-repo",owner:{login:"fork-owner"}}},
     user:{login:"contributor"},changed_files:fixture.changedFiles === undefined ? 101 : fixture.changedFiles};
   const stale = fixture.cacheUntilRevalidated && !args.includes("Cache-Control: max-age=0");
-  out({...record,...(count === 1 || stale ? fixture.initialPatch : fixture.finalPatch)});
+  const patch = (count === 1 || stale ? fixture.initialPatch : fixture.finalPatch) || {};
+  out({...record,...patch,...(patch.base ? {base:{...record.base,...patch.base}} : {})});
 } else if (endpoint.includes("/files?")) {
   if (!args.includes("--paginate") || !args.includes("--slurp")) throw new Error("Files must be paginated");
   const count = fixture.changedFiles === undefined ? 101 : fixture.changedFiles || 0;
@@ -244,8 +265,13 @@ if (endpoint === "repos/base-owner/base-repo") {
     {
       cwd: process.cwd(),
       env: {
-        ...process.env,
+        ...parentEnv,
+        // This unsupervised child owns neither the parent's snapshot nor its FD3.
+        OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: undefined,
+        OPENCLAW_PR_LOCK_NOTIFY_FD: undefined,
         FAKE_GH_FIXTURE: JSON.stringify(fixture),
+        PR_GH_WRITER_LOGIN: "untrusted-inherited-login",
+        PR_GH_WRITER_CONTEXT: "untrusted-inherited-context",
         FAKE_GH_NOTIFY: join(dir, "notify"),
         GH_REPO: fixture.ghRepo ?? "base-owner/base-repo",
         GH_HOST: fixture.ghHost,
@@ -273,6 +299,11 @@ if (endpoint === "repos/base-owner/base-repo") {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as string[]),
+    graphqlInputs: readFileSync(join(dir, "graphql-inputs"), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { query: string; variables: Record<string, unknown> }),
     delays: readFileSync(join(dir, "sleeps"), "utf8")
       .trim()
       .split("\n")
@@ -282,6 +313,20 @@ if (endpoint === "repos/base-owner/base-repo") {
 }
 
 describe("PR metadata through REST", () => {
+  it("reads real metadata with an unrelated inherited snapshot and closed notify FD", () => {
+    const result = readPrMetadata({}, "pr_meta_json 42", {
+      ...process.env,
+      OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-metadata-snapshot-"),
+      OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, headRefOid: head });
+    expect(
+      result.calls.filter((args) => args.includes("repos/base-owner/base-repo/pulls/42")),
+    ).toHaveLength(2);
+    expect(result.notifications).toBe("");
+  });
+
   describe("core quota fallback", () => {
     const repository = {
       id: "R_base",
@@ -289,6 +334,104 @@ describe("PR metadata through REST", () => {
       nameWithOwner: "base-owner/base-repo",
       url: "https://github.com/base-owner/base-repo",
     };
+
+    it.each(["observation", "repository only"])(
+      "carries authoritative repository identity with one GraphQL PR read (%s)",
+      (selection) => {
+        const pullRequest = {
+          id: "PR_42",
+          number: 42,
+          url: `${repository.url}/pull/42`,
+          title: "Fixture",
+          state: "OPEN",
+          isDraft: false,
+          author: { login: "contributor", __typename: "User" },
+          baseRefName: "main",
+          baseRefOid: base,
+          headRefName: "topic",
+          headRefOid: head,
+          headRepository: {
+            name: "fork-repo",
+            nameWithOwner: "fork-owner/fork-repo",
+            url: "https://github.com/fork-owner/fork-repo",
+          },
+          headRepositoryOwner: { login: "fork-owner", __typename: "User" },
+          isCrossRepository: true,
+        };
+        const result = readPrMetadata(
+          {
+            ghRepo: "https://GITHUB.COM/Base-Owner/Base-Repo",
+            coreQuotaAt: ["repos/Base-Owner/Base-Repo/pulls/42"],
+            graphqlResponses: [{ data: { repository: { ...repository, pullRequest } } }],
+          },
+          selection === "observation"
+            ? 'pr_observe 42; printf "%s\\n" "$PR_OBSERVATION"'
+            : "pr_gh pr view 42 --json baseRepository",
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({ baseRepository: repository });
+        if (selection === "observation") {
+          expect(JSON.parse(result.stdout)).toMatchObject({
+            number: 42,
+            headRefOid: head,
+            headRefName: "topic",
+            headRepository: pullRequest.headRepository,
+          });
+        }
+        expect(result.calls).toEqual([
+          [
+            "api",
+            "--hostname",
+            "GITHUB.COM",
+            "repos/Base-Owner/Base-Repo/pulls/42",
+            "-H",
+            "Cache-Control: max-age=0",
+          ],
+          [
+            "api",
+            "--hostname",
+            "GITHUB.COM",
+            "graphql",
+            "--input",
+            "-",
+            "-H",
+            "Cache-Control: max-age=0",
+          ],
+        ]);
+        expect(result.graphqlInputs).toHaveLength(1);
+        expect(result.graphqlInputs[0]?.query).toContain(
+          "repository(owner:$owner,name:$name){id databaseId nameWithOwner url pullRequest(number:$number){",
+        );
+        expect(result.graphqlInputs[0]?.variables).toEqual({
+          owner: "Base-Owner",
+          name: "Base-Repo",
+          number: 42,
+        });
+      },
+    );
+
+    it.each([
+      { nameWithOwner: "other/repo" },
+      { url: "https://other.invalid/base-owner/base-repo" },
+      { id: null },
+      { databaseId: 0 },
+      { pullRequest: null },
+    ])("rejects invalid carried repository or PR authority %j", (patch) => {
+      const result = readPrMetadata(
+        {
+          ghRepo: repository.url,
+          coreQuotaAt: ["repos/base-owner/base-repo/pulls/42"],
+          graphqlResponses: [
+            { data: { repository: { ...repository, pullRequest: { id: "PR_42" }, ...patch } } },
+          ],
+        },
+        "pr_gh pr view 42 --json baseRepository",
+      );
+      expect(result.status, result.stderr).toBe(65);
+      expect(result.stdout).toBe("");
+      expect(result.calls).toHaveLength(2);
+      expect(result.graphqlInputs).toHaveLength(1);
+    });
 
     it("verifies the protected writer through GraphQL when REST quota is exhausted", () => {
       const result = readPrMetadata(
@@ -310,7 +453,7 @@ describe("PR metadata through REST", () => {
         const result = readPrMetadata(
           {
             coreQuotaAt: ["browse", "repos/base-owner/base-repo"],
-            graphqlResponses: [{ data: { repository } }],
+            graphqlResponses: [graphqlResponse(repository)],
             graphqlQuota,
           },
           "pr_gh_plain repo view --json id,nameWithOwner,url",
@@ -335,7 +478,7 @@ describe("PR metadata through REST", () => {
       const result = readPrMetadata(
         {
           coreQuotaAt: ["repos/Base-Owner/Base-Repo"],
-          graphqlResponses: [{ data: { repository } }],
+          graphqlResponses: [graphqlResponse(repository)],
         },
         "pr_gh_plain repo-authority Base-Owner/Base-Repo GitHub.com",
       );
@@ -351,17 +494,14 @@ describe("PR metadata through REST", () => {
     it.each(["exact", "absent", "unavailable"])(
       "resolves %s author permission without accepting a fuzzy collaborator match",
       (mode) => {
-        const page = (login: string, permission: string, hasNextPage: boolean) => ({
-          data: {
-            repository: {
-              collaborators: {
-                totalCount: 2,
-                edges: [{ permission, node: { login } }],
-                pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
-              },
+        const page = (login: string, permission: string, hasNextPage: boolean) =>
+          graphqlResponse({
+            collaborators: {
+              totalCount: 2,
+              edges: [{ permission, node: { login } }],
+              pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
             },
-          },
-        });
+          });
         const result = readPrMetadata(
           {
             coreQuotaAt: ["repos/base-owner/base-repo/collaborators/human/permission"],
@@ -399,19 +539,8 @@ describe("PR metadata through REST", () => {
           updatedAt: "2026-09-20T00:00:00Z",
           author: { id: "BOT_1", databaseId: 274271284, login: "clawsweeper", __typename: "Bot" },
         };
-        const page = (nodes: unknown[], hasNextPage: boolean) => ({
-          data: {
-            repository: {
-              pullRequest: {
-                comments: {
-                  nodes,
-                  totalCount: 2,
-                  pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
-                },
-              },
-            },
-          },
-        });
+        const page = (nodes: unknown[], hasNextPage: boolean) =>
+          graphqlResponse({ pullRequest: { comments: connectionPage(nodes, hasNextPage) } });
         const result = readPrMetadata(
           {
             coreQuotaAt: ["repos/base-owner/base-repo/issues/42/comments?per_page=100"],
@@ -452,24 +581,20 @@ describe("PR metadata through REST", () => {
           ],
           coreQuotaAt: [`repos/base-owner/base-repo/commits?sha=${second}&per_page=2`],
           graphqlResponses: [
-            {
-              data: {
-                repository: {
-                  commit0: {
-                    oid: first,
-                    author: {
-                      name: "Human",
-                      email: "human@example.invalid",
-                      user: { login: "human", __typename: "User" },
-                    },
-                  },
-                  commit1: {
-                    oid: second,
-                    author: { name: "Unlinked", email: "unlinked@example.invalid", user: null },
-                  },
+            graphqlResponse({
+              commit0: {
+                oid: first,
+                author: {
+                  name: "Human",
+                  email: "human@example.invalid",
+                  user: { login: "human", __typename: "User" },
                 },
               },
-            },
+              commit1: {
+                oid: second,
+                author: { name: "Unlinked", email: "unlinked@example.invalid", user: null },
+              },
+            }),
           ],
         },
         'printf "%s\\n" "$FAKE_GH_FIXTURE" | jq .authorSources | pr_gh commit-authors base-owner/base-repo github.com',
@@ -489,35 +614,27 @@ describe("PR metadata through REST", () => {
     it.each([false, true])(
       "returns complete PR file metadata through GraphQL (truncated=%s)",
       (truncated) => {
-        const page = (path: string, hasNextPage: boolean) => ({
-          data: {
-            repository: {
-              pullRequest: {
-                files: {
-                  totalCount: 2,
-                  nodes: [{ path, additions: 1, deletions: 0, changeType: "MODIFIED" }],
-                  pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
-                },
-              },
+        const page = (path: string, hasNextPage: boolean) =>
+          graphqlResponse({
+            pullRequest: {
+              files: connectionPage(
+                [{ path, additions: 1, deletions: 0, changeType: "MODIFIED" }],
+                hasNextPage,
+              ),
             },
-          },
-        });
+          });
         const result = readPrMetadata(
           {
             coreQuotaAt: ["repos/base-owner/base-repo/pulls/42"],
             graphqlResponses: [
-              {
-                data: {
-                  repository: {
-                    pullRequest: {
-                      headRefOid: head,
-                      author: null,
-                      headRepository: null,
-                      headRepositoryOwner: null,
-                    },
-                  },
+              graphqlResponse({
+                pullRequest: {
+                  headRefOid: head,
+                  author: null,
+                  headRepository: null,
+                  headRepositoryOwner: null,
                 },
-              },
+              }),
               page("src/a.ts", !truncated),
               page("src/b.ts", false),
             ],
@@ -549,6 +666,44 @@ describe("PR metadata through REST", () => {
         ).toBe(true);
       },
     );
+  });
+
+  it("accepts canonical repository casing when adopting an explicit qualified observation", () => {
+    const result = readPrMetadata(
+      { ghRepo: "https://GITHUB.COM/base-owner/base-repo" },
+      'pr_observe 42; printf "%s\\n" "$PR_REPOSITORY_URL"',
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("https://github.com/base-owner/base-repo\n");
+    expect(result.calls).toHaveLength(1);
+  });
+
+  it("authenticates nested worktree entries once without trusting inherited login state", () => {
+    const result = readPrMetadata(
+      {},
+      'ensure_gh_api_auth; ensure_gh_api_auth; ensure_gh_api_auth; ensure_gh_api_auth; printf "%s\\n" "$PR_GH_WRITER_LOGIN"',
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("contributor\n");
+    expect(result.calls.filter((args) => args.includes("user"))).toHaveLength(1);
+  });
+
+  it("revalidates writer identity after explicit credential selection changes", () => {
+    const result = readPrMetadata(
+      {},
+      "ensure_gh_api_auth; GH_TOKEN=synthetic-replacement ensure_gh_api_auth",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls.filter((args) => args.includes("user"))).toHaveLength(2);
+  });
+
+  it("does not retain a failed authentication probe", () => {
+    const result = readPrMetadata(
+      { failure: "quota", failureTarget: "user" },
+      "ensure_gh_api_auth || true; ensure_gh_api_auth",
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.calls.filter((args) => args.includes("user"))).toHaveLength(2);
   });
 
   describe("pinned source authors", () => {
@@ -866,7 +1021,7 @@ describe("PR metadata through REST", () => {
     (failure) => {
       const result = readPrMetadata(
         { failure, failureTarget: "permission" },
-        "source scripts/pr-lib/prepare-core.sh; resolve_pr_author_access_at_prepare contributor",
+        "source scripts/pr-lib/prepare-core.sh; resolve_pr_author_access_at_prepare contributor base-owner/base-repo github.com",
       );
       expect(result.status, result.stderr).toBe(failure === "forbidden" ? 0 : 1);
       expect(result.stdout).toBe(failure === "forbidden" ? "unknown\n" : "");
@@ -925,6 +1080,8 @@ describe("PR metadata through REST", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.attempts).toBe(2);
+    expect(result.calls.filter((args) => args[0] === "api")).toHaveLength(3);
+    expect(result.calls.some((args) => args.includes("repos/base-owner/base-repo"))).toBe(false);
     expect(
       result.calls.every(
         (args) => (args[0] === "api" && !args.includes("graphql")) || args[0] === "browse",
@@ -1069,6 +1226,7 @@ describe("PR metadata through REST", () => {
         baseRefOid: base,
         headRefName: "topic",
         headRefOid: head,
+        isCrossRepository: false,
         headRepository: null,
         headRepositoryOwner: null,
         url: "https://github.com/base-owner/base-repo/pull/42",
@@ -1077,7 +1235,14 @@ describe("PR metadata through REST", () => {
         additions: 0,
         deletions: 0,
       };
-      const response = (pullRequest: unknown) => ({ data: { repository: { pullRequest } } });
+      const response = (pullRequest: unknown) =>
+        graphqlResponse({
+          id: "R_base",
+          databaseId: 1,
+          nameWithOwner: "base-owner/base-repo",
+          url: "https://github.com/base-owner/base-repo",
+          pullRequest,
+        });
       const emptyPage = { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false } };
       const result = readPrMetadata({
         cacheUntilRevalidated: true,

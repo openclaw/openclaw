@@ -8,8 +8,8 @@ import {
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
-  type CronRunReceiptHandle,
 } from "../store/run-receipt-store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
@@ -389,7 +389,7 @@ export async function persistQueuedCronRunReservations(params: {
         return committedReservations;
       }
       // A failed refresh cannot orphan committed markers before local ownership.
-      await ensureLoaded(params.state, { forceReload: true, skipRecompute: true }).catch(() =>
+      await ensureLoaded(params.state, { forceReload: true }).catch(() =>
         applyCronRuntimeRowsToState(params.state, committedJobs),
       );
       const receiptByJobId = new Map(
@@ -425,7 +425,7 @@ export async function persistQueuedCronRunReservations(params: {
       pendingJobs.delete(error.candidate.jobId);
     }
   }
-  await ensureLoaded(params.state, { forceReload: true, skipRecompute: true });
+  await ensureLoaded(params.state, { forceReload: true });
   return [];
 }
 
@@ -572,7 +572,7 @@ export async function executeQueuedCronRun(params: {
   const { state } = params;
   const executeAdmitted = async () => {
     const started = await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      await ensureLoaded(state, { forceReload: true });
       if (params.isUnavailable?.() || state.stopped) {
         params.onUnavailable?.();
         return undefined;

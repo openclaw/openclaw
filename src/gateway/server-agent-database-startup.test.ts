@@ -34,7 +34,7 @@ import {
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.server.js";
@@ -123,7 +123,7 @@ it.each([
   { outcome: "superseded", agentId: "worker" },
   { outcome: "shutdown-preparation", agentId: "worker" },
 ] as const)(
-  "serves healthy agents while $agentId follows its $outcome lifecycle",
+  "applies startup admission while $agentId follows its $outcome lifecycle",
   async ({ outcome, agentId }) => {
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
     const brokerExpected =
@@ -196,6 +196,7 @@ it.each([
       unregisterOpenClawAgentDatabase({ agentId, path: agentPath, env });
       closeOpenClawStateDatabaseForTest();
     }
+    const agentBytes = fs.readFileSync(agentPath);
     const paused = outcome !== "corrupt" && outcome !== "physical-corrupt" && outcome !== "fast";
     const pause = paused
       ? pauseIntegrityInspections({
@@ -271,6 +272,7 @@ it.each([
     }
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let suppliedBroker: Awaited<ReturnType<typeof spawnBroker.startGatewaySpawnBroker>>;
+    let unadoptedPortClaim: TestPortClaim | undefined;
     try {
       if (outcome === "startup-failure") {
         const startupFailure = new Error("startup stopped before Gateway adoption");
@@ -286,7 +288,10 @@ it.each([
         expect(() => process.kill(pid, 0)).toThrow();
         return;
       }
-      const started = await withAgentDatabaseStartupAdmission(async () => {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      unadoptedPortClaim = portClaim;
+      const port = portClaim.port;
+      const startup = withAgentDatabaseStartupAdmission(async () => {
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
@@ -297,20 +302,38 @@ it.each([
             },
           });
         }
-        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-        return {
-          port: portClaim.port,
-          server: await spawnBroker.runWithSpawnBroker(suppliedBroker, () =>
-            startTestGatewayServer(portClaim, { bind: "loopback", auth: { mode: "none" } }),
-          ),
-        };
+        return spawnBroker.runWithSpawnBroker(suppliedBroker, () => {
+          unadoptedPortClaim = undefined;
+          return startTestGatewayServer(portClaim, { bind: "loopback", auth: { mode: "none" } });
+        });
+      }).then((started) => {
+        server = started;
+        return started;
       });
-      server = started.server;
+      if (agentId === "main" && (outcome === "corrupt" || outcome === "physical-corrupt")) {
+        await expect(startup).rejects.toMatchObject({
+          name: "AgentDatabaseAdmissionError",
+          refusal: { agentId, code: "agent-database-inspection-failed", paths: [agentPath] },
+        });
+        expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
+        await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
+        return;
+      }
+      server = await startup;
       await server.startupSettled;
       if (brokerExpected) {
         expect(brokerPid).toBeTypeOf("number");
       }
-      expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
+      expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+      const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
+      expect(readiness.status).toBe(agentId === "main" && paused ? 503 : 200);
+      if (agentId === "main" && paused) {
+        await expect(readiness.json()).resolves.toMatchObject({
+          ready: false,
+          failing: ["agent-database:main"],
+          agentDatabases: [readAgentDatabaseAdmissionRefusal(agentId, { env })],
+        });
+      }
       expect(readAgentDatabaseAdmissionRefusal(healthyAgentId, { env })).toBeUndefined();
       if (paused) {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
@@ -400,6 +423,7 @@ it.each([
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
           false,
         );
+        expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
       } else if (outcome === "corrupt" || outcome === "physical-corrupt") {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",
@@ -427,7 +451,11 @@ it.each([
       try {
         await server?.close();
       } finally {
-        await suppliedBroker?.close();
+        try {
+          await suppliedBroker?.close();
+        } finally {
+          await unadoptedPortClaim?.release();
+        }
       }
     }
   },
@@ -474,6 +502,7 @@ it("recovers queued agents after both inspection slots expire without refusing a
     server = started.server;
     await server.startupSettled;
     expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
+    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(503);
     await vi.waitFor(() => {
       for (const marker of pause.enteredPaths.slice(0, 2)) {
         expect(fs.existsSync(marker)).toBe(true);
@@ -502,6 +531,7 @@ it("recovers queued agents after both inspection slots expire without refusing a
     expect(readAgentDatabaseAdmissionRefusal("a", { env })).toMatchObject({
       code: "agent-database-inspection-pending",
     });
+    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(200);
     fs.writeFileSync(pause.releasePaths[0]!, "resume a");
     await vi.waitFor(
       () => expect(readAgentDatabaseAdmissionRefusal("a", { env })).toBeUndefined(),

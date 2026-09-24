@@ -1,5 +1,5 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -18,6 +18,10 @@ import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { buildStatusReplyParts } from "./status-text.js";
 
 vi.mock(import("../infra/session-cost-usage.js"), async (importOriginal) => {
@@ -39,7 +43,14 @@ vi.mock(import("../infra/session-cost-usage.js"), async (importOriginal) => {
 type StatusTextParams = Parameters<typeof buildStatusReplyParts>[0];
 
 describe("buildStatusText prepared context windows", () => {
-  afterEach(() => cliBackendsTesting.resetDepsForTest());
+  let state: OpenClawTestState;
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ label: "status-model" });
+  });
+  afterEach(async () => {
+    cliBackendsTesting.resetDepsForTest();
+    await state.cleanup();
+  });
   const catalog = [
     {
       provider: "deepseek",

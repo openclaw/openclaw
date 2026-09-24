@@ -236,6 +236,13 @@ describe("plugins cli policy mutations", () => {
   it.each([
     { mode: undefined, json: false, acceptCapabilities: true, ids: ["alpha"] },
     {
+      mode: undefined,
+      json: false,
+      acceptCapabilities: true,
+      ids: ["alpha"],
+      restartRequired: true,
+    },
+    {
       mode: "OPENCLAW_CONFIG_READONLY",
       json: false,
       acceptCapabilities: true,
@@ -246,13 +253,20 @@ describe("plugins cli policy mutations", () => {
     { mode: undefined, json: true, acceptCapabilities: true, ids: ["alpha", "beta"] },
   ])(
     "reloads CLI-selected $ids in one generation (mode=$mode, json=$json, accept=$acceptCapabilities)",
-    async ({ mode, json, acceptCapabilities, ids }) => {
+    async ({ mode, json, acceptCapabilities, ids, restartRequired = false }) => {
       resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
       const receipt = {
         ok: true,
         pluginIds: ids,
-        restartRequired: false,
-        runtime: { operationId: "reload-selected", generation: 2, pluginIds: ids },
+        restartRequired,
+        runtime: {
+          operationId: "reload-selected",
+          generation: 2,
+          pluginIds: ids,
+          selectedEntries: Object.fromEntries(
+            ids.map((id) => [id, `/plugins/${id}/dist/index.js`]),
+          ),
+        },
       };
       const review = buildPluginCapabilityConsentReview({
         pluginId: "alpha",
@@ -305,10 +319,17 @@ describe("plugins cli policy mutations", () => {
           expect(pluginsCliRuntimeLogs).toEqual([]);
         }
       } else {
+        for (const id of ids) {
+          expect(pluginsCliRuntimeLogs).toContain(
+            `${id}: Selected entry: /plugins/${id}/dist/index.js. Rebuild compiled output after source edits.`,
+          );
+        }
         expect(pluginsCliRuntimeLogs).toContain(
-          ids.length === 1
-            ? 'Reloaded plugin "alpha" (generation 2).'
-            : 'Reloaded plugins "alpha", "beta" (generation 2).',
+          restartRequired
+            ? 'Reloaded registrations for plugin "alpha" (generation 2). Gateway restart required to load edited code.'
+            : ids.length === 1
+              ? 'Reloaded plugin "alpha" (generation 2).'
+              : 'Reloaded plugins "alpha", "beta" (generation 2).',
         );
       }
       expect(configWriteMock).not.toHaveBeenCalled();
@@ -772,9 +793,7 @@ describe("plugins cli policy mutations", () => {
       entries: { alpha: { enabled: true } },
       slots: { memory: "alpha" },
     });
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
-      'Exclusive slot "memory" switched from "previous" to "alpha".',
-    );
+    expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("Exclusive slot");
     expect(
       replaceConfigFileMock.mock.calls.map(([write]) => write.sourceConfig?.plugins?.slots?.memory),
     ).toEqual(["alpha", "previous", "alpha"]);

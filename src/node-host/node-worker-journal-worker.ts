@@ -24,7 +24,7 @@ export class NodeWorkerJournalWorker {
   private accepting = true;
   private uncertain: SqliteWorkerError | undefined;
 
-  constructor(private readonly options: { env?: NodeJS.ProcessEnv }) {}
+  constructor(private readonly options: { env?: NodeJS.ProcessEnv; path?: string }) {}
 
   execute<Key extends keyof NodeWorkerJournalWorkerOperations>(
     command: {
@@ -46,18 +46,40 @@ export class NodeWorkerJournalWorker {
 
   run<T>(
     operation: (scope: JournalScope) => Promise<T>,
+    authority: NodeWorkerJournalAuthority | undefined,
+    options: { existingOnly: true },
+  ): Promise<T | undefined>;
+  run<T>(
+    operation: (scope: JournalScope) => Promise<T>,
     authority?: NodeWorkerJournalAuthority,
-  ): Promise<T> {
+  ): Promise<T>;
+  run<T>(
+    operation: (scope: JournalScope) => Promise<T>,
+    authority?: NodeWorkerJournalAuthority,
+    options?: { existingOnly: true },
+  ): Promise<T | undefined> {
     if (!this.accepting) {
       return Promise.reject(this.uncertain ?? new Error("Node worker journal admission is closed"));
     }
-    return this.runAdmitted(operation, authority);
+    return options?.existingOnly
+      ? this.runAdmitted(operation, authority, options)
+      : this.runAdmitted(operation, authority);
   }
 
   private runAdmitted<T>(
     operation: (scope: JournalScope) => Promise<T>,
+    authority: NodeWorkerJournalAuthority | undefined,
+    options: { existingOnly: true },
+  ): Promise<T | undefined>;
+  private runAdmitted<T>(
+    operation: (scope: JournalScope) => Promise<T>,
     authority?: NodeWorkerJournalAuthority,
-  ): Promise<T> {
+  ): Promise<T>;
+  private runAdmitted<T>(
+    operation: (scope: JournalScope) => Promise<T>,
+    authority?: NodeWorkerJournalAuthority,
+    options?: { existingOnly: true },
+  ): Promise<T | undefined> {
     if (this.uncertain) {
       return Promise.reject(this.uncertain);
     }
@@ -103,10 +125,14 @@ export class NodeWorkerJournalWorker {
         }),
       };
     };
-    const result = runOpenClawStateWorkerOperation(context, operation, {
-      assertCurrent,
-      createAdmission,
-    }).finally(() => {
+    const admitted = options?.existingOnly
+      ? runOpenClawStateWorkerOperation(context, operation, {
+          assertCurrent,
+          createAdmission,
+          existingOnly: true,
+        })
+      : runOpenClawStateWorkerOperation(context, operation, { assertCurrent, createAdmission });
+    const result = admitted.finally(() => {
       active = false;
     });
     this.pending.add(result);

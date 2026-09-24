@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
@@ -41,10 +41,9 @@ import type { WorkerBootstrapArtifactTransferHttpCallback } from "./worker-envir
 import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bundle-retention.js";
 import type { WorkerSessionToolExecutor } from "./worker-environments/worker-session-tool-result.js";
 
-type WorkerEnvironmentStore = ReturnType<
-  typeof import("./worker-environments/store.js").createWorkerEnvironmentStore
+type WorkerEnvironmentStore = Awaited<
+  ReturnType<typeof import("./worker-environments/store.js").createWorkerEnvironmentStore>
 >;
-type WorkerEnvironmentRecord = ReturnType<WorkerEnvironmentStore["list"]>[number];
 type WorkerEnvironmentLogger = {
   child: (name: string) => { warn: (message: string) => void };
 };
@@ -52,7 +51,6 @@ type WorkerEnvironmentLogger = {
 export type GatewayWorkerEnvironmentStartupState = {
   durableProviderIds: string[];
   listDurableProviderIds: () => string[];
-  records: WorkerEnvironmentRecord[];
   store: WorkerEnvironmentStore;
   placementStore: WorkerSessionPlacementStore;
 };
@@ -88,7 +86,7 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
       import("./worker-environments/store.js"),
       import("./worker-environments/placement-store.js"),
     ]);
-  const store = createWorkerEnvironmentStore();
+  const store = await createWorkerEnvironmentStore();
   const placementStore = createWorkerSessionPlacementStore();
   const records = store.list();
   const durableProviderIds = uniqueStrings(
@@ -110,7 +108,6 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
   return {
     durableProviderIds,
     listDurableProviderIds,
-    records,
     store,
     placementStore,
   };
@@ -211,24 +208,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       });
     return await workerNpmArtifact;
   };
-  const startupBindings = params.startup.records.flatMap((record) =>
-    record.state === "attached" && record.attachedSessionIds.length === 1
-      ? [
-          {
-            environmentId: record.environmentId,
-            runEpoch: record.ownerEpoch,
-            sessionId: record.attachedSessionIds[0]!,
-          },
-        ]
-      : [],
-  );
-  const workerLiveEvents = createWorkerLiveEventReceiver({
-    getConfig: getRuntimeConfig,
-    startupBindings,
-    startupOwners: new Map(
-      startupBindings.map((binding) => [binding.environmentId, binding.runEpoch] as const),
-    ),
-  });
+  const workerLiveEvents = createWorkerLiveEventReceiver();
   const workerTunnelManager = createWorkerTunnelManager({
     desktopSessionRegistry: params.desktopSessionRegistry,
   });
@@ -286,7 +266,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   params.startup.store.onCredentialRevoked((environmentId) => {
     nodeWorkspaceTransfer.fenceEnvironment(environmentId);
   });
-  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
+  const gatewayDeviceId = (await loadOrCreateProcessDeviceIdentityAsync()).deviceId;
   const nodeWorkerGatewayNamespace = resolveNodeWorkerGatewayNamespace(gatewayDeviceId);
   const nodeWorkerTunnelManager = createNodeWorkerTunnelManager({
     gatewayDeviceId,
@@ -550,7 +530,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       })
       .map((record) => record.environmentId);
     for (const environmentId of environmentIds) {
-      params.startup.store.revokeEnvironmentCredential(environmentId);
+      await params.startup.store.revokeEnvironmentCredential(environmentId);
     }
     await Promise.all(
       environmentIds.map(async (environmentId) => {

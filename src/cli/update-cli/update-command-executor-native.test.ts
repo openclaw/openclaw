@@ -42,7 +42,11 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
       import fs from "node:fs";
       import {setTimeout} from "node:timers/promises";
       import {withDelegatedUpdateCommandExecutor} from ${JSON.stringify(ownerUrl)};
-      const {grant,proceed,effect}=JSON.parse(fs.readFileSync(0,"utf8"));
+      const chunks=[];
+      for await (const chunk of process.stdin) {
+        chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
+      }
+      const {grant,proceed,effect}=JSON.parse(Buffer.concat(chunks).toString("utf8"));
       await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
         process.stdout.write(JSON.stringify({ready:true,rootKey:grant.parent.key,spawnerKey:grant.spawner.key})+"\\n");
         while(!fs.existsSync(proceed)) await setTimeout(10);
@@ -51,10 +55,13 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
       });
     `;
     const intermediate = `
-      import fs from "node:fs";
       import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild} from ${JSON.stringify(ownerUrl)};
       import {runUtf8CommandWithTimeout} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processExec).href)};
-      const input=JSON.parse(fs.readFileSync(0,"utf8"));
+      const chunks=[];
+      for await (const chunk of process.stdin) {
+        chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
+      }
+      const input=JSON.parse(Buffer.concat(chunks).toString("utf8"));
       await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async fence=>{
         const result=await withUpdateCommandExecutorChild(fence,input.grant.root,(grant,beforeInput)=>runUtf8CommandWithTimeout(
           [process.execPath,...${JSON.stringify(sourceImportArgs)},"--input-type=module","-e",${JSON.stringify(leaf)}],
@@ -160,7 +167,7 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
 // Only database LOCATION and scheduling barriers are fixtures, never authority.
 it
   .skipIf(process.platform === "win32")
-  .each([
+  .for([
     "healthy-upgrade",
     "original-replaced",
     "spawner-replaced",
@@ -168,7 +175,8 @@ it
     "config-precommit-replaced",
   ] as const)(
   "composed native/config effects retain original authority: %s",
-  async (fault) => {
+  { timeout: 60_000 },
+  async (fault, { onTestFailed }) => {
     const root = fs.realpathSync(dirs.make("native-composed-owner-"));
     const control = path.join(root, "control");
     fs.mkdirSync(control);
@@ -177,6 +185,14 @@ it
     const config = path.join(root, "openclaw.json");
     const label = `ai.openclaw.proof.${randomUUID()}`;
     const plist = path.join(root, "Library", "LaunchAgents", `${label}.plist`);
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_CONFIG_PATH: config,
+    };
     const effect = path.join(root, "native-effect");
     const before = {
       gateway: {
@@ -192,19 +208,27 @@ it
     const receiver = `
     import fs from "node:fs";
     import {setTimeout} from "node:timers/promises";
-    import {runGatewayServiceUpdateCommand} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor).href)};
-    import {execFileUtf8} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href)};
-    import {writeLaunchAgentPlist} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.serviceFiles).href)};
-    import {assertGatewayServiceUpdateCurrent} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.serviceAuthority).href)};
-    import {createConfigIO} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.configIO).href)};
-    const root=${JSON.stringify(root)}, fault=${JSON.stringify(fault)};
+    import * as json5 from ${JSON.stringify(import.meta.resolve("json5"))};
+    import {registerSealedRuntime} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.sealedRuntime).href)};
+    const root=${JSON.stringify(root)}, control=${JSON.stringify(control)}, fault=${JSON.stringify(fault)};
+    registerSealedRuntime({json5,resolveSecureTempRoot:()=>control});
+    const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor).href)});
+    const {execFileUtf8}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href)});
+    const {writeLaunchAgentPlist}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.serviceFiles).href)});
+    const {assertGatewayServiceUpdateCurrent}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.serviceAuthority).href)});
+    const {createConfigIO}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.configIO).href)});
     const wait=async name=>{while(!fs.existsSync(root+"/"+name))await setTimeout(10);};
+    const phase=(name,event)=>process.stderr.write(JSON.stringify({phase:name,event,elapsedMs:performance.now()})+"\\n");
     try { await runGatewayServiceUpdateCommand("run","install",async()=>{
       fs.writeFileSync(root+"/ready.tmp",String(process.pid));
       fs.renameSync(root+"/ready.tmp",root+"/ready");
       await wait("proceed");
       const results={};
-      const attempt=async(name,fn)=>{try{await fn();results[name]="ok";}catch(e){results[name]=e.message;}};
+      const attempt=async(name,fn)=>{
+        phase(name,"start");
+        try{await fn();results[name]="ok";}catch(e){results[name]=e.message;}
+        phase(name,"end");
+      };
       const io=createConfigIO({configPath:root+"/openclaw.json",env:{...process.env,OPENCLAW_STATE_DIR:root,OPENCLAW_CONFIG_PATH:root+"/openclaw.json"},observe:false,shellEnvFallback:"defer"});
       await attempt("config",()=>io.writeConfigFile({gateway:{mode:"local",port:18789,auth:{mode:"token",token:"disposable-proof-token"}}},{observe:false,beforeCommit:async()=>{
         if(fault==="config-precommit-replaced"){fs.writeFileSync(root+"/precommit","ready");await wait("publish");}
@@ -222,7 +246,11 @@ it
     import {spawn} from "node:child_process";
     import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
     import {runUtf8CommandWithTimeout} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processExec).href)};
-    const input=JSON.parse(fs.readFileSync(0,"utf8"));
+    const chunks=[];
+    for await (const chunk of process.stdin) {
+      chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
+    }
+    const input=JSON.parse(Buffer.concat(chunks).toString("utf8"));
     try{await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async fence=>{
       const result=await withUpdateCommandExecutorChild(fence,input.grant.root,async(grant,beforeInput)=>{
         fs.writeFileSync(${JSON.stringify(file("binding"))},JSON.stringify(grant));
@@ -237,11 +265,14 @@ it
           });
         }
         return runUtf8CommandWithTimeout([process.execPath,...${JSON.stringify(sourceImportArgs)},"--input-type=module","-e",${JSON.stringify(receiver)}],{
-          input:JSON.stringify({action:"install",targetRoot:input.grant.root,executor:grant}),beforeInput,timeoutMs:30000,killProcessTree:true,requireProcessTreeExtinction:true});
+          input:JSON.stringify({action:"install",targetRoot:input.grant.root,executor:grant}),beforeInput,timeoutMs:30000,killProcessTree:true,requireProcessTreeExtinction:true,
+          onOutputChunk:chunk=>process.stderr.write(chunk)});
       });
       if(result.code!==0)throw new Error(result.stderr);
     });}catch(e){process.stderr.write(e.message);process.exitCode=1;}
   `;
+    let nativeOutput = "";
+    onTestFailed(() => console.error(JSON.stringify({ fault, nativeOutput })));
     let leaf: number | undefined;
     const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(root);
@@ -258,11 +289,12 @@ it
               const child = spawn(
                 process.execPath,
                 [...sourceImportArgs, "--input-type=module", "-e", spawner],
-                { stdio: ["pipe", "ignore", "pipe"], detached: true },
+                { env: childEnv, stdio: ["pipe", "ignore", "pipe"], detached: true },
               );
               let stderr = "";
               child.stderr.on("data", (chunk) => {
                 stderr += String(chunk);
+                nativeOutput += String(chunk);
               });
               child.once("error", reject);
               child.once("spawn", () => {
@@ -286,10 +318,14 @@ it
           [process.execPath, ...sourceImportArgs, "--input-type=module", "-e", spawner],
           {
             input: JSON.stringify({ grant }),
+            env: childEnv,
             beforeInput,
             timeoutMs: 40_000,
             killProcessTree: true,
             requireProcessTreeExtinction: true,
+            onOutputChunk: (chunk) => {
+              nativeOutput += String(chunk);
+            },
           },
         );
       });
@@ -406,5 +442,4 @@ it
       }
     }
   },
-  60_000,
 );

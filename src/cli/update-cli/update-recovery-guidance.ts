@@ -2,7 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
   formatUpdateActivationTimeoutGuidance,
   UPDATE_ACTIVATION_TIMEOUT_REASON,
@@ -53,6 +53,14 @@ export function resolveUpdateResultNextAction(params: {
     return UPDATE_INSTALL_SKIP_GUIDANCE[result.reason];
   }
   if (result.status === "error") {
+    if (
+      result.reason === "update-failed" &&
+      !result.recovery &&
+      (result.failedStep?.name === "requested" ||
+        result.failedStep?.name === "installation-inspection")
+    ) {
+      return `Update stopped before staging. Retry the same update command. If the failure persists, run \`${formatCliCommand("openclaw triage", env)}\` to inspect the recorded failure.`;
+    }
     if (result.reason === UPDATE_ACTIVATION_TIMEOUT_REASON) {
       return formatUpdateActivationTimeoutGuidance((command) => formatCliCommand(command, env));
     }

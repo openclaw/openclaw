@@ -1,31 +1,52 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
 import {
+  closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import { meetingTranscriptDb } from "./store-sqlite.js";
 import { safeTranscriptPathSegment, transcriptSessionSelector, TranscriptsStore } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
+let suiteStateDir: string;
 
-afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+beforeAll(() => {
+  suiteStateDir = tempDirs.make("openclaw-transcript-test-");
+});
+
+beforeEach(() => {
+  // Retain the worker while isolating each case's rows and exported artifacts.
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      executeSqliteQuerySync(db, meetingTranscriptDb(db).deleteFrom("meeting_transcript_sessions"));
+    },
+    { env: { ...process.env, OPENCLAW_STATE_DIR: suiteStateDir } },
+    { operationLabel: "test.transcripts.reset" },
+  );
+  fs.rmSync(path.join(suiteStateDir, "transcripts"), { recursive: true, force: true });
 });
 
 function createStore(): { stateDir: string; store: TranscriptsStore } {
-  const stateDir = tempDirs.make("openclaw-transcript-test-");
   return {
-    stateDir,
-    store: new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    stateDir: suiteStateDir,
+    store: new TranscriptsStore(path.join(suiteStateDir, "transcripts"), {
+      env: { ...process.env, OPENCLAW_STATE_DIR: suiteStateDir },
     }),
   };
 }
@@ -42,6 +63,58 @@ function session(
 }
 
 describe("TranscriptsStore", () => {
+  it("keeps summary snapshot queries bound to the current session and persisted revision", async () => {
+    const { store } = createStore();
+    const first = session("summary-first");
+    const second = { ...session("summary-second"), title: "Second meeting" };
+    const later = session("summary-first", "2026-07-02T10:00:00.000Z");
+    await store.writeSession(first);
+    await store.writeSession(second);
+    await store.appendUtteranceForSession(first, { text: "First speech" });
+    await store.appendUtteranceForSession(second, { text: "Second speech" });
+    await store.writeSession(later);
+    await store.appendUtteranceForSession(later, { text: "Next day speech" });
+    const firstSnapshot = await store.readSummarySnapshot(first, 20);
+    expect(firstSnapshot).toMatchObject({
+      nextSequence: 1,
+      utterances: [{ text: "First speech" }],
+    });
+    expect(await store.readSummarySnapshot(second, 20)).toMatchObject({
+      nextSequence: 1,
+      utterances: [{ text: "Second speech" }],
+    });
+    expect(await store.readSummarySnapshot(later, 20)).toMatchObject({
+      nextSequence: 1,
+      utterances: [{ text: "Next day speech" }],
+    });
+    await store.appendUtteranceForSession(first, { text: "Later speech" });
+    const updated = await store.readSummarySnapshot(first, 20);
+    expect(updated).toMatchObject({
+      nextSequence: 2,
+      utterances: [{ text: "First speech" }, { text: "Later speech" }],
+    });
+    expect(updated?.inputRevision).not.toBe(firstSnapshot?.inputRevision);
+    expect(await store.readSummarySnapshot(session("missing"), 20)).toBeUndefined();
+  });
+
+  it.each(["next_utterance_seq", "created_at_ms", "updated_at_ms"] as const)(
+    "preserves native integer errors for summary snapshot %s",
+    async (column) => {
+      const { store, stateDir } = createStore();
+      const target = session();
+      await store.writeSession(target);
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      db.prepare(`UPDATE meeting_transcript_sessions SET ${column} = ? WHERE session_id = ?`).run(
+        9_007_199_254_740_993n,
+        target.sessionId,
+      );
+      await expect(store.readSummarySnapshot(target, 20)).rejects.toMatchObject({
+        code: "ERR_OUT_OF_RANGE",
+      });
+    },
+  );
   it("keeps a streamed page stable across writes and shared writer closure", async () => {
     const { store, stateDir } = createStore();
     for (const id of ["a", "b", "c"]) {
@@ -59,7 +132,8 @@ describe("TranscriptsStore", () => {
       }
       expect(first.value.session.title).toBe("a");
       await store.writeSession({ ...session("c"), title: "changed" });
-      closeOpenClawStateDatabaseForTest();
+      // The retained reader deliberately prevents a truncating WAL checkpoint.
+      closeOpenClawStateDatabase({ checkpointMode: "PASSIVE" });
       expect(writer.db.isOpen).toBe(false);
       await expect(acquireOpenClawStateDatabaseFileExclusion(writer.path)).rejects.toThrow(
         StateDatabaseCoordinatorContentionError,
@@ -92,6 +166,8 @@ describe("TranscriptsStore", () => {
       try {
         const first = await rows.next();
         expect(first.done).toBe(false);
+        closeOpenClawStateDatabase({ checkpointMode: "PASSIVE" });
+        expect(writer.db.isOpen).toBe(false);
         await expect(acquireOpenClawStateDatabaseFileExclusion(writer.path)).rejects.toThrow(
           StateDatabaseCoordinatorContentionError,
         );
@@ -598,6 +674,7 @@ describe("TranscriptsStore", () => {
       summarizeTranscripts({ session: target, utterances: [{ text: "recover me" }] }),
       target,
     );
+    await store.materializeSessionArtifacts(target, "all");
     openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } })
       .db.prepare(
         "UPDATE meeting_transcript_sessions SET export_manifest_json = '{}' WHERE session_id = ?",

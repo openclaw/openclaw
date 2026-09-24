@@ -5,12 +5,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { listUpdateRuns } from "../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../infra/update-runner.js";
+import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { VERSION } from "../version.js";
 import {
   installDeferredCompletionFixture,
   readPackageVersion,
-  runGatewayUpdate,
+  updateGitCheckout,
   runCommandWithTimeout,
   readConfigFileSnapshot,
   defaultRuntime,
@@ -73,7 +73,7 @@ describe("update-cli child-owned deferred completion", () => {
     readPackageVersion.mockResolvedValue("2026.9.4");
     await runPostCoreCommand({ restart: false }, { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" });
 
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(updateGitCheckout).not.toHaveBeenCalled();
     const installCall = (
       vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<[string[], unknown]>
     ).find(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
@@ -141,11 +141,12 @@ describe("update-cli child-owned deferred completion", () => {
   });
 
   it("completes convergence-only post-core changes for a legacy parent", async () => {
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
-      postCoreConvergenceResult({
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+      ...postCoreConvergenceResult({
         changes: ["Repaired configured plugin install records."],
       }),
-    );
+      config: cfg,
+    }));
 
     await runPostCoreCommand({ restart: false, json: true });
 
@@ -270,7 +271,7 @@ describe("update-cli child-owned deferred completion", () => {
               step: "gateway recovery verification",
               status: "failed",
               exitCode: 1,
-              detail: "Exit code: 1",
+              detail: "Exit code: 1; Gateway did not settle.",
               failureFacts: [
                 { check: "settled", code: "stopped-free", message: "Gateway did not settle." },
               ],
@@ -300,7 +301,7 @@ describe("update-cli child-owned deferred completion", () => {
       } else {
         expect(replaceConfigFile).not.toHaveBeenCalled();
       }
-      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      expect(updateGitCheckout).not.toHaveBeenCalled();
     },
   );
 
@@ -359,10 +360,11 @@ describe("update-cli child-owned deferred completion", () => {
         fsSync.writeFileSync(path.join(installPath, "index.js"), "module.exports = {};\n");
         return { config: current, changed: true, outcomes: [repaired] };
       });
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
         ...postCoreConvergenceResult(),
         installRecords: records,
-      });
+        config: cfg,
+      }));
 
       await runPostCoreCommand({ yes: true, json, restart: false });
 

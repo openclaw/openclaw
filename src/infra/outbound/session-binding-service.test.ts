@@ -8,9 +8,11 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { readSessionBindingInspectionConversation } from "./session-binding-normalization.js";
 import {
   testing,
   getSessionBindingService,
@@ -191,6 +193,102 @@ describe("session binding service", () => {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
     await tempDirs.cleanup();
+  });
+
+  it("awaits async adapter persistence without calling its legacy mutation", async () => {
+    const gate = createDeferredCore();
+    const touch = vi.fn();
+    const touchAsync = vi.fn(() => gate.promise);
+    registerSessionBindingAdapter({
+      channel: "adapter-chat",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => null,
+      touch,
+      touchAsync,
+    });
+    const scope = { channel: "adapter-chat", accountId: "default" };
+    let settled = false;
+    const pending = getSessionBindingService()
+      .touchAsync("binding-1", 123, scope)
+      .then(() => {
+        settled = true;
+      });
+    await Promise.resolve();
+    expect(touchAsync).toHaveBeenCalledWith("binding-1", 123);
+    expect(touch).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+    gate.resolve();
+    await pending;
+    expect(settled).toBe(true);
+
+    getSessionBindingService().touch("binding-1", 456, scope);
+    expect(touch).toHaveBeenCalledWith("binding-1", 456);
+    expect(touchAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["keep", "remove", "replace"] as const)(
+    "revalidates captured adapters after an earlier touch waits (%s)",
+    async (change) => {
+      const gate = createDeferredCore();
+      const firstTouch = vi.fn(() => gate.promise);
+      const secondTouch = vi.fn(async () => {});
+      const replacementTouch = vi.fn(async () => {});
+      const first: SessionBindingAdapter = {
+        channel: "adapter-chat",
+        accountId: "first",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+        touchAsync: firstTouch,
+      };
+      const second: SessionBindingAdapter = {
+        ...first,
+        accountId: "second",
+        touchAsync: secondTouch,
+      };
+      registerSessionBindingAdapter(first);
+      registerSessionBindingAdapter(second);
+      const pending = getSessionBindingService().touchAsync("binding-1", 123);
+      expect(firstTouch).toHaveBeenCalledWith("binding-1", 123);
+      expect(secondTouch).not.toHaveBeenCalled();
+      if (change !== "keep") {
+        unregisterSessionBindingAdapter({
+          channel: second.channel,
+          accountId: second.accountId,
+          adapter: second,
+        });
+      }
+      if (change === "replace") {
+        registerSessionBindingAdapter({ ...second, touchAsync: replacementTouch });
+      }
+      gate.resolve();
+      await pending;
+      expect(secondTouch).toHaveBeenCalledTimes(change === "keep" ? 1 : 0);
+      expect(replacementTouch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("propagates a rejected async touch and preserves legacy synchronous failure", async () => {
+    const failure = new Error("persistence rejected");
+    const touch = vi.fn(() => {
+      throw failure;
+    });
+    registerSessionBindingAdapter({
+      channel: "adapter-chat",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => null,
+      touch,
+      touchAsync: async () => {
+        throw failure;
+      },
+    });
+    const scope = { channel: "adapter-chat", accountId: "default" };
+    await expect(getSessionBindingService().touchAsync("binding-1", 1, scope)).rejects.toBe(
+      failure,
+    );
+    expect(touch).not.toHaveBeenCalled();
+    expect(() => getSessionBindingService().touch("binding-1", 1, scope)).toThrow(failure);
   });
 
   it("normalizes conversation refs and infers current placement", async () => {
@@ -382,9 +480,11 @@ describe("session binding service", () => {
       });
       const unavailable: ConversationBindingInspection =
         inspectSessionBindingByConversation(conversation);
-      expect(unavailable).toEqual({
+      expect(Object.fromEntries(Object.entries(unavailable))).toEqual({
         status: "unavailable",
       });
+      expect(readSessionBindingInspectionConversation(unavailable)).toEqual(conversation);
+      expect(Object.isFrozen(readSessionBindingInspectionConversation(unavailable))).toBe(true);
       await expectSessionBindingError(
         service.bind({
           targetSessionKey: "agent:finance:bound",
@@ -400,12 +500,17 @@ describe("session binding service", () => {
         resolveByConversation: () => null,
       };
       registerSessionBindingAdapter(adapter);
-      expect(inspectSessionBindingByConversation(conversation)).toEqual({
+      const empty = inspectSessionBindingByConversation(conversation);
+      expect(Object.fromEntries(Object.entries(empty))).toEqual({
         status: "available",
         binding: null,
       });
+      expect(readSessionBindingInspectionConversation(empty)).toEqual(conversation);
+      expect(Object.isFrozen(readSessionBindingInspectionConversation(empty))).toBe(true);
       unregisterSessionBindingAdapter({ channel, accountId: "default", adapter });
-      expect(inspectSessionBindingByConversation(conversation)).toEqual({
+      expect(
+        Object.fromEntries(Object.entries(inspectSessionBindingByConversation(conversation))),
+      ).toEqual({
         status: "unavailable",
       });
     },

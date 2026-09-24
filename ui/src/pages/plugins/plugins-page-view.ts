@@ -11,27 +11,27 @@ import { icons } from "../../components/icons.ts";
 import { renderSettingsPage } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import type {
-  PluginDiscoveryDetailResult,
-  PluginListResult,
-  PluginsInspectResult,
-} from "../../lib/plugins/index.ts";
+import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { renderPluginCatalogDetail } from "./catalog-detail.ts";
 import { renderPluginCatalogResults } from "./catalog-results.ts";
 import { renderPluginConsentDialog } from "./consent-dialog.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
-import type { InstallWizardController } from "./install-wizard-controller.ts";
-import {
-  installRequestForDiscoveryDetail,
-  type PluginInstallWizardState,
-} from "./install-wizard-model.ts";
-import { renderPluginInstallWizard } from "./install-wizard.ts";
 import type { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import type { PluginHelpController } from "./plugin-help-controller.ts";
-import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.ts";
+import {
+  pluginRowKey,
+  renderPluginRowMessage,
+  type PluginRowMessage,
+} from "./plugin-row-message.ts";
 import type { PluginsConsentController } from "./plugins-consent-controller.ts";
 import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
+import {
+  installRequestForDiscoveryDetail,
+  type PluginMutationAction,
+  type PluginsPageCatalogDetail,
+  type PluginsPageDetail,
+} from "./plugins-page-model.ts";
 import type { PluginsRouteData } from "./route-data.ts";
 import type { PluginSettingsEditor } from "./settings-editor.ts";
 import {
@@ -50,19 +50,6 @@ import {
   type PluginPreviewController,
 } from "./skill-preview.ts";
 
-type CatalogDetailState = {
-  id: string;
-  result: PluginDiscoveryDetailResult | null;
-  error: string | null;
-};
-
-type InstalledDetailState = {
-  tools?: Array<{ name: string; description?: string }>;
-  pluginId: string;
-  inspection: PluginsInspectResult | null;
-  error: string | null;
-};
-
 type PluginsPageViewActions = {
   openTool: (name: string) => void;
   openSkill: (request: PluginsSkillsReadParams) => void;
@@ -76,7 +63,6 @@ type PluginsPageViewActions = {
   handlePluginIconError: (pluginId: string) => void;
   updateEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   uninstall: (pluginId: string, rowKey: string) => void;
-  reload: (pluginId: string, rowKey: string) => void;
   patchConfig: (path: Array<string | number>, value: unknown) => boolean | void;
   removeConfig: (path: Array<string | number>) => boolean | void;
   reloadConfig: () => void;
@@ -100,22 +86,19 @@ export type PluginsPageViewModel = {
   error: string | null;
   query: string;
   settingsTab: PluginSettingsTab;
-  busy: Record<string, boolean>;
+  busy: Record<string, PluginMutationAction>;
   messages: Record<string, PluginRowMessage>;
-  detail: InstalledDetailState | null;
+  detail: PluginsPageDetail | null;
   iconUrls: Record<string, string>;
   catalogIconUrls: Record<string, string>;
   pageNotice: PluginRowMessage | null;
-  catalogDetail: CatalogDetailState | null;
+  catalogDetail: PluginsPageCatalogDetail | null;
   installedDetailTab: InstalledPluginDetailTab;
-  installWizard: PluginInstallWizardState | null;
   mutationBlockedReason: string | null;
   canMutate: boolean;
-  reloadBlockedReason: string | null;
   canEditConfig: boolean;
   discovery: PluginDiscoveryController;
   consentController: PluginsConsentController;
-  installWizardController: InstallWizardController;
   actions: PluginsPageViewActions;
   skillPreview: PluginPreviewController;
 };
@@ -124,21 +107,9 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
   model.help?.update(model);
   const ask = model.help?.available ? model.help.ask : undefined;
   const onAskPlugin = ask ? () => void ask() : undefined;
-  const {
-    actions,
-    catalogDetail,
-    consentController,
-    context,
-    detail,
-    discovery,
-    installWizard,
-    installWizardController,
-  } = model;
+  const { actions, catalogDetail, consentController, context, detail, discovery } = model;
   const configState = context.runtimeConfig.state;
   const configAnalysis = analyzeConfigSchema(configState.configSchema);
-  const installWizardConfigSchema = installWizard?.pluginId
-    ? pluginConfigSchema(configAnalysis.schema, installWizard.pluginId)
-    : null;
   const catalog = catalogDetail?.result;
   const catalogVersion = catalog?.plugin.catalog.latestVersion;
   const catalogSkillsSection =
@@ -153,6 +124,9 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
         )
       : undefined;
   const detailPluginId = detail?.pluginId ?? null;
+  const activeCatalogInstall = catalogDetail
+    ? consentController.getActiveInstall(`install:${catalogDetail.id}`)
+    : undefined;
   const settingsParentRoute =
     new URLSearchParams(model.routeData?.location.search ?? "").get("from") === "plugins"
       ? "plugins"
@@ -166,7 +140,6 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     messages: model.messages,
     iconUrls: model.iconUrls,
     canMutate: model.canMutate,
-    reloadBlockedReason: model.reloadBlockedReason,
     mutationBlockedReason: model.mutationBlockedReason,
     configBusy: configState.configLoading,
     configError: configState.lastError,
@@ -178,7 +151,6 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     onIconError: actions.handlePluginIconError,
     onSetEnabled: actions.updateEnabled,
     onUninstall: actions.uninstall,
-    onReload: actions.reload,
     onConfigPatch: actions.patchConfig,
     onConfigRemove: actions.removeConfig,
     onConfigReload: actions.reloadConfig,
@@ -202,8 +174,12 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     return renderPluginSettingsDetail({
       ...settingsShared,
       pluginId,
+      installProgress: consentController.getActiveInstall(pluginRowKey(pluginId)),
       inspection: detail?.inspection ?? null,
+      catalog: detail?.catalog,
       inspectionError: detail?.error ?? null,
+      catalogLoading: detail?.catalogLoading,
+      catalogIconUrls: model.catalogIconUrls,
       renderCredential: model.renderCredential,
       tools: detail?.tools,
       onOpenTool: actions.openTool,
@@ -211,7 +187,9 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
         ? renderPluginSkillsSection(skills, (skillName) =>
             actions.openSkill({ source: "installed", pluginId, skillName }),
           )
-        : undefined,
+        : !components
+          ? catalogSkillsSection
+          : undefined,
       settingsHref: `${current?.pathname ?? ""}?${search}`,
       configSchema: pluginConfigSchema(configAnalysis.schema, pluginId),
       hostControlsSchema: pluginHostControlsSchema(configAnalysis.schema, pluginId),
@@ -262,7 +240,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
               aria-labelledby="plugins-tab-plugins"
               >${
                 catalogDetail
-                  ? detailPluginId
+                  ? detailPluginId && !activeCatalogInstall
                     ? renderInstalled(detailPluginId)
                     : renderPluginCatalogDetail({
                         onAskPlugin,
@@ -275,16 +253,20 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         onRetry: actions.retryCatalogDetail,
                         canInstall:
                           model.canMutate &&
+                          !model.messages[`install:${catalogDetail.id}`]?.savedInstall &&
                           Boolean(
                             catalogDetail.result &&
                             installRequestForDiscoveryDetail(catalogDetail.result),
                           ),
                         installBlockedReason: model.mutationBlockedReason,
-                        onInstall: () => {
-                          if (catalogDetail.result) {
-                            installWizardController.open(catalogDetail.result);
-                          }
-                        },
+                        onInstall: () => actions.installCatalogEntry(catalogDetail.id),
+                        busy: Boolean(model.busy[`install:${catalogDetail.id}`]),
+                        installProgress: consentController.installProgress.get(
+                          `install:${catalogDetail.id}`,
+                        ),
+                        message: model.messages[`install:${catalogDetail.id}`],
+                        onContinueInstall: (request) =>
+                          void consentController.install(request, `install:${catalogDetail.id}`),
                         iconUrls: model.catalogIconUrls,
                       })
                   : renderSettingsPage(
@@ -295,6 +277,9 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         error: discovery.error ?? model.error,
                         remoteError: discovery.remoteError,
                         categories: discovery.categories,
+                        categoriesLoading: discovery.categoriesLoading,
+                        categoriesError: discovery.categoriesError,
+                        onRetryCategories: () => void discovery.ensureCategories(true),
                         featured: discovery.featured,
                         featuredLoading: discovery.featuredLoading,
                         trending: discovery.trending,
@@ -307,6 +292,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         iconUrls: model.catalogIconUrls,
                         pluginIconUrls: model.iconUrls,
                         canInstall: model.canMutate,
+                        installProgress: consentController.installProgress,
                         entryHref: (id) => pathForPluginCatalogEntry(id, context.basePath),
                         onIntentChange: (intent) => discovery.selectIntent(intent),
                         onCategoryChange: (category) => discovery.selectCategory(category),
@@ -316,6 +302,10 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                             pathname: pathForPluginCatalogEntry(id, context.basePath),
                           }),
                         onInstall: actions.installCatalogEntry,
+                        busy: model.busy,
+                        messages: model.messages,
+                        onContinueInstall: (id, request) =>
+                          void consentController.install(request, `install:${id}`),
                         onLoadMore: () => void discovery.loadMore(),
                         onRetry: () => void discovery.refresh(),
                       }),
@@ -337,32 +327,6 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
               })
       }
     `)}
-    ${
-      installWizard
-        ? renderPluginInstallWizard({
-            state: installWizard,
-            mutationBlockedReason: model.mutationBlockedReason,
-            canMutate: model.canMutate,
-            busy: Object.values(model.busy).some(Boolean),
-            configSchema: installWizardConfigSchema,
-            configSchemaLoading: configState.configSchemaLoading,
-            configValue: installWizard.configDraft?.value ?? null,
-            configHints: configState.configUiHints,
-            configUnsupportedPaths: configAnalysis.unsupportedPaths,
-            configBusy: configState.configLoading || configState.configSaving,
-            configError: configState.lastError,
-            canEditConfig: model.canEditConfig,
-            onClose: () => installWizardController.close(),
-            onInstall: () => installWizardController.begin(),
-            onContinuePolicyWarning: () => installWizardController.continuePolicyWarning(),
-            onRetry: () => installWizardController.retry(),
-            onConfigPatch: (path, value) => installWizardController.patchConfiguration(path, value),
-            onConfigRemove: (path) => installWizardController.removeConfiguration(path),
-            onSaveConfiguration: () => void installWizardController.saveConfiguration(),
-            onManage: () => installWizardController.manage(),
-          })
-        : nothing
-    }
     ${renderPluginSkillPreview(model.skillPreview)}
     ${
       consentController.consent
@@ -377,7 +341,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
             canMutate: model.canMutate,
             mutationBlockedReason: model.mutationBlockedReason,
             busy: Object.values(model.busy).some(Boolean),
-            onCancel: () => installWizardController.cancelConsent(),
+            onCancel: () => consentController.close(),
             onConfirm: () => consentController.confirm(),
             onRetry: () => void consentController.inspect(),
           })

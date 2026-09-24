@@ -2,7 +2,6 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import {
   createOperationalRunInstanceRef,
   type OperationalRunInstanceRef,
-  type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
@@ -10,10 +9,9 @@ import {
   isEmbeddedAgentRunAbortableForRunId,
   retainEmbeddedAgentRunAbortabilityForRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
-import {
-  commitMainSessionRecovery,
-  type MainSessionRecoveryPendingTarget,
-} from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
+import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
@@ -35,10 +33,9 @@ import {
 } from "../../sessions/input-provenance.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import { retainGatewayDeviceRevocation } from "../device-revocation.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../session-subagent-resume.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
@@ -54,6 +51,7 @@ import type {
   PrepareAgentRunDispatchParams,
   PreparedAgentRunDispatch,
 } from "./agent-run-admission-types.js";
+import { admitAgentRestartRecovery } from "./agent-run-recovery-admission.js";
 import {
   prepareAgentRunTaskTracking,
   registerSessionFollowupTask,
@@ -270,14 +268,17 @@ export async function prepareAgentRunDispatch(
     cwd: params.sessionEntry?.spawnedCwd,
   });
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
-  let releaseCallerAuthority: (() => void) | undefined;
-  let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+  let capturedOperator: ReturnType<typeof retainGatewayOperatorRun> | undefined;
   let registeredFollowupTask: RegisteredGatewayAgentTask | undefined;
+  let restoreAdmittedRestartRecoveryInterrupted:
+    | (() => Promise<MainSessionRecoveryPendingTarget | undefined>)
+    | undefined;
   const cleanupPreaccept = async (admissionReleased = false, failure?: string) => {
     const lease = preparedModelRuntimeLease;
     preparedModelRuntimeLease = undefined;
     const task = registeredFollowupTask;
     registeredFollowupTask = undefined;
+    let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
     try {
       if (task) {
         await settleUnstartedGatewayAgentTask({
@@ -296,12 +297,29 @@ export async function prepareAgentRunDispatch(
       }
     } finally {
       try {
-        await lease?.[Symbol.asyncDispose]();
+        if (restoreAdmittedRestartRecoveryInterrupted) {
+          pendingRecovery = await repairMainSessionRecoveryMutation({
+            mutation: restoreAdmittedRestartRecoveryInterrupted,
+            onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
+            onError: (error) =>
+              params.context.logGateway.warn(
+                `failed to restore unaccepted restart recovery: ${formatForLog(error)}`,
+              ),
+          });
+        }
       } finally {
-        releaseCallerAuthority?.();
-        activeRunAbort.cleanup();
-        if (!admissionReleased) {
-          activeGatewayWorkAdmission.release();
+        try {
+          await lease?.[Symbol.asyncDispose]();
+        } finally {
+          try {
+            capturedOperator?.release();
+            activeRunAbort.cleanup();
+            if (!admissionReleased) {
+              activeGatewayWorkAdmission.release();
+            }
+          } finally {
+            scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
+          }
         }
       }
     }
@@ -412,9 +430,6 @@ export async function prepareAgentRunDispatch(
     return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, err));
   }
   const { taskTrackingMode, adoptParentResume } = taskTracking;
-  let restoreAdmittedRestartRecoveryInterrupted:
-    | (() => Promise<MainSessionRecoveryPendingTarget | undefined>)
-    | undefined;
   if (params.isRestartRecoveryResumeRun) {
     const recoverySessionKey = params.resolvedSessionKey;
     if (!recoverySessionKey) {
@@ -423,56 +438,17 @@ export async function prepareAgentRunDispatch(
       );
     }
     try {
-      const recoveryAdmission = await commitMainSessionRecovery({
-        command: {
-          kind: "admit_recovery",
-          lifecycleGeneration: params.lifecycleGeneration,
-          now: Date.now(),
-          runId: params.runId,
-          sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
-        },
-        requireWriteSuccess: true,
-        target: { sessionKey: recoverySessionKey, storePath: lifecycleStorePath },
+      restoreAdmittedRestartRecoveryInterrupted = await admitAgentRestartRecovery({
+        lifecycleGeneration: params.lifecycleGeneration,
+        runId: params.runId,
+        sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
+        sessionKey: recoverySessionKey,
+        storePath: lifecycleStorePath,
       });
       const recoveryRevalidation = revalidateAdmission();
       if (recoveryRevalidation !== true) {
         return recoveryRevalidation;
       }
-      if (recoveryAdmission.transition.kind !== "admitted_recovery") {
-        throw new Error(
-          `Session "${recoverySessionKey}" restart recovery reservation is stale; recovery was skipped.`,
-        );
-      }
-      const admittedRecoverySessionKey = recoveryAdmission.sessionKey ?? recoverySessionKey;
-      let restored = false;
-      restoreAdmittedRestartRecoveryInterrupted = async () => {
-        if (restored) {
-          return undefined;
-        }
-        const recovery = await commitMainSessionRecovery({
-          command: {
-            kind: "mark_admitted_recovery_interrupted",
-            lifecycleGeneration: params.lifecycleGeneration,
-            now: Date.now(),
-            runId: params.runId,
-            sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
-          },
-          requireWriteSuccess: true,
-          target: { sessionKey: admittedRecoverySessionKey, storePath: lifecycleStorePath },
-        });
-        restored = true;
-        const expectedSessionId =
-          params.request.expectedExistingSessionId ?? params.getAdmittedSessionId();
-        return recovery.transition.kind === "applied" &&
-          recovery.entry?.sessionId === expectedSessionId &&
-          recovery.sessionKey
-          ? {
-              sessionId: recovery.entry.sessionId,
-              sessionKey: recovery.sessionKey,
-              storePath: lifecycleStorePath,
-            }
-          : undefined;
-      };
     } catch (err) {
       return rejectPreaccept(errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
@@ -617,10 +593,7 @@ export async function prepareAgentRunDispatch(
   }
   try {
     // The transport request ends at acceptance; execution retains this exact caller.
-    const capturedOperator = captureGatewayOperatorRunAuthority(params);
-    operatorAuthority = capturedOperator?.authority;
-    releaseCallerAuthority =
-      capturedOperator?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
+    capturedOperator = retainGatewayOperatorRun({ ...params, entry: activeRunAbort.entry });
   } catch (error) {
     const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
     return rejectPreaccept(errorShapeFromError(ErrorCodes.INVALID_REQUEST, failure));
@@ -657,6 +630,7 @@ export async function prepareAgentRunDispatch(
     // may reject its execution after this synchronous ownership transfer.
     assertInputAdmissionCurrent = undefined;
     params.io.emitAcceptance([true, accepted, undefined], { runId: params.runId });
+    capturedOperator.armCancellation();
     recordAgentRunUserTurnParticipant(
       { ...params, inputProvenance: userTurn.inputProvenance },
       userTurn,
@@ -679,8 +653,8 @@ export async function prepareAgentRunDispatch(
       activeGatewayWorkAdmission,
       activeRunAbort,
       ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),
-      ...(releaseCallerAuthority ? { releaseCallerAuthority } : {}),
-      ...(operatorAuthority ? { operatorAuthority } : {}),
+      releaseCallerAuthority: capturedOperator.release,
+      ...(capturedOperator.authority ? { operatorAuthority: capturedOperator.authority } : {}),
       operationalRunInstance,
       effectiveProviderOverride,
       effectiveModelOverride,

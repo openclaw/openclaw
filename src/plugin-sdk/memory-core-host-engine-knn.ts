@@ -12,5 +12,6 @@ export {
 export { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
 export {
   cosineSimilarity,
+  decodeMemoryEmbedding,
   parseEmbedding,
 } from "../../packages/memory-host-sdk/src/host/embedding-vector.js";

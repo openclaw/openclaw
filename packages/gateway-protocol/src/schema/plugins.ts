@@ -19,6 +19,13 @@ import {
 import { NonEmptyString } from "./primitives.js";
 
 export {
+  PluginInstallActivitySchema,
+  PluginsInstallProgressEventSchema,
+  type PluginInstallActivity,
+  type PluginsInstallProgressEvent,
+} from "./plugin-install-progress.js";
+
+export {
   PluginDecisionProviderStatusSchema,
   PluginDeclaredSurfaceSchema,
   PluginHookGrantSchema,
@@ -468,6 +475,9 @@ export const PluginDiscoveryDetailSchema = closedObject({
   repositoryUrl: Type.Optional(NonEmptyString),
   documentationUrl: Type.Optional(NonEmptyString),
   compatibility: Type.Optional(PluginDiscoveryCompatibilitySchema),
+  contracts: Type.Optional(Type.Record(NonEmptyString, Type.Array(NonEmptyString))),
+  providers: Type.Optional(Type.Array(NonEmptyString)),
+  channels: Type.Optional(Type.Array(NonEmptyString)),
   configuration: Type.Array(PluginDiscoveryConfigFieldSchema),
   mcpServers: Type.Array(NonEmptyString),
   skills: Type.Array(
@@ -603,6 +613,7 @@ export const PluginRuntimeApplicationSchema = closedObject({
   generation: Type.Integer({ minimum: 0 }),
   pluginIds: Type.Array(NonEmptyString),
   sourceDigests: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+  selectedEntries: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
 });
 
 export const PluginsChangedEventSchema = closedObject({
@@ -649,7 +660,7 @@ export const PluginsReloadParamsSchema = closedObject({
 export const PluginsReloadResultSchema = closedObject({
   ok: Type.Literal(true),
   pluginIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: MAX_PLUGIN_RELOAD_TARGETS }),
-  restartRequired: Type.Literal(false),
+  restartRequired: Type.Boolean(),
   runtime: PluginRuntimeApplicationSchema,
   warnings: Type.Optional(Type.Array(Type.String())),
 });

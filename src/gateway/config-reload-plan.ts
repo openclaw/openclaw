@@ -7,9 +7,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
-import { isTranscriptTitleOnlyConfigChange } from "../transcripts/config-reload.js";
 import { isPlainObject } from "../utils.js";
 import { canHotReloadGatewayAuthCredentials } from "./auth-resolve.js";
+import { haveSameOperatorRoleSourcePolicies } from "./operator-role-source-policy.js";
 
 export type ChannelKind = ChannelId;
 
@@ -78,10 +78,6 @@ type ReloadPolicy = {
   accountScoped?: boolean;
 };
 type ReloadRule = Omit<ReloadPolicy, "prefixes"> & { prefix: string };
-
-type ConfigReloadMetadata = {
-  kind: ReloadRule["kind"];
-};
 
 type GatewayReloadPlanOptions = {
   noopPaths?: Iterable<string>;
@@ -163,6 +159,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.controlUi.enabled",
       "gateway.controlUi.environment",
       "gateway.controlUi.communityInvite",
+      "gateway.controlUi.newSessionModelDefaults",
       "gateway.controlUi.github",
       "gateway.controlUi.sessionObserver",
       "gateway.controlUi.embedSandbox",
@@ -179,12 +176,18 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.push.apns.relay",
       "gateway.terminal",
       "gateway.auth.rateLimit",
+      "gateway.roles",
+      "gateway.trustedProxies",
+      "gateway.allowRealIpFallback",
+      "gateway.auth.allowTailscale",
+      "gateway.auth.identityScopes",
+      "gateway.auth.trustedProxy",
       "diagnostics.enabled",
       "discovery.mdns.mode",
       "mcp.apps.sandboxOrigin",
       "agents.defaults",
-      "desktop.host.enabled",
-      "cloudWorkers.desktop",
+      "desktop.host",
+      "cloudWorkers",
     ],
     kind: "hot",
   },
@@ -234,6 +237,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
   },
   { prefixes: ["plugins.load", "plugins.installs"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
+  { prefixes: ["transcripts", "cloudWorkers.profiles"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["mcp", "gateway.publicOrigin"], kind: "hot", actions: ["disposeMcpRuntimes"] },
   // Capability ownership changes replace the plugin generation that owns its routes.
   {
@@ -277,11 +281,11 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
       "broadcast",
       "memory.citations",
       "worktreeRoot",
-      "cloudWorkers.projectProfiles",
+      "worktreeAcceleration",
       "security.audit.suppressions",
       "security.installPolicy",
       "diagnostics.cacheTrace.enabled",
-      "acp.runtime.installCommand",
+      "acp",
       "attachments.ttlHours",
       "update.checkOnStart",
       "update.channel",
@@ -415,7 +419,7 @@ function matchRule(path: string): ReloadRule | undefined {
   return getReloadPolicyCatalog().rules.find(({ prefix }) => matchesReloadPrefix(path, prefix));
 }
 
-export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
+export function resolveConfigReloadMetadata(path: string): Pick<ReloadRule, "kind"> {
   if (isPluginInstallTimestampPath(path)) {
     return { kind: "none" };
   }
@@ -483,6 +487,9 @@ function isInspectableChannelAccount(params: {
     if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
       return false;
     }
+    if (!params.plugin.config.inspectAccount && params.plugin.config.resolveAccountAsync) {
+      return false;
+    }
     const inspectAccount =
       params.plugin.config.inspectAccount ?? params.plugin.config.resolveAccount;
     inspectAccount(params.config, params.accountId);
@@ -498,6 +505,16 @@ export function buildGatewayReloadPlan(
 ): GatewayReloadPlan {
   const noopPaths = new Set(options.noopPaths);
   const forceChangedPaths = new Set(options.forceChangedPaths);
+  const roleModelPolicyOnly =
+    haveSameOperatorRoleSourcePolicies(
+      options.previousConfig?.gateway?.roles,
+      options.candidateConfig?.gateway?.roles,
+    ) &&
+    ((!options.previousCompareConfig && !options.candidateCompareConfig) ||
+      haveSameOperatorRoleSourcePolicies(
+        options.previousCompareConfig?.gateway?.roles,
+        options.candidateCompareConfig?.gateway?.roles,
+      ));
   const restartChannelAccounts = new Map<ChannelKind, Set<string>>();
   const plan: GatewayReloadPlan = {
     changedPaths,
@@ -519,19 +536,12 @@ export function buildGatewayReloadPlan(
   };
 
   for (const path of changedPaths) {
-    // Arrays diff at their parent path. Titles configure future admissions;
-    // retaining this exact live capture must not rename or finalize its archive.
     if (
-      path === "transcripts.autoStart" &&
-      !forceChangedPaths.has(path) &&
-      options.previousConfig &&
-      options.candidateConfig &&
-      options.candidateConfig.gateway?.reload?.mode !== "off" &&
-      isTranscriptTitleOnlyConfigChange(
-        options.previousCompareConfig ?? options.previousConfig,
-        options.candidateCompareConfig ?? options.candidateConfig,
-      )
+      roleModelPolicyOnly &&
+      matchesReloadPrefix(path, "gateway.roles") &&
+      !forceChangedPaths.has(path)
     ) {
+      // The committed snapshot notifies model bindings without replacing permitted runtimes.
       plan.noopPaths.push(path);
       continue;
     }

@@ -1008,7 +1008,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it.each([
-    { agentRuntime: "codex", includesUltra: false },
+    { agentRuntime: "codex", includesUltra: true },
     { agentRuntime: "openclaw", includesUltra: true },
   ] as const)(
     "renders runtime-specific /think choices for $agentRuntime",

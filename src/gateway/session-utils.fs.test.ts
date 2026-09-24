@@ -19,6 +19,7 @@ import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { buildSessionPreviewItems } from "./session-display-projection.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   ArchivedTranscriptReader,
@@ -26,7 +27,6 @@ import {
   type ReadSessionMessagesAsyncOptions,
 } from "./session-transcript-archive-reader.js";
 import {
-  buildSessionPreviewItems,
   readLatestSessionUsageFromTranscriptFileAsync,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";

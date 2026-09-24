@@ -84,6 +84,9 @@ describe("AppSidebar footer identity menu", () => {
     expect(buildChip?.querySelector(".sidebar-footer-build__update")?.textContent?.trim()).toBe(
       "Update available",
     );
+    expect(buildChip?.querySelector(".sidebar-footer-build")?.getAttribute("role")).toBe(
+      "menuitem",
+    );
 
     for (const [id, dismissed] of [
       ["bob", false],

@@ -6,6 +6,7 @@ import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subag
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.types.js";
+import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type {
@@ -69,6 +70,8 @@ export type GatewayClient = {
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Authenticated operator transport ingress; never accepted from wire params. */
+    authenticatedOperator?: true;
     /** Authenticated Control UI operator ingress; never accepted from wire params. */
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */
@@ -79,6 +82,8 @@ export type GatewayClient = {
     operatorRoleActor?: GatewayOperatorRoleActor;
     /** Original source restriction carried only by trusted in-process run admission. */
     operatorRunAuthority?: AdmittedRunOperatorAuthority;
+    /** Closure-bound access captured by the authenticated ingress, never wire data. */
+    operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
     senderAttribution?: { id: string; name?: string; identity?: TranscriptSenderIdentity };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */

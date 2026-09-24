@@ -29,15 +29,14 @@ export const GIT_BACKUP_TABLES = "tables";
 
 const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 const SAFE_TABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-// session_transcript_index_state: Gateway startup transcript reconciliation owns
-// rebuilding that FTS projection when the state rows are absent.
-// FTS row ownership must be rebuilt with that projection, never restored against different rowids.
+// Transcript FTS identities and watermarks rebuild together on Gateway startup;
+// retaining identities without the omitted FTS content would leave dangling rows.
 // backup_runs: the backup outcome log is written by every backup run, so dumping
 // it would make each cycle dirty the next one and defeat no-change detection.
 const GIT_BACKUP_PROJECTION_TABLES = [
   "backup_runs",
-  "session_transcript_index_state",
   "session_transcript_fts_rows",
+  "session_transcript_index_state",
 ] as const;
 
 export type GitBackupIdentity = { role: "global" } | { role: "agent"; agentId: string };
@@ -686,8 +685,8 @@ export async function restoreGitBackupDirectory(params: {
           .run();
       }
     }
-    // Contentless transcript FTS stays empty. Omission of session_transcript_index_state
-    // makes Gateway startup reconciliation rebuild that projection from transcripts.
+    // Transcript FTS and its identities stay empty. Omission of the watermark makes
+    // Gateway startup reconciliation rebuild both from canonical transcripts.
     database.exec(`PRAGMA user_version = ${manifest.userVersion};`);
     // Redacted and operational projection tables are absent from Git. Recreate
     // their canonical empty schemas before enforcing database ownership.

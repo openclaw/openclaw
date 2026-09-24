@@ -299,6 +299,7 @@ describe("plugin npm extended-stable workflow", () => {
         {
           releaseProfile: "beta",
           stableSoakWaiver: 'Operator approved "stable" publication.\nSoak waived.',
+          stableSoakWaiverSource: "explicit",
         },
       ]) {
         const result = runStableBootstrapAdmission({ input });
@@ -323,11 +324,26 @@ describe("plugin npm extended-stable workflow", () => {
     ],
     ["profile", { approval: { releaseProfile: "beta" } }],
     ["empty waiver", { approval: { releaseProfile: "beta", stableSoakWaiver: "" } }],
-    ["blank waiver", { approval: { releaseProfile: "beta", stableSoakWaiver: " \n\t " } }],
+    [
+      "blank waiver",
+      {
+        approval: {
+          releaseProfile: "beta",
+          stableSoakWaiver: " \n\t ",
+          stableSoakWaiverSource: "explicit",
+        },
+      },
+    ],
     ["non-string waiver", { approval: { releaseProfile: "beta", stableSoakWaiver: true } }],
     [
       "unknown waived profile",
-      { approval: { releaseProfile: "unknown", stableSoakWaiver: "Approved" } },
+      {
+        approval: {
+          releaseProfile: "unknown",
+          stableSoakWaiver: "Approved",
+          stableSoakWaiverSource: "explicit",
+        },
+      },
     ],
     ["attestation", { attestationExit: 1 }],
     ["tag moved", { tagSha: "c".repeat(40) }],
@@ -480,7 +496,13 @@ describe("plugin npm extended-stable workflow", () => {
       toolingTrusted: true,
       candidateMoved: false,
       mainVersion: "2026.9.1",
-      expectedFailure: "only the trailing completed month",
+    },
+    {
+      publishTag: "extended-stable",
+      toolingTrusted: true,
+      candidateMoved: false,
+      mainVersion: "2026.10.1",
+      expectedFailure: "only the two trailing completed months",
     },
     {
       publishTag: "extended-stable",

@@ -5,7 +5,10 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
+import {
+  buildConnectorPluginApprovalElicitation,
+  codexTestTurnIds,
+} from "./codex-app-server.test-fixtures.js";
 import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import type { JsonObject } from "./protocol.js";
 
@@ -167,27 +170,6 @@ function buildPluginApprovalElicitation(overrides: Record<string, unknown> = {})
         },
       },
       required: ["approve"],
-    },
-    ...overrides,
-  };
-}
-
-function buildConnectorPluginApprovalElicitation(overrides: Record<string, unknown> = {}) {
-  return {
-    ...codexTestTurnIds(),
-    serverName: "codex_apps",
-    mode: "form",
-    message: "Allow Google Calendar to create an event?",
-    _meta: {
-      codex_approval_kind: "mcp_tool_call",
-      source: "connector",
-      connector_id: "connector_google_calendar",
-      connector_name: "Google Calendar",
-      tool_title: "create_event",
-    },
-    requestedSchema: {
-      type: "object",
-      properties: {},
     },
     ...overrides,
   };
@@ -1498,26 +1480,43 @@ describe("Codex app-server elicitation bridge", () => {
     expect(result).toEqual({ action: "cancel", content: null, _meta: null });
   });
 
-  it("declines connector-id plugin app elicitations when destructive actions are disabled", async () => {
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildConnectorPluginApprovalElicitation(),
-      paramsForRun: createParams(),
-      ...codexTestTurnIds(),
-      pluginAppPolicyContext: createPluginAppPolicyContext({
-        allowDestructiveActions: false,
-        apps: [
-          {
-            appId: "connector_google_calendar",
-            pluginName: "google-calendar",
-            mcpServerNames: [],
-          },
-        ],
-      }),
-    });
+  it.each(["allow-once", "deny"])(
+    "routes permitted native app calls for consent under destructive denial (%s)",
+    async (decision) => {
+      mockCallGatewayTool
+        .mockResolvedValueOnce({ id: "plugin:read-consent", status: "accepted" })
+        .mockResolvedValueOnce({ id: "plugin:read-consent", decision });
+      const requestParams = buildConnectorPluginApprovalElicitation({
+        message: "Allow Google Calendar to read an event?",
+      });
+      requestParams._meta.tool_title = "read_event";
+      const result = await handleCodexAppServerElicitationRequest({
+        requestParams,
+        paramsForRun: createParams(),
+        ...codexTestTurnIds(),
+        pluginAppPolicyContext: createPluginAppPolicyContext({
+          allowDestructiveActions: false,
+          apps: [
+            {
+              appId: "connector_google_calendar",
+              pluginName: "google-calendar",
+              mcpServerNames: [],
+            },
+          ],
+        }),
+      });
 
-    expect(result).toEqual({ action: "decline", content: null, _meta: null });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({
+        action: decision === "allow-once" ? "accept" : "decline",
+        content: null,
+        _meta: null,
+      });
+      expect(gatewayToolArg(0, 2)).toMatchObject({
+        title: "Allow Google Calendar to read an event?",
+        allowedDecisions: ["allow-once", "deny"],
+      });
+    },
+  );
 
   it("declines live connector elicitations that only match display names", async () => {
     const result = await handleCodexAppServerElicitationRequest({

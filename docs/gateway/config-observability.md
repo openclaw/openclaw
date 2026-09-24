@@ -40,14 +40,14 @@ and coverage limits.
 
 - `enabled`: record new audit events (default: `true`). The ledger is on by
   default because an audit trail enabled only after an incident cannot explain
-  the incident. Setting `false` stops new event inserts after the Gateway restarts;
+  the incident. Setting `false` stops new event collection immediately;
   existing records stay readable until they expire. Turning it back on resumes
   recording from that point — the gap is not backfilled.
 - `executionIdentity`: retain bounded attribution context for exact execution
   inspection (default: `false`). This privacy-sensitive metadata is disabled
   on fresh installs and upgrades. Collection requires `enabled: true`; use
-  `openclaw config set logging.audit.executionIdentity true`, then restart the
-  Gateway. There is no environment-variable alias.
+  `openclaw config set logging.audit.executionIdentity true` to enable it for
+  newly admitted runs. There is no environment-variable alias.
 - `messages`: message metadata scope (default: `"off"`). `"direct"` records
   known direct conversations only. `"all"` also records group, channel, and
   unknown conversation kinds. Both modes remain content-free and replace raw
@@ -59,9 +59,9 @@ A root-level `audit` block is retired; the canonical path is `logging.audit`.
 The root config object is strict, so an old top-level `audit` block is rejected.
 Run [`openclaw doctor --fix`](/cli/doctor) to move it to `logging.audit`.
 
-The running Gateway captures `logging.audit.enabled`,
-`logging.audit.executionIdentity`, and `logging.audit.messages` at startup;
-restart it after changing any of these settings. Message coverage includes
+All three settings apply live. Accepted writes still drain through the same
+writer, and retained identity contexts remain unchanged. Enabling collection
+does not backfill activity or add identity to already admitted runs. Message coverage includes
 accepted inbound messages that reach core dispatch and one terminal row per
 original logical outbound reply payload that reaches shared durable delivery.
 Plugin-local and direct-send paths that bypass those shared boundaries are not

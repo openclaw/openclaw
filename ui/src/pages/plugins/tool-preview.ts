@@ -6,6 +6,9 @@ import { t } from "../../i18n/index.ts";
 export type PluginToolPreview = { name: string; description?: string };
 
 export function showPluginToolPreview(tool: PluginToolPreview, signal: AbortSignal): Promise<void> {
+  if (!tool.description?.trim()) {
+    return Promise.resolve();
+  }
   return withPromiseModalHost({ signal, value: undefined }, ({ render, finish }) => {
     render(
       () => html`<openclaw-modal-dialog
@@ -25,7 +28,7 @@ export function showPluginToolPreview(tool: PluginToolPreview, signal: AbortSign
               ${icons.x}
             </button>
           </header>
-          <p>${tool.description ?? t("pluginsPage.detailNoToolDescription")}</p>
+          <p>${tool.description}</p>
         </article>
       </openclaw-modal-dialog>`,
     );

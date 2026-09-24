@@ -1,15 +1,8 @@
-import { withAgentRosterFactsBatch } from "../../agents/agent-scope-config.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
-import {
-  getPublishedPreparedModelCatalogOwnerSnapshot,
-  withPreparedModelRuntimeReadBatch,
-} from "../../agents/prepared-model-catalog.js";
-import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
-import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
-import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -17,10 +10,7 @@ import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
-import {
-  assertAgentDatabaseAdmitted,
-  readAgentDatabaseAdmissionRefusal,
-} from "../../state/agent-database-admission.js";
+import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { listUserProfileAuthLinks } from "../../state/user-model-accounts.js";
 import { resolveChatAccountSelection } from "./chat-account-selection.js";
@@ -30,6 +20,8 @@ import type {
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
 import {
+  captureGenerationFacts,
+  ChatMetadataSnapshotUnavailableError,
   generationFactsMatch,
   type ChatMetadataRuntimeDeps,
   type PreparedAgentFacts,
@@ -100,74 +92,11 @@ function readPreparedChatMetadata(
   );
 }
 
-export class ChatMetadataSnapshotUnavailableError extends Error {
-  constructor(message = "prepared chat metadata snapshot is unavailable") {
-    super(message);
-    this.name = "ChatMetadataSnapshotUnavailableError";
-  }
-}
-
-function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerationFacts {
-  const config = deps.getConfig();
-  const agents = withPreparedModelRuntimeReadBatch(() =>
-    withAgentRosterFactsBatch(config, () =>
-      listAgentIds(config)
-        .filter((agentId) => !readAgentDatabaseAdmissionRefusal(agentId))
-        .flatMap((rawAgentId): PreparedAgentFacts[] => {
-          const agentId = normalizeAgentId(rawAgentId);
-          // Metadata follows the published lifecycle owner while its replacement gate owns turnover;
-          // display-only config publications must not make that still-current owner disappear.
-          const owner = deps.getPreparedOwner({ agentId, config });
-          if (!owner) {
-            if (getPreparedModelRuntimeStartupStatus()?.degraded) {
-              return [];
-            }
-            throw new ChatMetadataSnapshotUnavailableError(
-              `prepared chat metadata owner is unavailable for agent "${agentId}"`,
-            );
-          }
-          const workspaceDir = owner.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
-          const fullModelCatalog = owner.readFullModelCatalog?.();
-          const fullCatalogAuth = fullModelCatalog
-            ? getPreparedModelFullCatalogAuth(fullModelCatalog)
-            : undefined;
-          if (fullModelCatalog && !fullCatalogAuth) {
-            throw new Error("prepared full model catalog omitted its auth generation");
-          }
-          const catalog = fullModelCatalog ?? owner.modelCatalog;
-          return [
-            {
-              agentId,
-              owner,
-              authStore: fullCatalogAuth?.authStore ??
-                deps.getPreparedAuthStore(owner.agentDir, owner.inheritedAuthDir) ?? {
-                  version: 1,
-                  profiles: {},
-                },
-              authModes: fullCatalogAuth?.authModes ?? owner.authModes,
-              authStoreRevision: `${deps.getAuthStoreRevision(owner.agentDir)}:${deps.getAuthStoreRevision(owner.inheritedAuthDir)}`,
-              modelCatalog: catalog,
-              // Failure is visible metadata; in-flight discovery does not invalidate usable rows.
-              catalogRefreshFailed: catalog.refreshFailed === true,
-              skillsVersion: deps.getSkillsVersion(workspaceDir),
-            },
-          ];
-        }),
-    ),
-  );
-  return {
-    config,
-    configKey: resolveRuntimeConfigCacheKey(config),
-    pluginRegistryVersion: deps.getPluginRegistryVersion(),
-    agents,
-  };
-}
-
 export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayModelCatalogContext;
   beforeRefresh?: () => Promise<void>;
-  onChanged?: () => void;
+  onChanged?: (change: { modelCatalogChanged: boolean; authChanged: boolean }) => void;
   refreshOnRead?: boolean;
   log: {
     warn: (message: string) => void;
@@ -204,6 +133,19 @@ export function createGatewayChatMetadataRuntime(params: {
   let invalidationEpoch = 0;
   let refreshVersion = 0;
   let lastSettlement: PreparedMetadataGeneration | number | undefined;
+  let lastNotifiedFacts: PreparedGenerationFacts | undefined;
+  const notifyChanged = (facts?: PreparedGenerationFacts, catalogStatusChanged = false) => {
+    const previous = lastNotifiedFacts;
+    lastNotifiedFacts = facts;
+    params.onChanged?.({
+      modelCatalogChanged:
+        catalogStatusChanged ||
+        !previous ||
+        !facts ||
+        !generationFactsMatch(previous, facts, "catalog"),
+      authChanged: !previous || !facts || !generationFactsMatch(previous, facts, "auth"),
+    });
+  };
   let refreshTail: Promise<void> = Promise.resolve();
   let stoppedError: ChatMetadataSnapshotUnavailableError | undefined;
   const activeWork = new Set<Promise<unknown>>();
@@ -409,7 +351,7 @@ export function createGatewayChatMetadataRuntime(params: {
         // A settled attempt can clear progress cached by models.list or models.snapshot readers
         // without changing any prepared model/command facts. Wake them without retiring the cache.
         if (options.notifyIfUnchanged) {
-          params.onChanged?.();
+          notifyChanged(current.facts, true);
         }
         return Promise.resolve();
       }
@@ -420,7 +362,7 @@ export function createGatewayChatMetadataRuntime(params: {
       if (current || pending) {
         // Fence reads synchronously only after proving the published facts changed. A suspended
         // session projection must not return its old success or failure while replacement builds.
-        invalidate();
+        invalidate(true);
       }
     }
     const version = ++refreshVersion;
@@ -451,7 +393,7 @@ export function createGatewayChatMetadataRuntime(params: {
         committedReplacement?.resolve();
         if (lastSettlement !== current || notifyIfUnchanged) {
           lastSettlement = current;
-          params.onChanged?.();
+          notifyChanged(current.facts, notifyIfUnchanged);
         }
       },
       (error: unknown) => {
@@ -552,6 +494,17 @@ export function createGatewayChatMetadataRuntime(params: {
   const read = async (readParams: ChatMetadataReadParams): Promise<ChatMetadataResult> => {
     assertAgentDatabaseAdmitted(readParams.agentId);
     const draft = readParams.draftAccountSelection;
+    const isCurrent = readParams.isCurrent;
+    const assertCurrent = isCurrent
+      ? () => {
+          if (!isCurrent()) {
+            throw new PreparedModelRuntimePublicationSupersededError(
+              "Chat metadata access changed while preparing its metadata. Retry the request.",
+            );
+          }
+          draft?.assertCurrent();
+        }
+      : draft?.assertCurrent;
     const sessionEntry: ChatMetadataSessionEntry | undefined = draft
       ? { authProfileOverride: draft.authProfileId, authProfileOverrideSource: "user" }
       : readParams.sessionEntry;
@@ -563,12 +516,13 @@ export function createGatewayChatMetadataRuntime(params: {
           `prepared chat metadata is unavailable for agent "${agentId}"`,
         );
       }
+      readParams.assertCurrent?.();
       const projection = await projectAgent(
         generation,
         agent,
         sessionEntry,
         draft?.owner ?? readParams.requesterProfileId,
-        draft?.assertCurrent,
+        assertCurrent,
         // Existing sessions use their saved selection, never a viewer's newer default.
         !readParams.sessionKey && !readParams.sessionEntry,
       );
@@ -605,7 +559,16 @@ export function createGatewayChatMetadataRuntime(params: {
       // History consumes stable catalogs only; live readiness stays inside the current-read fence.
       ...(readParams.readPolicy === "ready"
         ? {}
-        : { metadata: readPreparedChatMetadata(session, readParams, deps.getConfig()) }),
+        : {
+            metadata: readPreparedChatMetadata(
+              session,
+              {
+                ...readParams,
+                requesterProfileId: readParams.readRequesterProfileId?.(),
+              },
+              deps.getConfig(),
+            ),
+          }),
       sessionModelCatalog: session.modelCatalog,
       defaultModelCatalog: neutral.modelCatalog,
     });
@@ -625,7 +588,7 @@ export function createGatewayChatMetadataRuntime(params: {
             generation,
             agent,
             readParams.sessionEntry,
-            readParams.requesterProfileId,
+            readParams.readRequesterProfileId?.(),
           )
         : readNeutral;
       return {
@@ -670,9 +633,13 @@ export function createGatewayChatMetadataRuntime(params: {
     return assemble(neutral.projection, session.projection);
   };
 
-  const invalidate = () => {
+  const invalidate = (retainNotifiedFacts = false) => {
     if (stoppedError) {
       return;
+    }
+    // External owner replacement can change materializations without changing snapshot identity.
+    if (!retainNotifiedFacts) {
+      lastNotifiedFacts = undefined;
     }
     invalidationEpoch += 1;
     refreshVersion += 1;
@@ -701,7 +668,7 @@ export function createGatewayChatMetadataRuntime(params: {
     // A later ready generation is a different settlement even without another invalidation.
     if (!stoppedError && lastSettlement !== invalidationEpoch) {
       lastSettlement = invalidationEpoch;
-      params.onChanged?.();
+      notifyChanged();
     }
   };
 

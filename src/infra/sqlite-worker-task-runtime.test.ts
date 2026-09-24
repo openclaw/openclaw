@@ -27,7 +27,6 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
-import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.test-support.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   deleteTaskFlowRecordById,
@@ -340,15 +339,12 @@ describe("registered tasks.async runtime", () => {
     db.exec(
       "CREATE TRIGGER reject_flow_update BEFORE UPDATE ON flow_runs BEGIN SELECT RAISE(ABORT, 'synthetic flow write failure'); END",
     );
-    const onEvent = vi.fn();
-    configureTaskFlowRegistryRuntime({ observers: { onEvent } });
     try {
       expect(await managed.finish({ flowId: created.flowId, expectedRevision: 0 })).toMatchObject({
         applied: false,
         code: "persist_failed",
         current: { revision: 0, status: "queued" },
       });
-      expect(onEvent).not.toHaveBeenCalled();
       expect(await managed.get(created.flowId)).toMatchObject({ revision: 0, status: "queued" });
     } finally {
       db.exec("DROP TRIGGER reject_flow_update");
@@ -357,56 +353,6 @@ describe("registered tasks.async runtime", () => {
       await managed.finish({ flowId: created.flowId, expectedRevision: 0, endedAt: 200 }),
     ).toMatchObject({ applied: true, flow: { revision: 1, status: "succeeded", endedAt: 200 } });
   });
-
-  it.each(["shutdown", "update"] as const)(
-    "retains a committed result when its observer initiates a synchronous %s",
-    async (action) => {
-      const runtime = createPluginRuntime();
-      const managed = runtime.tasks.async.managedFlows.bindSession({
-        sessionKey: ownerKey,
-      });
-      const legacy = runtime.tasks.managedFlows.bindSession({ sessionKey: ownerKey });
-      await managed.list();
-      let closing: Promise<void> | undefined;
-      const observedRevisions: number[] = [];
-      configureTaskFlowRegistryRuntime({
-        observers: {
-          onEvent: (event) => {
-            if (event.kind === "upserted") {
-              observedRevisions.push(event.flow.revision);
-              if (action === "shutdown") {
-                closing = drainGlobalSingletonLifecycleState("restart");
-              } else if (event.flow.revision === 0) {
-                legacy.resume({
-                  flowId: event.flow.flowId,
-                  expectedRevision: 0,
-                  status: "running",
-                });
-              }
-            }
-          },
-        },
-      });
-      const created = await managed.createManaged({
-        controllerId: "tests/close",
-        goal: "Committed before close",
-      });
-      expect(created.revision).toBe(0);
-      expect(observedRevisions).toEqual(action === "shutdown" ? [0] : [0, 1]);
-      if (action === "shutdown") {
-        expect(closing).toBeDefined();
-      } else {
-        expect(legacy.get(created.flowId)).toMatchObject({ revision: 1, status: "running" });
-      }
-      await closing;
-      configureTaskFlowRegistryRuntime({ observers: null });
-      expect(await managed.get(created.flowId)).toMatchObject({
-        flowId: created.flowId,
-        goal: "Committed before close",
-        revision: action === "shutdown" ? 0 : 1,
-      });
-    },
-  );
 
   it("preserves canonical schema error identity when a large managed command reaches staged EOF", async () => {
     const managed = createPluginRuntime().tasks.async.managedFlows.bindSession({
@@ -442,6 +388,7 @@ describe("registered tasks.async runtime", () => {
       }
       return originalPost.call(this, request, transferList);
     });
+    const inspector = new (requireNodeSqlite().DatabaseSync)(database.path);
     try {
       database.db.exec("PRAGMA user_version = 999999");
       await expect(
@@ -449,18 +396,25 @@ describe("registered tasks.async runtime", () => {
           scope.execute({ type: "flows.createManaged", input: { flow: stagedFlow } }),
         ),
       ).rejects.toBeInstanceOf(SqliteSchemaVersionError);
+      expect(database.db.isOpen).toBe(false);
       expect(frames.filter((kind) => kind === "execute-start")).toHaveLength(1);
       expect(receivedEof).toBe(true);
       expect(
-        database.db
-          .prepare("SELECT flow_id FROM flow_runs WHERE flow_id = ?")
-          .get(stagedFlow.flowId),
+        inspector.prepare("SELECT flow_id FROM flow_runs WHERE flow_id = ?").get(stagedFlow.flowId),
       ).toBeUndefined();
-      await expect(managed.createManaged(input)).rejects.toThrow("TaskFlow persistence failed.");
-      expect(database.db.prepare("SELECT COUNT(*) AS count FROM flow_runs").get()?.count).toBe(0);
+      await expect(managed.createManaged(input)).rejects.toMatchObject({
+        message: expect.stringContaining("uses newer schema version 999999"),
+        cause: expect.any(SqliteSchemaVersionError),
+      });
+      expect(frames.filter((kind) => kind === "execute-start")).toHaveLength(1);
+      expect(inspector.prepare("SELECT COUNT(*) AS count FROM flow_runs").get()?.count).toBe(0);
     } finally {
       post.mockRestore();
-      database.db.exec(`PRAGMA user_version = ${version}`);
+      try {
+        inspector.exec(`PRAGMA user_version = ${version}`);
+      } finally {
+        inspector.close();
+      }
     }
   });
 

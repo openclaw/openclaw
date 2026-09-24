@@ -13,6 +13,7 @@ import {
   withPluginRuntimeGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import * as userTurn from "../agent-turn/agent-run-user-turn.js";
 import {
   captureGatewayDeviceRevocation,
@@ -218,6 +219,146 @@ describe("gateway agent caller authority custody", () => {
       }
     },
   );
+
+  it("revokes only the accepted guest run after both callers disconnect from the same session", async () => {
+    prime();
+    const context = makeContext();
+    context.resolveGatewayContext = () => context;
+    const registry = createGatewayMethodRegistry([
+      {
+        name: "agent",
+        scope: "operator.write",
+        owner: { kind: "core", area: "agents" },
+        handler: expectDefined(agentHandlers.agent, "agent handler missing"),
+      },
+    ]);
+    context.getGatewayMethodRegistry = () => registry;
+    const source = new AbortController();
+    const guestConnection = new AbortController();
+    const staffConnection = new AbortController();
+    const actor = { kind: "operator" as const, profileId: "same-person" };
+    const guestClient = {
+      ...operatorWriteCliClient(),
+      connectionSignal: guestConnection.signal,
+      internal: {
+        operatorRoleActor: actor,
+        operatorAccessAuthority: {
+          signal: source.signal,
+          assertCurrent: () => source.signal.throwIfAborted(),
+        },
+      },
+    };
+    const staffClient = {
+      ...operatorWriteCliClient(["operator.admin"]),
+      connectionSignal: staffConnection.signal,
+      internal: { operatorRoleActor: actor },
+    };
+    const guestRunId = "registered-guest-source";
+    const staffRunId = "registered-staff-source";
+    const finishCommands = createDeferredCore();
+    const commands = new Map<string, AgentCommandGatewayIngressOpts>();
+    getAgentTestMocks().agentCommand.mockImplementation(
+      async (opts: AgentCommandGatewayIngressOpts) => {
+        await opts.onExecutionStarted?.();
+        commands.set(expectDefined(opts.runId, "command run ID missing"), opts);
+        await finishCommands.promise;
+        opts.abortSignal?.throwIfAborted();
+        return { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
+      },
+    );
+    const callers: Array<ReturnType<typeof captureGatewayDeviceRevocation>> = [];
+    try {
+      for (const [runId, client, connection] of [
+        [guestRunId, guestClient, guestConnection],
+        [staffRunId, staffClient, staffConnection],
+      ] as const) {
+        const caller = captureGatewayDeviceRevocation(
+          context,
+          { deviceId: runId, role: "operator" },
+          () => true,
+          connection.signal,
+        );
+        callers.push(caller);
+        let accepted = false;
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: runId,
+            method: "agent",
+            params: { message: "hi", sessionKey: "agent:main:main", idempotencyKey: runId },
+          },
+          context,
+          client,
+          isWebchatConnect: () => false,
+          hasCurrentClientAuthority: caller.isCurrent,
+          methodRegistry: registry,
+          respond: (ok, payload) => {
+            if (ok && isRecord(payload) && payload.status === "accepted") {
+              accepted = true;
+              caller.release();
+              connection.abort();
+            }
+          },
+        });
+        expect(accepted).toBe(true);
+      }
+      await waitForAssertion(() => expect(commands.size).toBe(2));
+      const guest = expectDefined(
+        context.chatAbortControllers.get(guestRunId),
+        "guest run missing",
+      );
+      const staff = expectDefined(
+        context.chatAbortControllers.get(staffRunId),
+        "staff run missing",
+      );
+      const guestAuthority = expectDefined(
+        commands.get(guestRunId)?.operatorAuthority,
+        "guest authority missing",
+      );
+      const staffAuthority = expectDefined(
+        commands.get(staffRunId)?.operatorAuthority,
+        "staff authority missing",
+      );
+      expect(guestConnection.signal.aborted).toBe(true);
+      expect(staffConnection.signal.aborted).toBe(true);
+      expect(source.signal.aborted).toBe(false);
+      expect(guest.controller.signal.aborted).toBe(false);
+      expect(staff.controller.signal.aborted).toBe(false);
+      expect(guest.sessionKey).toBe(staff.sessionKey);
+      expect(() => guestAuthority.assertCurrent()).not.toThrow();
+      expect(() => staffAuthority.assertCurrent()).not.toThrow();
+
+      source.abort(new Error("Guest invitation ended"));
+
+      expect(guest.controller.signal.aborted).toBe(true);
+      expect(() => guestAuthority.assertCurrent()).toThrow();
+      expect(staff.controller.signal.aborted).toBe(false);
+      expect(context.chatAbortControllers.get(staffRunId)).toBe(staff);
+      expect(() => staffAuthority.assertCurrent()).not.toThrow();
+      finishCommands.resolve();
+      await waitForAssertion(() => {
+        expect(context.chatAbortControllers.size).toBe(0);
+        expect(context.dedupe.get(`agent:${guestRunId}`)).toMatchObject({
+          ok: true,
+          payload: { runId: guestRunId, status: "timeout", summary: "aborted", stopReason: "rpc" },
+        });
+        expect(context.dedupe.get(`agent:${staffRunId}`)).toMatchObject({
+          ok: true,
+          payload: { runId: staffRunId, status: "ok" },
+        });
+      });
+    } finally {
+      finishCommands.resolve();
+      try {
+        await waitForAssertion(() => expect(context.chatAbortControllers.size).toBe(0));
+      } finally {
+        for (const caller of callers) {
+          caller.release();
+        }
+        closeGatewayDeviceRevocation(context);
+      }
+    }
+  });
 
   it("releases the original caller when the acceptance publisher throws", async () => {
     prime();

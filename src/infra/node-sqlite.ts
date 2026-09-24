@@ -5,7 +5,9 @@ import { pathToFileURL } from "node:url";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { formatErrorMessage } from "./errors.js";
 import { compareValidSemver } from "./semver.js";
+import { registerSqliteReaderConnection } from "./sqlite-reader-lifecycle.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
+import { trackSqliteSchema } from "./sqlite-schema-facts.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
@@ -143,9 +145,13 @@ export function openNodeSqliteDatabase(
   // Callers may pass file: URIs or already-namespaced paths from specialized
   // resolvers; location normalization must remain idempotent for those forms.
   const resolvedLocation = resolveNodeSqliteLocation(location);
-  return options === undefined
-    ? new sqlite.DatabaseSync(resolvedLocation)
-    : new sqlite.DatabaseSync(resolvedLocation, options);
+  const database =
+    options === undefined
+      ? new sqlite.DatabaseSync(resolvedLocation)
+      : new sqlite.DatabaseSync(resolvedLocation, options);
+  trackSqliteSchema(database, sqlite);
+  registerSqliteReaderConnection(database);
+  return database;
 }
 
 /** Compare versions only across reads on the same connection. */

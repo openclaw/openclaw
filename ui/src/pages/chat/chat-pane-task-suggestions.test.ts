@@ -9,13 +9,15 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { createTestChatPane as createChatPane } from "./chat-pane.test-support.ts";
+import {
+  createSessionCapabilityFixture,
+  createTestChatPane as createChatPane,
+} from "./chat-pane.test-support.ts";
 import { renderChatTaskSuggestionTray } from "./components/chat-task-suggestions.ts";
 
 const suggestion: TaskSuggestion = {
@@ -54,7 +56,7 @@ describe("chat pane task suggestion lifecycle", () => {
     );
     const { pane } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion];
 
@@ -84,7 +86,7 @@ describe("chat pane task suggestion lifecycle", () => {
     );
     const { pane, state } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion];
 
@@ -110,7 +112,7 @@ describe("chat pane task suggestion lifecycle", () => {
     );
     const { pane, state } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion];
     const pending = pane.dismissTaskSuggestion(suggestion);
@@ -132,7 +134,7 @@ describe("chat pane task suggestion lifecycle", () => {
       const dismissed = createDeferred<never>();
       const { pane, state } = createTestChatPane({
         client: createTestGatewayClient(createGatewayRequestMock(() => dismissed.promise)),
-        sessions: {} as SessionCapability,
+        sessions: createSessionCapabilityFixture(),
       });
       pane.taskSuggestions = [suggestion];
       const pending = pane.dismissTaskSuggestion(suggestion);
@@ -161,7 +163,7 @@ describe("chat pane task suggestion lifecycle", () => {
     );
     const { pane } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion];
     await pane.dismissTaskSuggestion(suggestion);
@@ -185,7 +187,7 @@ describe("chat pane task suggestion lifecycle", () => {
     });
     const { pane } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion, next];
     const first = pane.dismissTaskSuggestion(suggestion);
@@ -215,7 +217,7 @@ describe("chat pane task suggestion lifecycle", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
 
     try {
@@ -255,7 +257,7 @@ describe("chat pane task suggestion lifecycle", () => {
           : Promise.resolve({ suggestions: [] } satisfies TaskSuggestionsListResult),
     );
     const client = createTestGatewayClient(request);
-    const sessions = {} as SessionCapability;
+    const sessions = createSessionCapabilityFixture();
     const { pane } = createTestChatPane({ client, sessions });
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
@@ -340,7 +342,7 @@ describe("chat pane task suggestion lifecycle", () => {
     });
     const { pane } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
       "taskSuggestions.accept",
@@ -417,7 +419,7 @@ describe("chat pane task suggestion lifecycle", () => {
     );
     const { pane } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
       "taskSuggestions.accept",
@@ -443,7 +445,7 @@ describe("chat pane task suggestion lifecycle", () => {
     const client = {
       request: vi.fn(() => accepted.promise),
     } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
+    const sessions = createSessionCapabilityFixture();
     const { pane } = createTestChatPane({ client, sessions });
     pane.taskSuggestions = [suggestion];
     const pending = pane.acceptTaskSuggestion(suggestion);
@@ -467,7 +469,7 @@ describe("chat pane task suggestion lifecycle", () => {
     );
     const { pane, state } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.context.gateway.snapshot.selfUser = { id: "operator-a", name: "Operator A" };
     state.loadAssistantIdentity = vi.fn(async () => {});
@@ -540,7 +542,7 @@ describe("chat pane task suggestion lifecycle", () => {
       });
       const { pane } = createTestChatPane({
         client: createTestGatewayClient(request),
-        sessions: {} as SessionCapability,
+        sessions: createSessionCapabilityFixture(),
       });
       pane.taskSuggestions = [suggestion];
       const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
@@ -590,7 +592,7 @@ describe("chat pane task suggestion lifecycle", () => {
         recoveryScope: { get: () => (source === "unknown" ? "" : "principal-a") },
         recoveryScopeReady: { get: () => recoveryReady },
       });
-      const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const { pane } = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
       const snapshot = pane.context.gateway.snapshot;
       const hello = snapshot.hello!;
       snapshot.hello = {
@@ -645,7 +647,7 @@ describe("chat pane task suggestion lifecycle", () => {
       );
       const { pane, state } = createTestChatPane({
         client: createTestGatewayClient(request),
-        sessions: {} as SessionCapability,
+        sessions: createSessionCapabilityFixture(),
       });
       state.currentSessionId = initiallyKnown ? "physical-original" : undefined;
       state.loadAssistantIdentity = vi.fn(async () => {});
@@ -703,7 +705,7 @@ describe("chat pane task suggestion lifecycle", () => {
     const client = {
       request: vi.fn(() => listed.promise),
     } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
+    const sessions = createSessionCapabilityFixture();
     const { pane } = createTestChatPane({ client, sessions });
 
     const pending = pane.refreshTaskSuggestions();

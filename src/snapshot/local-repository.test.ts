@@ -4,12 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import * as directoryDurability from "@openclaw/fs-safe/durability";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runExec } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import {
+  createAgentDatabase,
+  createGlobalDatabase,
+  createUnsafeIndexDrift,
+  disableDefensiveModeForSchemaCorruption,
+  DURABLE_PLUGIN_BLOB_MARKER,
+  seedGlobalPluginBlobSnapshotFixtures,
+  seedStateLease,
+  STATE_LEASE_MARKER,
+  TRANSIENT_PLUGIN_BLOB_MARKER,
+} from "./local-repository.schema.test-support.js";
 import {
   createGenericDatabase,
   createGenericSnapshot,
@@ -70,155 +80,12 @@ import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
 
 const { createTempDir, createGenericRepositoryFixture, createGenericSnapshotFixture } =
   useLocalRepositoryFixtures(afterEach);
-const TRANSIENT_PLUGIN_BLOB_MARKER = `transient-plugin-blob-${"sensitive".repeat(32)}`;
-const DURABLE_PLUGIN_BLOB_MARKER = "durable-plugin-blob-control";
-const STATE_LEASE_MARKER = "snapshot-must-not-retain-active-lease";
 
 afterEach(() => {
   durabilityTestState.beforePin = undefined;
   durabilityTestState.beforeSync = undefined;
   durabilityTestState.pinnedSyncOutcome = undefined;
 });
-
-function createGlobalDatabase(databasePath: string): void {
-  withDatabase(databasePath, (database) => {
-    database.exec(`
-      ${OPENCLAW_STATE_SCHEMA_SQL}
-      PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
-    `);
-    database
-      .prepare(
-        `
-          INSERT INTO schema_meta (
-            meta_key,
-            role,
-            schema_version,
-            agent_id,
-            app_version,
-            created_at,
-            updated_at
-          ) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)
-        `,
-      )
-      .run(OPENCLAW_STATE_SCHEMA_VERSION);
-    database
-      .prepare(
-        `
-          INSERT INTO delivery_queue_entries (
-            queue_name,
-            id,
-            status,
-            entry_json,
-            enqueued_at,
-            updated_at
-          ) VALUES ('delivery', 'queued', 'pending', ?, 1, 1)
-        `,
-      )
-      .run('{"payload":"do-not-restore"}');
-  });
-}
-
-function seedGlobalPluginBlobSnapshotFixtures(databasePath: string): void {
-  withDatabase(databasePath, (database) => {
-    const insertPluginBlob = database.prepare(
-      `
-        INSERT INTO plugin_blob_entries (
-          plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
-    insertPluginBlob.run(
-      "diffs",
-      "viewer-artifacts",
-      "transient",
-      JSON.stringify({ marker: TRANSIENT_PLUGIN_BLOB_MARKER }),
-      Buffer.from(`<html>${TRANSIENT_PLUGIN_BLOB_MARKER}</html>`),
-      1,
-      Date.UTC(2099, 0, 1),
-    );
-    insertPluginBlob.run(
-      "durable-plugin",
-      "documents",
-      "durable",
-      JSON.stringify({ kind: "durable" }),
-      Buffer.from(DURABLE_PLUGIN_BLOB_MARKER),
-      1,
-      null,
-    );
-  });
-}
-
-function createAgentDatabase(databasePath: string, agentId: string): void {
-  withDatabase(databasePath, (database) => {
-    database.exec(`
-      ${OPENCLAW_AGENT_SCHEMA_SQL}
-      PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
-    `);
-    database
-      .prepare(
-        `
-          INSERT INTO schema_meta (
-            meta_key,
-            role,
-            schema_version,
-            agent_id,
-            app_version,
-            created_at,
-            updated_at
-          ) VALUES ('primary', 'agent', ?, ?, NULL, 1, 1)
-        `,
-      )
-      .run(OPENCLAW_AGENT_SCHEMA_VERSION, agentId);
-  });
-}
-
-function seedStateLease(databasePath: string): void {
-  withDatabase(databasePath, (database) => {
-    database
-      .prepare(
-        `
-          INSERT INTO state_leases (
-            scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at
-          ) VALUES (?, 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
-        `,
-      )
-      .run(STATE_LEASE_MARKER);
-  });
-}
-
-function disableDefensiveModeForSchemaCorruption(database: object): void {
-  (
-    database as {
-      enableDefensive?: (active: boolean) => void;
-    }
-  ).enableDefensive?.(false);
-}
-
-function createUnsafeIndexDrift(databasePath: string): void {
-  withDatabase(databasePath, (database) => {
-    disableDefensiveModeForSchemaCorruption(database);
-    database.exec(`
-      CREATE TABLE records (
-        id INTEGER PRIMARY KEY,
-        indexed_value TEXT NOT NULL,
-        alternate_value TEXT NOT NULL
-      );
-      CREATE INDEX records_value ON records(indexed_value);
-      INSERT INTO records (indexed_value, alternate_value)
-      VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
-      PRAGMA writable_schema = ON;
-    `);
-    database
-      .prepare(
-        "UPDATE sqlite_schema SET sql = 'CREATE INDEX records_value ON records(alternate_value)' WHERE name = 'records_value'",
-      )
-      .run();
-    const schemaVersion = Number(
-      Object.values(database.prepare("PRAGMA schema_version").get() as Record<string, unknown>)[0],
-    );
-    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
-  });
-}
 
 async function rewriteManifest(
   result: SnapshotResult,
@@ -469,6 +336,86 @@ describe("local SQLite snapshot repository", () => {
 
     await expect(provider.list()).resolves.toEqual([second, first]);
   });
+
+  it.each(["before content inspection", "after content inspection"] as const)(
+    "keeps a snapshot recovered while its creator is paused %s",
+    async (phase) => {
+      const { provider, repositoryPath, restorePath, sourcePath } =
+        await createGenericRepositoryFixture({ database: { values: ["recovered"] } });
+      await fs.mkdir(repositoryPath, { mode: 0o700 });
+      const canonicalRepositoryPath = await fs.realpath(repositoryPath);
+      const paused = createDeferred();
+      const resume = createDeferred();
+      let snapshotDir: string | undefined;
+      let creatorPaused = false;
+      durabilityTestState.beforePin = (directoryPath) => {
+        if (
+          path.dirname(directoryPath) === canonicalRepositoryPath &&
+          !path.basename(directoryPath).startsWith(".tmp-")
+        ) {
+          snapshotDir ??= directoryPath;
+        }
+      };
+      durabilityTestState.beforeSync = async (directoryPath) => {
+        if (!snapshotDir || creatorPaused) {
+          return;
+        }
+        const pausePath =
+          phase === "before content inspection" ? snapshotDir : canonicalRepositoryPath;
+        if (directoryPath !== pausePath) {
+          return;
+        }
+        const entries = await fs.readdir(snapshotDir);
+        if (
+          !entries.includes(SNAPSHOT_MANIFEST_FILENAME) ||
+          !entries.includes(SNAPSHOT_SQLITE_FILENAME)
+        ) {
+          return;
+        }
+        creatorPaused = true;
+        paused.resolve();
+        await resume.promise;
+      };
+      const creating = createGenericSnapshot(provider, sourcePath, "concurrent-create-recovery");
+      const creationOutcome = Promise.allSettled([creating]);
+      try {
+        await Promise.race([
+          paused.promise,
+          creating.then(() => {
+            throw new Error("Snapshot creation finished before the recovery barrier.");
+          }),
+        ]);
+        const recovered = await provider.list();
+        const snapshot = recovered.at(0);
+        if (!snapshot) {
+          throw new Error("Expected a recovered snapshot while creation was paused.");
+        }
+        expect(recovered).toEqual([snapshot]);
+        await expectMissing(path.join(snapshot.ref.path, ".pending"));
+
+        resume.resolve();
+        const outcome = await creationOutcome;
+        expect({ creation: outcome, snapshots: await provider.list() }).toEqual({
+          creation: [{ status: "fulfilled", value: snapshot }],
+          snapshots: [snapshot],
+        });
+        await expect(provider.verify(snapshot.ref)).resolves.toEqual({
+          ok: true,
+          manifest: snapshot.manifest,
+        });
+        await expect(provider.restoreFresh(snapshot.ref, restorePath)).resolves.toEqual({
+          ok: true,
+          manifest: snapshot.manifest,
+        });
+        expect(readGenericValues(restorePath)).toEqual([{ value: "recovered" }]);
+      } finally {
+        resume.resolve();
+        await creationOutcome;
+        durabilityTestState.beforePin = undefined;
+        durabilityTestState.beforeSync = undefined;
+      }
+    },
+  );
 
   it("recovers a complete snapshot left pending after a crash", async () => {
     const { provider, snapshot } = await createGenericSnapshotFixture("recover-complete-pending");

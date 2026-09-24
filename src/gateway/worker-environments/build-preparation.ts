@@ -110,7 +110,7 @@ export function createWorkerEnvironmentBuildPreparation(options: BuildPreparatio
     }
     const demandAtMs = now();
     const identity = deriveEnvironmentIntent(`prepared:${randomUUID()}`);
-    const record = store.ensurePreparedIntent({
+    const record = await store.ensurePreparedIntent({
       intent: {
         ...identity,
         providerId: intent.providerId,

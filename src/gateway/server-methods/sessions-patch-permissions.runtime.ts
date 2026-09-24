@@ -53,9 +53,15 @@ export function prepareSessionPatchPermissionChange(params: {
           if (authorizationFailure) {
             throw new Error(authorizationFailure.message);
           }
-          const applied = await change.apply(mode, (authority) =>
-            params.context.cancelRunBoundApprovals?.(authority),
-          );
+          const cancellations: Promise<number>[] = [];
+          const applied = await change.apply(mode, (authority) => {
+            const cancellation = params.context.cancelRunBoundApprovals?.(authority);
+            if (cancellation) {
+              void cancellation.catch(() => undefined);
+              cancellations.push(cancellation);
+            }
+          });
+          await Promise.all(cancellations);
           if (!applied) {
             throw new Error("The active run ended or was replaced before applying permissions.");
           }

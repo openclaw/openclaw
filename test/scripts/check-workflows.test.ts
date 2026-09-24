@@ -326,7 +326,9 @@ describe("check-workflows", () => {
       "blacksmith-16vcpu-windows-2025",
     );
     expect(native).not.toBe(probe);
-    expect(native.if).toBe("${{ inputs.run_windows_ci }}");
+    expect(native.if).toBe(
+      "${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}",
+    );
     expect(native["runs-on"]).toBe("windows-2025");
     expect(probe.if).toBeUndefined();
     expect(probe["runs-on"]).toBe("${{ inputs.runner_label }}");
@@ -344,7 +346,9 @@ describe("check-workflows", () => {
     expect(probe.steps.some((step) => step.id?.startsWith("native_"))).toBe(false);
     expect(
       probe.steps.find((step) => step.name === "Keep runner alive for SSH inspection")?.if,
-    ).toBe("${{ always() && !cancelled() }}");
+    ).toBe(
+      "${{ always() && !cancelled() && !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}",
+    );
     expect(probe.steps.find((step) => step.name === "Enforce WSL2 requirement")?.if).toBe(
       "${{ always() && !cancelled() && inputs.require_wsl2 }}",
     );
@@ -355,10 +359,12 @@ describe("check-workflows", () => {
     expect(isolation.env).toEqual({
       NATIVE_RUNNER_ENVIRONMENT: "${{ runner.environment }}",
       EXPECTED_HEAD: "${{ inputs.target_ref }}",
+      NATIVE_ISOLATION_PROOF_NAME: "windows-schtasks-isolation.json",
     });
     const preflight = native.steps[1]!;
     expect(preflight.name).toBe("Preflight native Scheduled Task session");
-    expect(preflight.if).toBe(native.if);
+    // The job excludes private proof and replay before allocation; native steps retain the CI opt-in.
+    expect(preflight.if).toBe("${{ inputs.run_windows_ci }}");
     expect(preflight.run).toContain(
       'if (-not [Environment]::UserInteractive) {\n  throw "Native Scheduled Task proof requires an interactive Windows runner session."\n}',
     );
@@ -389,7 +395,7 @@ describe("check-workflows", () => {
     });
     expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
       REQUESTED_NODE_VERSION:
-        "${{ inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
+        "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
       "./.github/actions/setup-pnpm-store-cache",
@@ -428,7 +434,9 @@ describe("check-workflows", () => {
     expect(install.run).toContain(".openclaw-lifecycle-pending");
     expect(install.run).toContain("dist/openclaw-install-guard");
     const measure = probe.steps.find((step) => step.name === "Measure installed startup cohort")!;
-    expect(measure.if).toBe("${{ inputs.installed_startup_package != '' }}");
+    expect(measure.if).toBe(
+      "${{ inputs.installed_startup_package != '' && !inputs.installed_repair_worker }}",
+    );
     expect(measure.run).toContain("scripts/bench-gateway-startup.ts --installed-cohort");
     expect(measure.env).toMatchObject({
       CPU_DIAGNOSTIC: "${{ inputs.installed_startup_cpu_diagnostic }}",
@@ -441,6 +449,7 @@ describe("check-workflows", () => {
     expect(upload.with?.path).toBe(
       [
         ".artifacts/windows-installed-startup/*.json",
+        "${{ runner.temp }}/windows-repair-isolation.json",
         ".artifacts/windows-installed-startup/*.log",
         ".artifacts/windows-installed-startup/results.json.profiles/*.cpuprofile",
         ".artifacts/windows-installed-startup/results.json.profiles/*.json",
@@ -448,6 +457,46 @@ describe("check-workflows", () => {
       ].join("\n"),
     );
     expect(upload.with?.["if-no-files-found"]).toBe("error");
+  });
+
+  it("admits repair workers through the existing native and installed-package owners", () => {
+    const { workflow, probe, native } = readWindowsProbe();
+    expect(workflow.on.workflow_dispatch.inputs.installed_repair_worker).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const isolation = probe.steps.find((step) => step.id === "repair_isolation")!;
+    const validation = probe.steps.find((step) => step.id === "startup_input")!;
+    const install = probe.steps.find((step) => step.name === "Install and bind startup candidate")!;
+    const published = probe.steps.find(
+      (step) => step.name === "Install authenticated published repair controllers",
+    )!;
+    const proof = probe.steps.find(
+      (step) => step.name === "Prove installed repair worker compatibility and cleanup",
+    )!;
+    for (const step of [isolation, validation, install, published, proof]) {
+      expect(step).toBeDefined();
+    }
+    expect(isolation.if).toBe("${{ inputs.installed_repair_worker }}");
+    expect(isolation.run).toBe(native.steps[0]?.run);
+    expect(probe.steps.indexOf(isolation)).toBeLessThan(probe.steps.indexOf(validation));
+    expect(probe.steps.indexOf(validation)).toBeLessThan(probe.steps.indexOf(install));
+    expect(probe.steps.indexOf(install)).toBeLessThan(probe.steps.indexOf(proof));
+    expect(validation.env).toMatchObject({
+      REPAIR_WORKER: "${{ inputs.installed_repair_worker }}",
+      WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    });
+    expect(validation.run).toContain("$env:WORKFLOW_SHA -cne $toolingSha");
+    expect(validation.run).toContain('$env:RUNNER_LABEL -ne "windows-2025"');
+    expect(validation.run).toContain('$env:KEEPALIVE_MINUTES -ne "0"');
+    expect(published.if).toBe("${{ inputs.installed_repair_worker }}");
+    expect(published.run).toMatch(
+      /\$integrity -cne \$parent\.integrity[\s\S]*npm install --prefix \$prefix/u,
+    );
+    expect(proof.if).toBe("${{ inputs.installed_repair_worker }}");
+    expect(proof.run).toContain("scripts/windows-repair-worker-probe.mjs");
+    expect(proof.run).toContain("repair-results.json");
+    expect(proof["continue-on-error"]).toBeUndefined();
   });
 
   it("retains exact-source native proof and cleanup evidence even on failure", () => {
@@ -459,7 +508,7 @@ describe("check-workflows", () => {
       (step) => step.name === "Remove retained native Scheduled Task evidence",
     )!;
     expect(proof["timeout-minutes"]).toBe(5);
-    expect(proof.if).toBe(native.if);
+    expect(proof.if).toBe("${{ inputs.run_windows_ci }}");
     expect(proof.env).toMatchObject({
       EXPECTED_HEAD: "${{ inputs.target_ref }}",
       CI_WINDOWS_SCHTASKS_ROOT:

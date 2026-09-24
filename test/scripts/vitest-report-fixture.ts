@@ -9,6 +9,11 @@ const configs = [
   "test/vitest/vitest.unit-fast-isolated.config.ts",
   "test/vitest/vitest.agents-embedded-agent.config.ts",
 ];
+// Cross Telegram's ten-file process boundary without adding another config.
+export const reportChunkTestFiles: readonly string[] = Array.from(
+  { length: 11 },
+  (_, index) => `extensions/telegram/src/owned-${String(index).padStart(2, "0")}.test.ts`,
+);
 
 export type ReportFixtureMode =
   | "overlap"
@@ -91,7 +96,6 @@ export function createVitestReportFixture(
     OPENCLAW_TEST_PROJECTS_TIMINGS: "0",
     OPENCLAW_VITEST_MAX_WORKERS: "1",
     OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "cache"),
-    OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0",
     OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "20000",
   };
   for (const [key, value] of Object.entries(env)) {
@@ -163,8 +167,7 @@ if(output&&path.basename(path.dirname(output))==='1'&&process.argv.some(arg=>arg
       write(path.join(env.HOME!, "canary"), "synthetic caller home\n");
     }
     const isParallel = ["parallel", "batch-parallel", "failure", "overlap"].includes(mode);
-    // Report paths identify attempts before spawn; a marker written during config
-    // loading would move the intentional hang to a retry after slow first startup.
+    // Report paths identify the first attempt before config startup can record state.
     for (const [index, name] of ["alpha", "beta"].entries()) {
       const prelude = `import fs from 'node:fs';
 ${mode === "watchdog" ? "import path from 'node:path';" : ""}
@@ -269,14 +272,11 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       );
     }
     if (mode === "chunks") {
-      const files = [
-        "extensions/telegram/src/owned-one.test.ts",
-        "extensions/telegram/src/owned-two.test.ts",
-      ];
+      const files = reportChunkTestFiles;
       for (const [i, file] of files.entries()) {
         write(
           path.join(root, file),
-          `import {test,expect} from 'vitest';test('chunk/${i}',()=>expect(1).toBe(1));`,
+          `import {test,expect} from 'vitest';test('chunk/${String(i).padStart(2, "0")}',()=>expect(1).toBe(1));`,
         );
       }
       write(
@@ -287,14 +287,17 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       write(env.OPENCLAW_VITEST_INCLUDE_FILE, JSON.stringify(files));
       targets = ["test/vitest/vitest.extension-telegram.config.ts"];
     }
+    // Generated configs need no transforms. The real-home case imports the
+    // repository config and retains its source-aware loader.
+    const configLoader = `--configLoader=${realHomeReplay ? "runner" : "native"}`;
     const args = [
       "--reporter=verbose",
       "--reporter=json",
-      "--configLoader=runner",
+      configLoader,
       mode === "dotted" ? `--outputFile.json=${output}` : `--outputFile=${output}`,
     ];
     if (options.report === false) {
-      args.splice(0, args.length, "--configLoader=runner");
+      args.splice(0, args.length, configLoader);
     }
     args.push(...(options.nativeArgs ?? []));
     if (mode === "dotted") {
@@ -376,13 +379,24 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       OPENCLAW_TEST_PROJECTS_PARALLEL: isParallel ? "2" : "1",
       OPENCLAW_TEST_PROJECTS_SERIAL: isParallel ? "0" : "1",
       OPENCLAW_EXTENSION_BATCH_PARALLEL: isParallel ? "2" : "1",
-      OPENCLAW_VITEST_NO_OUTPUT_RETRY:
-        mode === "watchdog" ? "1" : env.OPENCLAW_VITEST_NO_OUTPUT_RETRY,
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS:
         mode === "watchdog" ? "1500" : env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
     };
+    let executable = process.execPath;
+    if (process.platform === "linux" && options.crashSignal === "SIGABRT") {
+      // Preserve an inherited zero hard limit; raising it needs OS authority we do not own.
+      const hasZeroHardCoreLimit = /^Max core file size\s+\S+\s+0\s/mu.test(
+        fs.readFileSync("/proc/self/limits", "utf8"),
+      );
+      if (!hasZeroHardCoreLimit) {
+        // Linux reserves one byte to suppress piped core collectors too; zero does not.
+        // Inherit it through wrappers that re-raise the fixture's intentional signal.
+        executable = "prlimit";
+        command = ["--core=1:1", "--", process.execPath, ...command];
+      }
+    }
     const { child, completion } = spawnOwnedVitestProcess({
-      command: process.execPath,
+      command: executable,
       args: command,
       homeMode: realHomeReplay ? "live-aware" : undefined,
       options: { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] },
@@ -411,7 +425,7 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
         path.join(evidence, "run.json"),
         JSON.stringify(
           {
-            command: [process.execPath, ...command],
+            command: [executable, ...command],
             cwd: root,
             env: childEnv,
             ...result,

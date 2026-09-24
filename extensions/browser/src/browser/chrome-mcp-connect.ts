@@ -3,9 +3,8 @@ import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { toErrorObject } from "../infra/errors.js";
-import { redactToolPayloadText } from "../logging/redact.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_MCP_HANDSHAKE_TIMEOUT_MS,

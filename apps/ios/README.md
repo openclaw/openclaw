@@ -14,6 +14,12 @@ OpenClaw iOS is the officially released iPhone app. It connects to an OpenClaw G
 - Some node commands require foreground access because of iOS platform limits.
 - Permissions, background behavior, and push delivery are documented below so release and support checks stay explicit.
 
+## Adaptive Navigation
+
+- Navigation uses available window width, not orientation: iPhone and accessibility text sizes use a drawer. On iPad, below 800pt it is a drawer; at 800pt and above it defaults to a persistent sidebar (300pt sidebar plus at least 500pt detail). The sidebar grows only to 320pt.
+- Hiding the persistent sidebar is remembered while the window narrows and widens. Entering a compact window closes the drawer; keyboard appearance does not change navigation mode.
+- The detail view stays mounted across navigation layout changes. On iPad, native Chat messages, composer, and progress content use a centered column capped at 760pt within the remaining detail space. Assistant answers, including streaming output, use this shared column instead of a nested 560pt cap. Detail-pane margins grow from 12pt to 24pt with available width. User bubbles retain their 560pt maximum; iPhone spacing is unchanged.
+
 ## Exact Xcode Manual Deploy Flow
 
 1. Prereqs:

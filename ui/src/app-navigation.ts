@@ -211,6 +211,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
     routes: [
       "agents",
       "model-providers",
+      "search",
       "plugin-settings",
       "skill-settings",
       "mcp",
@@ -238,6 +239,7 @@ const NON_ADMIN_SETTINGS_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   "devices",
   "agents",
   "model-providers",
+  "search",
   "plugin-settings",
   "skill-settings",
   "memory",
@@ -311,6 +313,8 @@ export function visibleSettingsNavigationGroups(
 // Subpages with a visible owner keep that owner selected so users retain
 // location context while completing the nested flow.
 const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
+  // Legacy General redirects remain Settings-owned during router transitions.
+  "config",
   "ai-agents",
   "model-setup",
   "lobsterdex",
@@ -350,8 +354,8 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   usage: navigationPresentation("coins", "usage"),
   cron: navigationPresentation("calendarClock", "cron"),
   tasks: navigationPresentation("listChecks", "tasks"),
-  skills: navigationPresentation("zap", "skills"),
-  "skill-settings": navigationPresentation("zap", "skills"),
+  skills: navigationPresentation("bookOpenText", "skills"),
+  "skill-settings": navigationPresentation("bookOpenText", "skills"),
   plugins: navigationPresentation("plug", "plugins"),
   "plugin-settings": navigationPresentation("plug", "plugins"),
   "skill-workshop": navigationPresentation("wrench", "skillWorkshop"),
@@ -372,6 +376,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   automation: navigationPresentation("terminal", "automation"),
   mcp: navigationPresentation("wrench", "mcp"),
   memory: navigationPresentation("book", "memory"),
+  search: navigationPresentation("search", "search"),
   talk: navigationPresentation("mic", "talk"),
   infrastructure: navigationPresentation("globe", "infrastructure"),
   labs: navigationPresentation("flaskConical", "labs"),

@@ -52,6 +52,11 @@ import {
   type RegisteredNodePluginToolCommand,
 } from "./node-plugin-tool-snapshot.js";
 import {
+  pairingBindingForSession,
+  pairingStateMatchesBinding,
+  isPublishedPairingCurrent,
+} from "./node-registry-pairing.js";
+import {
   forgetNodeRunnerInventory,
   invokeLifecycleNodeRegistry,
   invokePublicNodeRegistry,
@@ -160,26 +165,6 @@ type NodeSessionRegistrationOptions = {
   pairingGeneration?: string | undefined;
   approvedSurface?: NodeApprovalSurface;
 };
-
-function pairingBindingForSession(node: PairingBoundNodeSession): PairedDeviceNodeBinding {
-  return {
-    identity: node.pairingIdentity,
-    ...(node.pairingGeneration ? { generation: node.pairingGeneration } : {}),
-  };
-}
-
-function pairingStateMatchesBinding(
-  binding: PairedDeviceNodeBinding,
-  current: PairedDeviceNodeBindingSnapshot | undefined,
-): boolean {
-  if (!current) {
-    return false;
-  }
-  if (binding.identity !== current.identity) {
-    return false;
-  }
-  return !binding.generation || binding.generation === current.generation;
-}
 
 export type NodeRegistryOptions = {
   listRegisteredNodePluginToolCommands?:
@@ -380,11 +365,15 @@ export class NodeRegistry {
     } catch {
       return { status: "unavailable" };
     }
-    return this.settlePairingLease({
-      lease,
-      isCurrent: pairingStateMatchesBinding(lease.binding, currentPairingState),
-      invalidateStale: options.invalidateStale,
-    });
+    let isCurrent = pairingStateMatchesBinding(lease.binding, currentPairingState);
+    try {
+      if (isCurrent && this.options.isPairingStateCurrent) {
+        isCurrent = this.options.isPairingStateCurrent(lease.nodeId, lease.binding);
+      }
+    } catch {
+      return { status: "unavailable" };
+    }
+    return this.settlePairingLease({ lease, isCurrent, invalidateStale: options.invalidateStale });
   }
 
   private refreshSessionPolicy(node: NodeSession): void {
@@ -656,7 +645,7 @@ export class NodeRegistry {
     });
   }
 
-  /** Reconcile connected sessions through the synchronous persistent-pairing owner. */
+  /** Reconcile connected sessions against the pairing owner's committed publication. */
   listCurrentConnectedSync(): NodeSession[] {
     const isPairingStateCurrent = this.options.isPairingStateCurrent;
     if (!isPairingStateCurrent) {
@@ -911,6 +900,7 @@ export class NodeRegistry {
         : null,
       lease
         ? {
+            prepare: () => this.getCurrentConnected(lease.nodeId),
             isCurrent: () => {
               if (!this.currentSessionForLease(lease)) {
                 return false;
@@ -1192,36 +1182,26 @@ export class NodeRegistry {
     }
     const connId = params.connId;
     this.pruneAuthorizedSystemRunEvents();
-    let match: { key: string; event: AuthorizedSystemRunEvent } | null;
-    if (params.runId) {
+    let match = params.runId
+      ? this.matchAuthorizedSystemRunEvent({
+          nodeId: params.nodeId,
+          connId,
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+        })
+      : null;
+    if (match === null && this.allowsLegacyMacRunIdFallback({ nodeId: params.nodeId, connId })) {
       match = this.matchAuthorizedSystemRunEvent({
         nodeId: params.nodeId,
         connId,
-        runId: params.runId,
-        sessionKey: params.sessionKey,
-      });
-      if (!match && this.allowsLegacyMacRunIdFallback({ nodeId: params.nodeId, connId })) {
-        match = this.matchSingleAuthorizedSystemRunEvent({
-          nodeId: params.nodeId,
-          connId,
-          sessionKey: params.sessionKey,
-        });
-      }
-    } else {
-      if (!this.allowsLegacyMacRunIdFallback({ nodeId: params.nodeId, connId })) {
-        return false;
-      }
-      match = this.matchSingleAuthorizedSystemRunEvent({
-        nodeId: params.nodeId,
-        connId,
         sessionKey: params.sessionKey,
       });
     }
-    if (!match) {
+    if (match === null) {
       return false;
     }
     if (params.terminal) {
-      this.authorizedSystemRunEvents.delete(match.key);
+      this.authorizedSystemRunEvents.delete(match);
     }
     return true;
   }
@@ -1254,49 +1234,29 @@ export class NodeRegistry {
   private matchAuthorizedSystemRunEvent(params: {
     nodeId: string;
     connId: string;
-    runId: string;
+    runId?: string;
     sessionKey: string;
-  }): { key: string; event: AuthorizedSystemRunEvent } | null {
-    for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (
-        event.nodeId === params.nodeId &&
-        event.connId === params.connId &&
-        event.runId === params.runId &&
-        this.authorizedSystemRunSessionMatches(event, params.sessionKey)
-      ) {
-        return { key, event };
-      }
-    }
-    return null;
-  }
-
-  private matchSingleAuthorizedSystemRunEvent(params: {
-    nodeId: string;
-    connId: string;
-    sessionKey: string;
-  }): { key: string; event: AuthorizedSystemRunEvent } | null {
-    let match: { key: string; event: AuthorizedSystemRunEvent } | null = null;
+  }): string | null {
+    let match: string | null = null;
     for (const [key, event] of this.authorizedSystemRunEvents) {
       if (
         event.nodeId !== params.nodeId ||
         event.connId !== params.connId ||
-        !this.authorizedSystemRunSessionMatches(event, params.sessionKey)
+        (params.runId !== undefined && event.runId !== params.runId) ||
+        (event.sessionKey && event.sessionKey !== params.sessionKey)
       ) {
         continue;
       }
-      if (match) {
+      if (params.runId !== undefined) {
+        return key;
+      }
+      // Legacy macOS events may omit the run ID, but only one pending run may match.
+      if (match !== null) {
         return null;
       }
-      match = { key, event };
+      match = key;
     }
     return match;
-  }
-
-  private authorizedSystemRunSessionMatches(
-    event: AuthorizedSystemRunEvent,
-    sessionKey: string,
-  ): boolean {
-    return !event.sessionKey || event.sessionKey === sessionKey;
   }
 
   private allowsLegacyMacRunIdFallback(params: { nodeId: string; connId: string }): boolean {
@@ -1433,7 +1393,10 @@ export class NodeRegistry {
   }
 
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
-    if (node.client.invalidated === true) {
+    if (
+      node.client.invalidated === true ||
+      !isPublishedPairingCurrent(node, this.options.isPairingStateCurrent)
+    ) {
       return false;
     }
     const eventTransport = this.eventTransportsByConn.get(node.connId);
@@ -1459,7 +1422,10 @@ export class NodeRegistry {
     event: string,
     payloadJSON?: SerializedEventPayload | null,
   ): boolean {
-    if (node.client.invalidated === true) {
+    if (
+      node.client.invalidated === true ||
+      !isPublishedPairingCurrent(node, this.options.isPairingStateCurrent)
+    ) {
       return false;
     }
     if (

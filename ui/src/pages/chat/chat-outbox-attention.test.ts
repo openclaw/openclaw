@@ -46,6 +46,7 @@ it("projects only actionable submissions, without message or diagnostic content"
     "submitting",
     "failed",
     "unconfirmed",
+    "held",
   ] as const) {
     const row = { ...item(String(state), state), sendError: "private diagnostic" };
     expect(
@@ -57,7 +58,7 @@ it("projects only actionable submissions, without message or diagnostic content"
     ).toBe(true);
   }
   const attention = listChatOutboxAttention(host);
-  expect(attention.map((row) => row.id)).toEqual(["failed", "unconfirmed"]);
+  expect(attention.map((row) => row.id)).toEqual(["failed", "unconfirmed", "held"]);
   expect(JSON.stringify(attention)).not.toMatch(/Private message|private diagnostic/);
   expect(attention[1]).toMatchObject({ unconfirmed: true, command: false, ...scope });
   expect(listChatOutboxAttention({ ...host, settings: { gatewayUrl: "ws://other.test" } })).toEqual(

@@ -13,14 +13,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { installationTargetEnv } from "./installation-target-context.js";
-import { prepareUnattendedUpdateRepair, runUpdateRepairLoop } from "./update-repair-agent.js";
+import { updateRepairWorkerMessageSchema } from "./test-fixtures/update-repair-protocol.v2026-9-4.js";
+import { runUpdateRepairLoop } from "./update-repair-agent.js";
 import {
   updateRepairBudgetSchema,
-  updateRepairWorkerMessageSchema,
   type UpdateRepairParams,
   type UpdateRepairResult,
 } from "./update-repair-protocol.js";
-import { createUpdateRun, getUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
+import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
 // Manual triage retains the shared in-process loop. Load its built runtime through
 // Node's loader, as the CLI does; worker cases already use the packaged child.
@@ -79,14 +79,19 @@ async function runReleasedParentRepair(params: UpdateRepairParams): Promise<Upda
               ...context
             } = params.context;
             // v2026.9.4 sends neither an authority object nor context.phase after
-            // activation. Replaying that shipped message must retain worker repair.
+            // activation. The candidate must defer both released message shapes.
             child.send({
               type: "start",
-              runId: params.runId,
-              requester: params.requester,
+              runId: "released-update-run",
+              requester: { channel: "synthetic", senderId: "owner" },
               target: params.target,
               failure: context,
-              context: { beforeVersion, targetVersion, symptoms },
+              context: {
+                ...(params.context.phase === "validating" ? { phase: "validating" } : {}),
+                beforeVersion,
+                targetVersion,
+                symptoms,
+              },
               budget: updateRepairBudgetSchema.parse(params.budget),
             });
           } else if (message.type === "validate") {
@@ -156,25 +161,23 @@ function writeRepairToolCall(response: ServerResponse, name: "exec" | "write"): 
 
 describe("update repair with a local model provider", () => {
   it.each([
-    { phase: "validating", revoke: "none", entry: "worker" },
-    { phase: "verifying", revoke: "none", entry: "worker" },
-    { phase: "validating", revoke: "requester", entry: "worker" },
-    { phase: "validating", revoke: "run", entry: "worker" },
-    { phase: "verifying", revoke: "none", entry: "released-parent" },
-    { phase: "verifying", revoke: "none", entry: "manual" },
+    { phase: "validating", entry: "released-parent" },
+    { phase: "verifying", entry: "released-parent" },
+    { phase: "verifying", entry: "manual" },
   ] as const)(
-    "checks repair scope before host exec during $phase ($entry, $revoke)",
-    async ({ phase, revoke, entry }) => {
+    "defers published update inference and scopes manual post-failure repair ($entry, $phase)",
+    async ({ phase, entry }) => {
       await withOpenClawTestState(
         { prefix: "update-repair-boundary-", layout: "home" },
         async (state) => {
           const requests: ModelRequest[] = [];
+          const providerCalls: string[] = [];
           const errors: unknown[] = [];
           let issuedRepair = false;
           let issuedScopeProbe = false;
-          let revokeAuthority = async () => {};
           await withServer(
             (request, response) => {
+              providerCalls.push(`${request.method} ${request.url}`);
               void (async () => {
                 if (request.method === "GET" && request.url === "/v1/models") {
                   response.writeHead(200, { "content-type": "application/json" });
@@ -194,8 +197,6 @@ describe("update repair with a local model provider", () => {
                 }
                 if (body.tools?.some((tool) => tool.name === "exec") && !issuedRepair) {
                   issuedRepair = true;
-                  // Revoke after inference begins but before its tool effect is dispatched.
-                  await revokeAuthority();
                   writeRepairToolCall(response, "exec");
                   return;
                 }
@@ -265,30 +266,27 @@ describe("update repair with a local model provider", () => {
               }
               const expected = `${targetStateDir} 0 0 external`;
               const ledgerEnv = { ...process.env };
-              const run = createUpdateRun({ trigger: "cli" }, { env: ledgerEnv });
-              recordUpdateRunPhase(run.runId, "repairing", undefined, { env: ledgerEnv });
-              revokeAuthority = async () => {
-                if (revoke === "requester") {
-                  await state.writeConfig({
-                    ...config,
-                    commands: { ownerAllowFrom: ["different-owner"] },
-                  });
-                } else if (revoke === "run") {
-                  recordUpdateRunPhase(run.runId, "verifying", undefined, { env: ledgerEnv });
-                }
-              };
-              // The rehearsal has no live run ledger; authorization must use the source.
-              // Both phases host repair in the installation that owns the target state.
+              const run =
+                entry === "manual"
+                  ? createUpdateRun({ trigger: "cli" }, { env: ledgerEnv })
+                  : undefined;
+              if (run) {
+                finishUpdateRun(
+                  run.runId,
+                  { status: "failed", reason: "Synthetic startup failure" },
+                  { env: ledgerEnv },
+                );
+              }
+              // The released parent may target a copied rehearsal or omit context.phase.
               await fs.symlink(
                 path.join(process.cwd(), "dist"),
                 path.join(state.workspaceDir, "dist"),
                 "dir",
               );
               const params: UpdateRepairParams = {
-                runId: run.runId,
-                requester: { channel: "synthetic", senderId: "owner" },
-                admissionEnv: ledgerEnv,
-                isCurrent: () => getUpdateRun(run.runId, { env: ledgerEnv })?.status === "running",
+                isCurrent: run
+                  ? () => getUpdateRun(run.runId, { env: ledgerEnv })?.status === "failed"
+                  : undefined,
                 target: {
                   stateDir: targetStateDir,
                   configPath: targetConfigPath,
@@ -297,7 +295,7 @@ describe("update repair with a local model provider", () => {
                 },
                 context: { error: "Synthetic repair marker is missing.", phase },
                 budget: { maxTurns: 1, wallClockMs: 90_000, perTurnMs: 60_000, maxToolCalls: 2 },
-                validate: async () => {
+                validate: vi.fn(async () => {
                   const text = await fs.readFile(marker, "utf8").catch(() => "");
                   const ok = text === expected;
                   return {
@@ -305,25 +303,26 @@ describe("update repair with a local model provider", () => {
                     score: ok ? 1 : 0,
                     summary: ok ? "Target marker verified." : "Target marker absent.",
                   };
-                },
+                }),
               };
               const result =
                 entry === "released-parent"
                   ? await runReleasedParentRepair(params)
-                  : entry === "manual"
-                    ? await runUpdateRepairLoop(params)
-                    : await prepareUnattendedUpdateRepair(params);
+                  : await runUpdateRepairLoop(params);
 
               expect(errors).toEqual([]);
-              if (revoke !== "none") {
-                expect(issuedRepair).toBe(true);
-                expect(result, JSON.stringify(result)).toMatchObject({ status: "aborted" });
+              if (entry === "released-parent") {
+                expect(result).toMatchObject({
+                  status: "unavailable",
+                  reason:
+                    "Inference repair is deferred until after the update has failed. Updates do not require inference.",
+                  attempts: [],
+                  finalValidation: { ok: false },
+                });
+                expect(params.validate).not.toHaveBeenCalled();
+                expect(providerCalls).toEqual([]);
                 await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-                if (phase === "validating") {
-                  expect(
-                    JSON.parse(await fs.readFile(targetConfigPath, "utf8")).commands.ownerAllowFrom,
-                  ).toEqual(["owner"]);
-                }
+                expect(JSON.parse(await fs.readFile(targetConfigPath, "utf8"))).toEqual(config);
                 return;
               }
               expect(result, JSON.stringify(result)).toMatchObject({

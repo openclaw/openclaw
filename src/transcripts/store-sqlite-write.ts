@@ -8,9 +8,11 @@ import {
   parseTranscriptExportManifest,
   parseTranscriptPendingExports,
 } from "./store-export-state.js";
+import { readTranscriptCanonicalSessionRow } from "./store-sqlite-read.js";
 import {
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
+  parseOptionalJsonRecord,
   type MeetingTranscriptSessionRow,
   readTranscriptSummaryInputRevision,
   readStoredTranscriptSummaryRevision,
@@ -35,18 +37,12 @@ type TranscriptSummaryValues = Pick<
   "generated_at" | "summary_json" | "markdown" | "utterance_count"
 >;
 
-export function assertMeetingTranscriptSelectorAvailableInDatabase(
+function assertMeetingTranscriptSelectorAvailableInDatabase(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   selector: string,
 ): void {
-  const owner = executeSqliteQueryTakeFirstSync(
-    database,
-    meetingTranscriptDb(database)
-      .selectFrom("meeting_transcript_sessions")
-      .selectAll()
-      .where("selector", "=", selector),
-  );
+  const owner = readTranscriptCanonicalSessionRow(database, selector);
   if (owner && (owner.session_id !== session.sessionId || owner.started_at !== session.startedAt)) {
     throw new TranscriptSessionConflictError();
   }
@@ -55,7 +51,7 @@ export function assertMeetingTranscriptSelectorAvailableInDatabase(
 export function writeMeetingTranscriptSessionInDatabase(
   database: DatabaseSync,
   params: {
-    session: TranscriptSessionDescriptor;
+    session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
     sessionValues: TranscriptSessionValues;
     now: number;
     expectedInputRevision?: string;
@@ -76,7 +72,7 @@ export function writeMeetingTranscriptSessionInDatabase(
   if (previous) {
     // ID origin belongs to admission, including the absence of that fact in legacy rows.
     const admittedMetadata = sessionFromRow(previous).metadata;
-    let metadata = session.metadata ? { ...session.metadata } : undefined;
+    let metadata = parseOptionalJsonRecord(sessionValues.metadata_json);
     if (admittedMetadata && Object.hasOwn(admittedMetadata, "sessionIdOrigin")) {
       metadata = { ...metadata, sessionIdOrigin: admittedMetadata.sessionIdOrigin };
     } else if (metadata) {
@@ -149,7 +145,7 @@ export function writeMeetingTranscriptSummaryInDatabase(
 
 function updateMeetingTranscriptExportState(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   update: (
     stored:
       | Pick<MeetingTranscriptSessionRow, "export_manifest_json" | "export_pending_json">
@@ -175,7 +171,7 @@ function updateMeetingTranscriptExportState(
 
 export function updateMeetingTranscriptExportManifestInDatabase(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   exportedHashes: Readonly<Record<string, string>>,
   removedExports: ReadonlySet<string>,
 ): void {
@@ -199,7 +195,7 @@ export function updateMeetingTranscriptExportManifestInDatabase(
 
 export function markMeetingTranscriptPendingExportsInDatabase(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   fileNames: string[],
 ): void {
   updateMeetingTranscriptExportState(database, session, (stored) => {

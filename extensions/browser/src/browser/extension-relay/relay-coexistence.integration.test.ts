@@ -1,9 +1,15 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
+import net from "node:net";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
+import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it } from "vitest";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
@@ -29,6 +35,207 @@ import { ensureExtensionRelayForProfile, stopExtensionRelays } from "./relay-lif
 afterEach(async () => {
   await stopBrowserControlService();
   clearRuntimeConfigSnapshot();
+});
+
+it("rejects a refused fixture start before connecting to the occupied port", async (test) => {
+  test.signal.throwIfAborted();
+  let callbackEntered = false;
+  let connections = 0;
+  let refusal: unknown;
+  let daemon: Awaited<ReturnType<typeof runExtensionRelayDaemon>> | undefined;
+  const sockets = new Set<net.Socket>();
+  const socketErrors: Error[] = [];
+  const competitor = net.createServer((socket) => {
+    connections += 1;
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    socket.once("error", (error) => socketErrors.push(error));
+    socket.once("data", () => socket.resetAndDestroy());
+  });
+  const fixture = withConnectedDaemon(
+    async () => {
+      callbackEntered = true;
+    },
+    async (port) => {
+      test.signal.throwIfAborted();
+      const listening = once(competitor, "listening", { signal: test.signal });
+      competitor.listen({ port, host: "127.0.0.1", signal: test.signal });
+      await listening;
+      test.signal.throwIfAborted();
+      daemon = await runExtensionRelayDaemon({ port });
+      if (test.signal.aborted || daemon.port !== null) {
+        daemon.stop();
+        await daemon.done;
+        test.signal.throwIfAborted();
+        throw new Error("Expected daemon refusal for the occupied port");
+      }
+      refusal = await daemon.done;
+      test.signal.throwIfAborted();
+      return daemon;
+    },
+  ).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () =>
+    (cleanupPromise ??= (async () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      try {
+        await new Promise<void>((resolve, reject) => {
+          competitor.close((error) => {
+            if (error && extractErrorCode(error) !== "ERR_SERVER_NOT_RUNNING") {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
+      } finally {
+        try {
+          daemon?.stop();
+          await daemon?.done;
+        } finally {
+          await fixture;
+        }
+      }
+    })());
+  test.onTestFinished(cleanup);
+  let failure: unknown;
+  try {
+    failure = await Promise.race([
+      fixture,
+      waitForAbortSignal(test.signal).then(() => test.signal.throwIfAborted()),
+    ]);
+  } finally {
+    await cleanup();
+  }
+  expect(refusal).toBe("port-in-use");
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure).toMatchObject({
+    message: expect.stringMatching(/^Relay fixture startup failed:.*\(port-in-use\)$/),
+  });
+  expect(callbackEntered).toBe(false);
+  expect(connections).toBe(0);
+  expect(socketErrors).toEqual([]);
+  expect(sockets.size).toBe(0);
+  expect(competitor.listening).toBe(false);
+});
+
+it("retains the fixture port across startup, restart, and joined daemon cleanup", async (test) => {
+  test.signal.throwIfAborted();
+  const finalDaemonStopped = createDeferred<void>();
+  const releaseFinalCleanup = createDeferred<void>();
+  const contender = net.createServer((socket) => socket.destroy());
+  let contenderClaim: Awaited<ReturnType<typeof acquireTestPortBlock>> | undefined;
+  let daemon: Awaited<ReturnType<typeof runExtensionRelayDaemon>> | undefined;
+  let fixturePort: number | undefined;
+  const competingStarts: boolean[] = [];
+  const claimContender = async (port: number) => {
+    try {
+      contenderClaim = await acquireTestPortBlock({
+        port,
+        offsets: [0],
+        signal: test.signal,
+      });
+      return true;
+    } catch (error) {
+      if (extractErrorCode(error) !== "EADDRINUSE") {
+        throw error;
+      }
+      return false;
+    }
+  };
+  const fixture = withConnectedDaemon(
+    async ({ extension, restartDaemon }) => {
+      expect(extension.readyState).toBe(WebSocket.OPEN);
+      await restartDaemon();
+    },
+    async (port) => {
+      test.signal.throwIfAborted();
+      fixturePort ??= port;
+      expect(port).toBe(fixturePort);
+      const acquired = await claimContender(port);
+      competingStarts.push(acquired);
+      if (acquired) {
+        // An unclaimed startup lets a second owner bind before the real daemon.
+        const listening = once(contender, "listening", { signal: test.signal });
+        contender.listen({ port, host: "127.0.0.1", signal: test.signal });
+        await listening;
+      }
+      daemon = await runExtensionRelayDaemon({ port });
+      const generation = competingStarts.length;
+      return {
+        ...daemon,
+        done: daemon.done.then(async (reason) => {
+          if (generation === 2) {
+            finalDaemonStopped.resolve();
+            await releaseFinalCleanup.promise;
+          }
+          return reason;
+        }),
+      };
+    },
+  ).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () =>
+    (cleanupPromise ??= (async () => {
+      releaseFinalCleanup.resolve();
+      daemon?.stop();
+      try {
+        try {
+          await daemon?.done;
+        } finally {
+          await fixture;
+        }
+      } finally {
+        try {
+          if (contender.listening) {
+            await new Promise<void>((resolve, reject) => {
+              contender.close((error) => (error ? reject(error) : resolve()));
+            });
+          }
+        } finally {
+          await contenderClaim?.release();
+        }
+      }
+    })());
+  test.onTestFinished(cleanup);
+  try {
+    await Promise.race([
+      finalDaemonStopped.promise,
+      fixture.then((failure) => {
+        if (failure !== undefined) {
+          throw new Error("Relay fixture failed before its final daemon cleanup joined", {
+            cause: failure,
+          });
+        }
+        throw new Error("Relay fixture finished before its final daemon cleanup joined");
+      }),
+      waitForAbortSignal(test.signal).then(() => test.signal.throwIfAborted()),
+    ]);
+    if (fixturePort === undefined) {
+      throw new Error("Relay fixture never selected a port");
+    }
+    expect(competingStarts).toEqual([false, false]);
+    // The physical listener has closed, but the fixture still owns its final join.
+    expect(await claimContender(fixturePort)).toBe(false);
+    releaseFinalCleanup.resolve();
+    expect(await fixture).toBeUndefined();
+    const reacquired = await acquireTestPortBlock({
+      port: fixturePort,
+      offsets: [0],
+      signal: test.signal,
+    });
+    await reacquired.release();
+  } finally {
+    await cleanup();
+  }
 });
 
 it("uses a daemon-owned relay without replacing its listener or closing its extension", async () => {

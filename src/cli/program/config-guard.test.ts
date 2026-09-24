@@ -128,19 +128,6 @@ describe("ensureConfigReady", () => {
     return root;
   }
 
-  function writeLegacyTaskSidecarMarker(root: string): void {
-    const markerPath = path.join(root, ".openclaw", "tasks", "runs.sqlite");
-    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-    fs.writeFileSync(markerPath, "");
-  }
-
-  function writePendingTaskSidecarArchiveMarker(root: string): void {
-    const markerPath = path.join(root, ".openclaw", "tasks", "runs.sqlite");
-    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-    fs.writeFileSync(`${markerPath}.migrated`, "");
-    fs.writeFileSync(`${markerPath}-wal`, "");
-  }
-
   function writeStateMarker(root: string, relativePath: string): void {
     const markerPath = path.join(root, ".openclaw", relativePath);
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
@@ -249,24 +236,30 @@ describe("ensureConfigReady", () => {
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
   });
 
-  it("runs doctor flow when lightweight startup detection finds legacy state", async () => {
+  it("ignores retired SQLite sidecars during lightweight startup detection", async () => {
     const root = useTempOpenClawHome();
-    writeLegacyTaskSidecarMarker(root);
+    const sidecarPaths = [
+      "tasks/runs.sqlite",
+      "flows/registry.sqlite",
+      "plugin-state/state.sqlite",
+    ];
+    for (const relativePath of sidecarPaths) {
+      for (const suffix of ["", ".migrated", "-wal", "-shm", "-journal"]) {
+        writeStateMarker(root, `${relativePath}${suffix}`);
+      }
+    }
 
     await runEnsureConfigReady(["status"]);
 
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
-      migrateState: true,
-      migrateLegacyConfig: false,
-      invalidConfigNote: false,
-      observe: false,
-      requireStateMigrationCheckpoint: true,
-    });
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+    for (const relativePath of sidecarPaths) {
+      expect(fs.readFileSync(path.join(root, ".openclaw", relativePath), "utf8")).toBe("{}");
+    }
   });
 
   it("keeps remote gateway calls from migrating existing local legacy state", async () => {
     const root = useTempOpenClawHome();
-    writeLegacyTaskSidecarMarker(root);
+    writeStateMarker(root, "restart-sentinel.json");
 
     await runEnsureConfigReady(["gateway", "call"]);
 
@@ -278,7 +271,7 @@ describe("ensureConfigReady", () => {
     ["daemon", "restart"],
   ])("keeps %s control from migrating existing local legacy state", async (command, action) => {
     const root = useTempOpenClawHome();
-    writeLegacyTaskSidecarMarker(root);
+    writeStateMarker(root, "restart-sentinel.json");
 
     await runEnsureConfigReady([command, action]);
 
@@ -313,21 +306,6 @@ describe("ensureConfigReady", () => {
       });
     },
   );
-
-  it("runs doctor flow when lightweight startup detection finds a pending SQLite archive", async () => {
-    const root = useTempOpenClawHome();
-    writePendingTaskSidecarArchiveMarker(root);
-
-    await runEnsureConfigReady(["status"]);
-
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
-      migrateState: true,
-      migrateLegacyConfig: false,
-      invalidConfigNote: false,
-      observe: false,
-      requireStateMigrationCheckpoint: true,
-    });
-  });
 
   it.each([
     [["gateway"], false],
@@ -533,7 +511,7 @@ describe("ensureConfigReady", () => {
     setTestEnvValue("HOME", root);
     setTestEnvValue("OPENCLAW_HOME", "~/svc");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
-    writeLegacyTaskSidecarMarker(path.join(root, "svc"));
+    writeStateMarker(path.join(root, "svc"), "restart-sentinel.json");
 
     await runEnsureConfigReady(["status"]);
 
@@ -730,7 +708,7 @@ describe("ensureConfigReady", () => {
   );
 
   it("runs doctor and retries the config guard once after consent", async () => {
-    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
+    writeStateMarker(useTempOpenClawHome(), "restart-sentinel.json");
     const invalidSnapshot = setInvalidSnapshot();
     const validSnapshot = {
       ...makeSnapshot(),
@@ -962,7 +940,7 @@ describe("ensureConfigReady", () => {
   });
 
   it("runs doctor migration flow only once per module instance", async () => {
-    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
+    writeStateMarker(useTempOpenClawHome(), "restart-sentinel.json");
     const runtimeA = makeRuntime();
     const runtimeB = makeRuntime();
 
@@ -972,13 +950,13 @@ describe("ensureConfigReady", () => {
   });
 
   it("still runs doctor flow when stdout suppression is enabled", async () => {
-    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
+    writeStateMarker(useTempOpenClawHome(), "restart-sentinel.json");
     await runEnsureConfigReady(["message"], true);
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
   });
 
   it("prevents preflight note noise when suppression is enabled", async () => {
-    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
+    writeStateMarker(useTempOpenClawHome(), "restart-sentinel.json");
     loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
       note("Doctor warnings", "Config warnings");
       return {
@@ -993,7 +971,7 @@ describe("ensureConfigReady", () => {
   });
 
   it("allows preflight note noise when suppression is not enabled", async () => {
-    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
+    writeStateMarker(useTempOpenClawHome(), "restart-sentinel.json");
     loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
       note("Doctor warnings", "Config warnings");
       return {
@@ -1008,7 +986,7 @@ describe("ensureConfigReady", () => {
   });
 
   it("does not suppress unrelated concurrent stdout writes while suppressing preflight notes", async () => {
-    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
+    writeStateMarker(useTempOpenClawHome(), "restart-sentinel.json");
     let releasePreflight: (() => void) | undefined;
     let preflightStarted: (() => void) | undefined;
     const preflightStartedPromise = new Promise<void>((resolve) => {

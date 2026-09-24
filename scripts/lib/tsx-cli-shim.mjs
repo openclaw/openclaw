@@ -17,6 +17,11 @@ const FORWARDED_COMPILER_FLAGS = new Set([
 ]);
 const SHIM_CHECKOUT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+// Forward compiler policy without replaying parent loaders, evals, or debuggers.
+export function resolveForwardedNodeCompilerArgs(execArgv = process.execArgv) {
+  return execArgv.filter((arg) => FORWARDED_COMPILER_FLAGS.has(arg));
+}
+
 function resolveConfiguredModulesDir(checkoutRoot) {
   const modulesDir =
     (process.env.PNPM_CONFIG_MODULES_DIR ?? process.env.pnpm_config_modules_dir) ||
@@ -133,7 +138,7 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
     const implementationPath = fileURLToPath(implementationUrl);
     const nodeExecutable = options.executable ?? (process.versions.bun ? "node" : process.execPath);
     // Preserve explicit compiler policy without copying parent loaders, evals, or debuggers.
-    const compilerArgs = process.execArgv.filter((arg) => FORWARDED_COMPILER_FLAGS.has(arg));
+    const compilerArgs = resolveForwardedNodeCompilerArgs();
     child = spawn(
       nodeExecutable,
       [

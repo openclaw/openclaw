@@ -9,7 +9,6 @@ export {
 } from "./agent-components-context.js";
 export {
   ensureAgentComponentInteractionAllowed,
-  ensureComponentUserAllowed,
   resolveAuthorizedComponentInteraction,
   resolveComponentCommandAuthorized,
   resolveInteractionContextWithDmAuth,

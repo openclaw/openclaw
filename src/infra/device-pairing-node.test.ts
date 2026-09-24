@@ -3,7 +3,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -82,7 +82,7 @@ describe("node surface approvals", () => {
 
   afterAll(async () => {
     for (const databasePath of databasePaths) {
-      closeOpenClawStateDatabaseByPath(databasePath);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
     }
     await tempDirs.cleanup();
   });
@@ -617,7 +617,7 @@ describe("node surface approvals", () => {
         )?.nodeSurface?.sessionHost,
       ).toBe(true);
 
-      expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
+      expect(await closeOpenClawStateDatabaseByPathAsync(database.path)).toBe(true);
       expect((await findPairedNode("node-1", baseDir))?.sessionHost).toBe(true);
       expect(
         openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } })
@@ -820,7 +820,7 @@ describe("node surface approvals", () => {
           baseDir,
         }),
       ).resolves.toBe(true);
-      expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
+      expect(await closeOpenClawStateDatabaseByPathAsync(database.path)).toBe(true);
       expect((await getPairedDevice("node-1", baseDir))?.nodeSurface?.lastHostStats).toEqual(
         hostStats,
       );
