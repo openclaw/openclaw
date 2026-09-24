@@ -204,11 +204,7 @@ function renderHero(props: AboutProps) {
 export function renderAbout(props: AboutProps) {
   const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt, i18n.getLocale());
   const buildFacts = html`
-    <dl
-      class="settings-kv about-build-grid"
-      role="group"
-      aria-label=${t("aboutPage.artifactDetails")}
-    >
+    <dl class="settings-kv about-build-grid" aria-label=${t("aboutPage.artifactDetails")}>
       <dt>${t("aboutPage.version")}</dt>
       <dd>
         ${

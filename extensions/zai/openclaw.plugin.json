@@ -146,8 +146,8 @@
   "modelPricing": {
     "providers": {
       "zai": {
-        "openRouter": {
-          "provider": "z-ai"
+        "modelsDev": {
+          "provider": "zai"
         },
         "liteLLM": {
           "provider": "zai"

@@ -3,12 +3,17 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import * as tar from "tar";
 import { describe, expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { sqliteWorkerPreloadEnv } from "../../infra/sqlite-worker-preload.test-support.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { cliRecoveryEntrypoints } from "../cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
 function runBackupCli(params: {
@@ -18,9 +23,7 @@ function runBackupCli(params: {
 }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return runCliProcessChild({
     nodeArgs: [
-      "--import",
-      "tsx",
-      path.resolve("src/entry.ts"),
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
       "backup",
       "create",
       "--output",

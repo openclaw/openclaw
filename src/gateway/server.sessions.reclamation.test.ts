@@ -1,5 +1,8 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
+import { threadId } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test } from "vitest";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { createSessionTranscriptFtsInserter } from "../config/sessions/session-transcript-fts.js";
@@ -159,7 +162,7 @@ function seedTranscriptState(storePath: string): void {
   expect(listSessionsNeedingTranscriptIndexReconcile(database.db)).toEqual([]);
 }
 
-test("sessions.delete keeps the Gateway responsive while reclaiming a large session", async () => {
+test("sessions.delete reclaims a large session off the Gateway thread", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
     entries: {
@@ -172,13 +175,18 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
 
   // Client setup prepares reply runtime before the deletion responsiveness window.
   const { ws } = await openClient();
-  const samples: number[] = [];
-  let previous = performance.now();
-  const heartbeat = setInterval(() => {
-    const current = performance.now();
-    samples.push(current - previous);
-    previous = current;
-  }, 10);
+  const diagnostics = channel("openclaw.session.write");
+  const reclamations: Record<string, unknown>[] = [];
+  const recordReclamation = (message: unknown) => {
+    if (
+      isRecord(message) &&
+      (message.operation === "session.reclamation.worker-commit" ||
+        message.operation === "session.reclamation.in-process")
+    ) {
+      reclamations.push(message);
+    }
+  };
+  diagnostics.subscribe(recordReclamation);
   let deleted: Awaited<
     ReturnType<
       typeof rpcReq<{
@@ -191,20 +199,16 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   >;
   let deleteMs = 0;
   try {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
-    });
     const deleteStartedAt = performance.now();
     // The 200k-row fixture can take longer than the generic RPC helper's 10s
-    // wall-clock budget on slower CI hosts. Responsiveness is asserted
-    // independently below via the event-loop heartbeat.
+    // wall-clock budget on slower CI hosts. Completed worker facts below
+    // protect the off-thread contract independently of host scheduling delays.
     deleted = await rpcReq(ws, "sessions.delete", { key: SESSION_KEY }, 60_000);
     deleteMs = performance.now() - deleteStartedAt;
   } finally {
-    clearInterval(heartbeat);
+    diagnostics.unsubscribe(recordReclamation);
     ws.close();
   }
-  const maxGatewayGapMs = Math.max(...samples);
 
   const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
   if (!target.path) {
@@ -270,7 +274,7 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
     process.stdout.write(
       `${JSON.stringify({
         deleteMs,
-        maxGatewayGapMs,
+        reclamations,
         rows: ROWS,
         historicalCounts,
         targetCounts,
@@ -331,6 +335,18 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
     },
   ]);
   expect(archives.every((archive) => Number(archive.archive_bytes) > 0)).toBe(true);
-  expect(samples.length).toBeGreaterThan(0);
-  expect(maxGatewayGapMs).toBeLessThan(500);
+  expect(reclamations.map((record) => record.reclamationKind)).toEqual([
+    "historical-generation",
+    "entry",
+  ]);
+  for (const record of reclamations) {
+    expect(record).toMatchObject({
+      operation: "session.reclamation.worker-commit",
+      outcome: "ok",
+      threadId,
+      writer: "worker",
+    });
+    expect(record.workerThreadId).toBeGreaterThan(0);
+    expect(record.workerThreadId).not.toBe(threadId);
+  }
 }, 120_000);

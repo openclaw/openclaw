@@ -7,6 +7,7 @@ import {
 import {
   WORKSPACE,
   captureUiProof,
+  checkoutBaseRefInput,
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
@@ -221,9 +222,7 @@ suite.define(() => {
       await pollLocatorText(project.locator(".new-session-page__trigger-label")).toBe("Registered");
       await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
       await checkout.click();
-      await expect
-        .poll(() => page.getByLabel("From", { exact: true }).inputValue())
-        .toBe("release/local");
+      await expect.poll(() => checkoutBaseRefInput(page).inputValue()).toBe("release/local");
       await expect
         .poll(() => page.getByLabel("Name", { exact: true }).inputValue())
         .toBe("browser-task");
@@ -348,7 +347,7 @@ suite.define(() => {
       await checkout.click();
       const checkoutPopover = page.locator("wa-popover.new-session-page__checkout-popover");
       await expect
-        .poll(() => checkoutPopover.getByLabel("From", { exact: true }).inputValue())
+        .poll(() => checkoutBaseRefInput(checkoutPopover).inputValue())
         .toBe("release/next");
       await expect
         .poll(() => checkoutPopover.getByLabel("Name", { exact: true }).inputValue())

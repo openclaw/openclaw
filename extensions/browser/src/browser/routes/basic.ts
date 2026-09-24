@@ -14,6 +14,7 @@ import {
 } from "../chrome.graphics.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
+import { listBrowserEngines, resolveBrowserEngine } from "../engines/registry.js";
 import { BrowserError, toBrowserErrorResponse } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
@@ -151,6 +152,7 @@ async function buildBrowserStatus(
   }
 
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+  const { descriptor: engine } = resolveBrowserEngine(profileCtx.profile.engine);
   const [cdpHttp, cdpReady, pageReady] = capabilities.usesChromeMcp
     ? await (async () => {
         const statusStartedAtMs = Date.now();
@@ -228,6 +230,10 @@ async function buildBrowserStatus(
     enabled: current.resolved.enabled,
     profile: profileCtx.profile.name,
     driver: profileCtx.profile.driver,
+    engine: engine.id,
+    sessionScope: engine.sessionScope,
+    screenshotFidelity: engine.screenshotFidelity,
+    availableEngines: listBrowserEngines(),
     transport: capabilities.usesChromeMcp
       ? ("chrome-mcp" as const)
       : capabilities.mode === "local-extension"

@@ -103,7 +103,6 @@ export function createTelegramUpdateOffsetPersistence(
   };
 
   return {
-    getAcceptedUpdateId: () => acceptedUpdateId,
     getCommittedUpdateId: () => committedUpdateId,
     persistUpdateId,
     stop,

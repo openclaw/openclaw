@@ -28,6 +28,7 @@ import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { withLocalGatewayRequestScope } from "../../../gateway/local-request-context.js";
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import { getSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
@@ -506,6 +507,9 @@ describe("pending ACP spawn authority", () => {
         admission.close();
         parent.cleanup();
         await work.drain();
+        const projection = getSessionRowProjection(context);
+        projection?.dispose();
+        await projection?.ensureMaterialized();
         if (stage === "thread") {
           unregisterSessionBindingAdapter({
             channel: "discord",

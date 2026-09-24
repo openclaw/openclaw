@@ -1,10 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
 import {
   MAX_SESSION_PARTICIPANTS,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
+import {
+  captureStateDatabaseCoordinatorRuntime,
+  type StateDatabaseCoordinatorRuntime,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   openOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesForTest,
@@ -15,13 +21,41 @@ import {
 } from "../state/openclaw-state-db.js";
 import { setUserPreferences } from "../state/user-preferences.js";
 import { ensureProfileForEmail, linkEmail, syncGitHubIdentity } from "../state/user-profiles.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { resolveGitCoauthorAttribution } from "./git-coauthor-attribution.js";
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+let sharedState: OpenClawTestState;
+let coordinatorRuntime: StateDatabaseCoordinatorRuntime;
+
+beforeAll(async () => {
+  sharedState = await createOpenClawTestState({ scenario: "minimal" });
+  coordinatorRuntime = { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false };
 });
+
+afterAll(async () => {
+  await withStateDatabaseCoordinatorRuntimeDirectory(coordinatorRuntime, async () => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    await sharedState.cleanup();
+  });
+});
+
+async function withOpenClawTestState<T>(
+  _options: { scenario: "minimal" },
+  fn: (state: OpenClawTestState) => Promise<T>,
+): Promise<T> {
+  return await withStateDatabaseCoordinatorRuntimeDirectory(coordinatorRuntime, async () => {
+    const work = new AsyncWorkScope();
+    try {
+      return await work.track(() => fn(sharedState));
+    } finally {
+      await work.drain();
+    }
+  });
+}
 
 describe("Git co-author attribution", () => {
   it("resolves credit from the configured templated session store", async () => {
@@ -66,15 +100,18 @@ describe("Git co-author attribution", () => {
     "returns undefined when the only participant is %s",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const sessionKey = "agent:main:no-coauthors";
+        const sessionKey = `agent:main:no-coauthors-${kind}`;
         const scope = { agentId: "main", env: state.env, sessionKey };
-        await upsertSessionEntryCore(scope, { sessionId: "no-coauthors", updatedAt: 1 });
-        const profile = ensureProfileForEmail("solo@example.test", { env: state.env });
+        await upsertSessionEntryCore(scope, { sessionId: `no-coauthors-${kind}`, updatedAt: 1 });
+        const accountId = kind === "primary-author" ? 202 : 201;
+        const login = `solo-${kind}`;
+        const email = `${login}@example.test`;
+        const profile = ensureProfileForEmail(email, { env: state.env });
         if (kind !== "unresolved") {
           syncGitHubIdentity(
             {
-              identity: { accountId: 20, login: "solo" },
-              authenticationAlias: { kind: "email", email: "solo@example.test" },
+              identity: { accountId, login },
+              authenticationAlias: { kind: "email", email },
             },
             { env: state.env },
           );
@@ -99,7 +136,7 @@ describe("Git co-author attribution", () => {
               tools: {
                 github: {
                   profileId: "ghp_11111111111111111111111111111111",
-                  gitAuthor: { email: "20+solo@users.noreply.github.com" },
+                  gitAuthor: { email: `${accountId}+${login}@users.noreply.github.com` },
                 },
               },
             },
@@ -341,11 +378,11 @@ describe("Git co-author attribution", () => {
       recordSessionParticipant(scope, {
         identity: { type: "legacy", actorType: "human", source: null, id: "unknown" },
       });
-      const current = ensureProfileForEmail("current@example.test", { env: state.env });
+      const current = ensureProfileForEmail("legacy-current@example.test", { env: state.env });
       syncGitHubIdentity(
         {
-          identity: { accountId: 99, login: "current" },
-          authenticationAlias: { kind: "email", email: "current@example.test" },
+          identity: { accountId: 999, login: "legacy-current" },
+          authenticationAlias: { kind: "email", email: "legacy-current@example.test" },
         },
         { env: state.env },
       );
@@ -357,8 +394,8 @@ describe("Git co-author attribution", () => {
         sessionAgentId: "main",
       });
       expect(resolveGitCoauthorAttribution({ ...scope, config: {} })).toEqual({
-        logins: ["current"],
-        trailers: ["Co-authored-by: current <99+current@users.noreply.github.com>"],
+        logins: ["legacy-current"],
+        trailers: ["Co-authored-by: legacy-current <999+legacy-current@users.noreply.github.com>"],
       });
     });
   });
@@ -373,7 +410,7 @@ describe("Git co-author attribution", () => {
         const profile = ensureProfileForEmail(email, { env: state.env });
         syncGitHubIdentity(
           {
-            identity: { accountId: index + 1, login: `person-${index}` },
+            identity: { accountId: index + 10_000, login: `person-${index}` },
             authenticationAlias: { kind: "email", email },
           },
           { env: state.env },

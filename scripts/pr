@@ -70,7 +70,7 @@ pr_subcommand_classification() {
     ls | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
+    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -461,7 +461,7 @@ readonly canonical_repo_root
 
 is_main_only_pr_command() {
   case "$1" in
-    prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
+    prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -520,6 +520,8 @@ Usage:
   scripts/pr review-validate-artifacts <PR>
   scripts/pr review-tests <PR> <test-file> [<test-file> ...]
   scripts/pr prepare-init <PR>
+  scripts/pr prepare-correction-init <PR>
+  scripts/pr prepare-correction-review-init <PR>
   scripts/pr prepare-validate-commit <PR>
   scripts/pr prepare-gates <PR>
   scripts/pr prepare-push <PR>
@@ -540,7 +542,8 @@ Usage:
     Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
     Keeps prior evidence and reruns admission; requires the same method and no auto/queue/admin route.
-    --cancel-auto instead retires the exact accepted non-queue auto request before any head repair.
+    --cancel-auto instead retires the exact accepted or uncertain non-queue auto request before head repair.
+    Cancels a matching active request once, or records an already absent request without sending cancellation.
     Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.
   scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion
     Finish a verified merge receipt after cleanup; never dispatches a merge or deletes resources.
@@ -694,7 +697,7 @@ main() {
       [ "$cancel_auto" = false ] || [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] || { usage; exit 2; }
       set -- "$merge_pr"
       ;;
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
       ;;
     *)
@@ -708,6 +711,7 @@ main() {
   case "$cmd" in
     review-validate-artifacts) review_artifact_preflight "${1-}" || return 1 ;;
     prepare-init | prepare-run) review_artifact_preflight "${1-}" true || return 1 ;;
+    prepare-correction-init) review_artifact_preflight "${1-}" correction || return 1 ;;
   esac
 
   # merge-run reconciles retained outcomes before reading disposable artifacts or base guards.
@@ -778,6 +782,14 @@ main() {
       [ -n "$pr" ] || { usage; exit 2; }
       shift || true
       review_tests "$pr" "$@"
+      ;;
+    prepare-correction-init)
+      [ "$#" -eq 1 ] || { usage; exit 2; }
+      prepare_init "$1" "${PR_OBSERVATION:-}" correction
+      ;;
+    prepare-correction-review-init)
+      [ "$#" -eq 1 ] || { usage; exit 2; }
+      prepare_correction_review_init "$1"
       ;;
     prepare-init)
       local pr="${1-}"

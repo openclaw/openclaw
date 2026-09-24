@@ -1,3 +1,4 @@
+import { compareReleaseVersions, parseReleaseVersion } from "./release-version.mjs";
 import catalog from "./upgrade-survivor-scenarios.json" with { type: "json" };
 
 const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze(catalog.scenarios);
@@ -9,13 +10,12 @@ export const UPGRADE_SURVIVOR_ASSERTION_SCENARIOS = Object.freeze([
 
 // Oldest release line supported by the operator-state upgrade regression gate.
 export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE = "2026.6.34";
+export const MINIMUM_UPGRADE_SURVIVOR_BASELINE = "2026.6.1";
 export const CUSTOM_PLUGIN_SIBLINGS_BASELINE = "openclaw@2026.9.4";
 
 const scenarioMinimumBaselines = new Map([
   ["custom-plugin-siblings", CUSTOM_PLUGIN_SIBLINGS_BASELINE],
   ["legacy-operator-state", `openclaw@${OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE}`],
-  ["plugin-deps-cleanup", "openclaw@2026.4.23"],
-  ["acpx-openclaw-tools-bridge", "openclaw@2026.4.22"],
   ["mobile-pairing-reconnect", "openclaw@2026.7.1"],
   ["watchos-direct-node", "openclaw@2026.8.1"],
 ]);
@@ -37,12 +37,10 @@ export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
 
 // Registry proof needs its artifact contract; versioned auth fixtures exercise
 // legacy import rather than native state from every baseline in a broad sweep.
-// Teams poll migration requires its own published companion install and remains opt-in.
 // Platform pairing probes run only through explicit or dedicated scheduled
 // qualification until their runtime cost justifies aggregate release coverage.
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
-    scenario !== "msteams-polls" &&
     scenario !== "abandoned-update" &&
     scenario !== "missing-configured-plugin-migration" &&
     scenario !== "missing-load-path" &&
@@ -93,6 +91,22 @@ export function parseUpgradeSurvivorBaselineSpecs(raw) {
         .filter((spec) => spec !== undefined),
     ),
   ];
+}
+
+// Historical receipts retain syntax-only parsing; active harnesses enforce the floor.
+export function assertSupportedUpgradeSurvivorBaselineSpec(spec) {
+  if (!spec || /^openclaw@(alpha|beta|latest)$/u.test(spec)) {
+    return;
+  }
+  const version = parseReleaseVersion(spec.replace(/^openclaw@/u, ""));
+  if (!version) {
+    throw new Error(`invalid published upgrade survivor baseline: ${spec}`);
+  }
+  if (compareReleaseVersions(version.baseVersion, MINIMUM_UPGRADE_SURVIVOR_BASELINE) === -1) {
+    throw new Error(
+      `Published upgrade survivor baselines must be ${MINIMUM_UPGRADE_SURVIVOR_BASELINE} or newer; got ${spec}. Upgrade pre-June installs through OpenClaw 2026.9.5 and run Doctor first.`,
+    );
+  }
 }
 
 function normalizeUpgradeSurvivorScenario(raw) {

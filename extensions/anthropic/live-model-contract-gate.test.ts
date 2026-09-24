@@ -34,7 +34,13 @@ const LEGACY = { adaptive: false, xhigh: false, max: false };
 describe("acceptsAnthropicLiveModelContract", () => {
   it("accepts current models whose advertised capabilities match our contracts", () => {
     // Adaptive + full effort range: what the contracts already shape correctly.
-    for (const id of ["claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-opus-4-8"]) {
+    for (const id of [
+      "claude-opus-5-5",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-fable-5",
+      "claude-opus-4-8",
+    ]) {
       expect(acceptsAnthropicLiveModelContract({ id, record: capabilities(MODERN) }), id).toBe(
         true,
       );

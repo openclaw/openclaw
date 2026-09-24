@@ -42,6 +42,17 @@ enum AppKitTestSupport {
         try #require(application.isRunning)
     }
 
+    static func pointAtModelButton(_ button: AnyObject, in window: NSWindow) throws {
+        try #require((button.accessibilityWindow?() as? NSWindow) === window)
+        try #require(button.accessibilityLabel?() == "Model" && button.isAccessibilityEnabled?() == true)
+        let frame = try #require(button.accessibilityFrame?())
+        try #require(!frame.isEmpty && window.frame.contains(frame))
+        // The native menu anchors at NSEvent.mouseLocation even when opened through accessibility.
+        let primaryScreen = try #require(NSScreen.screens.first)
+        let position = CGPoint(x: frame.midX, y: primaryScreen.frame.maxY - frame.midY)
+        try #require(CGWarpMouseCursorPosition(position) == .success)
+    }
+
     static func accessibilityElements(in root: AnyObject) async throws -> [AnyObject] {
         // SwiftUI materializes its virtual accessibility children after a real client request.
         let result = await Task.detached {
@@ -117,13 +128,18 @@ enum AppKitTestSupport {
     static func openMenu(
         _ button: AnyObject,
         in window: NSWindow,
+        waitForDismissal: Bool = false,
+        requireCompositedPopup: Bool = false,
         file: StaticString = #fileID,
         line: UInt = #line,
         inspect: @escaping (NSMenu) throws -> Void) async throws
     {
         let role: NSAccessibility.Role? = button.accessibilityRole?()
         let controlType = String(reflecting: type(of: button))
-        let tracking = AppKitTestMenuTracking(inspect: inspect)
+        let tracking = AppKitTestMenuTracking(
+            waitForDismissal: waitForDismissal,
+            requireCompositedPopup: requireCompositedPopup,
+            inspect: inspect)
         tracking.start()
         defer { tracking.stop() }
         try Task.checkCancellation()
@@ -146,58 +162,73 @@ enum AppKitTestSupport {
         enabled=\(String(describing: enabled)) frame=\(String(describing: frame)) window=\(window.windowNumber) windowMatches=\(windowMatches)
         pressAllowed=\(String(describing: pressAllowed)) showMenuAllowed=\(String(describing: showMenuAllowed)) remaining=\(ContinuousClock.now.duration(to: tracking.expiresAt)) appRunning=\(NSApp.isRunning)
         """)
-        guard ContinuousClock.now < tracking.expiresAt else {
-            throw InteractionFailure(message: "The menu interaction deadline expired before dispatch")
-        }
-        let action: String
-        var ownerType: String?
-        var actionResult: Bool?
-        if let cell = button as? NSPopUpButtonCell {
-            guard let owner = cell.controlView as? NSPopUpButton,
-                  owner.cell === cell,
-                  owner.window === window,
-                  owner.isEnabled
-            else {
-                throw InteractionFailure(message:
-                    "The popup cell must belong to its enabled fixture control and window: \(controlType), owner=\(String(describing: cell.controlView))")
+        let performAction: @MainActor () throws -> (String, String?, Bool?) = {
+            guard ContinuousClock.now < tracking.expiresAt else {
+                throw InteractionFailure(message: "The menu interaction deadline expired before dispatch")
             }
-            action = "popup-cell"
-            ownerType = String(reflecting: type(of: owner))
-            cell.performClick(withFrame: owner.bounds, in: owner)
-        } else {
-            let windowMatches = (button.accessibilityWindow?() as? NSWindow) === window
-            guard role == .button || role == .menuButton,
-                  windowMatches
-            else {
-                throw InteractionFailure(message:
-                    "Unsupported menu element or fixture window: \(controlType), role=\(String(describing: role)), windowMatches=\(windowMatches)")
-            }
-            if pressAllowed == true {
-                action = "accessibility-press"
-                actionResult = button.accessibilityPerformPress?()
-            } else if showMenuAllowed == true {
-                action = "accessibility-show-menu"
-                actionResult = button.accessibilityPerformShowMenu?()
+            let action: String
+            var ownerType: String?
+            var actionResult: Bool?
+            if let cell = button as? NSPopUpButtonCell {
+                guard let owner = cell.controlView as? NSPopUpButton,
+                      owner.cell === cell,
+                      owner.window === window,
+                      owner.isEnabled
+                else {
+                    throw InteractionFailure(message:
+                        "The popup cell must belong to its enabled fixture control and window: \(controlType), owner=\(String(describing: cell.controlView))")
+                }
+                action = "popup-cell"
+                ownerType = String(reflecting: type(of: owner))
+                cell.performClick(withFrame: owner.bounds, in: owner)
             } else {
-                throw InteractionFailure(message:
-                    "The fixture menu element has no allowed accessibility action: Press=\(String(describing: pressAllowed)), ShowMenu=\(String(describing: showMenuAllowed))")
+                let windowMatches = (button.accessibilityWindow?() as? NSWindow) === window
+                guard role == .button || role == .menuButton,
+                      windowMatches
+                else {
+                    throw InteractionFailure(message:
+                        "Unsupported menu element or fixture window: \(controlType), role=\(String(describing: role)), windowMatches=\(windowMatches)")
+                }
+                if pressAllowed == true {
+                    action = "accessibility-press"
+                    actionResult = button.accessibilityPerformPress?()
+                } else if showMenuAllowed == true {
+                    action = "accessibility-show-menu"
+                    actionResult = button.accessibilityPerformShowMenu?()
+                } else {
+                    throw InteractionFailure(message:
+                        "The fixture menu element has no allowed accessibility action: Press=\(String(describing: pressAllowed)), ShowMenu=\(String(describing: showMenuAllowed))")
+                }
+                guard actionResult != nil else {
+                    throw InteractionFailure(
+                        message: "The fixture menu element does not implement its allowed \(action) action")
+                }
             }
-            guard actionResult != nil else {
-                throw InteractionFailure(
-                    message: "The fixture menu element does not implement its allowed \(action) action")
+            return (action, ownerType, actionResult)
+        }
+        // AX actions enter NSMenu's nested loop synchronously. Suspend this task first so
+        // Gateway delivery and model-owned dismissal can use the main actor during tracking.
+        let outcome: (action: String, ownerType: String?, result: Bool?) = try await withCheckedThrowingContinuation {
+            continuation in
+            RunLoop.main.perform(inModes: [.common]) {
+                MainActor.assumeIsolated {
+                    do { continuation.resume(returning: try performAction()) }
+                    catch { continuation.resume(throwing: error) }
+                }
             }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
         }
         await tracking.waitForCompletion()
-        let completed = tracking.observed && tracking.inspectionCompleted && !tracking.timedOut
+        let completed = tracking.observed && tracking.completed && !tracking.timedOut
         print("""
         Menu interaction at \(file):\(line)
-        action=\(action) result=\(String(describing: actionResult))
+        action=\(outcome.action) result=\(String(describing: outcome.result))
         observed=\(tracking.observed) inspected=\(tracking.inspectionCompleted) timedOut=\(tracking.timedOut) error=\(String(describing: tracking.error))
-        control=\(controlType) owner=\(String(describing: ownerType)) role=\(String(describing: role)) appActive=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow)
+        control=\(controlType) owner=\(String(describing: outcome.ownerType)) role=\(String(describing: role)) appActive=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow)
         """)
         if let error = tracking.error { throw error }
         try Task.checkCancellation()
-        // The inspection cancels tracking; its completion matters, not popup selection.
+        // Ordinary inspections cancel tracking; lifecycle proofs wait for the owning menu to close itself.
         guard completed else {
             throw InteractionFailure(message: "The native menu inspection must complete before its tracking deadline")
         }
@@ -316,17 +347,31 @@ private final class AppKitTestMenuTracking: NSObject {
     private static let timeout: TimeInterval = 3
     let inspect: (NSMenu) throws -> Void
     let expiresAt: ContinuousClock.Instant
+    let waitForDismissal: Bool
+    let requireCompositedPopup: Bool
     private(set) var observed = false
     private(set) var inspectionCompleted = false
     private(set) var timedOut = false
     private(set) var error: Error?
+    private var dismissalObserved = false
+    private var inspectionStarted = false
     private var menu: NSMenu?
     private var inspection: Timer?
     private var deadline: Timer?
     private var completion: CheckedContinuation<Void, Never>?
 
-    init(inspect: @escaping (NSMenu) throws -> Void) {
+    var completed: Bool {
+        self.inspectionCompleted && (!self.waitForDismissal || self.dismissalObserved)
+    }
+
+    init(
+        waitForDismissal: Bool,
+        requireCompositedPopup: Bool,
+        inspect: @escaping (NSMenu) throws -> Void)
+    {
         self.inspect = inspect
+        self.waitForDismissal = waitForDismissal
+        self.requireCompositedPopup = requireCompositedPopup
         self.expiresAt = ContinuousClock.now + .seconds(Self.timeout)
     }
 
@@ -337,6 +382,12 @@ private final class AppKitTestMenuTracking: NSObject {
         NotificationCenter.default.addObserver(
             self, selector: #selector(self.endedTracking(_:)),
             name: NSMenu.didEndTrackingNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(self.applicationUpdated(_:)),
+            name: NSApplication.didUpdateNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(self.applicationUpdated(_:)),
+            name: NSWindow.didUpdateNotification, object: nil)
         let deadline = Timer(
             timeInterval: Self.timeout,
             target: self,
@@ -350,7 +401,7 @@ private final class AppKitTestMenuTracking: NSObject {
     }
 
     func waitForCompletion() async {
-        guard !self.inspectionCompleted, !self.timedOut else { return }
+        guard !self.completed, !self.timedOut, self.error == nil else { return }
         await withCheckedContinuation { self.completion = $0 }
     }
 
@@ -364,11 +415,11 @@ private final class AppKitTestMenuTracking: NSObject {
         }
         // AppKit tracks menus in a nested run loop; inspect and cancel in that mode too.
         let inspection = Timer(
-            timeInterval: 0,
+            timeInterval: self.requireCompositedPopup ? 0.02 : 0,
             target: self,
             selector: #selector(self.inspectMenu),
             userInfo: nil,
-            repeats: false)
+            repeats: self.requireCompositedPopup)
         self.inspection = inspection
         for mode in [RunLoop.Mode.eventTracking, .common] {
             RunLoop.main.add(inspection, forMode: mode)
@@ -378,25 +429,55 @@ private final class AppKitTestMenuTracking: NSObject {
     @objc private func endedTracking(_ notification: Notification) {
         guard let menu = notification.object as? NSMenu, self.menu === menu else { return }
         self.menu = nil
+        self.dismissalObserved = true
+        if self.completed {
+            self.deadline?.invalidate()
+            self.resumeWaiter()
+        }
+    }
+
+    @objc private func applicationUpdated(_: Notification) {
+        self.inspectMenu()
     }
 
     @objc private func inspectMenu() {
-        guard let menu = self.menu else { return }
+        guard !self.inspectionStarted, let menu = self.menu else { return }
         guard !self.timedOut, ContinuousClock.now < self.expiresAt else {
             self.expire()
             return
         }
+        guard NSApp.windows.contains(where: { $0.level == .popUpMenu && $0.isVisible }) else { return }
+        if self.requireCompositedPopup {
+            // Window Server publication can follow the last AppKit update; retry within the same menu deadline.
+            let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], 0)
+                as? [[String: Any]] ?? []
+            guard windows.contains(where: { window in
+                guard window[kCGWindowOwnerPID as String] as? Int32 == ProcessInfo.processInfo.processIdentifier,
+                      window[kCGWindowLayer as String] as? Int == NSWindow.Level.popUpMenu.rawValue,
+                      let fields = window[kCGWindowBounds as String] as? [String: Any],
+                      let bounds = CGRect(dictionaryRepresentation: fields as CFDictionary)
+                else { return false }
+                return !bounds.isEmpty
+            }) else { return }
+        }
+        self.inspectionStarted = true
+        self.inspection?.invalidate()
         defer {
             self.inspectionCompleted = true
-            self.deadline?.invalidate()
-            self.cancelTracking()
-            self.resumeWaiter()
+            if !self.waitForDismissal || self.error != nil {
+                self.deadline?.invalidate()
+                self.cancelTracking()
+                self.resumeWaiter()
+            } else if self.dismissalObserved {
+                self.deadline?.invalidate()
+                self.resumeWaiter()
+            }
         }
         do { try self.inspect(menu) } catch { self.error = error }
     }
 
     @objc private func expire() {
-        guard !self.inspectionCompleted else { return }
+        guard !self.completed else { return }
         self.timedOut = true
         self.cancelTracking()
         self.resumeWaiter()

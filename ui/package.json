@@ -10,11 +10,11 @@
   },
   "dependencies": {
     "@awesome.me/webawesome": "3.12.0",
-    "@codemirror/commands": "6.11.0",
+    "@codemirror/commands": "6.11.1",
     "@codemirror/language": "6.12.4",
     "@codemirror/language-data": "6.5.2",
-    "@codemirror/state": "6.7.4",
-    "@codemirror/view": "6.43.11",
+    "@codemirror/state": "6.7.5",
+    "@codemirror/view": "6.43.12",
     "@lezer/highlight": "1.2.3",
     "@lit/context": "1.1.6",
     "@lit/task": "1.0.3",
@@ -36,8 +36,8 @@
     "@openclaw/uirouter": "0.1.1",
     "@openclaw/workboard-contract": "workspace:*",
     "@panzoom/panzoom": "4.6.2",
-    "@tanstack/lit-virtual": "3.14.1",
-    "@tanstack/virtual-core": "3.17.10",
+    "@tanstack/lit-virtual": "3.14.2",
+    "@tanstack/virtual-core": "3.17.11",
     "diff": "9.0.0",
     "dompurify": "3.4.15",
     "ghostty-web": "0.4.0",
@@ -55,8 +55,8 @@
   },
   "devDependencies": {
     "@types/markdown-it": "14.2.0",
-    "@vitest/browser": "5.0.0",
-    "@vitest/browser-playwright": "5.0.0",
+    "@vitest/browser": "5.0.1",
+    "@vitest/browser-playwright": "5.0.1",
     "fake-indexeddb": "6.2.5",
     "jsdom": "30.0.1",
     "openclaw": "workspace:*",
@@ -64,6 +64,6 @@
     "playwright": "1.63.0",
     "postcss": "8.5.28",
     "vite": "8.3.0",
-    "vitest": "5.0.0"
+    "vitest": "5.0.1"
   }
 }

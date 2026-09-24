@@ -49,10 +49,11 @@ export function createGatewayConnectionState(params: {
       try {
         const projection = sessionRowProjection;
         const cfg = loadRuntimeConfig();
+        const policyConfig = projection?.getPolicyConfig() ?? cfg;
         const prepared = projection
           ? {
               sharing: prepareProjectedSessionSharing({
-                cfg,
+                cfg: policyConfig,
                 client,
                 isMember: (target, identity) =>
                   projection.hasMembership(target.storePath, target.storeKey, identity),
@@ -65,6 +66,7 @@ export function createGatewayConnectionState(params: {
           : undefined;
         return canReceiveSessionEvent({
           cfg,
+          policyConfig,
           client,
           sessionKeys,
           agentId,
@@ -147,7 +149,7 @@ export function createGatewayConnectionState(params: {
         if (!row) {
           return undefined;
         }
-        return {
+        const projected: Record<string, unknown> = {
           ...base,
           session: row,
           ancestorSessions: ancestors?.every((ancestor) => projection.isCurrent(ancestor))
@@ -170,6 +172,10 @@ export function createGatewayConnectionState(params: {
               }
             : {}),
         };
+        if (Object.hasOwn(projected, "childSessions")) {
+          projected.childSessions = row.childSessions;
+        }
+        return projected;
       };
     },
     onBroadcast: (event, payload, opts) => eventWebPush.handleEvent(event, payload, opts),

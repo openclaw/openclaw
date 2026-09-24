@@ -62,15 +62,9 @@ export function runWithSqliteCoordinator<T>(
       throw new SqliteCoordinatorError(`${operationLabel} must remain synchronous`);
     }
   } catch (operationError) {
-    let releaseFailed = false;
-    let releaseError: unknown;
     try {
       coordinator.release();
-    } catch (error) {
-      releaseFailed = true;
-      releaseError = error;
-    }
-    if (releaseFailed) {
+    } catch (releaseError) {
       throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         `${operationLabel} and coordinator release both failed`,
@@ -177,19 +171,10 @@ function closeIdleCoordinatorDatabase(database: DatabaseSync, location: string) 
 }
 
 function closeIdleCoordinatorsOnExit() {
-  const databases = new Map(failedIdleCloses);
-  for (const [location] of idleCoordinators) {
-    const idle = takeIdleCoordinator(location);
-    if (idle) {
-      databases.set(idle.database, location);
-    }
-  }
-  for (const [database, location] of databases) {
-    try {
-      closeIdleCoordinatorDatabase(database, location);
-    } catch {
-      // Process exit is the last cleanup opportunity for a failed native close.
-    }
+  try {
+    closeIdleCoordinatorPool();
+  } catch {
+    // Process exit is the last cleanup opportunity for a failed native close.
   }
 }
 

@@ -1,9 +1,9 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 /**
  * Extension relay lifecycle: one owned listener or authenticated borrowed lease
  * per extension-driver profile in the browser control runtime.
  */
-import { extractErrorCode } from "../../infra/errors.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { resolveProfile, type ResolvedBrowserProfile } from "../config.js";
 import {
   getProfileLifecycle,

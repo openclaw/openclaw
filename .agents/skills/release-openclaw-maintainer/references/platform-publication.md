@@ -1,5 +1,15 @@
 # Native release platforms
 
+## Decoupling
+
+npm + ClawHub publication is the priority path. Native app publication
+(macOS, Windows, Linux, Android) runs in parallel and never gates it: a native
+failure is classified and fixed in parallel, not a reason to re-cut or re-run
+npm validation. Each native lane starts as soon as its own prerequisites
+exist, alongside npm publication rather than queued behind it: macOS from the
+tag and exact source; the Linux and Windows publishers from
+`finalize_github_release`, which they require.
+
 Apps are independent publication tasks. They do not block npm, Docker, GitHub
 release finalization, or stable main closeout. Record pending platforms
 explicitly and call each complete only after its assets and updater evidence
@@ -18,6 +28,14 @@ validation, signing/notarization preflight, and promotion. Use `$release-private
 for credential topology. A smoke-test artifact with ad-hoc signing proves no
 release readiness. Real publish reuses the successful notarized preflight and
 validation for the same tag/source SHA.
+
+The real publish (`openclaw-macos-publish.yml` in `openclaw/releases`) requires
+the public GitHub release; flip it as soon as core npm is visible. Preflights
+resume from notarization checkpoints without rebuilding: pass
+`resume_notarization_run_id=<run>`, `resume_notarization_run_attempt=1`, and
+`resume_notarization_variant=all`. The appcast lands as an auto-opened PR
+`chore(release): update appcast for <version>` that must be merged; macOS is
+not complete until it is. Record preflight/publish run ids in the handoff.
 
 For mac-only packaging/signing/workflow fixes after npm is published, preserve
 the original tag and use `source_ref=release/YYYY.M.PATCH` plus

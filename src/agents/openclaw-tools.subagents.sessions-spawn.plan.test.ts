@@ -167,7 +167,12 @@ describe("subagent spawn model + thinking plan", () => {
     {
       name: "per-agent subagent model over defaults",
       defaults: { subagents: { model: "minimax/MiniMax-M2.7" } },
-      targetAgentConfig: { id: "research", subagents: { model: "opencode/claude" } },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]",
+        subagents: { model: "opencode/claude" },
+      },
       expectedModel: "opencode/claude",
       expectedProvider: "opencode",
       expectedOriginModel: "claude",
@@ -175,7 +180,11 @@ describe("subagent spawn model + thinking plan", () => {
     {
       name: "default subagent model over target agent primary model",
       defaults: { subagents: { model: "minimax/MiniMax-M2.7" } },
-      targetAgentConfig: { id: "research", model: { primary: "opencode/claude" } },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: { primary: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]" },
+      },
       expectedModel: "minimax/MiniMax-M2.7",
       expectedProvider: "minimax",
       expectedOriginModel: "MiniMax-M2.7",
@@ -188,6 +197,35 @@ describe("subagent spawn model + thinking plan", () => {
       expectedProvider: "opencode",
       expectedOriginModel: "claude",
     },
+    {
+      name: "native default over an ACP target's harness primary",
+      defaults: { model: { primary: "minimax/MiniMax-M2.7" } },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: { primary: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]" },
+      },
+      expectedModel: "minimax/MiniMax-M2.7",
+      expectedProvider: undefined,
+      expectedOriginModel: undefined,
+    },
+    {
+      name: "explicit native model over an ACP target's configured defaults",
+      defaults: {
+        model: { primary: "anthropic/claude-sonnet-4-6" },
+        subagents: { model: "minimax/MiniMax-M2.7" },
+      },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]",
+        subagents: { model: "opencode/claude" },
+      },
+      modelOverride: "openai/gpt-5.4",
+      expectedModel: "openai/gpt-5.4",
+      expectedProvider: undefined,
+      expectedOriginModel: undefined,
+    },
   ])("prefers $name", async (row) => {
     const cfg = createConfig({
       agents: { defaults: row.defaults, list: [row.targetAgentConfig] },
@@ -197,11 +235,12 @@ describe("subagent spawn model + thinking plan", () => {
         cfg,
         targetAgentId: "research",
         targetAgentConfig: row.targetAgentConfig,
+        modelOverride: row.modelOverride,
       }),
     );
     expect(plan.resolvedModel).toBe(row.expectedModel);
     expect(plan.initialSessionPatch.model).toBe(row.expectedModel);
-    expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+    expect(plan.initialSessionPatch.modelOverrideSource).toBe(row.modelOverride ? "user" : "auto");
     expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe(row.expectedProvider);
     expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe(row.expectedOriginModel);
   });

@@ -48,7 +48,10 @@ function hashNamespacePart(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 24);
 }
 
-function createWhatsAppDurableInboundMessageId(params: { remoteJid: string; id: string }): string {
+export function createWhatsAppDurableInboundMessageId(params: {
+  remoteJid: string;
+  id: string;
+}): string {
   return createHash("sha256").update(`${params.remoteJid}\n${params.id}`).digest("hex");
 }
 

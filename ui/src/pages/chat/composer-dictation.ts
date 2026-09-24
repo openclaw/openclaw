@@ -1,9 +1,9 @@
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
-  bytesToBase64,
   floatToG711Ulaw,
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,

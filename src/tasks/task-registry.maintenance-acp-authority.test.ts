@@ -7,6 +7,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { loadTaskAcpSessionCloser, type CloseAcpSession } from "./task-registry-acp-cleanup.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
 import {
   configureTaskRegistryMaintenance,
   runTaskRegistryMaintenance,
@@ -119,6 +120,7 @@ describe("task maintenance ACP cleanup authority", () => {
         mode: "oneshot",
       });
       vi.mocked(readAcpSessionEntry).mockReturnValue(entry);
+      using deliveries = captureTaskDeliveryWork();
       createTaskFixture("acp", {
         ownerKey: parentSessionKey,
         requesterSessionKey: parentSessionKey,
@@ -129,6 +131,7 @@ describe("task maintenance ACP cleanup authority", () => {
         cleanupAfter: Date.now() + 86_400_000,
         notifyPolicy: "silent",
       });
+      await deliveries.settle();
       close.mockImplementationOnce(async () => {
         await Promise.resolve();
         configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });

@@ -84,6 +84,7 @@ function renderSecurityOverview(props: SecurityViewProps) {
       control: renderSettingsSegmented({
         value: normalizedToolProfile,
         options: profileOptions,
+        ariaLabel: t("quickSettings.security.toolProfile"),
         disabled: props.configBusy,
         onChange: (profile) => props.onToolProfileChange?.(profile),
       }),

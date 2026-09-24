@@ -2,7 +2,7 @@
 
 // Ensures ingress agent command callsites pass explicit owner context.
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mts";
 import {
@@ -23,9 +23,12 @@ const enforcedFiles = new Set([
 /**
  * Finds legacy `agentCommand(...)` call lines in ingress-owned source.
  */
-function findLegacyAgentCommandCallLines(content: string, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  return collectCallExpressionLines(ts, sourceFile, (node) => {
+function findLegacyAgentCommandCallLines(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+) {
+  return collectCallExpressionLines(sourceFile, (node) => {
     const callee = unwrapExpression(node.expression);
     return ts.isIdentifier(callee) && callee.text === "agentCommand" ? callee : null;
   });

@@ -9,7 +9,10 @@ import {
 import { abortQueuedChatTurnById } from "./chat-queued-turns.js";
 import { retainGatewayDeviceRevocation } from "./device-revocation.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { captureAbortedPartial } from "./server-methods/chat-aborted-partial.js";
+import {
+  captureAbortedPartial,
+  deferAbortedPartialPersistence,
+} from "./server-methods/chat-aborted-partial.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -124,12 +127,14 @@ function createGatewayOperatorRunCancellation(params: {
             agentId: entry.agentId,
             text,
             abortOrigin: "rpc",
+            resolveTerminalProducer: entry.resolveTerminalProducer,
           })
         : undefined;
     const { aborted } = abortChatRunById(createChatAbortOps(context), {
       runId,
       sessionKey,
       stopReason: "rpc",
+      onAbortCommitted: () => deferAbortedPartialPersistence(snapshot, context),
     });
     if (!aborted) {
       return;

@@ -11,6 +11,7 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { newSessionSearch } from "../pages/new-session/location.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.ts";
+import { renderPersonalSessionEmpty } from "./app-sidebar-session-filter-summary.ts";
 import { renderSessionListFrame, renderSessionSection } from "./app-sidebar-session-list-render.ts";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import {
@@ -24,8 +25,7 @@ import { renderTeamSessionSlots } from "./session-attention-presentation.ts";
 import "../styles/sidebar-agent-roster.css";
 
 registerAgentsHomeEnglish();
-type RosterHost = AppSidebarRenderHost &
-  SessionListHost & { loadMoreSidebarSessions(): Promise<void> };
+type RosterHost = AppSidebarRenderHost & SessionListHost;
 
 class SidebarAgentRoster extends AgentRosterElement {
   @property({ attribute: false }) host!: RosterHost;
@@ -248,6 +248,16 @@ class SidebarAgentRoster extends AgentRosterElement {
                 }
               </section>`;
             },
+          )}
+          ${renderPersonalSessionEmpty(
+            this.host,
+            this.sections.every((section) => section.totalRowCount === 0),
+            this.connected &&
+              this.roster.result !== null &&
+              !this.roster.loading &&
+              !error &&
+              !this.roster.result.hasMore &&
+              !this.host.sessionData.sessionMutationError,
           )}
         </div>`,
       );
