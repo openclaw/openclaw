@@ -26,6 +26,9 @@ The question box wraps and grows like the main composer; Enter (or your configur
 Drop an image onto Side chat or paste one into its question box. You can send it
 with a written question or on its own. Side chat accepts image attachments, not
 other file types; its previews never add attachments to the main composer.
+Image questions require an image-capable Side chat utility model. A text-only
+model produces a visible error instead of answering without the image; choose
+an image-capable utility model before retrying.
 Images are available only for the current question and are not retained in the
 restored text thread. Reattach an image when asking a later question about it.
 A failed question keeps its image for **Retry** while the current pane is retained;

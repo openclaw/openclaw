@@ -23,6 +23,7 @@ import type { SessionCompanionContextReader } from "./session-companion-context.
 import {
   buildSessionCompanionSystemPrompt,
   resolveSessionCompanionModel,
+  resolveSessionCompanionImageInputError,
   SESSION_COMPANION_TOOLS,
 } from "./session-companion-policy.js";
 import {
@@ -151,6 +152,12 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     modelRef: params.modelRef,
     operatorAuthority: params.operatorAuthority,
   });
+  if (params.images?.length) {
+    const imageError = await resolveSessionCompanionImageInputError(params, selectedModel);
+    if (imageError) {
+      throw new SessionCompanionAskError("utility-model-unavailable", imageError);
+    }
+  }
   const current = params.messages.at(-1);
   if (!current || current.role !== "user") {
     throw new Error("Session companion has no current question.");

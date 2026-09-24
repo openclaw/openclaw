@@ -16,6 +16,8 @@ const runEmbeddedAgent = vi.hoisted(() =>
   >(),
 );
 
+const resolveModelAsync = vi.hoisted(() => vi.fn());
+
 const { appendMessage, admitWrite, loadEntry, removeSession } = vi.hoisted(() => ({
   appendMessage: vi.fn<(message: unknown) => void>(),
   admitWrite: vi.fn<(manager: unknown, write: () => void) => Promise<void>>(),
@@ -43,6 +45,7 @@ const preparedTarget = {
 };
 
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
+vi.mock("../agents/embedded-agent-runner/model.js", () => ({ resolveModelAsync }));
 vi.mock("../agents/sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: admitWrite,
 }));
@@ -78,6 +81,9 @@ function createCompanion(cfg: OpenClawConfig = {}) {
   });
 }
 
+const imageBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=";
+
 const question = {
   agentId: "main",
   sessionKey: "agent:main:main",
@@ -88,6 +94,7 @@ const question = {
 describe("session companion embedded invocation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveModelAsync.mockReset().mockResolvedValue({ model: { input: ["text", "image"] } });
     appendMessage.mockReset();
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
     loadEntry.mockReturnValue({ entry: { ...preparedTarget.sessionEntry } });
@@ -103,10 +110,7 @@ describe("session companion embedded invocation", () => {
       const companion = createCompanion();
       const respond = vi.fn();
       const data = Buffer.concat([
-        Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=",
-          "base64",
-        ),
+        Buffer.from(imageBase64, "base64"),
         Buffer.alloc(padding),
       ]).toString("base64");
       try {
@@ -138,6 +142,44 @@ describe("session companion embedded invocation", () => {
       }
     },
   );
+
+  it("rejects an image before model I/O when the selected Side chat model is text-only", async () => {
+    resolveModelAsync.mockResolvedValue({ model: { input: ["text"] } });
+    const companion = createCompanion();
+    const respond = vi.fn();
+    try {
+      await sessionCompanionHandlers["sessions.companion.ask"]!({
+        params: {
+          sessionKey: question.sessionKey,
+          question: "What does this show?",
+          attachments: [{ mimeType: "image/png", content: imageBase64 }],
+        },
+        client: { connId: "image-connection" },
+        context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringContaining("does not support image input"),
+        }),
+      );
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(resolveModelAsync).toHaveBeenCalledWith(
+        "test",
+        "model-a",
+        undefined,
+        {},
+        expect.objectContaining({ agentId: "main" }),
+      );
+      await expect(companion.ask(question)).resolves.toMatchObject({ answer: expect.any(String) });
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(resolveModelAsync).toHaveBeenCalledOnce();
+    } finally {
+      companion.dispose();
+    }
+  });
 
   it("keeps read-only tools direct when the selected agent model opts into Code Mode", async () => {
     const cfg: OpenClawConfig = {

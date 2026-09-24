@@ -59,3 +59,40 @@ export function buildSessionCompanionSystemPrompt(sessionKey: string): string {
     "Return a concise plain-text answer in American English with no markdown or JSON wrapper.",
   ].join(" ");
 }
+
+/** Check the selected executable route without changing the operator’s model choice. */
+export async function resolveSessionCompanionImageInputError(
+  params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    workspaceDir: string;
+    signal: AbortSignal;
+    assertSourceCurrent?: () => void;
+  },
+  selection: ReturnType<typeof resolveSessionCompanionModel>,
+): Promise<string | undefined> {
+  const { resolveModelAsync } = await import("../agents/embedded-agent-runner/model.js");
+  const { model } = await resolveModelAsync(
+    selection.runtimeProvider ?? selection.provider,
+    selection.modelId,
+    selection.agentDir,
+    params.cfg,
+    {
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      authProfileId: selection.profileId,
+      modelIdSource: "selected",
+      abortSignal: params.signal,
+      assertCurrent: params.assertSourceCurrent,
+    },
+  );
+  params.signal.throwIfAborted();
+  params.assertSourceCurrent?.();
+  if (!model) {
+    return "Side chat could not resolve its selected model for image input.";
+  }
+  if (!model.input?.includes("image")) {
+    return "The selected Side chat model does not support image input. Choose an image-capable utility model and retry.";
+  }
+  return undefined;
+}
