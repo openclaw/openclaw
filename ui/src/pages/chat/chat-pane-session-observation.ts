@@ -8,6 +8,7 @@ import {
 import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
 import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
 import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
@@ -93,10 +94,17 @@ function applyObservedChatSessionRow(
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {
+  protected readonly activeSessionResources = new ChatPaneActiveResources();
+
   private sessionObservation: {
     matchesPane: () => boolean;
     observation: SessionRowObservation | null;
   } | null = null;
+
+  protected resourceSessionObservation(): SessionRowObservation | null {
+    const binding = this.sessionObservation;
+    return binding?.matchesPane() && binding.observation?.isCurrent() ? binding.observation : null;
+  }
 
   protected retireSessionObservation() {
     const previous = this.sessionObservation;
@@ -173,6 +181,19 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         }
       },
       {
+        onInvalidate: (reason) => {
+          if (ownsPane()) {
+            if (reason === "runner-availability") {
+              this.activeSessionResources.invalidate();
+              this.requestUpdate();
+              return;
+            }
+            this.activeSessionResources.reconcileObservation({
+              requestUpdate: () => this.requestUpdate(),
+              updated: () => this.updateComplete,
+            });
+          }
+        },
         onEvent: (event, result) => {
           if (!ownsPane()) {
             return;

@@ -22,14 +22,8 @@ import {
   isChannelPartialDeliveryError,
 } from "../../channels/turn/partial-delivery-error.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  selectApplicableRuntimeConfig,
-} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
-import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import {
   hydrateAttachmentParamsForAction,
@@ -67,8 +61,9 @@ import {
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
+import { readInProcessSessionDeliveryGeneration } from "../in-process-session-delivery.js";
 import { selectMessageActionRequesterIdentity } from "../message-action-turn-capability.js";
 import {
   authorizeGatewaySessionCreation,
@@ -99,6 +94,11 @@ import {
   scheduleDeliveredSourceReplyTranscriptMirror,
 } from "./message-operation-result.js";
 import { resolveMessageOperationAccountRoute } from "./send-account-route.js";
+import {
+  resolveGatewayOutboundTarget,
+  resolveMessageActionRuntimeConfig,
+  resolveRequestedChannel,
+} from "./send-channel-resolution.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -592,101 +592,6 @@ function respondGatewayInvalidRequest(params: {
   });
 }
 
-async function resolveRequestedChannel(params: {
-  requestChannel: unknown;
-  unsupportedMessage: (input: string) => string;
-  context: GatewayRequestContext;
-  config?: OpenClawConfig;
-  rejectWebchatAsInternalOnly?: boolean;
-}): Promise<
-  | {
-      cfg: OpenClawConfig;
-      sourceCfg: OpenClawConfig;
-      channel: string;
-    }
-  | {
-      error: ReturnType<typeof errorShape>;
-    }
-> {
-  const channelInput = readStringValue(params.requestChannel);
-  const normalizedChannel = channelInput ? normalizeMessageChannel(channelInput) : undefined;
-  if (params.rejectWebchatAsInternalOnly && normalizedChannel === INTERNAL_MESSAGE_CHANNEL) {
-    return {
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
-      ),
-    };
-  }
-  if (channelInput && !normalizedChannel) {
-    return {
-      error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
-    };
-  }
-  const sourceCfg = params.config ?? params.context.getRuntimeConfig();
-  const cfg = sourceCfg;
-  let channel = normalizedChannel;
-  if (!channel) {
-    try {
-      channel = (await resolveMessageChannelSelection({ cfg })).channel;
-    } catch (err) {
-      return { error: errorShape(ErrorCodes.INVALID_REQUEST, String(err)) };
-    }
-  }
-  return { cfg, sourceCfg, channel };
-}
-
-function resolveGatewayOutboundTarget(params: {
-  channel: string;
-  to: string;
-  cfg: OpenClawConfig;
-  accountId?: string;
-}):
-  | {
-      ok: true;
-      to: string;
-    }
-  | {
-      ok: false;
-      error: ReturnType<typeof errorShape>;
-    } {
-  const resolved = resolveOutboundTarget({
-    channel: params.channel,
-    to: params.to,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    mode: "explicit",
-  });
-  if (!resolved.ok) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)),
-    };
-  }
-  return { ok: true, to: resolved.to };
-}
-
-function resolveMessageActionRuntimeConfig(params: {
-  cfg: OpenClawConfig;
-  sourceCfg: OpenClawConfig;
-}): OpenClawConfig {
-  const runtimeConfig = getRuntimeConfigSnapshot();
-  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
-  if (!runtimeConfig || !runtimeSourceConfig) {
-    return params.cfg;
-  }
-  const selected = selectApplicableRuntimeConfig({
-    inputConfig: params.sourceCfg,
-    runtimeConfig,
-    runtimeSourceConfig,
-  });
-  // Message actions must use the hot runtime snapshot when it matches the caller's source config.
-  if (selected === runtimeConfig && selected !== params.cfg) {
-    return selected;
-  }
-  return params.cfg;
-}
-
 export const sendHandlers: GatewayRequestHandlers = {
   "message.action": async ({
     params: request,
@@ -1068,6 +973,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(request, validateSendParams, "send", respond)) {
       return;
     }
+    const sessionGeneration = readInProcessSessionDeliveryGeneration(request);
     const to = normalizeOptionalString(request.to) ?? "";
     const message = request.message?.trim() ? request.message : "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
@@ -1319,37 +1225,49 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (!authorize()) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
-          const send = await sendDurableMessageBatchCore({
-            cfg,
-            channel,
-            to: deliveryTarget,
-            accountId,
-            payloads: outboundPayloads,
-            replyToId: replyToId ?? null,
-            session: outboundSession,
-            gifPlayback: request.gifPlayback,
-            forceDocument: request.forceDocument,
-            threadId: outboundRoute?.threadId ?? threadId ?? null,
-            deps: outboundDeps,
-            gatewayClientScopes: client?.connect?.scopes ?? [],
-            silent: request.silent,
-            formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
-            onDeliveryResult: commitOutboundSessionRoute,
-            // Runtime-bound sends cannot outlive their operational run. Keep
-            // recovery from replaying them after the live authority closes.
-            onPlatformSendDispatch,
-            assertDirectAdapterHandoff: commitAgentRuntimeAuthority,
-            skipQueue: hasAgentRuntimeAuthority,
-            mirror: outboundSessionKey
-              ? {
-                  sessionKey: outboundSessionKey,
-                  agentId: effectiveAgentId,
-                  text: mirrorText || message,
-                  mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
-                  idempotencyKey: idem,
-                }
-              : undefined,
-          });
+          const send = await sendDurableMessageBatchCore(
+            {
+              cfg,
+              channel,
+              to: deliveryTarget,
+              accountId,
+              payloads: outboundPayloads,
+              replyToId: replyToId ?? null,
+              session: outboundSession,
+              gifPlayback: request.gifPlayback,
+              forceDocument: request.forceDocument,
+              threadId: outboundRoute?.threadId ?? threadId ?? null,
+              deps: outboundDeps,
+              gatewayClientScopes: client?.connect?.scopes ?? [],
+              silent: request.silent,
+              formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
+              ...(sessionGeneration
+                ? {
+                    deliveryIntentId: idem,
+                    reusePendingDeliveryIntent: true,
+                    durability: "required" as const,
+                  }
+                : {}),
+              onDeliveryResult: commitOutboundSessionRoute,
+              // Runtime-bound sends cannot outlive their operational run. Keep
+              // recovery from replaying them after the live authority closes.
+              onPlatformSendDispatch,
+              assertDirectAdapterHandoff: commitAgentRuntimeAuthority,
+              skipQueue: hasAgentRuntimeAuthority,
+              mirror: outboundSessionKey
+                ? {
+                    sessionKey: outboundSessionKey,
+                    agentId: effectiveAgentId,
+                    text: mirrorText || message,
+                    mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                    idempotencyKey: idem,
+                  }
+                : undefined,
+            },
+            undefined,
+            undefined,
+            sessionGeneration,
+          );
           // Safety net for adapters whose results carry no platform identity:
           // any partially or fully sent batch still binds the route.
           if (send.status === "sent" || send.status === "partial_failed") {

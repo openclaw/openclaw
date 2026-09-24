@@ -42,6 +42,7 @@ export const runtimeProcessEntrypoints = {
   updateMigratedFinalize: runtimeProcessEntrypoint("infra/update-migrated-finalize.worker"),
   updateCandidateState: runtimeProcessEntrypoint("infra/update-candidate-state.worker"),
   doctorLint: runtimeProcessEntrypoint("commands/doctor-lint.worker"),
+  doctor: runtimeProcessEntrypoint("commands/doctor.worker"),
   databaseVerify: runtimeProcessEntrypoint("state/openclaw-database-verify.worker"),
   stateLeaseHeartbeat: runtimeProcessEntrypoint("state/openclaw-state-lease-heartbeat.worker"),
   sessionTranscriptArchive: runtimeProcessEntrypoint(

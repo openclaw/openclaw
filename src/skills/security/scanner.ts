@@ -5,8 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
-import { readFileHandleBounded } from "../../infra/fs-safe-advanced.js";
-import { FsSafeError, openLocalFileSafely } from "../../infra/fs-safe.js";
+import { FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../security/scan-paths.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
@@ -970,24 +969,18 @@ async function scanFileWithCache(params: {
 
   try {
     // Explicitly included entrypoints may be symlinked outside the scan directory.
-    const opened = await openLocalFileSafely({ filePath: await fs.realpath(filePath) });
-    try {
-      const content = await readFileHandleBounded(opened.handle, maxFileBytes);
-      const after = await opened.handle.stat();
-      if (!sameFileScanIdentity(opened.stat, after) || content.byteLength !== after.size) {
-        throw new Error(`File changed while scanning: ${filePath}`);
-      }
-      const findings = scanSource(content.toString("utf8"), filePath);
-      setCachedFileScanResult(filePath, {
-        identity: fileScanIdentity(after),
-        maxFileBytes,
-        scanned: true,
-        findings,
-      });
-      return { scanned: true, findings };
-    } finally {
-      await opened.handle.close();
-    }
+    const { buffer, stat } = await readLocalFileSafely({
+      filePath: await fs.realpath(filePath),
+      maxBytes: maxFileBytes,
+    });
+    const findings = scanSource(buffer.toString("utf8"), filePath);
+    setCachedFileScanResult(filePath, {
+      identity: fileScanIdentity(stat),
+      maxFileBytes,
+      scanned: true,
+      findings,
+    });
+    return { scanned: true, findings };
   } catch (err) {
     if (
       hasErrnoCode(err, "ENOENT") ||

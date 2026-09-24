@@ -112,7 +112,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       if (changed) {
         // Rows served during renewal need new materializations only when their model facts changed.
         epoch++;
-        databaseRevision++;
         revisionToken = undefined;
         metadata.invalidate({ all: true, scope: "catalog" });
         archive.invalidateRows({ all: true, scope: "catalog" }, rows.values());
@@ -285,7 +284,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       revisionToken = undefined;
     }
     if ("all" in change) {
-      if (!presentationOnly) {
+      const catalogOnly = change.scope === "catalog" && !change.factsInvalidated;
+      if (!presentationOnly && !catalogOnly) {
         databaseRevision++;
       }
       placementFacts.invalidateChange(change);
@@ -294,15 +294,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         catalog.invalidate();
       }
       // Renewal serves the old catalog until its replacement is adopted.
-      if (!presentationOnly && (change.scope !== "catalog" || !params.getModelCatalog)) {
+      if (!presentationOnly && (!catalogOnly || !params.getModelCatalog)) {
         archive.invalidateRows(
           change,
           typeof change.scope === "string" ? rows.values() : matching(change.scope),
         );
-      } else if (!presentationOnly) {
-        for (const row of rows.values()) {
-          row.pendingDatabaseFacts = undefined;
-        }
       }
     } else if (change.scope === "automation") {
       records.markAutomation(
@@ -615,6 +611,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       topologyDirty: () => topologyDirty,
       topology,
       lookup,
+      stores: () => stores,
       owner: (): SessionRowReadView & { isCurrent: typeof isCurrent } => projection,
     });
   const projection = {

@@ -52,6 +52,7 @@ import {
   createThreadBinding,
   createDiscordMessage,
   createDiscordPreflightArgs,
+  runThreadBoundPreflight,
   createGuildEvent,
   createGuildTextClient,
   createThreadClient,
@@ -151,47 +152,6 @@ function createMissingChannelClient(): DiscordClient {
   return {
     fetchChannel: async () => null,
   } as unknown as DiscordClient;
-}
-
-async function runThreadBoundPreflight(params: {
-  threadId: string;
-  parentId: string;
-  message: import("../internal/discord.js").Message;
-  threadBinding: import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord;
-  discordConfig: DiscordConfig;
-  registerBindingAdapter?: boolean;
-}) {
-  if (params.registerBindingAdapter) {
-    registerSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      listBySession: () => [],
-      resolveByConversation: (ref) =>
-        ref.conversationId === params.threadId ? params.threadBinding : null,
-    });
-  }
-
-  const client = createThreadClient({
-    threadId: params.threadId,
-    parentId: params.parentId,
-  });
-
-  return preflightDiscordMessage({
-    ...createPreflightArgs({
-      cfg: DEFAULT_PREFLIGHT_CFG,
-      discordConfig: params.discordConfig,
-      data: createGuildEvent({
-        channelId: params.threadId,
-        guildId: "guild-1",
-        author: params.message.author,
-        message: params.message,
-      }),
-      client,
-    }),
-    threadBindings: {
-      getByThreadId: (id: string) => (id === params.threadId ? params.threadBinding : undefined),
-    } as import("./thread-bindings.js").ThreadBindingManager,
-  });
 }
 
 async function runGuildPreflight(params: {
@@ -424,6 +384,7 @@ describe("preflightDiscordMessage", () => {
     });
 
     const result = await runThreadBoundPreflight({
+      threadBindings: defaultThreadBindings,
       threadId,
       parentId,
       message,
@@ -901,37 +862,45 @@ describe("preflightDiscordMessage", () => {
     ).not.toBeNull();
   });
 
-  it("keeps bound-thread regular bot messages flowing when allowBots=true", async () => {
-    const threadBinding = createThreadBinding({
-      targetKind: "session",
-      targetSessionKey: "agent:main:acp:discord-thread-1",
-    });
-    const threadId = "thread-bot-regular-1";
-    const parentId = "channel-parent-regular-1";
-    const message = createDiscordMessage({
-      id: "m-bot-regular-1",
-      channelId: threadId,
-      content: "here is tool output chunk",
-      author: {
-        id: "relay-bot-1",
-        bot: true,
-        username: "Relay",
-      },
-    });
+  it.each([undefined, true, false])(
+    "handles bound-thread bot messages with allowBots=%s",
+    async (allowBots) => {
+      const threadBinding = createThreadBinding({
+        targetKind: "session",
+        targetSessionKey: "agent:main:acp:discord-thread-1",
+      });
+      const threadId = "thread-bot-regular-1";
+      const parentId = "channel-parent-regular-1";
+      const message = createDiscordMessage({
+        id: "m-bot-regular-1",
+        channelId: threadId,
+        content: "here is tool output chunk",
+        author: {
+          id: "relay-bot-1",
+          bot: true,
+          username: "Relay",
+        },
+      });
 
-    const result = await runThreadBoundPreflight({
-      threadId,
-      parentId,
-      message,
-      threadBinding,
-      discordConfig: {
-        allowBots: true,
-      } as DiscordConfig,
-      registerBindingAdapter: true,
-    });
+      const result = await runThreadBoundPreflight({
+        threadBindings: defaultThreadBindings,
+        threadId,
+        parentId,
+        message,
+        threadBinding,
+        discordConfig: {
+          allowBots,
+        } as DiscordConfig,
+        registerBindingAdapter: true,
+      });
 
-    expect(expectPreflightResult(result).boundSessionKey).toBe(threadBinding.targetSessionKey);
-  });
+      if (allowBots === false) {
+        expect(result).toBeNull();
+      } else {
+        expect(expectPreflightResult(result).boundSessionKey).toBe(threadBinding.targetSessionKey);
+      }
+    },
+  );
 
   it("looks up thread bindings once for an accepted ordinary guild message", async () => {
     const channelId = "channel-binding-lookup-once";
@@ -1052,6 +1021,7 @@ describe("preflightDiscordMessage", () => {
     });
 
     const result = await runThreadBoundPreflight({
+      threadBindings: defaultThreadBindings,
       threadId,
       parentId,
       message,
@@ -1227,6 +1197,7 @@ describe("preflightDiscordMessage", () => {
     const parentId = "channel-parent-webhook-pk-echo-1";
 
     const result = await runThreadBoundPreflight({
+      threadBindings: defaultThreadBindings,
       threadId,
       parentId,
       threadBinding,

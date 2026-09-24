@@ -780,12 +780,16 @@ export async function inspectContinuation(plan, client, options = {}) {
       const active = run.status !== "completed";
       const passed =
         !active &&
-        terminalPolicyPass({
-          conclusion: run.conclusion,
-          jobs: evidence.jobs,
-          key: child.key,
-          status: run.status,
-        });
+        terminalPolicyPass(
+          {
+            conclusion: run.conclusion,
+            jobs: evidence.jobs,
+            key: child.key,
+            status: run.status,
+          },
+          plan.releaseProfile,
+          child.workflowRef,
+        );
       return {
         compositeJobsSha256: evidence.compositeJobsSha256,
         conclusion: String(run.conclusion ?? ""),

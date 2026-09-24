@@ -76,17 +76,23 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     if (!params.setup.sandbox?.enabled) {
       return undefined;
     }
-    const sandboxInfoExecPolicy = await resolveEmbeddedSandboxInfoExecPolicy(
-      {
-        config: attempt.config,
-        agentId: params.setup.sessionAgentId,
-        sessionKey: attempt.sessionKey,
-        permissionMode: attempt.permissionMode,
-        sandboxAvailable: params.setup.sandbox.enabled,
-        execOverrides: attempt.execOverrides,
-      },
-      policyPreparation,
-    );
+    // Keep the original lifetime check when no elevation policy is needed.
+    policyPreparation.signal?.throwIfAborted();
+    policyPreparation.assertCurrent?.();
+    const sandboxInfoExecPolicy =
+      attempt.bashElevated?.enabled === true
+        ? await resolveEmbeddedSandboxInfoExecPolicy(
+            {
+              config: attempt.config,
+              agentId: params.setup.sessionAgentId,
+              sessionKey: attempt.sessionKey,
+              permissionMode: attempt.permissionMode,
+              sandboxAvailable: params.setup.sandbox.enabled,
+              execOverrides: attempt.execOverrides,
+            },
+            policyPreparation,
+          )
+        : undefined;
     return buildEmbeddedSandboxInfo(
       params.setup.sandbox ?? undefined,
       attempt.bashElevated,
@@ -423,6 +429,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
           if (params.isRawModelRun) {
             return currentSystemPrompt;
           }
+          policyPreparation.signal?.throwIfAborted();
+          policyPreparation.assertCurrent?.();
           const systemPrompt = nextSystemPrompt.refreshSystemPrompt(
             currentSystemPrompt,
             permissionNotice,
