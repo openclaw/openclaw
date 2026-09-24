@@ -14,6 +14,7 @@ import { listClickClackAccountIds, resolveClickClackAccount } from "./accounts.j
 import {
   applyClickClackCredentialConfig,
   applyClickClackSetupConfigPatch,
+  applyClickClackWizardSetupCode,
   normalizeClickClackBaseUrl,
 } from "./setup-core.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
@@ -32,6 +33,18 @@ function isClickClackSetupConfigured(account: ResolvedClickClackAccount): boolea
     account.baseUrl &&
     account.workspace &&
     (account.token || hasConfiguredClickClackCredential(account)),
+  );
+}
+
+function shouldPromptUnconfiguredClickClack(params: {
+  cfg: CoreConfig | Record<string, unknown>;
+  accountId: string;
+}): boolean {
+  return !isClickClackSetupConfigured(
+    resolveClickClackAccount({
+      cfg: params.cfg as CoreConfig,
+      accountId: params.accountId,
+    }),
   );
 }
 
@@ -57,9 +70,10 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       ),
   }),
   introNote: {
-    title: t("wizard.clickclack.botTokenTitle"),
+    title: t("wizard.clickclack.setupCodeTitle"),
     lines: [
-      t("wizard.clickclack.helpCreateToken"),
+      t("wizard.clickclack.helpCreateSetupCode"),
+      t("wizard.clickclack.setupCodeLeaveBlank"),
       t("wizard.channels.docs", {
         link: formatDocsLink("/channels/clickclack", "clickclack"),
       }),
@@ -72,6 +86,7 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
         }),
       ),
   },
+  stepOrder: "text-first",
   credentials: [
     defineTokenCredential({
       inputKey: "token",
@@ -84,6 +99,8 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       keepPrompt: t("wizard.clickclack.botTokenKeep"),
       inputPrompt: t("wizard.clickclack.botTokenInput"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
+      shouldPrompt: ({ cfg, accountId }) =>
+        shouldPromptUnconfiguredClickClack({ cfg: cfg as CoreConfig, accountId }),
       resolveAccount: ({ cfg, accountId }) =>
         resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
       hasConfiguredValue: hasConfiguredClickClackCredential,
@@ -101,6 +118,39 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
     }),
   ],
   textInputs: [
+    {
+      inputKey: "code",
+      message: t("wizard.clickclack.setupCodeInput"),
+      placeholder: t("wizard.clickclack.setupCodePlaceholder"),
+      sensitive: true,
+      required: false,
+      helpTitle: t("wizard.clickclack.setupCodeTitle"),
+      helpLines: [
+        t("wizard.clickclack.helpCreateSetupCode"),
+        t("wizard.clickclack.setupCodeLeaveBlank"),
+      ],
+      shouldPrompt: ({ cfg, accountId }) =>
+        shouldPromptUnconfiguredClickClack({ cfg: cfg as CoreConfig, accountId }),
+      validate: ({ value }) => {
+        if (!value.trim()) {
+          return undefined;
+        }
+        if (!/^https?:\/\//iu.test(value.trim()) || !value.includes("#")) {
+          return t("wizard.clickclack.setupCodeUrlRequired");
+        }
+        return undefined;
+      },
+      applySet: async ({ cfg, accountId, value }) => {
+        if (!value.trim()) {
+          return cfg;
+        }
+        return await applyClickClackWizardSetupCode({
+          cfg,
+          accountId,
+          code: value,
+        });
+      },
+    },
     baseUrlTextInput({
       inputKey: "baseUrl",
       configKey: "baseUrl",
@@ -109,6 +159,8 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
         resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
       currentValue: (account) => account.baseUrl || undefined,
       includeInitialValue: true,
+      shouldPrompt: ({ cfg, accountId }) =>
+        shouldPromptUnconfiguredClickClack({ cfg: cfg as CoreConfig, accountId }),
       validate: (value) =>
         normalizeClickClackBaseUrl(value)
           ? undefined
@@ -130,6 +182,8 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
         resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).workspace || undefined,
       initialValue: ({ cfg, accountId }) =>
         resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).workspace || undefined,
+      shouldPrompt: ({ cfg, accountId }) =>
+        shouldPromptUnconfiguredClickClack({ cfg: cfg as CoreConfig, accountId }),
       validate: ({ value }) => (value.trim() ? undefined : "Required"),
       normalizeValue: ({ value }) => value.trim(),
       applySet: async ({ cfg, accountId, value }) =>
