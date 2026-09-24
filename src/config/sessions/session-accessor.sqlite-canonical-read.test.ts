@@ -13,9 +13,9 @@ import {
   assignSessionOwner,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  recordSessionParticipant,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

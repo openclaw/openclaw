@@ -26,7 +26,10 @@ import {
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
-import { clearPluginStateStoreForTests } from "./plugin-state-store.test-helpers.js";
+import {
+  clearPluginStateStoreForTests,
+  seedPluginStateEntriesForTests,
+} from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
 let testState: OpenClawTestState | undefined;
@@ -386,7 +389,18 @@ describe("plugin state keyed store", () => {
     vi.setSystemTime(1200);
     expect(store.lookup("default")).toBeUndefined();
     expect(store.lookup("override")).toEqual({ value: "override" });
-    expect(sweepExpiredPluginStateEntries()).toBe(1);
+    vi.useRealTimers();
+    // The worker uses real time; keep the survivor live after the synchronous TTL checks.
+    seedPluginStateEntriesForTests([
+      {
+        pluginId: "discord",
+        namespace: "ttl",
+        key: "override",
+        value: { value: "override" },
+        expiresAt: Date.now() + 86_400_000,
+      },
+    ]);
+    expect(await sweepExpiredPluginStateEntries()).toBe(1);
     expect(store.entries().map((entry) => entry.key)).toEqual(["override"]);
   });
 

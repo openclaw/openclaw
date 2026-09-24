@@ -66,7 +66,7 @@ vi.mock("../commands-text-routing.js", () => ({
   shouldHandleTextCommands: (...args: unknown[]) => textRoutingMocks.shouldHandle(...args),
 }));
 vi.mock("../../skills/discovery/chat-commands.runtime.js", () => ({
-  listSkillCommandsForWorkspace: (...args: unknown[]) =>
+  prepareSkillCommandsForWorkspace: (...args: unknown[]) =>
     skillCommandMocks.listForWorkspace(...args),
 }));
 

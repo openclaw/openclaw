@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -9,7 +10,8 @@ import {
 } from "../session-sharing.test-utils.js";
 import {
   ArtifactSessionResolutionError,
-  resolveAuthorizedArtifactSession,
+  prepareArtifactSessionResolution,
+  type ArtifactQuery,
 } from "./artifacts-session-resolution.js";
 import type { GatewayClient } from "./types.js";
 
@@ -18,13 +20,22 @@ const mocks = vi.hoisted(() => ({
   resolveRunSession: vi.fn(),
 }));
 
-vi.mock("../../tasks/task-status-access.js", () => ({
-  getTaskSessionLookupByIdForStatus: mocks.getTaskSession,
+vi.mock("../../tasks/task-registry-read.js", () => ({
+  prepareTaskRegistryRead: async () => ({ getTaskById: mocks.getTaskSession }),
 }));
 
 vi.mock("../server-session-key.js", () => ({
   resolveSessionKeyForRun: mocks.resolveRunSession,
 }));
+
+async function resolveSession(
+  query: ArtifactQuery,
+  getRuntimeConfig: () => OpenClawConfig | undefined,
+  client: GatewayClient | null,
+) {
+  const resolve = await prepareArtifactSessionResolution(query);
+  return resolve(getRuntimeConfig(), client);
+}
 
 function identifiedClient(scopes: string[], profileId = "viewer@example.com"): GatewayClient {
   return {
@@ -69,16 +80,16 @@ describe("artifact session authorization", () => {
       mocks.resolveRunSession.mockReturnValue(sessionKey);
       const viewer = identifiedClient(["operator.read"]);
 
-      expect(() =>
-        resolveAuthorizedArtifactSession(
+      await expect(
+        resolveSession(
           { sessionKey: "dashboard:incognito-artifacts", agentId: "main" },
-          cfg,
+          () => cfg,
           viewer,
         ),
-      ).toThrow('Incognito session "dashboard:incognito-artifacts" was not found.');
+      ).rejects.toThrow('Incognito session "dashboard:incognito-artifacts" was not found.');
       for (const query of [{ taskId: "task-private" }, { runId: "run-private" }]) {
         try {
-          resolveAuthorizedArtifactSession(query, cfg, viewer);
+          await resolveSession(query, () => cfg, viewer);
           throw new Error("expected incognito artifact selector to be denied");
         } catch (error) {
           expect(error).toBeInstanceOf(ArtifactSessionResolutionError);
@@ -90,9 +101,9 @@ describe("artifact session authorization", () => {
       }
 
       expect(
-        resolveAuthorizedArtifactSession(
+        await resolveSession(
           { sessionKey: "dashboard:incognito-artifacts", agentId: "main" },
-          cfg,
+          () => cfg,
           identifiedClient(["operator.admin"]),
         ),
       ).toMatchObject({ sessionKey });
@@ -150,7 +161,7 @@ describe("artifact session authorization", () => {
           { taskId: "task-foreign" },
           { taskId: "task-run" },
         ]) {
-          expect(() => resolveAuthorizedArtifactSession(query, cfg, viewer)).toThrowError(
+          await expect(resolveSession(query, () => cfg, viewer)).rejects.toThrowError(
             expect.objectContaining({
               shape: {
                 code: "INVALID_REQUEST",
@@ -162,16 +173,16 @@ describe("artifact session authorization", () => {
         }
 
         expect(
-          resolveAuthorizedArtifactSession(
+          await resolveSession(
             { sessionKey },
-            cfg,
+            () => cfg,
             identifiedClient(["operator.read"], ownerProfile.id),
           ),
         ).toMatchObject({ sessionKey });
         expect(
-          resolveAuthorizedArtifactSession(
+          await resolveSession(
             { runId: "run-foreign" },
-            cfg,
+            () => cfg,
             identifiedClient(["operator.admin"], viewerProfile.id),
           ),
         ).toMatchObject({ sessionKey });
@@ -197,7 +208,7 @@ describe("artifact session authorization", () => {
         );
 
         for (const cfg of [undefined, {}, rolePolicyConfig()]) {
-          expect(resolveAuthorizedArtifactSession({ sessionKey }, cfg, viewer)).toMatchObject({
+          expect(await resolveSession({ sessionKey }, () => cfg, viewer)).toMatchObject({
             sessionKey,
           });
         }
@@ -214,19 +225,19 @@ describe("artifact session authorization", () => {
       );
       const identityless = sharingPolicyClient({});
       for (const client of [null, identityless, sharingPolicyClient({ user: "gateway-owner" })]) {
-        expect(resolveAuthorizedArtifactSession({ sessionKey }, {}, client)).toMatchObject({
+        expect(await resolveSession({ sessionKey }, () => ({}), client)).toMatchObject({
           sessionKey,
         });
       }
       const cfg = rolePolicyConfig();
-      expect(() => resolveAuthorizedArtifactSession({ sessionKey }, cfg, identityless)).toThrow(
+      await expect(resolveSession({ sessionKey }, () => cfg, identityless)).rejects.toThrow(
         "no session found for artifact query",
       );
       const system: GatewayClient = {
         ...identityless,
         internal: { operatorRoleActor: { kind: "system" } },
       };
-      expect(resolveAuthorizedArtifactSession({ sessionKey }, cfg, system)).toMatchObject({
+      expect(await resolveSession({ sessionKey }, () => cfg, system)).toMatchObject({
         sessionKey,
       });
     });

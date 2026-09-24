@@ -35,9 +35,15 @@ This is creation-only: later messages do not regenerate an existing session's
 name. Explicit worktree names are preserved, and typing never creates a worktree
 or runs setup.
 
+If automatic naming fails after submission, the session receives a two-word,
+crustacean-themed name. New worktree branches use the saved session title when
+available, with the same two-word fallback if naming has not finished. They never
+use the first-message text as a branch-name fallback. A title that arrives later
+updates the sidebar without renaming an existing branch.
+
 ## New-session preferences and recents
 
-For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, and thinking choices. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
+For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
 A custom worktree **Name** applies to the submitted session. Once its start is
 accepted, New session clears that name while remembering the repository, checkout
@@ -88,6 +94,13 @@ the sidebar header and footer stay fixed. Returning to conversations restores
 their sidebar scroll position. Navigation changes this context; background
 machine or session activity does not switch your workspace.
 
+Use **Filter & sort machines** beside the search field to sort each group
+alphabetically, online first (the default), or offline first. Choose **All**,
+**Online**, or **Offline** to filter by reported status; search narrows that
+selection further. Starting, stopping, and error states remain visible under
+**All**. Filtering does not change the machine open in the workspace. These
+choices stay in place when you leave Systems and return on the same connection.
+
 The machine list excludes cloud workers whose teardown is complete, including
 retained records from archived sessions and failed starts with no allocated
 machine. Workers awaiting cleanup remain visible. Archiving stops running cloud
@@ -121,7 +134,7 @@ Hover a session to see its project and branch. Repository details and the workin
 
 Hover a session with an enabled automation and choose **Automation attached** to open its **Automations** page. A single matching automation opens directly in the editor; multiple matches appear in a session-filtered list. You can inspect settings and history or edit with the usual permissions. **Show all automations** clears the session filter. Cmd/Ctrl-click opens the link in a new browser tab.
 
-In the default chip mode, the sidebar organizes everything around the active agent. The identity row at the top is that agent; below it, the **Pages** section starts with **Home** — the agent's rolling main session, badged with its unread or running state — followed by the pinned destinations (**Automations** and **Plugins** by default). The customize control on the Pages header opens a menu with every other destination, including **Usage** and plugin-provided tabs, plus **Edit pinned items**; right-clicking the navigation area opens the pin editor directly. The session list below splits into zones: **Other** for the agent's ungrouped chat sessions (the main session appears only as Home, including when it is pinned or has subagents; independent conversations it spawned appear here as top-level threads, and named threads show without a type prefix), **Groups** for group and room conversations, and **Coding** for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), ACP-backed harness sessions, and external CLI catalogs. The **Other** heading is omitted when it is the only section. Coding starts collapsed on first run and remembers your choice; its collapsed header keeps the true count and shows a running indicator while contained sessions work. Custom groups (the session `category`) and **Pinned** rows sit above Other, and assigning an independent session to a custom group wins over the automatic zone classification. The global **Sessions** toolbar holds the filter and sort control (Created, Last updated, or Owners when the loaded session roster contains multiple owners), **Group by** — **Custom groups** (the default zone layout above), **Project** to bucket sessions by their repo or workspace checkout (sessions without one keep their zones), **Person** to bucket by owner when the loaded roster has several, or **None** for a single flat list with no zone headers — a persisted **Status** filter for Active, Archived, or All, and the **+** that opens the New session page. The Owners sort mode orders owner groups by name and keeps Created order within each group. On multi-user gateways the same menu adds an **Owners** filter: **All owners**, one specific person or agent, or **Involving me** — sessions you own, have prompted, or have been explicitly mentioned in, excluding sessions you personally hid with **Hide from Involving me**. A new explicit mention brings a hidden session back. **Show in Involving me** restores it from **All owners**. The personal Hide/Show menu entry appears only when the Gateway has more than one identity. These personal choices do not archive sessions or alter access, and the Gateway evaluates the filter before pagination (see [Multi-user mode](/concepts/multi-user#finding-sessions-by-owner)). Archived rows stay inline, dimmed with an archive glyph; they do not contribute unread or attention state and stay outside lineage promotion. Opening a session moves the selection highlight without reordering rows. Parents with nested persistent sessions or forks show a disclosure and child count; expand it to inspect those sessions, their status, and runtime without leaving the sidebar. Selecting a nested session opens its chat and reveals its ancestor path. If a persistent session has subagent runs between it and its nearest loaded non-subagent ancestor, it nests under that ancestor. If no such ancestor is loaded, it keeps its normal top-level placement. These child rows stay outside root grouping, pinning, dragging, multi-select, and pagination; collapsed zones do not consume the visible page budget. Subagent runs never appear as sidebar rows, even when selected or assigned a custom group, and do not add a disclosure to a parent with no nested persistent sessions. Inspect them through inline transcript activity rows, the chat **Tasks** tab, or the [Tasks page](/automation/tasks#control-ui). Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Accepted work immediately shows an activity ring around the row’s own icon for Home, sessions, child sessions, and catalog rows; a row without an icon shows a compact ring in the icon slot. Subagent runs still contribute to their ancestors’ running, queued, and failed counts, unread attention, and failure warnings. A session’s ring stays active while its subagents work. When only delegated work is executing, the ring is labeled **Subagents working**. Select an ancestor’s child-failure warning to inspect the failed run in chat without adding a sidebar row. Collapsed groups and collapsed child toggles summarize hidden running rows on the right. It spins during startup and execution, pauses with **Queued** only during a scheduler-confirmed concurrency-slot wait, and resumes when a slot is granted. With reduced motion enabled, the ring stays still. A session holding composer text you typed but never sent shows a pencil badge until the draft is sent or cleared; the active session hides it because its composer is already in view. An agent can also publish a short expiring status line and optionally request attention with a curated amber icon; that declaration clears when you open the session, send the next message, clear it explicitly, or its TTL expires. Cloud-worker lifecycle states use a globe badge; local and reclaimed sessions omit a placement badge because local execution is the default. Each root session row has a [session menu](#session-menu), opened with its kebab button or right-click; touch layouts keep the direct pin and menu controls visible. The chat header composes the same single-session management actions with its pane-specific **Panels**, **Layout**, and **View** actions. Cmd/Ctrl-click opens a session in a new browser tab. Alt/Option-click toggles root rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a root session onto **Pinned** to pin it, or onto a custom group to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names, order, and New Session defaults live in the gateway (`sessions.groups.*`), so they follow you across browsers, while collapsed state stays in the browser profile. Each custom group header has a **+** that opens the normal New Session page and assigns the created session to that group. When the **Other** header is visible, its **+** opens an ungrouped draft without inheriting the current named group. **New session defaults** in the group menu sets its working directory and Local or Worktree preference; the page prefills those values but leaves them editable. Leaving the directory empty uses the selected agent's workspace. The menu also has Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Other.
+In the default chip mode, the sidebar organizes everything around the active agent. The identity row at the top is that agent; below it, the **Pages** section starts with **Home** — the agent's rolling main session, badged with its unread or running state — followed by the pinned destinations (**Automations** and **Plugins** by default). The customize control on the Pages header opens a menu with every other destination, including **Usage** and plugin-provided tabs, plus **Edit pinned items**; right-clicking the navigation area opens the pin editor directly. The session list below splits into zones: **Other** for the agent's ungrouped chat sessions (the main session appears only as Home, including when it is pinned or has subagents; independent conversations it spawned appear here as top-level threads, and named threads show without a type prefix), **Groups** for group and room conversations, and **Coding** for sessions bound to a managed worktree or exec node (rows show a `repo ⎇ branch` line plus the node host), ACP-backed harness sessions, and external CLI catalogs. The **Other** heading is omitted when it is the only section. Coding starts collapsed on first run and remembers your choice; its collapsed header keeps the true count and shows a running indicator while contained sessions work. Custom groups (the session `category`) and **Pinned** rows sit above Other, and assigning an independent session to a custom group wins over the automatic zone classification. The global **Sessions** toolbar holds the filter and sort control (Created, Last updated, or Owners when the loaded session roster contains multiple owners), **Group by** — **Custom groups** (the default zone layout above), **Project** to bucket sessions by their repo or workspace checkout (sessions without one keep their zones), **Person** to bucket by owner when the loaded roster has several, or **None** for a single flat list with no zone headers — a persisted **Status** filter for Active, Archived, or All, and the **+** that opens the New session page. The Owners sort mode orders owner groups by name and keeps Created order within each group. On multi-user gateways the same menu adds an **Owners** filter: **All owners**, one specific person or agent, or **Involving me** — sessions you own, have prompted, or have been explicitly mentioned in, excluding sessions you personally hid with **Hide from Involving me**. A new explicit mention brings a hidden session back. **Show in Involving me** restores it from **All owners**. The personal Hide/Show menu entry appears only when the Gateway has more than one identity. These personal choices do not archive sessions or alter access, and the Gateway evaluates the filter before pagination (see [Multi-user mode](/concepts/multi-user#finding-sessions-by-owner)). Archived rows stay inline, dimmed with an archive glyph; they do not contribute unread or attention state and stay outside lineage promotion. Opening a session moves the selection highlight without reordering rows. Parents with nested persistent sessions or forks show a disclosure and child count; expand it to inspect those sessions, their status, and runtime without leaving the sidebar. Selecting a nested session opens its chat and reveals its ancestor path. If a persistent session has subagent runs between it and its nearest loaded non-subagent ancestor, it nests under that ancestor. If no such ancestor is loaded, it keeps its normal top-level placement. These child rows stay outside root grouping, pinning, dragging, multi-select, and pagination; collapsed zones do not consume the visible page budget. Subagent runs never appear as sidebar rows, even when selected or assigned a custom group, and do not add a disclosure to a parent with no nested persistent sessions. Inspect them through inline transcript activity rows, the chat **Tasks** tab, or the [Tasks page](/automation/tasks#control-ui). Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Accepted work immediately shows an activity ring around the row’s own icon for Home, sessions, child sessions, and catalog rows; a row without an icon shows a compact ring in the icon slot. Subagent runs still contribute to their ancestors’ running, queued, and failed counts, unread attention, and failure warnings. A session’s ring stays active while its subagents work. When only delegated work is executing, the ring is labeled **Subagents working**. Select an ancestor’s child-failure warning to inspect the failed run in chat without adding a sidebar row. Collapsed groups and collapsed child toggles summarize hidden running rows on the right. It spins during startup and execution, pauses with **Queued** only during a scheduler-confirmed concurrency-slot wait, and resumes when a slot is granted. With reduced motion enabled, the ring stays still. A session holding composer text you typed but never sent shows a pencil badge until the draft is sent or cleared; the active session hides it because its composer is already in view. An agent can also publish a short expiring status line and optionally request attention with a curated amber icon; that declaration clears when you open the session, send the next message, clear it explicitly, or its TTL expires. Cloud-worker lifecycle states use a globe badge; local and reclaimed sessions omit a placement badge because local execution is the default. Each session row offers a direct **Archive** button alongside **Pin**; archived rows offer **Restore**. Right-click a row, or focus its link and press **Shift+F10** or the **Menu** key, to open the full [session menu](#session-menu). Touch layouts keep Pin, Archive, and a separate menu button visible so every action remains available without right-click. The chat header also provides the session menu. The chat header composes the same single-session management actions with its pane-specific **Panels**, **Layout**, and **View** actions. Cmd/Ctrl-click opens a session in a new browser tab. Alt/Option-click toggles root rows into a multi-select and Shift-click extends it across the visible order; opening the menu on a selected row then offers batch actions (Mark N as unread/read, Move N to group, Archive N, Delete N) that apply to every selected session, with a single confirmation for batch delete. Drag a root session onto **Pinned** to pin it, or onto a custom group to move it. Custom group headers can be collapsed, expanded, or dragged to reorder them; group names, order, and New Session defaults live in the gateway (`sessions.groups.*`), so they follow you across browsers, while collapsed state stays in the browser profile. Each custom group header has a **+** that opens the normal New Session page and assigns the created session to that group. When the **Other** header is visible, its **+** opens an ungrouped draft without inheriting the current named group. **New session defaults** in the group menu sets its working directory and Local or Worktree preference; the page prefills those values but leaves them editable. Leaving the directory empty uses the selected agent's workspace. The menu also has Rename group, New group, and Delete group; renaming or deleting a group updates every member session server-side, including archived ones, and deleting a group keeps its sessions and moves them back to Other.
 
 Choose **Show all agents** in the agent switcher to enter **team mode**, which shows every selectable agent as a collapsible session group. It is off by default, and the browser remembers your choice and each agent's collapsed state. Groups start expanded. Headers emphasize the agent's avatar and name. Activity, attention, unread, and workspace indicators sit on the right of session rows; collapsed parents and agents summarize hidden work and outcomes there. A row shows each status once, even when both the parent and a hidden child share that status. Session icons stay to the left of their titles in both sidebar modes; status indicators and actions stay on the right. Nested children indent 16px per level without moving the right edge of the trailing indicators. Groups keep the configured agent order as activity changes. Agent headers are 48px tall with 36px avatars; session rows stay on one line at 32px on desktop. Each agent header is its Home entry: selecting the name or avatar opens the main conversation and highlights the header. Home does not appear again as a session row, even when pinned. The header shows Home activity, unread state, and attention while expanded, and summarizes the group's hidden sessions while collapsed. Independent conversations created from Home remain visible beneath the agent.
 
@@ -156,7 +169,9 @@ CPU because Apple silicon Macs and desktop-mode iPads also report it.
 
 Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the command palette with **⌘K** on Mac or **Ctrl+K** on Windows/Linux. Mac **Ctrl+B** and **Ctrl+K** remain available for native text editing.
 
-During text composition, the command palette leaves Enter, Escape, and arrow keys to the input method.
+The search field updates immediately, while command filtering and session searches wait until you pause typing for 200 ms. Previous results stay in place during that pause but cannot be selected until the new query applies. Press Enter to apply a pending query immediately and select an available matching result. Clearing the field restores the default commands immediately.
+
+During text composition, the command palette pauses searches and leaves Enter, Escape, and arrow keys to the input method.
 
 After token or device-token authentication, the sidebar can show its cached session roster on reload only when the browser will present the Gateway token that authenticated the previous connection, or the paired device token retained from that connection. The cached roster has no live run state and is replaced by the live list after connecting. Other authentication methods wait for the connection; see [Warm reload](/web/control-ui/offline-and-reconnect#warm-reload).
 
@@ -240,7 +255,7 @@ backup behavior, and login-proxy configuration, see
 
 Hover a cloud session in the sidebar to see its provider and profile. When known, a compact line below them shows the operating system, machine class, vCPU count, and memory in GB. The placement badge tooltip includes the same machine details; unavailable fields are omitted.
 
-A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Connections with `operator.write` can choose **Move session…** to continue on the Gateway or an eligible paired device, and can use **Stop cloud worker…** through the write-scoped `sessions.reclaim` lifecycle. Moving to a configured cloud profile requires `operator.admin`. Cloud rows are filtered against all execution modes advertised by each profile: the same bundled Crabbox profile is selectable for OpenClaw `worker-turn` and Codex `remote-exec`, while a genuinely single-mode profile stays disabled for the other runtime. Profiles with multiple machine classes show a machine picker; choosing the default omits an override, while choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
+A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Connections with `operator.write` can choose **Move session…** to continue on the Gateway or an eligible paired device, and can use **Stop cloud worker…** through the write-scoped `sessions.reclaim` lifecycle. Moving to a configured cloud profile requires `operator.admin`. Cloud rows are filtered against all execution modes advertised by each profile: the same bundled Crabbox profile is selectable for OpenClaw `worker-turn` and Codex `remote-exec`, while a genuinely single-mode profile stays disabled for the other runtime. Profiles with multiple machine classes show a machine picker. Leaving the Move session picker untouched omits a size override; explicitly selecting a class, including the displayed default, sends that class. Choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
 
 You can send a message while an existing worker session is provisioning or preparing its workspace. The accepted message shows **Received · waiting for worker setup** and starts automatically once that worker is ready. Stop, Move, and Restart keep their own admission controls; cancelled or interrupted input is not silently started on a different destination. The unsent draft in the New Session flow remains separate from accepted input.
 
@@ -256,13 +271,68 @@ With **Person** grouping, hover or focus a person’s header and choose **Show o
 
 Choose **Icon & color** from a session menu and select a color swatch to add a narrow color stripe to its sidebar row and a matching dot beside the chat title. Pick one of eight colors, or choose **Default** to clear only the color. **Reset to default** clears both the icon and color. The colors match Claude Code’s `/color` names, so imported Claude Code sessions keep the same color. Imported catalog rows show their color without offering color editing.
 
+## Direct session shortcuts
+
+- **⌘⇧O** on Mac or **Ctrl+Shift+O** on Windows/Linux opens **New Session**
+  and focuses its composer. It opens a draft, without creating an empty session
+  or sending a message. **⌘N / Ctrl+N** remains **New Window**.
+- **⌘⇧A** on Mac or **Ctrl+Shift+A** on Windows/Linux requests **Archive**
+  for the current chat pane only, not other sessions selected in the sidebar.
+  It uses the same permissions, protected-session checks, archive lifecycle, and
+  **Undo** as the chat header menu. The archived conversation stays open; this
+  is not a separate stop or delete action.
+
+Both shortcuts work from the chat composer, ignore key repeat and text
+composition, and leave open modal dialogs in control. The keyboard-shortcuts help
+dialog is the exception for New Session: the shortcut closes help before opening
+and focusing the draft. Press **⌘/** or **Ctrl+/** again to close help without
+navigating. Archive remains blocked while help is open. New Session preserves the
+existing conversation's draft through normal navigation. Archive does not clear
+that draft or navigate to another conversation.
+
+Browser shortcut handling can vary by browser version and configuration. If your
+browser handles a chord itself, use the corresponding New Session control or
+**Archive** in the current chat's header menu. The menu's **A** shortcut still
+works while that menu is open.
+
+In the macOS app, these additional shortcuts apply while the Dashboard web view
+has keyboard focus. A separate native reading pane does not forward Archive to
+the Dashboard or another window. The existing native **⌘N** New Gateway Window
+and **⌘⇧N** New Thread commands are unchanged.
+
+These direct shortcuts do not change the command palette's **⌘K / Ctrl+K**, then
+**⌘Enter / Ctrl+Enter** workflow for starting a task in the background.
+
 ## Command palette
 
 The command palette can start an independent task without leaving your current
 conversation or settings page. Search sessions, settings, and commands as usual,
-or write a prompt in the same field.
+or write a prompt in the same field. Multiline text or a prompt of 60 or more
+characters pauses palette searches and gently hides the search tabs, results, and
+hints. The input stays anchored in place. Search returns when the text is
+single-line and shortened to 50 characters or fewer, or cleared. Between 51 and
+59 characters, the palette keeps its current mode to avoid flickering while you
+edit. Counts exclude leading and trailing whitespace. Session-creation errors and
+recovery actions remain visible in either mode.
 
-- **Enter** opens or runs the selected result. With no result, Enter does not send.
+Pasted images appear as small, removable thumbnails below the text. Pasting or
+removing them leaves the input, **New session** action, and settings control in
+place; the palette grows downward. Images can start a session on their own or
+accompany text. There is no attachment picker in the palette.
+
+Type **@** to search eligible people by name or verified GitHub handle, just as
+in the chat composer. Use **↑/↓** or **Home/End**, then **Enter** or **Tab** to
+select a person; **Escape** dismisses the people picker before the palette.
+The compact **Will notify** row shows selected people once each, with **+N**
+when space is tight. You can select up to ten mention references. Editing or
+deleting a selected name removes that reference; **Remove mention** clears all
+recipient selections without deleting the text. Pasted names and email addresses
+remain ordinary text. The picker replaces search results while open, and selected
+mentions keep the palette in composer mode. Mentions travel with the first message
+of the new session; they never share a session, invite people, or grant access.
+
+- **Enter** selects a person while the people picker is open; otherwise it opens
+  or runs the selected search result. With no result, Enter does not send.
 - **Shift+Enter** adds a line. The field grows downward to three lines, then scrolls
   without moving the palette or its top-right controls.
 - **Command+Enter** on macOS or **Ctrl+Enter** on Windows/Linux starts a new session
@@ -279,11 +349,11 @@ the checkbox restores your usual choices immediately and leaves the prompt
 intact. One-off choices are not remembered for the next palette session.
 
 Accepted creation closes the palette and offers **Open session** without changing
-the foreground view or its draft. A failed submission retains the prompt and
+the foreground view or its draft. A failed submission retains the prompt, selected mentions, images, and
 choices with an error. These settings do not affect sessions opened from search,
 and the existing conversation composer keeps its own send and steer/queue
-shortcuts. Prompts longer than the transcript-search limit are not sent as search
-queries; they remain intact for session creation.
+shortcuts. Long prompts remain intact for session creation and are never sent as
+search queries.
 
 ## New session page
 
@@ -298,6 +368,8 @@ The destination picker opens with **Search environments** focused. Its compact, 
 Hover a configurable cloud profile or focus its row to open its operating-system and machine options. Unavailable operating systems are omitted. Before selecting a profile, dashed outlines identify the defaults; choosing any option selects that profile and activates the defaults for the other setting. The selected profile shows its operating system and machine as muted text beside its name in the menu. The closed selector keeps only the profile name. Options use equal-width tiles, up to four columns, with long catalogs scrollable.
 
 The folder defaults to the agent workspace. Write-scoped connections can browse, restore recent Gateway folders, and start sessions anywhere inside a configured agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. Local placement keeps the optional **Worktree** control with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Choosing a device or cloud profile with a Gateway folder selected uses a managed worktree. With a GitHub repository selected, **Remote checkout** sends its URL and optional ref directly to the runner without creating a Gateway checkout.
+
+Leave **From** empty to fetch `origin` when creating the worktree and use its default branch. The placeholder is a suggestion, not a saved branch selection. Explicitly selected or saved branches and commits are used as entered without fetching; selecting local `main` uses that local branch, which can lag behind `origin/main`. If fetching or resolving the remote default fails, the Gateway falls back to the source checkout's `HEAD`.
 
 ### Start a native coding CLI
 
@@ -354,9 +426,9 @@ For device and cloud sessions, the submitted prompt also starts background namin
 
 For a remote target, the Control UI creates the repository or managed-worktree session with an empty initial message and no `execNode`, dispatches it by exact `deviceId`, `autoDevice: true`, or `profileId` (plus an optional cloud machine class), waits for active placement, and then sends the first message and attachments with the same idempotency key used by recovery. Explicit and automatic device dispatch require `operator.write`; cloud profile dispatch requires `operator.admin`. The composer footer chooses the new session's model and reasoning level.
 
-Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Fast-mode controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the picker, accessible label, and tooltip. Mobile Effort uses a gauge whose needle reflects the current level, with a lightning badge when Fast mode is active. In chat, Fast mode stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
+Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Fast-mode controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the picker, accessible label, and tooltip. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast mode is active. In chat, Fast mode stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
 
-Search the model picker by model name or provider. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
+Search the model picker by model name, model ID, provider, or provider/model reference. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
 
 When you switch sessions, the composer keeps the session's known model name visible while refreshing the model options available for that session. If the model is not yet known, the control shows a loading placeholder. Locked chats also show the selected model, or **Session model** when it is not known. The lock prevents model selection changes; it does not indicate that a native runtime owns the model.
 
@@ -372,7 +444,28 @@ When an interrupted remote-placement draft needs deletion, cleanup reclaims the 
 
 Unsent text and staged attachments can be recovered only in the same browser profile and Gateway credential scope; they are never stored on the Gateway or synced across devices. The browser keeps the 20 most recently edited draft scopes per Gateway credential scope for up to seven days, with at most 25 MiB of attachment data per draft, but it can evict browser storage sooner. A successful send or New Session creation, explicit attachment removal, or confirmed session deletion retires the corresponding browser draft. If cleanup fails after deletion, clear site data for the Control UI origin to remove it. Clearing site data also removes every other browser draft. If a draft's attachments exceed the cap, the current tab keeps them and shows the existing storage warning, but only the text is restart-recoverable. OpenClaw **Incognito** drafts are never durable. Turning Incognito off resumes browser autosave for the current text and attachments, without requiring another edit. Switching New Session destinations and returning with Back keeps unsent Incognito text and attachments in the current tab, but reloading or closing the tab discards them. In a private browser window, IndexedDB availability and lifetime are controlled by the browser and stored data is normally cleared when the private session ends. The **Incognito** toggle in the new-session page's top-right control rail retires that browser draft and creates a web-only thread whose session entry, transcript, and compaction state stay in memory until the Gateway restarts; OpenClaw also skips its automatic memory flush. The agent keeps its normal tools, so an explicit save request or tool-driven file write can still persist data. The model provider still processes messages, and content-free audit metadata is still recorded. Remote-placement starts persist their model and reasoning choices before dispatching the session to its worker.
 
+<a id="register-an-existing-repository" />
+
 **Projects.** The Place picker lists configured agent workspaces and repositories recorded with `projects.register`. Read-only connections receive project names and IDs; checkout paths and origin URLs are included only at `operator.write`. An admin can browse to a Git checkout and choose **Register as project**; write-only operators see a hint directing them to that flow. Choosing a project sends its ID through `sessions.create`, so it can run directly or supply the source for optional Worktree isolation without submitting a raw path. If an agent workspace was moved or removed, update that agent's configured workspace path. If a recorded checkout was moved or removed, re-register it before starting another session there.
+
+You can also register an existing checkout through the
+[Gateway CLI](/cli/gateway/query#gateway-call-%3Cmethod%3E). Registration requires
+`operator.admin`; listing requires `operator.read`.
+
+```bash
+openclaw gateway call projects.register \
+  --params '{"path":"/srv/projects/example","name":"example"}' --json
+openclaw gateway call projects.list --json
+```
+
+Use an absolute path on the machine running the Gateway, even when the CLI runs
+on another machine. The Gateway service account must be able to access the Git
+checkout, and its `HEAD` must resolve to a commit. Registration records the
+existing checkout without cloning it. `name` is optional and defaults to the
+checkout directory's name.
+
+Registering the same resolved repository root again returns its existing project ID and
+display name. Passing a different `name` does not rename an existing project.
 
 **Projects from GitHub.** Search the same picker or paste a GitHub HTTPS or `git@github.com` repository URL. For a remote destination, creation records that source and the runner fetches it during dispatch; no Gateway project clone is required. For Gateway execution, the picker clones into the Gateway-managed projects area. Recent repository sources retain their URL without inventing a local path. Public repository search and cloning work anonymously. Private remote checkout uses the effective shared `tools.github` identity; the discovery credential below only grants picker access. For affiliated and private repositories, prefer the explicit `gateway.controlUi.github.token` SecretRef so this service access has a clear runtime owner. When it is omitted, the Gateway still uses its shipped `GH_TOKEN` then `GITHUB_TOKEN` fallback from the shared process environment. When it is explicit, its exact environment or store name is excluded from agent execution without clearing unrelated native GitHub CLI variables. Search requires `operator.read`, cloning requires `operator.write`, and deleting a Gateway-managed cloned checkout requires `operator.admin`. Clone deletion refuses while a live session or managed worktree still references the checkout. SecretRef ownership is not an OS-user security boundary; use a sandbox, dedicated host, or dedicated OS user when same-account processes are not trusted.
 

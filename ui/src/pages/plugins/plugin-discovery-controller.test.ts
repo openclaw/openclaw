@@ -51,13 +51,11 @@ function setup(
     }
     return response;
   });
-  const onEntriesChanged = vi.fn();
   const controller = new PluginDiscoveryController(host, {
     getClient: () => client,
     isConnected: () => true,
-    onEntriesChanged,
   });
-  return { controller, onEntriesChanged, request };
+  return { controller, request };
 }
 
 afterEach(() => {

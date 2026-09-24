@@ -31,5 +31,8 @@
       "publishToClawHub": true,
       "publishToNpm": true
     }
+  },
+  "dependencies": {
+    "@openclaw/fs-safe": "0.18.1"
   }
 }

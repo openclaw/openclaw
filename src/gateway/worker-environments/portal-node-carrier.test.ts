@@ -121,7 +121,7 @@ describe("worker node portal carrier", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it("advertises only current node placements with the versioned portal stream capability", async () => {
-    const record = support.seedReadyNodeDesktop("worker-node-portal-capability");
+    const record = await support.seedReadyNodeDesktop("worker-node-portal-capability");
     let current: WorkerEnvironmentRecord | undefined = record;
     let proofCurrent = true;
     const proof = portalNodeProof(record.nodeDeviceId!);
@@ -156,7 +156,7 @@ describe("worker node portal carrier", () => {
   });
 
   it("opens one ticketed node duplex per portal connection and closes its owned streams", async () => {
-    const record = support.seedReadyNodeDesktop("worker-node-portal-streams");
+    const record = await support.seedReadyNodeDesktop("worker-node-portal-streams");
     const proof = portalNodeProof(record.nodeDeviceId!);
     const transport = pendingPortalTransport({ proof, isProofCurrent: () => true });
     const streamed = fakePortalBroker();
@@ -213,7 +213,7 @@ describe("worker node portal carrier", () => {
       (record: WorkerEnvironmentRecord) => ({ ...record, destroyRequestedAtMs: 2_000 }),
     ],
   ] as const)("rejects the attached stream when its durable %s changes", async (_name, mutate) => {
-    const record = support.seedReadyNodeDesktop(`worker-node-portal-stale-${_name}`);
+    const record = await support.seedReadyNodeDesktop(`worker-node-portal-stale-${_name}`);
     let current: WorkerEnvironmentRecord | undefined = record;
     const transport = pendingPortalTransport({
       proof: portalNodeProof(record.nodeDeviceId!),
@@ -239,7 +239,7 @@ describe("worker node portal carrier", () => {
   });
 
   it("destroys a disconnected node stream while retaining the portal for a new connection", async () => {
-    const record = support.seedReadyNodeDesktop("worker-node-portal-reconnect");
+    const record = await support.seedReadyNodeDesktop("worker-node-portal-reconnect");
     const transport = pendingPortalTransport({
       proof: portalNodeProof(record.nodeDeviceId!),
       isProofCurrent: () => true,
@@ -270,7 +270,7 @@ describe("worker node portal carrier", () => {
   });
 
   it("aborts an owner that is stopped while node discovery is still pending", async () => {
-    const record = support.seedReadyNodeDesktop("worker-node-portal-pending-discovery");
+    const record = await support.seedReadyNodeDesktop("worker-node-portal-pending-discovery");
     const pendingNodes = deferredPortalValue<readonly NodeWorkerSupervisorNodeProof[]>();
     const transport = pendingPortalTransport({
       proof: portalNodeProof(record.nodeDeviceId!),

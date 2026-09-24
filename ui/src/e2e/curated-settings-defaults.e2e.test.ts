@@ -63,7 +63,7 @@ function hasOwnPath(value: Record<string, unknown>, pathSegments: readonly strin
 
 function settingsRow(page: Page, title: string): Locator {
   return page.locator(".settings-row").filter({
-    has: page.locator(".settings-row__title", { hasText: title }),
+    has: page.locator(".settings-row__title").getByText(title, { exact: true }),
   });
 }
 
@@ -114,7 +114,7 @@ suite.define(() => {
         const afterLabsReset = {
           agents: initialConfig.agents,
           browser: initialConfig.browser,
-          tools: { profile: "minimal" },
+          tools: { codeMode: {}, profile: "minimal" },
         };
         const afterThinkingReset = {
           agents: {
@@ -247,7 +247,7 @@ suite.define(() => {
           200,
         );
         const thinkingRow = settingsRow(page, "Thinking");
-        const fastModeRow = settingsRow(page, "Fast mode");
+        const fastModeRow = settingsRow(page, "Fast Mode");
         await thinkingRow.getByRole("radio", { name: "High", exact: true }).waitFor();
         expect(
           await thinkingRow
@@ -336,7 +336,7 @@ suite.define(() => {
 
         expect((await page.reload())?.status()).toBe(200);
         const reloadedThinkingRow = settingsRow(page, "Thinking");
-        const reloadedFastModeRow = settingsRow(page, "Fast mode");
+        const reloadedFastModeRow = settingsRow(page, "Fast Mode");
         await expectDefaultInfo(reloadedThinkingRow, thinkingDefaultExplanation);
         await expectDefaultInfo(reloadedFastModeRow, fastModeDefaultExplanation);
         expect(
@@ -357,7 +357,7 @@ suite.define(() => {
           await reloadedCodeModeRow
             .getByRole("switch", { name: "Code Mode", exact: true })
             .getAttribute("aria-checked"),
-        ).toBe("false");
+        ).toBe("true");
 
         if (captureUiProofEnabled) {
           await page.screenshot({

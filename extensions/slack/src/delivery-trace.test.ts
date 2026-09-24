@@ -586,7 +586,6 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     requireMention: true,
     isDirectMessage: false,
     isRoomish: true,
-    historyKey: "slack:trace",
     preview: "",
     ackReactionValue: "eyes",
     ackReactionPromise: null,

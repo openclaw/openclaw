@@ -1,7 +1,7 @@
-import { AcpxRuntime as BaseAcpxRuntime } from "acpx/runtime";
+import { AcpxRuntime as BaseAcpxRuntime, RequestedModelUnsupportedError } from "acpx/runtime";
+import type { AcpSessionStore } from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AcpSessionStore } from "./runtime.js";
 import { type TestSessionStore, makeRuntime, makeManagedRuntime } from "./runtime.test-support.js";
 
 describe("AcpxRuntime reset generation custody", () => {
@@ -77,6 +77,52 @@ describe("AcpxRuntime reset generation custody", () => {
     await pending;
     expect(persisted).toMatchObject({ acpSessionId: "fresh-session" });
   });
+
+  it.each(["startup", "control"])(
+    "does not retry a model reference after reset during %s rejection",
+    async (operation) => {
+      const sessionKey = "agent:catalog:acp:model-reset";
+      const { runtime, delegate } = makeRuntime({
+        load: vi.fn(async () => undefined),
+        save: vi.fn(async () => {}),
+      });
+      const started = createDeferred<void>();
+      const release = createDeferred<void>();
+      const rejectModel = async (): Promise<never> => {
+        started.resolve();
+        await release.promise;
+        throw new RequestedModelUnsupportedError("Model is not advertised", "unadvertised-model");
+      };
+      const ensure = vi.spyOn(delegate, "ensureSession").mockImplementation(rejectModel);
+      const control = vi.spyOn(delegate, "setConfigOption").mockImplementation(rejectModel);
+      const pending =
+        operation === "startup"
+          ? runtime.ensureSession({
+              sessionKey,
+              agent: "catalog",
+              mode: "persistent",
+              model: "provider/model",
+              modelExplicit: true,
+            })
+          : runtime.setConfigOption({
+              handle: { sessionKey, backend: "acpx", runtimeSessionName: sessionKey },
+              key: "model",
+              value: "provider/model",
+            });
+      const rejected = expect(pending).rejects.toThrow("superseded by reset");
+      try {
+        await started.promise;
+        await runtime.prepareFreshSession({ sessionKey });
+        release.resolve();
+        await rejected;
+        expect(operation === "startup" ? ensure : control).toHaveBeenCalledOnce();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending]);
+        await runtime.shutdown();
+      }
+    },
+  );
 
   it("keeps a fresh generation owned when an older discard close finishes late", async () => {
     const sessionKey = "agent:codex:acp:binding:test";

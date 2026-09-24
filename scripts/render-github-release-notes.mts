@@ -9,6 +9,8 @@ import {
   validateReleaseNotesRepository as validateRepository,
   validateReleaseNotesTag as validateTag,
 } from "./lib/release-notes-compaction.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { validateActiveExtendedStableLine } from "./openclaw-npm-extended-stable-release.mjs";
 
 type ShippedBaselineExclusion = {
   ref: string;
@@ -32,11 +34,26 @@ type ReleaseNotesTarget = {
   version: unknown;
   tag: unknown;
   repository: unknown;
+  regularStableVersion?: unknown;
   contributionRecordPath?: string;
 };
 
 const RELEASE_VERIFICATION_HEADING = "### Release verification";
 const SHIPPED_BASELINE_EXCLUSIONS_PREFIX = "Shipped baseline exclusions:";
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+] as const;
 const RELEASE_HEADING_PATTERN =
   /^## (?<version>Unreleased|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:(?:alpha|beta)\.[1-9][0-9]*|[1-9][0-9]*))?)\r?$/u;
 
@@ -57,7 +74,35 @@ function normalizeTail(value: string | undefined) {
 function joinBody(notes: string, tail: string | undefined) {
   const normalizedNotes = notes.trimEnd();
   const normalizedTail = normalizeTail(tail);
+  if (!normalizedNotes) {
+    return normalizedTail;
+  }
   return normalizedTail ? `${normalizedNotes}\n\n${normalizedTail}` : normalizedNotes;
+}
+
+function extendedStableReleaseNotice({
+  version,
+  repository,
+  regularStableVersion,
+}: {
+  version: string;
+  repository: string;
+  regularStableVersion: unknown;
+}) {
+  const release = parseReleaseVersion(version);
+  if (!release || classifyReleaseTrain(release) !== "extended-stable") {
+    if (regularStableVersion !== undefined) {
+      fail("regular stable version is only valid for extended-stable release notes");
+    }
+    return "";
+  }
+  assertString(regularStableVersion, "regular stable version");
+  validateActiveExtendedStableLine(version, regularStableVersion);
+  const month = MONTH_NAMES[release.month - 1];
+  if (!month) {
+    fail(`unsupported extended-stable release month: ${release.month}`);
+  }
+  return `This is a gateway-only \`extended-stable\` release, which is our current equivalent to LTS. This release is OpenClaw from the end of ${month} ${release.year}, plus critical security updates, reliability and performance fixes, and features like new model support. The current latest version of OpenClaw is [${regularStableVersion}](https://github.com/${repository}/releases#release-v${regularStableVersion})`;
 }
 
 export function formatContributionRecordProvenance(provenance: ContributionRecordProvenance) {
@@ -339,6 +384,7 @@ export function renderGithubReleaseNotes({
   version,
   tag,
   repository,
+  regularStableVersion,
   contributionRecordPath,
   verification = "",
 }: ReleaseNotesTarget & { verification?: string }) {
@@ -356,11 +402,14 @@ export function renderGithubReleaseNotes({
     fail("docs-mirrored release notes require the docs-publication renderer");
   }
   const section = releaseNotesSectionForTag(changelog, version, tag);
-  const mode = fitsGithubReleaseBody(section) ? "full" : "compact";
-  const baseBody =
+  const notice = extendedStableReleaseNotice({ version, repository, regularStableVersion });
+  const fullBody = joinBody(notice, section);
+  const mode = fitsGithubReleaseBody(fullBody) ? "full" : "compact";
+  const compactBody =
     mode === "full"
-      ? section
+      ? undefined
       : compactReleaseNotes(section, repository, tag, contributionRecordPath)?.body;
+  const baseBody = mode === "full" ? fullBody : compactBody && joinBody(notice, compactBody);
   if (baseBody === undefined) {
     fail(
       "release notes exceed GitHub's body limit and cannot be compacted without a complete contribution record",
@@ -392,6 +441,7 @@ export function verifyGithubReleaseNotes({
   version,
   tag,
   repository,
+  regularStableVersion,
   contributionRecordPath,
 }: ReleaseNotesTarget & { body: unknown }) {
   assertString(body, "release body");
@@ -401,6 +451,7 @@ export function verifyGithubReleaseNotes({
     version,
     tag,
     repository,
+    regularStableVersion,
     contributionRecordPath,
   });
   if (normalizedBody === base.body) {
@@ -420,6 +471,7 @@ export function verifyGithubReleaseNotes({
         version,
         tag,
         repository,
+        regularStableVersion,
         contributionRecordPath,
         verification,
       })
@@ -436,7 +488,8 @@ function usage() {
   node --import tsx scripts/render-github-release-notes.mts \\
     (--root <repository-path> [--ref <ref>] | --changelog <legacy-file>) \\
     --tag <tag> --repository <owner/repo> \\
-    [--version <version>] [--verification-file <path>] [--output <path>] \\
+    [--version <version>] [--regular-stable-version <version>] \\
+    [--verification-file <path>] [--output <path>] \\
     [--metadata-output <path>]
   Verification uses the same target arguments with --verify-body <path>.
 `;
@@ -450,6 +503,7 @@ function parseArgs(argv: string[]) {
     ["--version", "version"],
     ["--tag", "tag"],
     ["--repository", "repository"],
+    ["--regular-stable-version", "regularStableVersion"],
     ["--verification-file", "verificationFile"],
     ["--output", "output"],
     ["--metadata-output", "metadataOutput"],
@@ -526,6 +580,7 @@ function main() {
       version,
       tag,
       repository,
+      regularStableVersion: options.regularStableVersion,
       contributionRecordPath: source?.recordPath ?? undefined,
     });
     if (!result.matches) {
@@ -541,6 +596,7 @@ function main() {
     version,
     tag,
     repository,
+    regularStableVersion: options.regularStableVersion,
     verification,
     contributionRecordPath: source?.recordPath ?? undefined,
   });

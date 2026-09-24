@@ -1,6 +1,7 @@
 // Migrate Claude plugin module implements skills behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import {
   createMigrationItem,
   markMigrationItemConflict,
@@ -22,20 +23,6 @@ type PlannedSkill = {
   action: "copy" | "create";
   sourceLabel: string;
 };
-
-async function listMarkdownFiles(root: string): Promise<string[]> {
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
-  const files: string[] = [];
-  for (const entry of entries) {
-    const fullPath = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await listMarkdownFiles(fullPath)));
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      files.push(fullPath);
-    }
-  }
-  return files;
-}
 
 async function collectSkillDirs(
   planned: PlannedSkill[],
@@ -78,7 +65,11 @@ async function collectCommandFiles(
   if (!dir) {
     return;
   }
-  for (const file of await listMarkdownFiles(dir)) {
+  const { entries } = await walkDirectory(dir, {
+    symlinks: "skip",
+    include: (entry) => entry.kind === "file" && entry.name.endsWith(".md"),
+  });
+  for (const { path: file } of entries) {
     const relative = path.relative(dir, file);
     const parsed = path.parse(relative);
     const namespace = sanitizeName(parsed.dir.replaceAll(path.sep, "-"));

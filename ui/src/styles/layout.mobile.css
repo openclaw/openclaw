@@ -64,13 +64,20 @@
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell--mobile-nav.shell--merged-chat-chrome {
   --shell-topbar-height: 0px;
-  grid-template-rows: 0px minmax(0, 1fr);
 }
 
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell--mobile-nav.shell--merged-chat-chrome
   .topbar {
   display: none;
+}
+
+.shell--mobile-nav:has(> .shell-connection-status) {
+  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
+  grid-template-areas:
+    "topbar"
+    "connection"
+    "content";
 }
 
 .shell--mobile-nav .shell-nav,

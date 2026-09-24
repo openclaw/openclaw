@@ -71,7 +71,7 @@ describe("failed placement Gateway recovery", () => {
         runId: "recovered-local-run",
       });
       placementStore.releaseTurn(localTurn);
-      expect(harness.environments.create).not.toHaveBeenCalled();
+      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     },
   );
 

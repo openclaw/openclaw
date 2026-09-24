@@ -9,10 +9,28 @@ import { withEnvAsync } from "../../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
+  prepareStop:
+    vi.fn<typeof import("../../daemon/systemd-maintenance.js").prepareSystemdGatewayMaintenance>(),
+  drain: vi.fn(
+    async (
+      _params: Parameters<
+        typeof import("./update-command-service-drain.js").withGatewayMaintenanceDrain
+      >[0],
+      stop: () => Promise<void>,
+    ) => await stop(),
+  ),
   taskState: 3 as number | string,
 }));
 
 export { mocks };
+
+vi.mock("./update-command-service-drain.js", () => ({
+  withGatewayMaintenanceDrain: mocks.drain,
+}));
+
+vi.mock("../../daemon/systemd-maintenance.js", () => ({
+  prepareSystemdGatewayMaintenance: mocks.prepareStop,
+}));
 
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
@@ -31,7 +49,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
   })),
 }));
 
-beforeEach(() => mockSystemAccountHome());
+beforeEach(() => {
+  mockSystemAccountHome();
+  mocks.prepareStop.mockReset().mockResolvedValue(false);
+  mocks.drain.mockReset().mockImplementation(async (_params, stop) => await stop());
+});
 afterEach(() => vi.restoreAllMocks());
 
 export async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {

@@ -9,12 +9,12 @@ import {
 } from "./openclaw-agent-db-identity.js";
 import { withCommittedOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-companion.js";
 import {
-  openOpenClawAgentDatabaseReadOnly,
   readOpenClawAgentDatabase,
   type OpenClawAgentDatabaseReadOnlyResult,
   type OpenClawAgentReadOnlyDatabase,
 } from "./openclaw-agent-db-readonly-open.js";
 import {
+  retainCachedOpenClawAgentDatabaseReadOnly,
   withScopedOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentDatabaseReadOnlyBehavior,
 } from "./openclaw-agent-db-readonly-scope.js";
@@ -70,14 +70,9 @@ export function retainOpenClawAgentDatabaseReadOnly(
       claim: createOpenClawAgentDatabaseClaim(opened, borrowed.release),
     };
   }
-  const fresh = openOpenClawAgentDatabaseReadOnly(options);
-  return fresh.found
-    ? {
-        found: true,
-        database: fresh.database,
-        claim: createOpenClawAgentDatabaseClaim(fresh.database, fresh.database.close),
-      }
-    : fresh;
+  const agentId = normalizeAgentId(options.agentId);
+  const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+  return retainCachedOpenClawAgentDatabaseReadOnly({ ...options, agentId, path: pathname });
 }
 
 /** Read agent state without creating, registering, migrating, or joining its writable lifecycle. */

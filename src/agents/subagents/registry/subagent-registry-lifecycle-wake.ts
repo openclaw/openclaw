@@ -15,7 +15,6 @@ import { settleRequesterCompletionBatch } from "../completion/subagent-completio
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import type {
   CleanupBookkeepingParams,
@@ -457,7 +456,7 @@ export function completeCleanupBookkeeping(
   cleanupParams: CleanupBookkeepingParams,
 ): void {
   const params = context.options;
-  const suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(cleanupParams.entry);
+  const suppressSessionEffects = context.shouldSuppressSessionEffects(cleanupParams.entry);
   const scheduleCleanupTails = (options: {
     allowRetiredRow: boolean;
     isDeleteCleanup: boolean;
@@ -472,7 +471,7 @@ export function completeCleanupBookkeeping(
       return (
         rowOwnershipMatches &&
         !context.newerGenerationOwnsSession(cleanupParams.entry) &&
-        !shouldSuppressSubagentRecoverySessionEffects(cleanupParams.entry) &&
+        !context.shouldSuppressSessionEffects(cleanupParams.entry) &&
         // Every tail below retires a resource the child owns. A deadline alone
         // is not evidence it stopped, so none of them may run until an observed
         // stop promotes the row out of `child-unconfirmed`.

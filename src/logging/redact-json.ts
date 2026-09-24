@@ -22,29 +22,32 @@ import {
 
 export type { RedactionField, RedactionOrigins } from "./redact-json-tokens.js";
 
-export type RedactionTarget = {
+type RedactionTarget = {
   start: number;
   end: number;
   value: string;
 };
-export type RedactionEditSelector = (
+export type RedactionCapture = RedactionTarget & {
+  redact: (target: RedactionTarget) => RedactionEdit | undefined;
+};
+type RedactionCaptureSelector = (
   match: RedactMatch,
   pattern: ResolvedRedactPattern,
-  project: (start: number, end: number) => RedactionTarget | undefined,
-) => RedactionEdit | undefined;
+) => RedactionCapture | undefined;
 
 export function getPatternRedactionEdits(
   value: string,
   pattern: ResolvedRedactPattern,
-  getEdit: RedactionEditSelector,
+  getCapture: RedactionCaptureSelector,
 ): RedactionEdit[] {
   const edits: RedactionEdit[] = [];
   for (const match of iterateRedactMatches(value, pattern)) {
-    const edit = getEdit(match, pattern, (start, end) => ({
-      start,
-      end,
-      value: value.slice(start, end),
-    }));
+    const capture = getCapture(match, pattern);
+    const edit = capture?.redact({
+      start: capture.start,
+      end: capture.end,
+      value: value.slice(capture.start, capture.end),
+    });
     if (edit && edit.end >= edit.start) {
       edits.push(edit);
     }
@@ -370,7 +373,7 @@ export function redactJsonRecord(
   input: string,
   origins: RedactionOrigins,
   patternPhases: readonly [readonly RedactionPatternGroup[], readonly RedactionPatternGroup[]],
-  getEdit: RedactionEditSelector,
+  getCapture: RedactionCaptureSelector,
   legacyFieldEdits: (field: RedactionField, currentValue: string) => RedactionEdit[],
   fieldEdits: (field: RedactionField) => RedactionEdit[],
   prepEdits: (field: RedactionField) => RedactionEdit[],
@@ -464,17 +467,13 @@ export function redactJsonRecord(
       for (const pattern of group.patterns) {
         if (phase === 0) {
           for (const token of decodedTokens) {
-            for (const edit of getPatternRedactionEdits(token.currentValue, pattern, getEdit)) {
+            for (const edit of getPatternRedactionEdits(token.currentValue, pattern, getCapture)) {
               add(token, edit);
             }
           }
         } else {
           for (const match of iterateRedactMatches(current, pattern)) {
-            let capture: { start: number; end: number } | undefined;
-            getEdit(match, pattern, (start, end) => {
-              capture = { start, end };
-              return undefined;
-            });
+            const capture = getCapture(match, pattern);
             if (!capture || capture.end < capture.start) {
               continue;
             }
@@ -535,14 +534,14 @@ export function redactJsonRecord(
                 continue;
               }
               const { start: captureStart, end: captureEnd } = capture;
-              const edit = getEdit(match, pattern, () => ({
+              const edit = capture.redact({
                 start,
                 end,
                 value: current.slice(
                   Math.max(captureStart, token.currentStart + padding),
                   Math.min(captureEnd, token.currentEnd - padding),
                 ),
-              }));
+              });
               if (!edit) {
                 continue;
               }

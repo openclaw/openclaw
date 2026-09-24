@@ -3,6 +3,11 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { composedParent } from "../lib/navigation-click.ts";
+import {
+  isGitHubHost,
+  isGitHubPublicPageUrl,
+  matchGitHubItemUrl,
+} from "./github-link-eligibility.ts";
 
 export const LINK_READER_HOVERCARD_OPEN_DELAY_MS = 250;
 export const LINK_READER_HOVERCARD_PROVIDER_TAG = "openclaw-link-reader-hovercard-provider";
@@ -19,13 +24,8 @@ export function resolveLinkReaderTarget(
   if (!value || value.length > 8192) {
     return null;
   }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== "https:" || url.username || url.password || url.port) {
+  const url = URL.parse(value);
+  if (!url || url.protocol !== "https:" || url.username || url.password || url.port) {
     return null;
   }
   for (const reader of readers) {
@@ -49,16 +49,8 @@ export function resolveLinkReaderTarget(
 }
 
 export function linkReaderTargetKey(target: LinkReaderTarget): string {
-  const url = new URL(target.href);
-  url.hash = "";
-  return target.reader.pluginId + ":" + target.reader.id + ":" + url.href;
-}
-
-/** Response identity includes the reader and query; an anchor only selects within that document. */
-export function linkReaderResponseMatchesTarget(target: LinkReaderTarget, value: unknown): boolean {
-  const returned =
-    typeof value === "string" ? resolveLinkReaderTarget(value, [target.reader]) : null;
-  return returned !== null && linkReaderTargetKey(returned) === linkReaderTargetKey(target);
+  // The resolver already canonicalized href; only the fragment is non-identity.
+  return target.reader.pluginId + ":" + target.reader.id + ":" + target.href.split("#", 1)[0];
 }
 
 export type PageHoverTarget = { kind: "page"; href: string; reader?: undefined };
@@ -71,6 +63,18 @@ export type HoverPreviewOwner = {
 };
 
 export function isPreviewAnchor(anchor: HTMLAnchorElement): boolean {
+  const url = URL.parse(anchor.href);
+  // Repositories and public information pages use anonymous social metadata.
+  // Account/auth URLs stay unfetched.
+  // Hover, focus, and prefetch share this gate.
+  if (
+    url &&
+    isGitHubHost(url.hostname) &&
+    !matchGitHubItemUrl(url) &&
+    !isGitHubPublicPageUrl(url)
+  ) {
+    return false;
+  }
   if (
     anchor.matches(
       "[download], [data-file-path], [data-session-href], .markdown-session-link, [data-link-reader-external]",

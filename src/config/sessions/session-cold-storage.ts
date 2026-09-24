@@ -85,7 +85,7 @@ async function runColdMutation(
 ): Promise<SessionColdMutationResult> {
   return await withSqliteMutationWorkerLifetime(
     plan.databaseOptions,
-    async ({ assertCurrent: assertRequestCurrent, commitGate }) => {
+    async ({ assertCurrent: assertRequestCurrent, commitGate, signal }) => {
       const retained = await runExclusiveSqliteSessionWrite(
         plan.databaseOptions,
         async () => {
@@ -116,6 +116,7 @@ async function runColdMutation(
               cleanupIncomplete?: boolean;
             }>({
               diagnostics,
+              signal,
               expectedMessageType: "reclaimed",
               validationOwner: { database, isCurrent: claim.isCurrent },
               onCommitRequest: () => {

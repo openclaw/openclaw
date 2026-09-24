@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "./subagent-control.test-support.js";
 /** A cancellation result cannot publish a predecessor's task outcome after admitted reactivation. */
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -16,17 +22,10 @@ import * as taskControlRuntime from "../../../tasks/task-registry-control.runtim
 import { updateTask } from "../../../tasks/task-registry-mutation.js";
 import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
 import { getTaskRegistryStore } from "../../../tasks/task-registry.store.js";
-import {
-  resetTaskRegistryControlRuntimeForTests,
-  setTaskRegistryControlRuntimeForTests,
-} from "../../../tasks/task-registry.test-support.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import * as killRuntime from "./subagent-control-kill-runtime.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import {
   markSubagentRunTerminated,
   registerSubagentRun,
@@ -37,7 +36,6 @@ import {
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
-import { testing } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
 const rootKey = "agent:main:subagent:publication-root";
@@ -99,16 +97,12 @@ it.each(["canonical", "managed"] as const)(
     const capture = createDeferred<string>();
     const captureEntered = createDeferred();
     const wait = createDeferred<AgentWaitResult>();
-    testing.setDepsForTest({
-      ...subagentRegistryDeps,
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
-      runSubagentAnnounceFlow: async () => "delivered",
-      captureSubagentCompletionReply: () => {
-        captureEntered.resolve();
-        return capture.promise;
-      },
+    fixture.announce.mockResolvedValue("delivered");
+    fixture.capture.mockImplementation(() => {
+      captureEntered.resolve();
+      return capture.promise;
     });
-    vi.spyOn(subagentRegistryDeps, "callGateway").mockImplementation(async (request) => {
+    fixture.gateway.mockImplementation(async (request) => {
       expect(request.method).toBe("agent.wait");
       return await wait.promise;
     });
@@ -211,8 +205,8 @@ it.each(["canonical", "managed"] as const)(
       }
       return result;
     });
-    const admin = vi.fn(killSubagentRunAdmin);
-    setTaskRegistryControlRuntimeForTests({ ...taskControlRuntime, killSubagentRunAdmin: admin });
+    const runAdmin = killSubagentRunAdmin;
+    const admin = vi.spyOn(taskControlRuntime, "killSubagentRunAdmin").mockImplementation(runAdmin);
     try {
       const result = await cancelTaskById({ cfg: getRuntimeConfig(), taskId: selected.taskId });
       order.push("caller result");
@@ -236,7 +230,7 @@ it.each(["canonical", "managed"] as const)(
       expect(owner.execution.outcome?.status).toBe("ok");
     } finally {
       capture.resolve("completed native reply");
-      resetTaskRegistryControlRuntimeForTests();
+      admin.mockRestore();
     }
   },
 );
@@ -253,14 +247,10 @@ it.each([
 ])(
   "fences task publication (replace=%s, priorChildKill=%s, completeDuringDrain=%s, handoff=%s, provisional=%s)",
   async (replace, priorChildKill, completeDuringDrain, handoff, provisional) => {
-    testing.setDepsForTest({
-      ...subagentRegistryDeps,
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
-      runSubagentAnnounceFlow: async () => "delivered",
-    });
+    fixture.announce.mockResolvedValue("delivered");
     const previousWait = createDeferred<AgentWaitResult>();
     const nextWait = createDeferred<AgentWaitResult>();
-    vi.spyOn(subagentRegistryDeps, "callGateway").mockImplementation(async (request) => {
+    fixture.gateway.mockImplementation(async (request) => {
       expect(request.method).toBe("agent.wait");
       const runId = (request.params as { runId: string }).runId;
       expect(["publication-b0", "publication-b1"]).toContain(runId);
@@ -423,19 +413,21 @@ it.each([
       }
       return result;
     });
-    const admin = vi.fn<typeof killSubagentRunAdmin>((params, control) =>
-      killSubagentRunAdmin(
-        {
-          ...params,
-          onResult: (result) => {
-            rejectTerminalWrites = false;
-            params.onResult?.(result);
+    const runAdmin = killSubagentRunAdmin;
+    const admin = vi
+      .spyOn(taskControlRuntime, "killSubagentRunAdmin")
+      .mockImplementation((params, control) =>
+        runAdmin(
+          {
+            ...params,
+            onResult: (result) => {
+              rejectTerminalWrites = false;
+              params.onResult?.(result);
+            },
           },
-        },
-        control,
-      ),
-    );
-    setTaskRegistryControlRuntimeForTests({ ...taskControlRuntime, killSubagentRunAdmin: admin });
+          control,
+        ),
+      );
     const pending = cancelTaskById({ cfg: getRuntimeConfig(), taskId: task.taskId });
     const followupInterrupted = vi.fn();
     try {
@@ -592,7 +584,7 @@ it.each([
       childAdmission.release();
       followup?.release();
       await pending;
-      resetTaskRegistryControlRuntimeForTests();
+      admin.mockRestore();
       expect(getActiveSessionWorkAdmissionCount()).toBe(0);
       expect(getActiveSessionLifecycleMutationCount()).toBe(0);
     }

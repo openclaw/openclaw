@@ -49,6 +49,13 @@ export class PackageIntegrityTimeoutError extends Error {
   }
 }
 
+/** Resource exhaustion is distinct from a filesystem-integrity failure. */
+export class PackageIntegrityLimitError extends Error {
+  constructor(readonly resource: "entry" | "byte") {
+    super(`Package rollback verification ${resource} limit exceeded`);
+  }
+}
+
 export type PackageRootIntegrityFingerprint =
   | { kind: "directory"; tree: PackageIntegrityFingerprint }
   | { kind: "link"; metadata: string[]; target: string };
@@ -176,7 +183,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           break;
         }
         if (children.length >= limit) {
-          throw new Error("Package rollback verification entry limit exceeded");
+          throw new PackageIntegrityLimitError("entry");
         }
         children.push(child.name);
       }
@@ -187,8 +194,11 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
   }
 
   async function hashFile(file: string, stat: BigIntStats, remainingBytes: number) {
-    if (!stat.isFile() || stat.size > BigInt(remainingBytes)) {
+    if (!stat.isFile()) {
       throw new Error("Package rollback verification byte limit exceeded");
+    }
+    if (stat.size > BigInt(remainingBytes)) {
+      throw new PackageIntegrityLimitError("byte");
     }
     const handle = await read(
       () => fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK),

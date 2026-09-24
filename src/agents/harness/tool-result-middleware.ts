@@ -13,14 +13,8 @@ import type {
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
-import {
-  hasPluginMessagingDeliveryId,
-  isDeliveredMessagingToolResult,
-} from "../embedded-agent-message-tool-source-reply.js";
-import {
-  isMessagingToolSendAction,
-  isPluginNativeMessagingTool,
-} from "../embedded-agent-messaging.js";
+import { isDeliveredMessagingToolResult } from "../embedded-agent-message-tool-source-reply.js";
+import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
 import { isToolResultError } from "../tool-result-error.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -374,13 +368,12 @@ function buildDeliveredMessagingFailureFallback(
   );
   const delivered = deliveryFact
     ? deliveryFact.status === "settled"
-    : isPluginNativeMessagingTool(event.toolName) &&
-      isDeliveredMessagingToolResult({
+    : isDeliveredMessagingToolResult({
         toolName: event.toolName,
         args: event.args,
         result,
-      }) &&
-      hasPluginMessagingDeliveryId(result);
+        requirePluginDeliveryId: true,
+      });
   if (
     event.isError === true ||
     isToolResultError(result) ||

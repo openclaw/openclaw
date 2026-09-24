@@ -62,6 +62,9 @@ describe("Codex catalog failure recovery", () => {
       await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
       await vi.advanceTimersByTimeAsync(30_000);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+      await notify("Recovery activity");
+      await vi.advanceTimersByTimeAsync(30_000);
       await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
       await notify("Later activity");

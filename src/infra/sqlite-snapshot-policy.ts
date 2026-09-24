@@ -5,58 +5,22 @@ import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.
 
 export const MAX_SNAPSHOT_ATTEMPTS = 10;
 
-const SNAPSHOT_QUIESCENCE_SAMPLE_MS = 20;
-const SNAPSHOT_QUIESCENCE_STABLE_MS = 40;
-const SNAPSHOT_QUIESCENCE_DEADLINE_MS = 160;
 const SNAPSHOT_RETRY_BASE_MS = 10;
 const SNAPSHOT_RETRY_MAX_MS = 80;
-
-type SourceSizeSample = {
-  mainBytes: number;
-  mainMtimeMs: number;
-  walBytes: number;
-  walMtimeMs: number;
-};
-
-export type SnapshotAdmission = {
-  sample: SourceSizeSample;
-  stabilized: boolean;
-  waitMs: number;
-};
 
 type SnapshotOperation = "online-backup" | "raw-copy";
 type SnapshotOutcome = "changed" | "error" | "success";
 
-function sourceFileSample(pathname: string): { bytes: number; mtimeMs: number } {
+function sourceFileSize(pathname: string): number {
   try {
     const stat = fs.statSync(pathname);
-    return stat.isFile() ? { bytes: stat.size, mtimeMs: stat.mtimeMs } : { bytes: 0, mtimeMs: 0 };
+    return stat.isFile() ? stat.size : 0;
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
-      return { bytes: 0, mtimeMs: 0 };
+      return 0;
     }
     throw error;
   }
-}
-
-function sourceSizeSample(pathname: string): SourceSizeSample {
-  const main = sourceFileSample(pathname);
-  const wal = sourceFileSample(`${pathname}-wal`);
-  return {
-    mainBytes: main.bytes,
-    mainMtimeMs: main.mtimeMs,
-    walBytes: wal.bytes,
-    walMtimeMs: wal.mtimeMs,
-  };
-}
-
-function sameSourceSizeSample(left: SourceSizeSample, right: SourceSizeSample): boolean {
-  return (
-    left.mainBytes === right.mainBytes &&
-    left.mainMtimeMs === right.mainMtimeMs &&
-    left.walBytes === right.walBytes &&
-    left.walMtimeMs === right.walMtimeMs
-  );
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -84,45 +48,30 @@ async function sleepForSnapshot(ms: number, signal?: AbortSignal): Promise<void>
   });
 }
 
-export async function waitForSnapshotQuiescence(
-  pathname: string,
-  signal?: AbortSignal,
-): Promise<SnapshotAdmission> {
-  const started = performance.now();
-  const deadline = started + SNAPSHOT_QUIESCENCE_DEADLINE_MS;
-  let stableSince = started;
-  let previous = sourceSizeSample(pathname);
-  while (performance.now() < deadline) {
-    signal?.throwIfAborted();
-    await sleepForSnapshot(SNAPSHOT_QUIESCENCE_SAMPLE_MS, signal);
-    const now = performance.now();
-    const current = sourceSizeSample(pathname);
-    if (!sameSourceSizeSample(previous, current)) {
-      previous = current;
-      stableSince = now;
-    } else if (now - stableSince >= SNAPSHOT_QUIESCENCE_STABLE_MS) {
-      return { sample: current, stabilized: true, waitMs: Math.max(0, now - started) };
-    }
+function snapshotRetryDelayMs(attempt: number): number {
+  if (attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
+    return 0;
   }
-  signal?.throwIfAborted();
-  return {
-    sample: sourceSizeSample(pathname),
-    stabilized: false,
-    waitMs: Math.max(0, performance.now() - started),
-  };
+  return Math.min(SNAPSHOT_RETRY_MAX_MS, SNAPSHOT_RETRY_BASE_MS * 2 ** attempt);
+}
+
+export function waitForSnapshotRetrySync(attempt: number): void {
+  const delayMs = snapshotRetryDelayMs(attempt);
+  if (delayMs > 0) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+  }
 }
 
 export async function waitForSnapshotRetry(attempt: number, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted();
-  if (attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
-    return;
+  const delayMs = snapshotRetryDelayMs(attempt);
+  if (delayMs > 0) {
+    await sleepForSnapshot(delayMs, signal);
   }
-  const delayMs = Math.min(SNAPSHOT_RETRY_MAX_MS, SNAPSHOT_RETRY_BASE_MS * 2 ** attempt);
-  await sleepForSnapshot(delayMs, signal);
 }
 
 export function createSnapshotAttemptReporter(
-  admission: SnapshotAdmission,
+  pathname: string,
   attempt: number,
   started: number,
 ): (
@@ -140,10 +89,8 @@ export function createSnapshotAttemptReporter(
           durationMs: Math.max(0, performance.now() - started),
           operation,
           outcome,
-          sourceMainBytes: admission.sample.mainBytes,
-          sourceWalBytes: admission.sample.walBytes,
-          stabilized: admission.stabilized,
-          waitMs: admission.waitMs,
+          sourceMainBytes: sourceFileSize(pathname),
+          sourceWalBytes: sourceFileSize(`${pathname}-wal`),
           owner: "path-reader",
           errorCode:
             error && typeof error === "object" && "code" in error ? String(error.code) : undefined,

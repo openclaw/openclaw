@@ -1,3 +1,10 @@
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  findCodexAppServerSpawnError,
+  reportCodexCatalogSpawnFailure,
+  type CodexAppServerSpawnError,
+} from "./app-server/spawn-error.js";
+
 type CurrencyOptions = {
   local: boolean;
   reconcileFiles(): Promise<void>;
@@ -12,6 +19,8 @@ const SAFETY_INTERVAL_MS = 15 * 60_000;
 export class CodexCatalogCurrency {
   private timer: ReturnType<typeof setInterval> | undefined;
   private initial: ReturnType<typeof setTimeout> | undefined;
+  private hydration: NodeJS.Immediate | undefined;
+  private terminalFailure: CodexAppServerSpawnError | undefined;
   private running: Promise<void> | undefined;
   private closed = false;
   private nativeDirty = false;
@@ -21,7 +30,44 @@ export class CodexCatalogCurrency {
   constructor(private readonly options: CurrencyOptions) {}
 
   hasActiveWork(): boolean {
-    return this.initial !== undefined || this.running !== undefined;
+    return this.hydration !== undefined || this.initial !== undefined || this.running !== undefined;
+  }
+
+  assertRunnable(): void {
+    if (this.terminalFailure) {
+      throw this.terminalFailure;
+    }
+  }
+
+  stopForTerminalFailure(error: unknown): boolean {
+    const failure = findCodexAppServerSpawnError(error);
+    if (!failure) {
+      return false;
+    }
+    if (!this.closed) {
+      this.terminalFailure = failure;
+      void this.close();
+      reportCodexCatalogSpawnFailure(failure);
+    }
+    return true;
+  }
+
+  scheduleHydration(run: () => Promise<void>): void {
+    if (this.closed || this.hydration) {
+      return;
+    }
+    this.hydration = setImmediate(() => {
+      this.hydration = undefined;
+      void (this.options.runBackground ? this.options.runBackground(run) : run()).catch(
+        (error: unknown) => this.options.report(error),
+      );
+    });
+    this.hydration.unref();
+  }
+
+  cancelHydration(): void {
+    clearImmediate(this.hydration);
+    this.hydration = undefined;
   }
 
   requestNativeRefresh(): void {
@@ -44,24 +90,32 @@ export class CodexCatalogCurrency {
       if (!full && !filesDue && !this.nativeDirty) {
         return;
       }
+      const nativeDue = full || this.nativeDirty;
+      // Consume this trigger even if background admission or reconciliation fails.
+      // New activity during the attempt remains eligible for the next tick.
+      this.nativeDirty = false;
+      if (full) {
+        this.nextNativeAt = startedAt + SAFETY_INTERVAL_MS;
+      }
+      if (filesDue) {
+        this.nextFilesAt = startedAt + SAFETY_INTERVAL_MS;
+      }
       const run = async () => {
         if (filesDue) {
           await this.options.reconcileFiles();
-          this.nextFilesAt = startedAt + SAFETY_INTERVAL_MS;
         }
-        if (full || this.nativeDirty) {
-          // Consume before the read so notifications during it schedule another delta.
-          this.nativeDirty = false;
+        if (nativeDue) {
           await this.options.reconcileNative(full);
-          if (full) {
-            this.nextNativeAt = startedAt + SAFETY_INTERVAL_MS;
-          }
         }
       };
       this.running = (this.options.runBackground ? this.options.runBackground(run) : run())
         .catch((error: unknown) => {
-          this.nativeDirty = true;
-          this.options.report(error);
+          this.options.report(
+            new Error(
+              `Codex catalog reconciliation failed; waiting for new activity or the next safety cycle: ${coerceErrorMessage(error)}`,
+              { cause: error },
+            ),
+          );
         })
         .finally(() => {
           this.running = undefined;
@@ -80,6 +134,7 @@ export class CodexCatalogCurrency {
 
   close(): Promise<void> | undefined {
     this.closed = true;
+    this.cancelHydration();
     clearInterval(this.timer);
     this.timer = undefined;
     clearTimeout(this.initial);

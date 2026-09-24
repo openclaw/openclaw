@@ -92,9 +92,11 @@ async function createMismatchFixture() {
     env,
   };
   let current = true;
+  const retirement = new AbortController();
   const isCurrent = () => current;
   retireAfterTest(() => {
     current = false;
+    retirement.abort();
   });
   const build = (
     await startSerializedSnapshotBuildBatch(
@@ -103,6 +105,7 @@ async function createMismatchFixture() {
           input,
           catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
           isGenerationCurrent: isCurrent,
+          retirementSignal: retirement.signal,
           isBuildCurrent: isCurrent,
         },
       ],
@@ -114,6 +117,7 @@ async function createMismatchFixture() {
     ).pending
   )[0]!;
   const workerParams = {
+    retirementSignal: retirement.signal,
     agentFacts: {
       input: { agentId: "main", agentDir, workspaceDir, config, env },
       env,

@@ -3,7 +3,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 import { isSubagentChildStopUnconfirmed } from "./subagent-session-metrics.js";
 
-export function sortSubagentRuns(runs: readonly SubagentRunRecord[]): SubagentRunRecord[] {
+function sortSubagentRuns(runs: readonly SubagentRunRecord[]): SubagentRunRecord[] {
   return runs.toSorted((a, b) => {
     const aTime = a.execution.startedAt ?? a.createdAt ?? 0;
     const bTime = b.execution.startedAt ?? b.createdAt ?? 0;

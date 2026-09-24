@@ -33,7 +33,8 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { InvalidApprovalIdError, type ExecApprovalManager } from "../exec-approval-manager.js";
+import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { InvalidApprovalIdError } from "../exec-approval-registration.js";
 import {
   buildCronExecOperationBinding,
   listCronStandingGrants,
@@ -104,11 +105,11 @@ export function createExecApprovalHandlers(
         return;
       }
       const p = params as { id: string };
-      const resolved = resolvePendingApprovalRecord({
+      const resolved = await resolvePendingApprovalRecord({
         manager,
         inputId: p.id,
         client,
-        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         exposeAmbiguousPrefixError: true,
       });
       if (!resolved.ok) {
@@ -136,11 +137,11 @@ export function createExecApprovalHandlers(
     "exec.approval.list": async ({ respond, client, context }) => {
       respond(
         true,
-        listVisiblePendingApprovalRequests({
+        await listVisiblePendingApprovalRequests({
           manager,
           client,
           approvalKind: "exec",
-          ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+          ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         }),
         undefined,
       );
@@ -282,7 +283,7 @@ export function createExecApprovalHandlers(
               env: p.env,
             })
           : null;
-      if (explicitId && manager.getSnapshot(explicitId)) {
+      if (explicitId && (await manager.getSnapshot(explicitId))) {
         respond(
           false,
           undefined,
@@ -429,16 +430,14 @@ export function createExecApprovalHandlers(
           deviceIds: p.approvalReviewerDeviceIds,
         });
       }
-      // Use register() to synchronously add to pending map before sending any response.
-      // This ensures the approval ID is valid immediately after the "accepted" response.
-      const decisionPromise = registerPendingApprovalRecord({
+      const registration = await registerPendingApprovalRecord({
         manager,
         record,
         timeoutMs,
         respond,
         context,
       });
-      if (!decisionPromise) {
+      if (!registration) {
         return;
       }
       await handlePendingExecApprovalRequest({
@@ -463,7 +462,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: (params as { id?: string }).id,
         client,
-        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         respond,
         resolveTerminalReason: (snapshot) => {
           const runId = normalizeOptionalString(snapshot.request.runId);
@@ -586,19 +585,30 @@ export function createExecApprovalHandlers(
                 details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
               };
         },
-        resolveRecord: ({ approvalId, decision: decisionLocal, resolvedBy, resolver }) => {
+        resolveRecord: async ({
+          approvalId,
+          decision: decisionLocal,
+          resolvedBy,
+          resolver,
+          assertCurrent,
+        }) => {
           if (autoReviewResolution) {
-            return manager.resolveAutoReview(approvalId, resolvedBy);
+            return manager.resolveAutoReview(approvalId, resolvedBy, assertCurrent);
           }
-          const grantOptions = grantExpiresAtMs !== undefined ? { grantExpiresAtMs } : {};
+          const grantOptions = {
+            assertCurrent,
+            ...(grantExpiresAtMs !== undefined ? { grantExpiresAtMs } : {}),
+          };
           return resolver
-            ? manager.resolveDetailed(
-                approvalId,
-                decisionLocal,
-                resolver,
-                resolvedBy,
-                "operator",
-                grantOptions,
+            ? (
+                await manager.resolveDetailed(
+                  approvalId,
+                  decisionLocal,
+                  resolver,
+                  resolvedBy,
+                  "operator",
+                  grantOptions,
+                )
               ).outcome === "resolved"
             : manager.resolve(approvalId, decisionLocal, resolvedBy, grantOptions);
         },

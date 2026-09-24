@@ -8,9 +8,10 @@ const mock = vi.hoisted(() => ({
   handler: vi.fn<(input: unknown) => OpenClawStateReadReply>(),
   admit: vi.fn<() => void>(),
   query: vi.fn<() => []>(),
+  settle: vi.fn<(operation: (source: { db: object }) => unknown) => unknown>(),
 }));
-vi.mock("../infra/worker-task-pool.js", () => ({
-  serveWorkerTasks: (handler: (input: unknown) => OpenClawStateReadReply) => {
+vi.mock("../infra/worker-task-server.js", () => ({
+  serveOwnedWorkerTasks: (handler: (input: unknown) => OpenClawStateReadReply) => {
     mock.handler.mockImplementation(handler);
   },
 }));
@@ -18,10 +19,15 @@ vi.mock("../fleet/registry.kernel.js", () => ({
   listFleetCellsInDatabase: mock.query,
   getFleetCellInDatabase: () => undefined,
 }));
+vi.mock("./openclaw-agent-db-registry.read.js", () => ({
+  readRegisteredAgentDatabaseRows: mock.query,
+}));
 vi.mock("./openclaw-state-db-cache.js", () => ({
   openClawStateDatabaseCache: { assertOpenClawStateDatabaseFreshOpenAllowedAtPath() {} },
 }));
 vi.mock("./openclaw-state-db-read-connection.js", () => ({
+  closeRetainedOpenClawStateReadConnections: vi.fn(),
+  readOpenClawStateReadOnlyLocation: mock.settle,
   withOpenClawStateReadOnlyLocation: (operation: (source: { db: object }) => unknown) => {
     mock.admit();
     return operation({ db: {} });
@@ -44,6 +50,14 @@ const request: OpenClawStateReadRequest = {
 beforeEach(() => {
   mock.admit.mockReset();
   mock.query.mockReset().mockReturnValue([]);
+  mock.settle.mockReset().mockImplementation((operation) => {
+    try {
+      mock.admit();
+      return { status: "available", value: operation({ db: {} }) };
+    } catch (error) {
+      return { status: "unavailable", error };
+    }
+  });
 });
 
 it.each(["success", "query-error", "schema-error"] as const)(
@@ -70,3 +84,38 @@ it.each(["success", "query-error", "schema-error"] as const)(
     expect(mock.query).toHaveBeenCalledTimes(outcome === "schema-error" ? 0 : 1);
   },
 );
+
+it.each(["success", "query-error", "schema-error"] as const)(
+  "preserves native admission facts in the registry %s reply",
+  (outcome) => {
+    const fail = () => {
+      throw new Error("read unavailable");
+    };
+    if (outcome === "schema-error") {
+      mock.admit.mockImplementation(fail);
+    }
+    if (outcome === "query-error") {
+      mock.query.mockImplementation(fail);
+    }
+    expect(mock.handler({ ...request, command: { type: "agentDatabaseRegistry.read" } })).toEqual({
+      ok: true,
+      type: "agentDatabaseRegistry.read",
+      sourceAdmitted: outcome === "schema-error" ? undefined : true,
+      result:
+        outcome === "success" ? { status: "available", entries: [] } : { status: "unavailable" },
+    });
+  },
+);
+
+it("keeps registry native cleanup failure in the worker error protocol", () => {
+  mock.settle.mockImplementationOnce((operation) => {
+    operation({ db: {} });
+    throw new Error("native cleanup failed");
+  });
+  const reply = mock.handler({ ...request, command: { type: "agentDatabaseRegistry.read" } });
+  expect(reply).toMatchObject({
+    ok: false,
+    sourceAdmitted: true,
+    message: "native cleanup failed",
+  });
+});

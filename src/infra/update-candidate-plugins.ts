@@ -21,7 +21,7 @@ import {
   resolvePluginPackageEntries,
 } from "../plugins/discovery.js";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/installed-plugin-index-row.js";
-import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
 import { resolvePackageExtensionEntries } from "../plugins/manifest.js";
 import { pluginCacheRealpathSync } from "../plugins/plugin-cache-files.js";
 import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";

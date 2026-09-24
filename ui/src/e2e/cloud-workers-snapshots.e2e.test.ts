@@ -188,7 +188,7 @@ suite.define(() => {
           images: [],
           legacyLeases: [],
           recoveredCapture: "capture-uncertain",
-          nextSteps: "Restart the Gateway.",
+          nextSteps: "The next eligible worker can capture again.",
         },
       },
     });
@@ -223,10 +223,9 @@ suite.define(() => {
       await expect.poll(() => gateway.getRequests("crabbox.images.list")).toHaveLength(2);
       await expect.poll(() => page.getByText("Paused: uncertain", { exact: true }).count()).toBe(0);
       await page
-        .getByText(
-          "Capture reservation cleared. Restart the Gateway after reconciliation; the next eligible worker can capture again.",
-          { exact: true },
-        )
+        .getByText("Capture reservation cleared. The next eligible worker can capture again.", {
+          exact: true,
+        })
         .waitFor();
       await page.getByRole("button", { name: "Refresh", exact: true }).click();
       await expect.poll(() => gateway.getRequests("crabbox.images.list")).toHaveLength(3);

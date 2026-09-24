@@ -20,11 +20,22 @@ import {
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import * as runtimeWorker from "./runtime-worker-url.js";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import * as sqliteWorkers from "./sqlite-worker-store.js";
 import { getSqliteWorkerActorIdentity } from "./sqlite-worker-store.js";
+
+// Keep the shared-state owner on the fixture backend across reopenings.
+vi.mock("./runtime-worker-url.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-worker-url.js")>();
+  const { runtimeProcessEntrypoints } = await import("./runtime-process-entrypoints.js");
+  return {
+    ...actual,
+    resolveRuntimeWorkerUrl: (params: Parameters<typeof actual.resolveRuntimeWorkerUrl>[0]) =>
+      params.sourceWorkerName === runtimeProcessEntrypoints.sharedStateStore.sourceWorkerName
+        ? new URL("./sqlite-worker-shared-state-idle-fixture.test-support.ts", import.meta.url)
+        : actual.resolveRuntimeWorkerUrl(params),
+  };
+});
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -34,22 +45,6 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 const minute = 60_000;
-
-async function withIdleBackend<T>(run: () => Promise<T>): Promise<T> {
-  const resolveWorker = runtimeWorker.resolveRuntimeWorkerUrl;
-  const resolver = vi
-    .spyOn(runtimeWorker, "resolveRuntimeWorkerUrl")
-    .mockImplementation((params) =>
-      params.sourceWorkerName === runtimeProcessEntrypoints.sharedStateStore.sourceWorkerName
-        ? new URL("./sqlite-worker-shared-state-idle-fixture.test-support.ts", import.meta.url)
-        : resolveWorker(params),
-    );
-  try {
-    return await run();
-  } finally {
-    resolver.mockRestore();
-  }
-}
 
 async function fixture(mode: "healthy" | "local-reader" | "unsettled-inspection" = "healthy") {
   const context = captureOpenClawStateWorkerContext({
@@ -65,7 +60,7 @@ async function fixture(mode: "healthy" | "local-reader" | "unsettled-inspection"
       type: "flows.list",
       input: { ownerKey: `agent:main:${mode}` },
     });
-  expect(await withIdleBackend(read)).toEqual([]);
+  expect(await read()).toEqual([]);
   const worker = messages.mock.contexts[0];
   messages.mockRestore();
   if (!(worker instanceof Worker)) {
@@ -326,7 +321,7 @@ nodeIt("joins expiring idle-client maintenance without retiring a healthy co-use
   let peerClosing: Promise<void> | undefined;
   try {
     const peerContext = maintenance.run(() => captureOpenClawStateWorkerContext({ env }));
-    const peer = await withIdleBackend(() => openClient(peerContext));
+    const peer = await openClient(peerContext);
     expect(peer.actor).toBe(first.actor);
     accepted = sqliteWorkers.runSqliteWorkerStoreOperation(
       first.store,

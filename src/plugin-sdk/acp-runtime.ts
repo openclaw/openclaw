@@ -88,3 +88,5 @@ export const testing = new Proxy({} as typeof managerTesting & typeof registryTe
 
 /** @deprecated Use `testing`. */
 export { testing as __testing };
+
+export { consumeAcpTurnStream } from "../acp/control-plane/manager.turn-stream.js";

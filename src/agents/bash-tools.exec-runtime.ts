@@ -357,13 +357,14 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     return;
   }
   session.exitNotified = true;
+  // Requested stops must not wake another turn to relay leftover output.
+  if (session.exitReason === "manual-cancel" && session.finalizationFailed !== true) {
+    return;
+  }
   const exitLabel = renderExecExitLabel(session);
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
-  if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
-    return;
-  }
   if (
     status === "completed" &&
     session.exitCode === 0 &&

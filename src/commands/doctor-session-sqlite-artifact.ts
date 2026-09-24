@@ -1,5 +1,4 @@
 /** Exact original identity and no-copy publication for migration recovery artifacts. */
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -9,6 +8,7 @@ import {
   requireDirectorySync,
   syncDirectory,
 } from "../infra/directory-durability.js";
+import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
 
 const IdentitySchema = z.object({
   dev: z.string(),
@@ -107,17 +107,7 @@ export function readMigrationArtifactIdentity(
     if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
       throw new Error("artifact identity changed");
     }
-    const digest = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    let bytes = 0;
-    for (;;) {
-      const count = fs.readSync(fd, buffer, 0, buffer.length, null);
-      if (count === 0) {
-        break;
-      }
-      digest.update(buffer.subarray(0, count));
-      bytes += count;
-    }
+    const { sha256, sizeBytes: bytes } = hashFileDescriptorSync(fd);
     const after = fs.lstatSync(filePath, { bigint: true });
     if (
       after.dev !== before.dev ||
@@ -134,7 +124,7 @@ export function readMigrationArtifactIdentity(
       ino: String(before.ino),
       mtimeNs: String(before.mtimeNs),
       size: bytes,
-      sha256: digest.digest("hex"),
+      sha256,
     };
   } finally {
     fs.closeSync(fd);

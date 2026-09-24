@@ -70,6 +70,7 @@ async function persistSpawnedSessionLabel(params: {
   });
 
   // Only the requester store has an in-memory snapshot to keep coherent.
+  params.commandParams.command.assertOwnerCurrent?.();
   if (params.commandParams.sessionStore && params.commandParams.storePath === storePath) {
     const existing = params.commandParams.sessionStore[params.sessionKey];
     if (existing) {
@@ -86,10 +87,10 @@ async function persistSpawnedSessionLabel(params: {
       agentId,
       sessionKey: params.sessionKey,
     },
-    () => ({
-      label,
-      updatedAt: now,
-    }),
+    () => {
+      params.commandParams.command.assertOwnerCurrent?.();
+      return { label, updatedAt: now };
+    },
   );
 }
 
@@ -156,6 +157,7 @@ export async function handleAcpSpawnAction(
   let closeRuntimeOnFailure: () => Promise<void>;
   try {
     const initialized = await acpManager.initializeSession({
+      assertActive: params.command.assertOwnerCurrent,
       cfg: params.cfg,
       sessionKey,
       agentId: spawn.agentId,
@@ -345,6 +347,7 @@ export async function handleAcpCancelAction(
       await withAcpCommandErrorBoundary({
         run: async () =>
           await acpManager.cancelSession({
+            assertActive: params.command.assertOwnerCurrent,
             cfg: params.cfg,
             sessionKey,
             agentId,
@@ -358,6 +361,7 @@ export async function handleAcpCancelAction(
 }
 
 async function runAcpSteer(params: {
+  assertOwnerCurrent?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -369,6 +373,7 @@ async function runAcpSteer(params: {
   let output = "";
   const channelAdmission = consumeChannelRunAdmission(params.channelAdmissionEvidence);
   const admittedRunContext = await prepareAgentRunAdmission({
+    assertSourceCurrent: params.assertOwnerCurrent,
     cfg: params.cfg,
     operationalRunInstance: createOperationalRunInstanceRef(params.requestId),
     facts: {
@@ -456,6 +461,7 @@ export async function handleAcpSteerAction(
   return await withAcpCommandErrorBoundary({
     run: async () =>
       await runAcpSteer({
+        assertOwnerCurrent: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         instruction: parsed.value.instruction,
@@ -484,6 +490,7 @@ export async function handleAcpCloseAction(
       let runtimeNotice;
       try {
         const closed = await acpManager.closeSession({
+          assertActive: params.command.assertOwnerCurrent,
           cfg: params.cfg,
           sessionKey,
           agentId,

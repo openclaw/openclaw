@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationOverlays } from "../../app/overlays-types.ts";
 import {
   dismissSidebarAttention,
+  resolveSidebarAttentionKey,
   resolveUpdateAttentionDismissal,
 } from "../../components/sidebar-attention-dismissals.ts";
 import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
@@ -36,6 +37,7 @@ describe("AppSidebar footer identity menu", () => {
       instanceId: "self-instance",
     } as GatewayBrowserClient);
     gatewayHarness.publish({
+      selfUser: { id: "alice", name: "Alice" },
       hello: {
         ...gatewayHarness.gateway.snapshot.hello!,
         server: {
@@ -65,7 +67,7 @@ describe("AppSidebar footer identity menu", () => {
     if (!dismissal) {
       throw new Error("expected update dismissal fact");
     }
-    dismissSidebarAttention("ws://gateway.test", dismissal);
+    dismissSidebarAttention(resolveSidebarAttentionKey(gatewayHarness.gateway), dismissal);
     sidebar.requestUpdate();
     await sidebar.updateComplete;
 
@@ -82,6 +84,23 @@ describe("AppSidebar footer identity menu", () => {
     expect(buildChip?.querySelector(".sidebar-footer-build__update")?.textContent?.trim()).toBe(
       "Update available",
     );
+
+    for (const [id, dismissed] of [
+      ["bob", false],
+      ["alice", true],
+    ] as const) {
+      gatewayHarness.publish({ selfUser: { id, name: id } });
+      await sidebar.updateComplete;
+      if (!sidebar.querySelector(".sidebar-identity-menu")) {
+        sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card")?.click();
+        await sidebar.updateComplete;
+      }
+      const chip = sidebar.querySelector<
+        HTMLElement & { updateComplete: Promise<unknown>; updateAttentionDismissed: boolean }
+      >("openclaw-sidebar-build-chip");
+      await chip?.updateComplete;
+      expect(chip?.updateAttentionDismissed).toBe(dismissed);
+    }
 
     (context.overlays as unknown as { snapshot: ApplicationOverlays["snapshot"] }).snapshot = {
       ...context.overlays.snapshot,
@@ -112,18 +131,13 @@ describe("AppSidebar footer identity menu", () => {
     sidebar.connected = true;
     sidebar.canPairDevice = false;
     sidebar.onNavigate = onNavigate;
-    gatewayHarness.publishEvent("presence", {
-      presence: [
-        {
-          instanceId: "self-instance",
-          user: {
-            id: "self",
-            name: fullName,
-            email: "ada.with.a.deliberately.long.address@example.test",
-            avatarUrl: "/api/users/self/avatar?v=1",
-          },
-        },
-      ],
+    gatewayHarness.publish({
+      selfUser: {
+        id: "self",
+        name: fullName,
+        email: "ada.with.a.deliberately.long.address@example.test",
+        avatarUrl: "/api/users/self/avatar?v=1",
+      },
     });
     await sidebar.updateComplete;
 
@@ -239,7 +253,7 @@ describe("AppSidebar footer identity menu", () => {
       );
       sidebar.connected = true;
       sidebar.canPairDevice = false;
-      sidebar.offline = offline;
+      sidebar.connectionStatus = offline ? "reconnecting" : null;
       await sidebar.updateComplete;
 
       const identity = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");

@@ -86,6 +86,35 @@ export function prepareAuthProfileStoreMutation(params: {
     (profileId) =>
       Object.hasOwn(existingProfiles, profileId) !== Object.hasOwn(payload.profiles, profileId),
   );
+  const { statePayload, stateChanged, selectionChanged } = prepareAuthProfileStateMutation({
+    existingState,
+    store,
+    selectionProfiles,
+  });
+  return {
+    payload,
+    statePayload,
+    publication: {
+      profileIds: changedProfileIds,
+      profileSetChanged,
+      credentialsChanged: !isDeepStrictEqual(existingRaw, payload),
+      stateChanged,
+      selectionChanged,
+      oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
+        payload.profiles,
+        changedProfileIds,
+      ),
+    },
+  };
+}
+
+/** Classify state-only writes without changing credential ownership. */
+export function prepareAuthProfileStateMutation(params: {
+  existingState: unknown;
+  store: AuthProfileStore;
+  selectionProfiles: AuthProfileStore["profiles"];
+}) {
+  const { existingState, store, selectionProfiles } = params;
   const statePayload = buildPersistedAuthProfileState(store);
   const stateChanged = !isDeepStrictEqual(existingState, statePayload);
   const previousState = coerceAuthProfileState(existingState);
@@ -105,19 +134,5 @@ export function prepareAuthProfileStoreMutation(params: {
         usageStats: statePayload?.usageStats,
       }),
     );
-  return {
-    payload,
-    statePayload,
-    publication: {
-      profileIds: changedProfileIds,
-      profileSetChanged,
-      credentialsChanged: !isDeepStrictEqual(existingRaw, payload),
-      stateChanged,
-      selectionChanged,
-      oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
-        payload.profiles,
-        changedProfileIds,
-      ),
-    },
-  };
+  return { statePayload, stateChanged, selectionChanged };
 }

@@ -16,6 +16,7 @@ import {
   isTerminalSqliteIntegrityError,
 } from "../infra/sqlite-integrity.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -102,7 +103,11 @@ export function openUnpublishedStateDatabase(params: {
       return {
         db,
         path: params.pathname,
-        walMaintenance: { checkpoint: () => false, close: () => true },
+        walMaintenance: {
+          checkpoint: () => false,
+          close: () => true,
+          reclaimFreePages: createSqliteWalReclamationResult,
+        },
       };
     }
     const maintenance = runWithSqliteBusyTimeout(

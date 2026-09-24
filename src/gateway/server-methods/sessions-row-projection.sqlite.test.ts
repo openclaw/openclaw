@@ -40,6 +40,19 @@ describe("resident session rows", () => {
         );
       if (method === "describe") {
         commit();
+        const prepare = projection.withPreparedExactRows.bind(projection);
+        vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
+          (queries, consume, options) =>
+            prepare(
+              queries,
+              (read) => {
+                const result = consume(read);
+                expect(respond).toHaveBeenCalledTimes(1);
+                return result;
+              },
+              options,
+            ),
+        );
       }
       const pending = handler({
         req: { type: "req", id: "commit-during-readiness", method: `sessions.${method}` },
@@ -51,8 +64,6 @@ describe("resident session rows", () => {
       });
       if (method === "list") {
         commit();
-      } else {
-        expect(respond).toHaveBeenCalledTimes(1);
       }
       await expect(Promise.resolve(pending)).resolves.toBeUndefined();
       expect(respond.mock.calls[0]?.[0]).toBe(true);

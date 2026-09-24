@@ -12,6 +12,7 @@ import {
   runDiskSpaceHealth,
   runLegacyCronHealth,
   runLegacyPluginManifestHealth,
+  runLegacyPluginSourceCapturesHealth,
   runPluginRegistryHealth,
   runReleaseConfiguredPluginInstallsHealth,
   runSandboxHealth,
@@ -309,6 +310,12 @@ export function resolveInitialDoctorHealthContributions(params: {
         }, "legacy doctor plugin registry contribution owns registry repairs"),
       },
       run: runPluginRegistryHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:legacy-plugin-source-captures",
+      label: "Legacy plugin captures",
+      updateWork: { kind: "startup" },
+      run: runLegacyPluginSourceCapturesHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:ui-protocol-freshness",

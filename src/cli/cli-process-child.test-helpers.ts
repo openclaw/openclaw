@@ -223,7 +223,7 @@ export async function runCliProcessChild(params: {
                 "--require",
                 diagnosticPreload,
                 "--report-on-signal",
-                "--report-signal=SIGUSR2",
+                "--report-signal=SIGQUIT",
                 `--report-directory=${reportDir}`,
                 "--report-filename=diagnostic.json",
                 "--report-exclude-env",
@@ -340,12 +340,12 @@ export async function runCliProcessChild(params: {
           );
         };
         void processTree.then(() => {
-          // An unhandled SIGUSR2 would terminate Node before we could inspect it.
+          // An unhandled SIGQUIT would terminate Node before we could inspect it.
           if (reportDir && stderr.includes(`[cli-process-diagnostics] ready pid=${child.pid}\n`)) {
-            diagnosticRequest = "SIGUSR2 was not delivered";
+            diagnosticRequest = "SIGQUIT was not delivered";
             try {
-              if (child.kill("SIGUSR2")) {
-                diagnosticRequest = `SIGUSR2 requested; report grace<=${REPORT_GRACE_MS}ms`;
+              if (child.kill("SIGQUIT")) {
+                diagnosticRequest = `SIGQUIT requested; report grace<=${REPORT_GRACE_MS}ms`;
                 // Preserve the child's JS diagnostic and trailing pipe output grace.
                 void collectNodeDiagnosticReport(
                   path.join(reportDir, "diagnostic.json"),

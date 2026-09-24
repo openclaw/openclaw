@@ -713,17 +713,29 @@ export function prepareNpmPackageBundle({
     );
   },
   runPack = (directory, destination) =>
-    execFileSync("pnpm", ["--dir", directory, "pack", "--pack-destination", destination], {
-      env: {
-        ...process.env,
-        OPENCLAW_PREPACK_PREPARED: "1",
-        ...(/^[a-f0-9]{40}$/u.test(releaseRef)
-          ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
-          : {}),
+    // Bundled dependencies only pack under the hoisted linker; prepack scripts stay enabled.
+    execFileSync(
+      "pnpm",
+      [
+        "--dir",
+        directory,
+        "pack",
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        destination,
+      ],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_PREPACK_PREPARED: "1",
+          ...(/^[a-f0-9]{40}$/u.test(releaseRef)
+            ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
+            : {}),
+        },
+        stdio: "inherit",
+        timeout: 30 * 60 * 1000,
       },
-      stdio: "inherit",
-      timeout: 30 * 60 * 1000,
-    }),
+    ),
 }) {
   const { sourceSha, root, releaseTag, baseTag } = readReleaseSourceIdentity({
     sourceDir,

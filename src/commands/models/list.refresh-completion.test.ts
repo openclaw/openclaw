@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { unregisterResolvedAgentDir } from "../../agents/agent-dir-registry.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
@@ -123,6 +122,8 @@ module.exports = {
       writeStdout: vi.fn(),
     };
     await withEnvAsync(env, async () => {
+      // Only the parent deadline is virtual; the discovery worker keeps its native clock.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       let completed = false;
       const command = modelsListCommand(
         { agent: "main", provider: providerId, refresh: true, json: true },
@@ -135,13 +136,16 @@ module.exports = {
         await expect.poll(() => fs.existsSync(marker) || completed, { timeout: 30_000 }).toBe(true);
         expect(completed).toBe(false);
         expect(fs.existsSync(marker)).toBe(true);
-        // A live worker cannot use fake timers. Keep discovery held beyond the old five-second race.
-        await delay(5_100);
+        await vi.advanceTimersByTimeAsync(5_100);
         expect(completed).toBe(false);
         expect(runtime.writeJson).not.toHaveBeenCalled();
       } finally {
-        fs.rmSync(hold, { force: true });
-        await command;
+        try {
+          fs.rmSync(hold, { force: true });
+          await command;
+        } finally {
+          vi.useRealTimers();
+        }
       }
       expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
         {

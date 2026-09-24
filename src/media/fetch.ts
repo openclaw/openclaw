@@ -21,11 +21,9 @@ import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import {
-  captureChannelReadScope,
-  withChannelReadAuthority,
-} from "../shared/channel-read-authority.js";
+import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
+import { withMediaReadScope } from "./fetch.read-scope.js";
 import { saveMediaStream, type SavedMedia } from "./store.js";
 import { SaveMediaSourceError } from "./store.shared.js";
 
@@ -127,6 +125,8 @@ type SaveResponseMediaOptions = {
 
 /** Options for guarded URL fetches that are saved directly into the media store. */
 type SaveRemoteMediaOptions = FetchMediaOptions & {
+  /** Revalidate caller-owned read authority through transport and file publication. */
+  assertCurrent?: () => void;
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;
@@ -669,21 +669,8 @@ export async function saveResponseMedia(
 
 /** Fetches media through SSRF guards and saves the body into the media store. */
 export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
-  if (!captureChannelReadScope()) {
-    return await withMediaFetchRetry(options, () => saveRemoteMediaOnce(options));
-  }
-  // Retain request deadlines through MIME detection and publication, including late retries.
-  return await withChannelReadAuthority(
-    () => {},
-    async () => {
-      const scope = captureChannelReadScope()!;
-      const scopedOptions = {
-        ...options,
-        requestInit: { ...options.requestInit, signal: scope.signal },
-      };
-      return await withMediaFetchRetry(scopedOptions, () => saveRemoteMediaOnce(scopedOptions));
-    },
-    options.requestInit?.signal ?? undefined,
+  return await withMediaReadScope(options, (scopedOptions) =>
+    withMediaFetchRetry(scopedOptions, () => saveRemoteMediaOnce(scopedOptions)),
   );
 }
 

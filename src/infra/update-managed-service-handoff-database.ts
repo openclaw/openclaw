@@ -159,8 +159,6 @@ function createMissingDatabaseFile(
       parentReceipt.identity,
       "directory",
     );
-    // fs-safe 0.16 guards bigint receipt identities but declares only numeric Stats.
-    // @ts-expect-error Remove after adopting the declaration fix in openclaw/fs-safe#495.
     const directorySync = syncDirectorySync(parentReceipt);
     requireDirectorySync(directorySync, "Managed handoff lease directory");
   } finally {

@@ -17,11 +17,9 @@ import {
 import { loadPendingFinalDeliveryPayload } from "../registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
-import {
-  bindSubagentRunRecord,
-  loadSubagentRegistryFromSqlite,
-  upsertSubagentRunRowInDatabase,
-} from "../registry/subagent-registry.store.sqlite.js";
+import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
+import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import {
   blockSubagentCompletionDelivery,
   settleRequesterCompletionBatch,

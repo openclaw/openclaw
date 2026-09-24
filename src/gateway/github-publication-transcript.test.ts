@@ -22,103 +22,153 @@ afterEach(() => {
 });
 
 describe("GitHub publication transcript reporting", () => {
-  it.each([
-    {
-      label: "unreadable message",
-      tail: {
-        type: "message",
-        id: "tail",
-        parentId: null,
-        message: { role: "assistant", content: null },
-      },
-      count: 1,
-    },
-    {
-      label: "missing parent",
-      tail: {
-        type: "message",
-        id: "tail",
-        parentId: "absent",
-        message: { role: "user", content: "A separate branch" },
-      },
-      count: 2,
-    },
-    {
-      label: "parentless row",
-      tail: { type: "message", id: "tail", message: { role: "user", content: "Continued" } },
-      count: 1,
-    },
-    {
-      label: "unattached label",
-      tail: { type: "label", id: "tail", parentId: null, targetId: "absent", label: "Unknown" },
-      count: 1,
-    },
-    {
-      label: "invalid leaf control",
-      tail: { type: "leaf", id: "tail", parentId: "report", targetId: "absent" },
-      count: 1,
-    },
-    {
-      label: "side append",
-      tail: {
-        type: "message",
-        id: "tail",
-        parentId: null,
-        appendMode: "side",
-        message: { role: "user", content: "Side" },
-      },
-      count: 1,
-    },
-  ])("preserves canonical report visibility after $label", async ({ tail, count }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const identity = {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionId: "publication-codec",
-      };
-      const result = {
-        requestId: "codec-publication",
-        status: "failed",
-        code: "push_rejected",
-        message: "Publication failed.",
-        nextAction: "Retry.",
-      } satisfies SessionGitHubPublicationResult;
-      await upsertSessionEntryCore(identity, { sessionId: identity.sessionId, updatedAt: 1 });
-      await replaceTranscriptEvents(identity, [
-        { type: "session", id: identity.sessionId, version: CURRENT_SESSION_VERSION },
-        {
+  it.each(
+    [
+      {
+        label: "unreadable message",
+        tail: {
           type: "message",
-          id: "root",
+          id: "tail",
           parentId: null,
-          message: { role: "user", content: "Start" },
+          message: { role: "assistant", content: null },
         },
-        {
+        count: 1,
+      },
+      {
+        label: "missing parent",
+        tail: {
           type: "message",
-          id: "report",
-          parentId: "root",
-          message: {
-            role: "assistant",
-            responseId: `github-publication:${result.requestId}`,
-            content: "Reported",
-          },
+          id: "tail",
+          parentId: "absent",
+          message: { role: "user", content: "A separate branch" },
         },
-        tail,
-      ]);
-      const reporter = createGitHubPublicationTranscriptReporter(
-        () => import("./session-utils.js"),
-        { markReported: vi.fn() },
-      );
-      await reporter({ ...identity, result });
-      const reports = (await loadTranscriptEvents(identity)).filter(
-        (event) =>
-          isRecord(event) &&
-          event.type === "message" &&
-          isRecord(event.message) &&
-          event.message.responseId === `github-publication:${result.requestId}`,
-      );
-      expect(reports).toHaveLength(count);
-    });
-  });
+        count: 2,
+      },
+      {
+        label: "parentless row",
+        tail: { type: "message", id: "tail", message: { role: "user", content: "Continued" } },
+        count: 1,
+      },
+      {
+        label: "unattached label",
+        tail: { type: "label", id: "tail", parentId: null, targetId: "absent", label: "Unknown" },
+        count: 1,
+      },
+      {
+        label: "invalid leaf control",
+        tail: { type: "leaf", id: "tail", parentId: "report", targetId: "absent" },
+        count: 1,
+      },
+      {
+        label: "side append",
+        tail: {
+          type: "message",
+          id: "tail",
+          parentId: null,
+          appendMode: "side",
+          message: { role: "user", content: "Side" },
+        },
+        count: 1,
+      },
+      {
+        label: "parentless row after reset",
+        beforeTail: [{ type: "reset", id: "reset", parentId: null, reason: "reset" }],
+        tail: { type: "message", id: "tail", message: { role: "user", content: "Continued" } },
+        count: 2,
+      },
+      {
+        label: "parentless dangling label after reset",
+        beforeTail: [{ type: "reset", id: "reset", parentId: null, reason: "reset" }],
+        tail: { type: "label", id: "tail", targetId: "absent", label: "Unknown" },
+        count: 2,
+      },
+      {
+        label: "parentless side append after reset",
+        beforeTail: [{ type: "reset", id: "reset", parentId: null, reason: "reset" }],
+        tail: {
+          type: "message",
+          id: "tail",
+          appendMode: "side",
+          message: { role: "user", content: "Side" },
+        },
+        count: 2,
+      },
+    ].flatMap((scenario) =>
+      ["identity", "compressed"].map((encoding) => ({
+        label: scenario.label,
+        beforeTail: scenario.beforeTail,
+        tail: scenario.tail,
+        count: scenario.count,
+        encoding,
+      })),
+    ),
+  )(
+    "preserves canonical report visibility after $label ($encoding)",
+    async ({ tail, count, encoding, beforeTail = [] }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const identity = {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "publication-codec",
+        };
+        const result = {
+          requestId: "codec-publication",
+          status: "failed",
+          code: "push_rejected",
+          message: "Publication failed.",
+          nextAction: "Retry.",
+        } satisfies SessionGitHubPublicationResult;
+        await upsertSessionEntryCore(identity, { sessionId: identity.sessionId, updatedAt: 1 });
+        const events = [
+          { type: "session", id: identity.sessionId, version: CURRENT_SESSION_VERSION },
+          {
+            type: "message",
+            id: "root",
+            parentId: null,
+            message: { role: "user", content: "Start" },
+          },
+          {
+            type: "message",
+            id: "report",
+            parentId: "root",
+            message: {
+              role: "assistant",
+              responseId: `github-publication:${result.requestId}`,
+              content: "Reported",
+            },
+          },
+          ...beforeTail,
+          tail,
+        ];
+        await replaceTranscriptEvents(
+          identity,
+          encoding === "compressed"
+            ? events.map((event) => ({ ...event, padding: "x".repeat(4096) }))
+            : events,
+        );
+        const { db } = openOpenClawAgentDatabase({ agentId: identity.agentId });
+        const encoded = db
+          .prepare(
+            "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
+          )
+          .get(identity.sessionId);
+        expect(encoded?.count).toBe(encoding === "compressed" ? 3 + beforeTail.length : 0);
+        const reporter = createGitHubPublicationTranscriptReporter(
+          () => import("./session-utils.js"),
+          { markReported: vi.fn() },
+        );
+        await reporter({ ...identity, result });
+        const reports = (await loadTranscriptEvents(identity)).filter(
+          (event) =>
+            isRecord(event) &&
+            event.type === "message" &&
+            isRecord(event.message) &&
+            event.message.responseId === `github-publication:${result.requestId}`,
+        );
+        expect(reports).toHaveLength(count);
+      });
+    },
+  );
 
   it.each(["missing", "legacy"])(
     "keeps the %s header migration boundary before reporting",

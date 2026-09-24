@@ -21,13 +21,14 @@ import {
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { isPersistedSessionRow } from "../../lib/sessions/session-row-reconcile.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-queue-reconnect.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import {
-  flushChatQueueAfterIdleSessionReconciliation,
   refreshCurrentChatSessionList,
   retireChatModelSelectionOwnership,
 } from "./chat-session.ts";
@@ -579,10 +580,11 @@ async function refreshChat(
       return;
     }
     // The shared roster may belong to another agent. Keep this pane's accepted
-    // global history separate rather than relabeling or borrowing that roster.
+    // history separate rather than relabeling or borrowing that roster.
     const scopedHistory =
-      isUiSelectedGlobalSessionKey(host, refreshedSessionKey) &&
-      host.sessions.state.agentId !== refreshedAgentId;
+      host.sessions.state.agentId !== refreshedAgentId &&
+      (isUiSelectedGlobalSessionKey(host, refreshedSessionKey) ||
+        isPersistedSessionRow(history.sessionInfo));
     host.sessionsResult = scopedHistory
       ? reconcileSessionHistory(
           host.sessionsResultAgentId === refreshedAgentId ? host.sessionsResult : null,
@@ -629,8 +631,16 @@ async function refreshChat(
     }
     const runReconciled = reconcileChatRunFromSessionRow(host, sessionInfo, {
       publishRunStatus: true,
+      historyRun:
+        history.observation.run &&
+        history.sessionInfo.hasActiveRun === false &&
+        !isSessionRunActive(history.sessionInfo) &&
+        !history.inFlightRun &&
+        history.sessionInfo.sessionId === history.observation.run.sessionId
+          ? history.observation.run
+          : null,
     });
-    if (!runReconciled) {
+    if (!runReconciled && !host.chatRunId && host.chatStream == null) {
       reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: true });
     }
   });

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { hasFailedSubagentNoOutputCompletion } from "../../internal-event-contract.js";
 import { runAnnounceAgentCall } from "./subagent-announce-completion-delivery.js";
-import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-delivery.runtime.js";
+import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
 const failedChild = { type: "task_completion", source: "subagent", status: "error" } as const;
 

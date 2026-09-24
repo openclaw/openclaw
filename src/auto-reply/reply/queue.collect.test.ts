@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  configureChannelAdmissionEvidenceCollection,
+  createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
 import {
@@ -28,6 +28,7 @@ import {
   createQueueTestRun as createRun,
   createQueueSettings,
   createDrainRecorder,
+  drainRecordedQueue,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { resolveFollowupDeliveryContextKey } from "./queue/delivery-context.js";
@@ -95,15 +96,6 @@ function enqueueRoutedRuns(
   for (const prompt of prompts) {
     enqueueTestRun(key, { prompt, ...route }, settings);
   }
-}
-
-async function drainRecordedQueue(
-  key: string,
-  runFollowup: ReturnType<typeof createDrainRecorder>["runFollowup"],
-  done: ReturnType<typeof createDrainRecorder>["done"],
-) {
-  scheduleFollowupDrain(key, runFollowup);
-  await done.promise;
 }
 
 describe("followup queue collect routing", () => {
@@ -2155,7 +2147,7 @@ describe("followup queue collect routing", () => {
   });
 
   it("preserves sender-scoped batching while identity collection is disabled", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(false);
+    const audit = createChannelAdmissionAudit({ enabled: false });
     try {
       const { key, calls, done, runFollowup, settings } = createQueueCase(
         `test-collect-identity-disabled-${Date.now()}`,
@@ -2172,6 +2164,11 @@ describe("followup queue collect routing", () => {
           key,
           {
             ...item,
+            channelAdmissionEvidence: createChannelParticipantAdmissionEvidence({
+              audit,
+              channelId: "slack",
+              participantId: senderId,
+            }),
             run: { ...item.run, senderId, senderIsOwner: false },
           },
           settings,
@@ -2183,12 +2180,12 @@ describe("followup queue collect routing", () => {
 
       expect(calls.map((call) => call.run.senderId)).toEqual(["user-1", "user-2"]);
     } finally {
-      cleanup();
+      audit.close();
     }
   });
 
   it("keeps same-participant evidence for a collected batch", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({ enabled: true });
     try {
       const sameCase = createQueueCase(`test-collect-identity-same-${Date.now()}`);
       for (const prompt of ["same one", "same two"]) {
@@ -2202,6 +2199,7 @@ describe("followup queue collect routing", () => {
           {
             ...item,
             channelAdmissionEvidence: createChannelParticipantAdmissionEvidence({
+              audit,
               channelId: "slack",
               accountId: "default",
               participantId: "user-1",
@@ -2222,7 +2220,7 @@ describe("followup queue collect routing", () => {
         invoker: { state: "present", kind: "person" },
       });
     } finally {
-      cleanup();
+      audit.close();
     }
   });
 

@@ -7,7 +7,7 @@ const promiseLimit = 4_096;
 let promisesTruncated = false;
 const startedAt = Date.now();
 
-// An exit-time native wait cannot service the later SIGUSR2 diagnostic request.
+// An exit-time native wait cannot service the later SIGQUIT diagnostic request.
 if (process.execArgv.includes("--trace-exit") && require("node:worker_threads").isMainThread) {
   const { writeSync } = require("node:fs");
   // Keep the original method unbound: borrowed calls must retain their own receiver.
@@ -80,7 +80,7 @@ function countNames(names) {
   return Object.fromEntries(counts);
 }
 
-process.on("SIGUSR2", () => {
+process.on("SIGQUIT", () => {
   const diagnostic = {
     pid: process.pid,
     elapsedMs: Date.now() - startedAt,

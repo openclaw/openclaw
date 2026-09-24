@@ -13,7 +13,7 @@ import {
   notifyProviderStreamOpened,
   withProviderAcceptanceObserver,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
 function createStreamDeps(): {
@@ -167,6 +167,14 @@ function countCacheControlMarkers(payload: unknown): number {
 }
 
 describe("createAnthropicVertexStreamFn", () => {
+  beforeEach(() => {
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeAll(async () => {
     ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
       await import("./stream-runtime.js"));

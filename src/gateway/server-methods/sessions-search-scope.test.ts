@@ -18,6 +18,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   identifiedClient,
@@ -36,25 +37,30 @@ async function search(
   client: GatewayClient,
   params: Record<string, unknown>,
 ) {
-  await initializeSessionReadContext(context);
-  let response:
-    | { ok: boolean; payload?: SessionsSearchResult; error?: { message?: string } }
-    | undefined;
-  const respond: RespondFn = (ok, payload, error) => {
-    response = { ok, payload: payload as SessionsSearchResult, error };
-  };
-  await expectDefined(
-    sessionReadHandlers["sessions.search"],
-    "search handler",
-  )({
-    req: { type: "req", id: "search-scope-test", method: "sessions.search" },
-    params,
-    context,
-    client,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  return expectDefined(response, "search response");
+  const releaseForeground = retainSessionListForegroundWork();
+  try {
+    await initializeSessionReadContext(context);
+    let response:
+      | { ok: boolean; payload?: SessionsSearchResult; error?: { message?: string } }
+      | undefined;
+    const respond: RespondFn = (ok, payload, error) => {
+      response = { ok, payload: payload as SessionsSearchResult, error };
+    };
+    await expectDefined(
+      sessionReadHandlers["sessions.search"],
+      "search handler",
+    )({
+      req: { type: "req", id: "search-scope-test", method: "sessions.search" },
+      params,
+      context,
+      client,
+      respond,
+      isWebchatConnect: () => false,
+    });
+    return expectDefined(response, "search response");
+  } finally {
+    releaseForeground();
+  }
 }
 
 async function seed(
@@ -187,8 +193,9 @@ test("scope authorizes and applies membership before the hit limit, and empty sc
         sessions: [{ key: visible }],
       });
       expect(result.payload).not.toHaveProperty("truncated");
+      // Visible dashboard sessions stay discoverable with or without a sidebar group.
       for (const [category, expectedKeys] of [
-        [" ", []],
+        [" ", [visible]],
         ["Research", [visible]],
       ] as const) {
         await upsertSessionEntryCore({ agentId: "main", sessionKey: visible }, { category });
@@ -337,7 +344,7 @@ test("scope reports only authorized cold transcripts without restoring them", as
       });
       expect(result.payload).not.toHaveProperty("indexing");
       expect(
-        transcriptSearch.searchSessionTranscripts({
+        await transcriptSearch.searchSessionTranscripts({
           agentId: "main",
           storePath,
           query: "needle",
@@ -388,6 +395,53 @@ test("scope rechecks sharing after readiness and reports FTS failure instead of 
         ok: false,
         error: { code: "UNAVAILABLE", message: "FTS query failed" },
       });
+    } finally {
+      disposeSessionReadContexts();
+    }
+  });
+});
+
+test("search discards hits and page metadata when sharing is revoked during its worker read", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    try {
+      const viewer = ensureProfileForEmail("worker-search@example.test").id;
+      const context = requestContext({
+        agents: { list: [{ id: "main", default: true }] },
+        gateway: {
+          roles: {
+            default: "viewer",
+            definitions: {
+              viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
+        },
+      });
+      const client = identifiedClient(viewer);
+      const read = transcriptSearch.searchSessionTranscripts;
+      for (const scoped of [true, false]) {
+        const key = await seed("main", `worker-revoked-${scoped}`, "foreign", "needle");
+        const spy = vi
+          .spyOn(transcriptSearch, "searchSessionTranscripts")
+          .mockImplementationOnce(async (...args) => {
+            const result = await read(...args);
+            expect(result.hits).toHaveLength(1);
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey: key },
+              { visibility: "draft" },
+            );
+            return { ...result, indexing: true, truncated: true, archivedTranscriptsExcluded: 7 };
+          });
+        try {
+          const response = await search(context, client, {
+            query: "needle",
+            ...(scoped ? { scope: {} } : { sessionKeys: [key] }),
+          });
+          expect(response.ok).toBe(true);
+          expect(response.payload).toEqual({ results: [], ...(scoped ? { sessions: [] } : {}) });
+        } finally {
+          spy.mockRestore();
+        }
+      }
     } finally {
       disposeSessionReadContexts();
     }

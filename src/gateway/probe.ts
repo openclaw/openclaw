@@ -69,6 +69,7 @@ export type GatewayProbeServerSummary = {
 
 export type GatewayProbeResult = {
   ok: boolean;
+  startupPhase?: string;
   /** Set only after a Gateway hello or a correlated protocol response. */
   gatewayReached?: true;
   url: string;

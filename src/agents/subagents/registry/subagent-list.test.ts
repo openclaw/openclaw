@@ -10,7 +10,7 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { buildSubagentList } from "./subagent-list.js";
+import { buildSubagentListForTests as buildSubagentList } from "./subagent-list.test-support.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -77,17 +77,19 @@ describe("buildSubagentList", () => {
       }
       const list = () =>
         buildSubagentList({ cfg, runs, recentMinutes: 30, readSnapshot: new Map() });
-      expect(list().active.map(({ sessionKey, model }) => ({ sessionKey, model }))).toEqual([
-        { sessionKey: runs[0]!.childSessionKey, model: "openai/saved-active" },
-        { sessionKey: runs[2]!.childSessionKey, model: "openai/saved-other-store" },
-        { sessionKey: runs[3]!.childSessionKey, model: "openai/run-fallback" },
-      ]);
-      expect(list().recent).toMatchObject([{ model: "openai/saved-recent" }]);
+      expect((await list()).active.map(({ sessionKey, model }) => ({ sessionKey, model }))).toEqual(
+        [
+          { sessionKey: runs[0]!.childSessionKey, model: "openai/saved-active" },
+          { sessionKey: runs[2]!.childSessionKey, model: "openai/saved-other-store" },
+          { sessionKey: runs[3]!.childSessionKey, model: "openai/run-fallback" },
+        ],
+      );
+      expect((await list()).recent).toMatchObject([{ model: "openai/saved-recent" }]);
       await replaceSessionEntry(
         { sessionKey: runs[0]!.childSessionKey },
         { sessionId: runs[0]!.runId, updatedAt: now + 1, model: "openai/replaced" },
       );
-      expect(list().active[0]?.model).toBe("openai/replaced");
+      expect((await list()).active[0]?.model).toBe("openai/replaced");
     });
   });
 
@@ -96,7 +98,7 @@ describe("buildSubagentList", () => {
     channels: { whatsapp: { allowFrom: ["*"] } },
   };
 
-  it("keeps a yielded child visible with its real wait and independent delivery state", () => {
+  it("keeps a yielded child visible with its real wait and independent delivery state", async () => {
     const now = Date.now();
     const parent: SubagentRunRecord = {
       runId: "yielded-parent",
@@ -112,7 +114,7 @@ describe("buildSubagentList", () => {
     };
     addSubagentRunForTests(parent);
     const list = () => buildSubagentList({ cfg: {}, runs: [parent], recentMinutes: 30 });
-    expect(list().active[0]).toMatchObject({
+    expect((await list()).active[0]).toMatchObject({
       status: "waiting for external continuation",
       execution: { state: "waiting", wait: { kind: "external" } },
       deliveryStatus: "pending",
@@ -129,7 +131,7 @@ describe("buildSubagentList", () => {
       expectsCompletionMessage: true,
     };
     addSubagentRunForTests(child);
-    expect(list().active[0]?.execution).toEqual({
+    expect((await list()).active[0]?.execution).toEqual({
       state: "waiting",
       wait: {
         kind: "children",
@@ -138,14 +140,16 @@ describe("buildSubagentList", () => {
       },
     });
     addSubagentRunForTests({ ...child, expectsCompletionMessage: false });
-    expect(list().active[0]).toMatchObject({
+    expect((await list()).active[0]).toMatchObject({
       status: "waiting for external continuation",
       execution: { state: "waiting", wait: { kind: "external" } },
     });
     resetSubagentRegistryForTests();
     const killed = { ...parent, endedReason: SUBAGENT_ENDED_REASON_KILLED };
     addSubagentRunForTests(killed);
-    expect(buildSubagentList({ cfg: {}, runs: [killed], recentMinutes: 30 }).active).toEqual([]);
+    expect(
+      (await buildSubagentList({ cfg: {}, runs: [killed], recentMinutes: 30 })).active,
+    ).toEqual([]);
   });
 
   it("builds the subagent list without decoding unrelated saved prompts", async () => {
@@ -191,7 +195,7 @@ describe("buildSubagentList", () => {
 
         const parse = vi.spyOn(JSON, "parse");
         try {
-          const list = buildSubagentList({
+          const list = await buildSubagentList({
             cfg: { session: { store: storePath } },
             runs: [run],
             recentMinutes: 30,
@@ -221,8 +225,8 @@ describe("buildSubagentList", () => {
     });
   });
 
-  it("returns empty active and recent sections when no runs exist", () => {
-    const list = buildSubagentList({
+  it("returns empty active and recent sections when no runs exist", async () => {
+    const list = await buildSubagentList({
       cfg: baseConfig,
       runs: [],
       recentMinutes: 30,
@@ -234,7 +238,7 @@ describe("buildSubagentList", () => {
     expect(list.text).toContain("recent (last 30m):");
   });
 
-  it("truncates long task text in list lines", () => {
+  it("truncates long task text in list lines", async () => {
     const run = {
       runId: "run-long-task",
       childSessionKey: "agent:main:subagent:long-task",
@@ -247,7 +251,7 @@ describe("buildSubagentList", () => {
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
 
-    const list = buildSubagentList({
+    const list = await buildSubagentList({
       cfg: baseConfig,
       runs: [run],
       recentMinutes: 30,
@@ -258,7 +262,7 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).not.toContain("after a short hard cutoff.");
   });
 
-  it("shows taskName in list lines and structured views", () => {
+  it("shows taskName in list lines and structured views", async () => {
     const run = {
       runId: "run-task-name",
       childSessionKey: "agent:main:subagent:task-name",
@@ -273,7 +277,7 @@ describe("buildSubagentList", () => {
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
 
-    const list = buildSubagentList({
+    const list = await buildSubagentList({
       cfg: baseConfig,
       runs: [run],
       recentMinutes: 30,
@@ -313,7 +317,7 @@ describe("buildSubagentList", () => {
     },
   ])(
     "projects the canonical terminal status for $name",
-    ({ endedReason, outcome, expectedStatus }) => {
+    async ({ endedReason, outcome, expectedStatus }) => {
       const now = Date.now();
       const run = {
         runId: `run-status-${expectedStatus}`,
@@ -333,7 +337,7 @@ describe("buildSubagentList", () => {
       } satisfies SubagentRunRecord;
       addSubagentRunForTests(run);
 
-      const list = buildSubagentList({
+      const list = await buildSubagentList({
         cfg: {} as OpenClawConfig,
         runs: [run],
         recentMinutes: 30,
@@ -344,7 +348,7 @@ describe("buildSubagentList", () => {
     },
   );
 
-  it("keeps ended orchestrators active while descendants remain pending", () => {
+  it("keeps ended orchestrators active while descendants remain pending", async () => {
     // Parent orchestrators can finish their own turn before child workers do;
     // list output should keep them active until descendants settle.
     const now = Date.now();
@@ -375,7 +379,7 @@ describe("buildSubagentList", () => {
       startedAt: now - 30_000,
     });
 
-    const list = buildSubagentList({
+    const list = await buildSubagentList({
       cfg: baseConfig,
       runs: [orchestratorRun],
       recentMinutes: 30,
@@ -430,7 +434,7 @@ describe("buildSubagentList", () => {
     },
   ])(
     "preserves the status of $name while descendants remain pending",
-    ({ endedReason, outcome, ended, pendingChildren, expectedStatus }) => {
+    async ({ endedReason, outcome, ended, pendingChildren, expectedStatus }) => {
       const now = Date.now();
       const parentRun = {
         runId: `run-parent-${expectedStatus.replaceAll(" ", "-")}`,
@@ -465,7 +469,7 @@ describe("buildSubagentList", () => {
         });
       }
 
-      const list = buildSubagentList({
+      const list = await buildSubagentList({
         cfg: {} as OpenClawConfig,
         runs: [parentRun],
         recentMinutes: 30,
@@ -483,7 +487,7 @@ describe("buildSubagentList", () => {
     },
   );
 
-  it("omits old ended descendants from child session summaries", () => {
+  it("omits old ended descendants from child session summaries", async () => {
     const now = Date.now();
     const parentRun = {
       runId: "run-parent-active-old-child",
@@ -509,7 +513,7 @@ describe("buildSubagentList", () => {
       outcome: { status: "ok" },
     });
 
-    const list = buildSubagentList({
+    const list = await buildSubagentList({
       cfg: baseConfig,
       runs: [parentRun],
       recentMinutes: 30,
@@ -555,7 +559,7 @@ describe("buildSubagentList", () => {
     } as OpenClawConfig;
     // Prompt/cache usage is separate from visible IO so operators can spot
     // cache-heavy sessions without misreading it as assistant output.
-    const list = buildSubagentList({
+    const list = await buildSubagentList({
       cfg,
       runs: [run],
       recentMinutes: 30,
@@ -567,7 +571,7 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).not.toContain("1k io");
   });
 
-  it("keeps stale unended runs out of active and recent list output", () => {
+  it("keeps stale unended runs out of active and recent list output", async () => {
     const now = Date.now();
     const staleRun = {
       runId: "run-stale-list",
@@ -584,7 +588,7 @@ describe("buildSubagentList", () => {
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(staleRun);
 
-    const list = buildSubagentList({
+    const list = await buildSubagentList({
       cfg: baseConfig,
       runs: [staleRun],
       recentMinutes: 30,
@@ -597,7 +601,7 @@ describe("buildSubagentList", () => {
     expect(list.text).toContain("active subagents:\n(none)");
   });
 
-  it("does not let a stale unended child keep an ended parent listed active", () => {
+  it("does not let a stale unended child keep an ended parent listed active", async () => {
     const now = Date.now();
     const parentRun = {
       runId: "run-parent-ended-stale-child",
@@ -626,7 +630,7 @@ describe("buildSubagentList", () => {
       startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
     });
 
-    const list = buildSubagentList({
+    const list = await buildSubagentList({
       cfg: baseConfig,
       runs: [parentRun],
       recentMinutes: 30,
@@ -637,7 +641,7 @@ describe("buildSubagentList", () => {
     expect(list.recent[0]?.status).toBe("done");
   });
 
-  it("lists a run whose wait expired without an observed child stop as live, not as a recent timeout", () => {
+  it("lists a run whose wait expired without an observed child stop as live, not as a recent timeout", async () => {
     // Regression (round 3, finding 3): a `child-unconfirmed` timeout records the
     // end of the PARENT'S WAIT. Filing it under "recent" with a bare `timeout`
     // told the parent the child was dead in the same breath as the completion
@@ -662,7 +666,7 @@ describe("buildSubagentList", () => {
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(unconfirmedRun);
 
-    const list = buildSubagentList({
+    const list = await buildSubagentList({
       cfg: baseConfig,
       runs: [unconfirmedRun],
       recentMinutes: 30,
@@ -690,7 +694,7 @@ describe("buildSubagentList", () => {
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(observedRun);
 
-    const observedList = buildSubagentList({
+    const observedList = await buildSubagentList({
       cfg: baseConfig,
       runs: [observedRun],
       recentMinutes: 30,
@@ -751,7 +755,7 @@ describe("buildSubagentList", () => {
       await seedSessionEntry(storePath, runB.childSessionKey, sharedDir);
       const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+      const list = await buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
 
       expect(list.active).toHaveLength(2);
       const byRunId = new Map(list.active.map((item) => [item.runId, item]));
@@ -783,7 +787,7 @@ describe("buildSubagentList", () => {
       }
       const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      const list = buildSubagentList({ cfg, runs, recentMinutes: 30 });
+      const list = await buildSubagentList({ cfg, runs, recentMinutes: 30 });
 
       expect(list.active).toHaveLength(3);
       expect(list.sharedCwdGroups).toEqual([
@@ -813,7 +817,7 @@ describe("buildSubagentList", () => {
       await seedSessionEntry(storePath, runB.childSessionKey);
       const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+      const list = await buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
 
       expect(list.active).toHaveLength(2);
       for (const item of list.active) {
@@ -841,7 +845,7 @@ describe("buildSubagentList", () => {
       );
       const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+      const list = await buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
 
       expect(list.active).toHaveLength(2);
       for (const item of list.active) {
@@ -867,7 +871,7 @@ describe("buildSubagentList", () => {
       await seedSessionEntry(storePath, runB.childSessionKey, linkDir);
       const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+      const list = await buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
 
       expect(list.active).toHaveLength(2);
       const canonical = await fs.realpath(realDir);
@@ -899,7 +903,7 @@ describe("buildSubagentList", () => {
       await seedSessionEntry(storePath, runB.childSessionKey, missingDir);
       const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+      const list = await buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
 
       expect(list.active).toHaveLength(2);
       expect(list.sharedCwdGroups).toEqual([
@@ -941,7 +945,7 @@ describe("buildSubagentList", () => {
         addSubagentRunForTests(liveRun);
         addSubagentRunForTests(uncertainRun);
 
-        const uncertainList = buildSubagentList({
+        const uncertainList = await buildSubagentList({
           cfg,
           runs: [liveRun, uncertainRun],
           recentMinutes: 30,
@@ -965,7 +969,7 @@ describe("buildSubagentList", () => {
         resetSubagentRegistryForTests();
         addSubagentRunForTests(liveRun);
         addSubagentRunForTests(completedRun);
-        const completedList = buildSubagentList({
+        const completedList = await buildSubagentList({
           cfg,
           runs: [liveRun, completedRun],
           recentMinutes: 30,
@@ -988,7 +992,7 @@ describe("buildSubagentList", () => {
       await seedSessionEntry(storePath, runB.childSessionKey, sharedDir);
       const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+      const list = await buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
 
       expect(list.active).toStrictEqual([]);
       expect(list.recent).toHaveLength(2);
@@ -1020,7 +1024,7 @@ describe("buildSubagentList", () => {
       }
       const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      const list = buildSubagentList({ cfg, runs, recentMinutes: 30 });
+      const list = await buildSubagentList({ cfg, runs, recentMinutes: 30 });
 
       expect(list.active).toHaveLength(20);
       expect(list.sharedCwdGroupTotal).toBe(1);
@@ -1074,7 +1078,7 @@ describe("buildSubagentList", () => {
       }
       const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      const list = buildSubagentList({
+      const list = await buildSubagentList({
         cfg,
         runs: [...sharedRuns, ...otherRuns],
         recentMinutes: 30,
@@ -1118,7 +1122,7 @@ describe("buildSubagentList", () => {
       }
       const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      const list = buildSubagentList({ cfg, runs, recentMinutes: 30 });
+      const list = await buildSubagentList({ cfg, runs, recentMinutes: 30 });
 
       expect(list.active).toHaveLength(50);
       expect(list.sharedCwdGroupTotal).toBe(25);
@@ -1148,7 +1152,7 @@ describe("buildSubagentList", () => {
       await seedSessionEntry(storePath, endedRun.childSessionKey, sharedDir);
       const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      const list = buildSubagentList({ cfg, runs: [liveRun, endedRun], recentMinutes: 30 });
+      const list = await buildSubagentList({ cfg, runs: [liveRun, endedRun], recentMinutes: 30 });
 
       expect(list.active).toHaveLength(1);
       expect(list.active[0]?.runId).toBe(liveRun.runId);

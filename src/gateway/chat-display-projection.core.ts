@@ -51,6 +51,7 @@ import type {
   CurrentUserProfileDisplay,
   CurrentUserProfileDisplayResolver,
 } from "./current-user-profile-display.js";
+import { projectTranscriptImageArtifacts } from "./transcript-image-artifacts.js";
 
 export type ChatDisplayProjectionOptions = {
   resolveCronJobName?: (jobId: string) => string | undefined;
@@ -424,7 +425,8 @@ function prepareChatHistoryRecoveryMessages(
   messages: unknown[],
   options?: ChatHistoryRecoveryOptions,
 ) {
-  const projectedMessages = messages.map((message) => {
+  const projectedMessages = messages.map((original) => {
+    const message = projectTranscriptImageArtifacts(original);
     const entry = asOptionalRecord(message);
     if (entry?.role === "custom" && entry.customType === "run-failed-before-reply") {
       const runId = normalizeOptionalString(asOptionalRecord(entry.details)?.runId);

@@ -1,5 +1,6 @@
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -30,7 +31,7 @@ export function resolveSlackDmHistoryLimit(params: {
     params.userId && params.account.config.dms?.[params.userId]?.historyLimit !== undefined
       ? params.account.config.dms[params.userId]?.historyLimit
       : undefined;
-  return Math.max(0, override ?? params.defaultLimit);
+  return resolvePromptHistoryLimit(override ?? params.defaultLimit, 0);
 }
 
 export async function resolveSlackDmHistoryContext(params: {

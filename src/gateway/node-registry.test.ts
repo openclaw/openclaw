@@ -35,6 +35,12 @@ import {
   updateNodeRunnerInventory,
 } from "./node-registry-private.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
+import {
+  createTestNodeSocket,
+  makeClient,
+  registerNodeSession,
+  type TestNodeSocket,
+} from "./node-registry.test-helpers.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import {
@@ -47,34 +53,11 @@ let testNodeHostCommands: NonNullable<
 > = [];
 const activeTestRegistries = new Set<NodeRegistry>();
 
-type TestNodeSocket = {
-  readyState: number;
-  bufferedAmount: number;
-  send: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
-};
-
 const NON_OPEN_NODE_SOCKET_STATES = [
   { state: "connecting", readyState: WebSocket.CONNECTING },
   { state: "closing", readyState: WebSocket.CLOSING },
   { state: "closed", readyState: WebSocket.CLOSED },
 ];
-
-function createTestNodeSocket(
-  sent: string[] = [],
-  readyState: TestNodeSocket["readyState"] = WebSocket.OPEN,
-): TestNodeSocket {
-  return {
-    readyState,
-    bufferedAmount: 0,
-    send: vi.fn((frame: unknown) => {
-      if (typeof frame === "string") {
-        sent.push(frame);
-      }
-    }),
-    close: vi.fn(),
-  };
-}
 
 function createNodeRegistry(options?: ConstructorParameters<typeof NodeRegistry>[0]): NodeRegistry {
   const registry = new NodeRegistry(options);
@@ -99,74 +82,6 @@ afterEach(() => {
   testNodeHostCommands = [];
   setActiveNodeContext(null);
 });
-
-function makeClient(
-  connId: string,
-  nodeId: string,
-  sent: string[] = [],
-  opts: {
-    clientId?: string;
-    displayName?: string;
-    platform?: string;
-    version?: string;
-    caps?: string[];
-    commands?: string[];
-    computerUse?: unknown;
-    declaredComputerUse?: unknown;
-    permissions?: Record<string, boolean>;
-    declaredCaps?: string[];
-    declaredCommands?: string[];
-    declaredPermissions?: Record<string, boolean>;
-    sessionCapsCeiling?: string[];
-    sessionCommandsCeiling?: string[];
-    socket?: GatewayWsClient["socket"];
-    webSocket?: GatewayWsClient["webSocket"];
-  } = {},
-): GatewayWsClient {
-  return {
-    connId,
-    usesSharedGatewayAuth: false,
-    socket: opts.socket ?? (createTestNodeSocket(sent) as unknown as GatewayWsClient["socket"]),
-    webSocket: opts.webSocket,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: opts.clientId ?? "openclaw-macos",
-        version: opts.version ?? "1.0.0",
-        platform: opts.platform ?? "darwin",
-        mode: "node",
-        displayName: opts.displayName,
-      },
-      device: {
-        id: nodeId,
-        publicKey: "public-key",
-        signature: "signature",
-        signedAt: 1,
-        nonce: "nonce",
-      },
-      caps: opts.caps ?? [],
-      commands: opts.commands ?? [],
-      computerUse: opts.computerUse,
-      declaredComputerUse: opts.declaredComputerUse,
-      permissions: opts.permissions,
-      declaredCaps: opts.declaredCaps,
-      declaredCommands: opts.declaredCommands,
-      declaredPermissions: opts.declaredPermissions,
-      sessionCapsCeiling: opts.sessionCapsCeiling,
-      sessionCommandsCeiling: opts.sessionCommandsCeiling,
-    } as unknown as GatewayWsClient["connect"],
-  };
-}
-
-function registerNodeSession(
-  registry: NodeRegistry,
-  client: GatewayWsClient,
-  opts: Partial<Parameters<NodeRegistry["register"]>[1]> = {},
-) {
-  const { pairingIdentity = "identity-a", ...registration } = opts;
-  return registry.register(client, { ...registration, pairingIdentity });
-}
 
 function registerTestNodeSocket(
   registry: NodeRegistry,

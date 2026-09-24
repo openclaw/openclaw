@@ -527,6 +527,7 @@ it.each(dispatchCases)(
             expect(outcome.error).toMatchObject({
               code: "sandbox_provisioning",
               backendId: "docker",
+              message: "LOCAL_DOCKER_UNAVAILABLE",
             });
             expect(localBackend).toHaveBeenCalledOnce();
             expect(localBackend.mock.calls[0]?.[0].workspaceSource).toBe("managed-worktree");

@@ -2,6 +2,7 @@ package ai.openclaw.app.gateway
 
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -19,9 +20,12 @@ import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowNsdManager
 import java.net.Inet6Address
 import java.net.InetAddress
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [ServiceInfoNsdShadow::class])
 class GatewayDiscoveryTest {
   private val scope = CoroutineScope(SupervisorJob())
 
@@ -57,6 +61,81 @@ class GatewayDiscoveryTest {
     val discovery = discoverGateway(InetAddress.getByName("127.0.0.1"), scopedIpv6())
 
     assertEquals("127.0.0.1", discovery.discoveredHost())
+  }
+
+  @Test
+  fun retiredServiceUpdateCannotResurrectALostGateway() {
+    val harness = modernDiscovery()
+    val service = modernService("127.0.0.1")
+    val registration = harness.found(service)
+    registration.deliver { onServiceUpdated(service) }
+    harness.listener.onServiceLost(service)
+    assertTrue(
+      harness.discovery.gateways.value
+        .isEmpty(),
+    )
+
+    // Android can retain a captured listener even after unregister has been requested.
+    registration.deliver { onServiceUpdated(service) }
+
+    assertTrue(
+      harness.discovery.gateways.value
+        .isEmpty(),
+    )
+  }
+
+  @Test
+  fun retiredCallbacksCannotReplaceOrRemoveRediscoveredGateway() {
+    val harness = modernDiscovery()
+    val old = modernService("127.0.0.1")
+    val replacement = modernService("127.0.0.2")
+    val retired = harness.found(old)
+    retired.deliver { onServiceUpdated(old) }
+    harness.listener.onServiceLost(old)
+    val current = harness.found(replacement)
+    current.deliver { onServiceUpdated(replacement) }
+
+    retired.deliver { onServiceUpdated(old) }
+    assertEquals("127.0.0.2", harness.discovery.discoveredHost())
+    retired.deliver { onServiceLost() }
+    assertEquals("127.0.0.2", harness.discovery.discoveredHost())
+    retired.deliver { onServiceInfoCallbackUnregistered() }
+    // The old terminal callback must not retire the replacement registration either.
+    current.deliver { onServiceUpdated(modernService("127.0.0.3")) }
+    assertEquals("127.0.0.3", harness.discovery.discoveredHost())
+  }
+
+  @Test
+  fun currentRegistrationPublishesUpdatesAndLossInDeliveryOrder() {
+    val harness = modernDiscovery()
+    val service = modernService("127.0.0.1")
+    val registration = harness.found(service)
+    val delivered = mutableListOf<List<String>>()
+    val callbacks =
+      listOf<(NsdManager.ServiceInfoCallback) -> Unit>(
+        { it.onServiceUpdated(service) },
+        { it.onServiceLost() },
+        { it.onServiceUpdated(modernService("127.0.0.2")) },
+        { it.onServiceLost() },
+      ).map { event ->
+        registration.enqueue {
+          event(this)
+          synchronized(delivered) {
+            delivered.add(
+              harness.discovery.gateways.value
+                .map { it.host },
+            )
+          }
+        }
+      }
+    shadowOf(Looper.getMainLooper()).idle()
+    callbacks.forEach { it.get(5, TimeUnit.SECONDS) }
+
+    assertEquals(listOf(listOf("127.0.0.1"), emptyList(), listOf("127.0.0.2"), emptyList()), delivered)
+    assertTrue(
+      harness.discovery.gateways.value
+        .isEmpty(),
+    )
   }
 
   @Test
@@ -243,13 +322,25 @@ class GatewayDiscoveryTest {
       host = InetAddress.getByName("127.0.0.1")
     }
 
-  private fun discoverGateway(service: NsdServiceInfo): GatewayDiscovery {
-    val discovery = GatewayDiscovery(RuntimeEnvironment.getApplication(), scope)
-    GatewayDiscovery::class.java.getDeclaredMethod("upsertResolvedService", NsdServiceInfo::class.java).apply {
-      isAccessible = true
-      invoke(discovery, service)
+  private fun modernDiscovery(): ModernDiscoveryHarness {
+    val context = RuntimeEnvironment.getApplication()
+    val nsd = shadowOf(context.getSystemService(NsdManager::class.java)) as ServiceInfoNsdShadow
+    val discovery = GatewayDiscovery(context, scope)
+    return ModernDiscoveryHarness(discovery, nsd.getDiscoveryListeners("_openclaw-gw._tcp.")!!.single(), nsd)
+  }
+
+  private fun modernService(host: String): NsdServiceInfo =
+    NsdServiceInfo().apply {
+      serviceName = "Gateway"
+      serviceType = "_openclaw-gw._tcp."
+      port = 18789
+      hostAddresses = listOf(InetAddress.getByName(host))
     }
-    return discovery
+
+  private fun discoverGateway(service: NsdServiceInfo): GatewayDiscovery {
+    val harness = modernDiscovery()
+    harness.found(service).deliver { onServiceUpdated(service) }
+    return harness.discovery
   }
 
   private fun GatewayDiscovery.discoveredHost(): String {
@@ -289,4 +380,48 @@ private data class LegacyDiscoveryHarness(
   val nsd: ShadowNsdManager,
 ) {
   fun resolvers(service: NsdServiceInfo): List<NsdManager.ResolveListener> = nsd.getResolveListeners(service).orEmpty()
+}
+
+/** Controls API 34 callback scheduling while retaining the platform shadow's legacy bookkeeping. */
+@Implements(NsdManager::class)
+class ServiceInfoNsdShadow : ShadowNsdManager() {
+  val registrations = mutableListOf<ServiceInfoRegistration>()
+
+  @Implementation(minSdk = 34)
+  override fun registerServiceInfoCallback(
+    serviceInfo: NsdServiceInfo,
+    executor: Executor,
+    callback: NsdManager.ServiceInfoCallback,
+  ) {
+    registrations.add(ServiceInfoRegistration(executor, callback))
+  }
+
+  @Implementation(minSdk = 34)
+  override fun unregisterServiceInfoCallback(callback: NsdManager.ServiceInfoCallback) {
+    // Like NsdManager, unregister does not cancel listener lambdas already captured for delivery.
+  }
+}
+
+class ServiceInfoRegistration(
+  private val executor: Executor,
+  private val callback: NsdManager.ServiceInfoCallback,
+) {
+  fun enqueue(event: NsdManager.ServiceInfoCallback.() -> Unit): CompletableFuture<Void> = CompletableFuture.runAsync({ callback.event() }, executor)
+
+  fun deliver(event: NsdManager.ServiceInfoCallback.() -> Unit) {
+    val completion = enqueue(event)
+    shadowOf(Looper.getMainLooper()).idle()
+    completion.get(5, TimeUnit.SECONDS)
+  }
+}
+
+private data class ModernDiscoveryHarness(
+  val discovery: GatewayDiscovery,
+  val listener: NsdManager.DiscoveryListener,
+  val nsd: ServiceInfoNsdShadow,
+) {
+  fun found(service: NsdServiceInfo): ServiceInfoRegistration {
+    listener.onServiceFound(service)
+    return nsd.registrations.last()
+  }
 }

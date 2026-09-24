@@ -296,8 +296,8 @@ class ChatOutboxGatewayOwner {
     }
     this.prune(host);
   }
-  subscribe(host: Host): () => void {
-    const subscription = { owner: this };
+  subscribe(host: Host, onDiscard?: (item: ChatQueueItem) => void): () => void {
+    const subscription = { owner: this, onDiscard };
     subscriptions.set(host, subscription);
     this.attach(host);
     this.reconcile(host, this.state(host));
@@ -453,7 +453,7 @@ class ChatOutboxGatewayOwner {
     }
     return result;
   }
-  remove(host: Host, id: string): ChatQueueItem | null {
+  remove(host: Host, id: string, options?: { discard?: boolean }): ChatQueueItem | null {
     const located = this.locate(host, id);
     const durable = located?.durable;
     const local = host.chatQueue.find((item) => item.id === id);
@@ -479,6 +479,13 @@ class ChatOutboxGatewayOwner {
       this.change(host, id);
     }
     this.publish(undefined, true);
+    if (located && options?.discard) {
+      // Row disappearance also means ACK retirement. Only successful explicit
+      // discard invalidates admission presentation in every subscribed pane.
+      for (const pane of this.panes) {
+        subscriptions.get(pane)?.onDiscard?.(located.item);
+      }
+    }
     return located?.item ?? null;
   }
   hasVolatile(host: Host, id: string): boolean {
@@ -497,6 +504,26 @@ class ChatOutboxGatewayOwner {
   hasPendingSubmission(scope: Scope, item: ChatQueueItem): boolean {
     return Boolean(
       this.readLive(storedChatOutboxScopeKey(scope), item.id, item)?.submissionIsCurrent,
+    );
+  }
+  /** Inbox reads delivery state, not the reload-safe aliases stored during live work. */
+  needsReview(scope: Scope, item: ChatQueueItem): boolean {
+    const key = storedChatOutboxScopeKey(scope);
+    if (this.readLive(key, item.id, item)) {
+      return false;
+    }
+    for (const state of this.hosts.values()) {
+      if (
+        state.byScope
+          .get(key)
+          ?.queue.some((local) => local.id === item.id && local.sendState === "waiting-model")
+      ) {
+        return false;
+      }
+    }
+    return (
+      !item.pendingRunId &&
+      (item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held")
     );
   }
   beginSubmission(
@@ -587,7 +614,10 @@ class ChatOutboxGatewayOwner {
   }
 }
 const owners = new Map<string, ChatOutboxGatewayOwner>();
-const subscriptions = new WeakMap<Composer, { owner: ChatOutboxGatewayOwner }>();
+const subscriptions = new WeakMap<
+  Composer,
+  { owner: ChatOutboxGatewayOwner; onDiscard?: (item: ChatQueueItem) => void }
+>();
 function outboxOwnerKey(host: Composer): string {
   const storage = getSafeSessionStorage();
   if (storage && !storageIds.has(storage)) {
@@ -602,4 +632,30 @@ export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
   owners.set(key, owner);
   owner.adoptSubscriptions(host);
   return owner;
+}
+
+/** Read-only view of the existing tab/Gateway outbox; it does not claim a personal owner. */
+export function listChatOutboxAttention(host: Composer) {
+  if (!observeOutboxRecoveryOwner(host)) {
+    return [];
+  }
+  const owner = owners.get(outboxOwnerKey(host));
+  return listStoredChatOutboxes(host).flatMap((outbox) =>
+    outbox.queue
+      .filter((item) =>
+        owner
+          ? owner.needsReview(outbox, item)
+          : !item.pendingRunId &&
+            (item.sendState === "failed" ||
+              item.sendState === "unconfirmed" ||
+              item.sendState === "held"),
+      )
+      .map((item) => ({
+        id: item.id,
+        sessionKey: outbox.sessionKey,
+        agentId: outbox.agentId,
+        unconfirmed: item.sendState === "unconfirmed" || item.sendState === "held",
+        command: Boolean(item.localCommandName),
+      })),
+  );
 }

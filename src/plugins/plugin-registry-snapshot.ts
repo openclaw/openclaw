@@ -101,8 +101,9 @@ export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginI
   };
 }
 
-function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams): boolean {
+export function canReusePluginRegistrySnapshot(params: LoadPluginRegistryParams): boolean {
   return (
+    params.index === undefined &&
     params.allowCurrent !== false &&
     params.preferPersisted !== false &&
     params.stateDir === undefined &&
@@ -116,17 +117,21 @@ function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams)
   );
 }
 
-function loadCurrentPluginRegistrySnapshotResult(
-  params: LoadPluginRegistryParams,
-): PluginRegistrySnapshotResult | undefined {
-  if (!canReuseCurrentPluginMetadataSnapshot(params)) {
+export function getCurrentPluginMetadataSnapshotForRegistry(params: LoadPluginRegistryParams) {
+  if (!canReusePluginRegistrySnapshot(params)) {
     return undefined;
   }
-  const current = getCurrentPluginMetadataSnapshot({
+  return getCurrentPluginMetadataSnapshot({
     config: params.config,
     env: params.env ?? process.env,
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   });
+}
+
+function loadCurrentPluginRegistrySnapshotResult(
+  params: LoadPluginRegistryParams,
+): PluginRegistrySnapshotResult | undefined {
+  const current = getCurrentPluginMetadataSnapshotForRegistry(params);
   if (!current) {
     return undefined;
   }

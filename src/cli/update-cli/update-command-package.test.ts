@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -7,8 +8,20 @@ import {
   createNpmTarget,
   writePackageRoot,
 } from "../../infra/package-update-steps.test-support.js";
+import { runPackagePostInstallVerification } from "../../infra/package-update-verification-step.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import {
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  writeUpdatePostInstallDoctorResult,
+  type UpdatePostInstallDoctorResult,
+} from "../../infra/update-doctor-result.js";
+import * as gitRunner from "../../infra/update-runner-git.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import * as shared from "./shared.js";
+import { updateGitInstall } from "./update-command-git.js";
+import * as packageUpdate from "./update-command-package.js";
 import { runPackageInstallUpdate, stagePackageInstallUpdate } from "./update-command-package.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
@@ -110,7 +123,17 @@ it.each(["guidance", "staging"])(
         installTarget: target,
       };
       const permissionFacts = [
-        expect.objectContaining({ code: "global-install-permission-denied" }),
+        {
+          check: "package-install",
+          code: "global-install-permission-denied",
+          message: "Package update cannot write [redacted-path]",
+        },
+        ...[
+          "npm error code EACCES",
+          "npm error syscall rename",
+          "npm error path [redacted-path]",
+          "npm error EACCES: permission denied, rename [redacted-path]",
+        ].map((message) => ({ check: "npm", code: "EACCES", message })),
       ];
       if (consumer === "staging") {
         await expect(stagePackageInstallUpdate(params)).rejects.toMatchObject({
@@ -131,7 +154,7 @@ it.each(["guidance", "staging"])(
         expect(nextAction).not.toContain("Initial dependency resolution failed");
         expect(result).toMatchObject({
           reason: "global-install-permission-denied",
-          failedStep: { name: "global update (omit optional)", failureFacts: permissionFacts },
+          failedStep: { name: "package-install-omit-optional", failureFacts: permissionFacts },
           recovery: { serviceRestartSafe: true, version: "1.0.0" },
         });
       }
@@ -379,3 +402,159 @@ it("runs package post-update doctor from the verified package root after a stage
     }
   });
 });
+
+it.each(
+  (["package", "package-to-git"] as const).flatMap((method) =>
+    (["include-ownership", "requester-revoked"] as const).map((reason) => ({ method, reason })),
+  ),
+)(
+  "retains the $reason Doctor receipt when $method verification throws after settlement",
+  async ({ method, reason }) => {
+    await withTestDir({ prefix: "update-doctor-receipt-" }, async (base) => {
+      const { root, target, expectOriginalInstallation } = await createPackageInstallFixture(
+        base,
+        "2.0.0",
+      );
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(base);
+      const env = {
+        OPENCLAW_STATE_DIR: path.join(base, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
+      };
+      await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
+      const receipt: UpdatePostInstallDoctorResult = {
+        status: "error",
+        configChanges: [{ kind: "migration", message: "Moved model allowlist." }],
+        configWriteRefusal: { reason, message: "Config writer refused.", keys: ["agents"] },
+        failureFacts: [{ check: "config", code: reason, affectedKey: "agents" }],
+        warnings: ["Review the migrated model allowlist."],
+      };
+      const installCommand = vi.mocked(processRunner.runCommandWithTimeout).getMockImplementation();
+      assert(installCommand);
+      let resultPath: string | undefined;
+      vi.mocked(processRunner.runCommandWithTimeout).mockImplementation(async (argv, options) => {
+        if (argv[2] !== "doctor") {
+          return await installCommand(argv, options);
+        }
+        assert(typeof options === "object");
+        resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        assert(resultPath);
+        await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
+        throw new Error("Doctor transport failed after the child settled.");
+      });
+
+      let transaction: PackageUpdateTransaction | undefined;
+      try {
+        let result: UpdateRunResult;
+        if (method === "package") {
+          result = await runPackageInstallUpdate({
+            root,
+            installKind: "package",
+            tag: "2.0.0",
+            installTarget: target,
+            installEnv: env,
+            managedServiceEnv: env,
+            timeoutMs: 1000,
+            startedAt: Date.now(),
+            progress: {},
+            validateCandidate: async () => [],
+            beforeActivate: async () => {},
+            onTransaction: (retained) => {
+              transaction = retained;
+            },
+          });
+        } else {
+          const gitRoot = path.join(base, "checkout");
+          await writePackageRoot(gitRoot, "2.0.0");
+          vi.spyOn(shared, "resolveGitInstallDir").mockReturnValue(gitRoot);
+          vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue("npm");
+          vi.spyOn(shared, "ensureGitCheckout").mockResolvedValue({
+            checkoutDir: gitRoot,
+            step: null,
+          });
+          vi.spyOn(gitRunner, "updateGitCheckout").mockImplementation(async ({ opts }) => {
+            assert(opts.prepareGitExposure);
+            await opts.prepareGitExposure(gitRoot, "a".repeat(40), env);
+            return { status: "ok", mode: "git", root: gitRoot, steps: [], durationMs: 0 };
+          });
+          vi.spyOn(packageUpdate, "prepareGitPackageExposure").mockImplementation(
+            async (params) => {
+              assert(params.postVerifyStep);
+              const verify = params.postVerifyStep;
+              return {
+                activate: async () => {
+                  const failedStep = await runPackagePostInstallVerification(gitRoot, verify);
+                  return {
+                    steps: [failedStep],
+                    failedStep,
+                    activePackageRoot: root,
+                    afterVersion: "2.0.0",
+                    recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+                  };
+                },
+                cancel: async () => ({
+                  steps: [],
+                  recovery: { serviceRestartSafe: true, version: "1.0.0" },
+                }),
+              };
+            },
+          );
+          result = await updateGitInstall({
+            root,
+            switchToGit: true,
+            installKind: "package",
+            timeoutMs: 1000,
+            startedAt: Date.now(),
+            progress: {},
+            channel: "dev",
+            inspectGitTarget: async () => {},
+            beforeGitMutation: async () => {},
+            validateCandidate: async () => {},
+            getManagedServiceEnv: () => env,
+            getSnapshotSource: async () => ({ config: {}, env }),
+            jsonMode: true,
+          });
+        }
+        expect(result).toMatchObject({
+          status: "error",
+          reason: reason === "requester-revoked" ? reason : "repair-requires-config-change",
+          failedStep: {
+            name: "openclaw doctor",
+            exitCode: 1,
+            configChanges: receipt.configChanges,
+            configWriteRefusal: receipt.configWriteRefusal,
+            failureFacts: expect.arrayContaining([
+              ...(receipt.failureFacts ?? []),
+              expect.objectContaining({
+                check: "openclaw doctor",
+                code: "Error",
+                message: "Doctor transport failed after the child settled.",
+              }),
+            ]),
+            warnings: receipt.warnings,
+          },
+        });
+        expect(result.failedStep?.advisory).toBeUndefined();
+        expect(result.failedStep?.stderrTail).toContain(
+          "Doctor transport failed after the child settled.",
+        );
+        expect(
+          result.failedStep?.stderrTail?.match(
+            /Doctor transport failed after the child settled\./gu,
+          ),
+        ).toHaveLength(1);
+        expect(result.steps.filter((step) => step.name === "openclaw doctor")).toEqual([
+          result.failedStep,
+        ]);
+        assert(resultPath, "Doctor must write its receipt through the production callback");
+        await expect(fs.access(resultPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        if (transaction) {
+          const rollback = await transaction.rollback(() => {});
+          expect(rollback.exitCode).toBe(0);
+          await transaction.complete({ activationVerified: false }, () => {});
+        }
+      }
+      await expectOriginalInstallation();
+    });
+  },
+);

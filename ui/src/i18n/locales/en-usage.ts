@@ -4,6 +4,21 @@ import { en } from "./en.ts";
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
+    presets: {
+      today: "Today",
+      last7d: "7d",
+      last30d: "30d",
+      last90d: "90d",
+      last1y: "1y",
+      all: "All",
+    },
+    scope: {
+      instance: "Current instance",
+      instanceHint: "Show only the active session id for each logical session.",
+      family: "Historical lineage",
+      familyHint: "Roll up known rotated transcript-backed session ids.",
+      familyIncluded: "Historical lineage includes {count} session instances.",
+    },
     filters: {
       rangeTitle: "Reporting range",
       rangeHint: "Choose the dates to include in every chart and total.",
@@ -43,6 +58,13 @@ const enUsage = {
       matching: "{shown} of {total} sessions match",
       inRange: "{total} sessions in range",
       tip: "Tip: use filters or click bars to refine days.",
+    },
+    export: {
+      label: "Export",
+      changed: "Session context changed while preparing the export. Refresh usage and try again.",
+      sessionsCsv: "Sessions CSV",
+      dailyCsv: "Daily CSV",
+      json: "JSON",
     },
     cacheStatus: {
       warning: "Usage data may be incomplete. Checking for updated totals automatically.",

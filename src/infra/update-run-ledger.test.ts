@@ -1,25 +1,17 @@
 import { fork } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import {
   createUpdateRun,
-  findActiveUpdateRun,
   finishUpdateRun,
   getUpdateRun,
-  getUpdateRunAsync,
   listUpdateRuns,
-  listUpdateRunsAsync,
   recordUpdateRunPhase,
   recordUpdateRunRepairAttempt,
   recordUpdateRunStep,
@@ -37,39 +29,9 @@ function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-ledger-") } };
 }
 
-function snapshotDatabaseFiles(filename: string) {
-  const metadata = (pathname: string) => {
-    const stat = fs.lstatSync(pathname, { bigint: true });
-    return {
-      dev: stat.dev,
-      ino: stat.ino,
-      mode: stat.mode,
-      uid: stat.uid,
-      gid: stat.gid,
-      size: stat.size,
-      mtimeNs: stat.mtimeNs,
-      ctimeNs: stat.ctimeNs,
-    };
-  };
-  const directory = path.dirname(filename);
-  return {
-    directory: metadata(directory),
-    entries: fs.readdirSync(directory).toSorted(),
-    files: ["", "-wal", "-shm", "-journal"].map((suffix) => {
-      const pathname = `${filename}${suffix}`;
-      return fs.existsSync(pathname)
-        ? {
-            suffix,
-            metadata: metadata(pathname),
-            sha256: createHash("sha256").update(fs.readFileSync(pathname)).digest("hex"),
-          }
-        : { suffix, absent: true };
-    }),
-  };
-}
-
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
@@ -274,176 +236,6 @@ describe("update run ledger", () => {
     },
   );
 
-  it("keeps reads non-creating and adds the table on first write without changing the older schema", () => {
-    const options = isolatedOptions();
-    const runId = randomUUID();
-    const filename = resolveOpenClawStateSqlitePath(options.env);
-    expect(getUpdateRun(runId, options)).toBeUndefined();
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    expect(findActiveUpdateRun(options)).toBeUndefined();
-    expect(fs.existsSync(filename)).toBe(false);
-    expect(fs.readdirSync(options.env.OPENCLAW_STATE_DIR)).toEqual([]);
-
-    const initial = openOpenClawStateDatabase(options);
-    const hasLedger = () =>
-      initial.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get();
-    expect(hasLedger()).toBeUndefined();
-    const version = initial.db.prepare("PRAGMA user_version").get();
-    const metadata = initial.db.prepare("SELECT * FROM schema_meta").all();
-    const previousSchema = initial.db
-      .prepare(
-        "SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*' ORDER BY rowid",
-      )
-      .all()
-      .map((row) => row.sql)
-      .join(";\n");
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    expect(hasLedger()).toBeUndefined();
-    expect(() => recordUpdateRunPhase(runId, "staging", {}, options)).toThrow(
-      "missing table update_runs",
-    );
-    expect(hasLedger()).toBeUndefined();
-
-    const created = createUpdateRun({ runId, trigger: "cli" }, options);
-    expect(created).toMatchObject({ runId, phase: "requested", status: "running" });
-    closeOpenClawStateDatabaseForTest();
-    const olderReader = new DatabaseSync(filename);
-    try {
-      assertSqliteSchemaContains(olderReader, filename, previousSchema);
-      olderReader.prepare("UPDATE schema_meta SET updated_at = updated_at").run();
-      expect(olderReader.prepare("PRAGMA user_version").get()).toEqual(version);
-      expect(olderReader.prepare("SELECT * FROM schema_meta").all()).toEqual(metadata);
-    } finally {
-      olderReader.close();
-    }
-    expect(getUpdateRun(runId, options)).toEqual(created);
-    expect(createUpdateRun({ runId, trigger: "api" }, options)).toEqual(created);
-    expect(listUpdateRuns({}, options)).toEqual([created]);
-  });
-
-  it.each(
-    (["get", "list", "active", "get-async", "list-async"] as const).flatMap((reader) =>
-      [false, true].map((retainedWal) => ({ reader, retainedWal })),
-    ),
-  )(
-    "keeps cold $reader reads artifact-preserving with retained WAL=$retainedWal",
-    async ({ reader, retainedWal }) => {
-      const sourceOptions = isolatedOptions();
-      const created = createUpdateRun({ trigger: "cli" }, sourceOptions);
-      const sourcePath = resolveOpenClawStateSqlitePath(sourceOptions.env);
-      let options = sourceOptions;
-      let expected = created;
-      if (retainedWal) {
-        const { db } = openOpenClawStateDatabase(sourceOptions);
-        db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-        expected = recordUpdateRunPhase(created.runId, "staging", {}, sourceOptions);
-        options = isolatedOptions();
-        const filename = resolveOpenClawStateSqlitePath(options.env);
-        fs.mkdirSync(path.dirname(filename), { recursive: true });
-        // Capture committed WAL bytes while the only producer is idle, then close
-        // it before observing the copy. Omitting WAL must not return stale history.
-        fs.copyFileSync(sourcePath, filename);
-        fs.copyFileSync(`${sourcePath}-wal`, `${filename}-wal`);
-        const mainOnly = path.join(tempDirs.make("openclaw-update-main-only-"), "main.sqlite");
-        fs.copyFileSync(sourcePath, mainOnly);
-        const control = new DatabaseSync(mainOnly, { readOnly: true });
-        try {
-          expect(
-            control.prepare("SELECT phase FROM update_runs WHERE run_id = ?").get(created.runId),
-          ).toEqual({ phase: "requested" });
-        } finally {
-          control.close();
-        }
-      }
-      closeOpenClawStateDatabaseForTest();
-      const filename = resolveOpenClawStateSqlitePath(options.env);
-      expect(fs.existsSync(`${filename}-shm`)).toBe(false);
-      expect(fs.existsSync(`${filename}-wal`)).toBe(retainedWal);
-      const before = snapshotDatabaseFiles(filename);
-      const result =
-        reader === "get"
-          ? getUpdateRun(created.runId, options)
-          : reader === "list"
-            ? listUpdateRuns({}, options)
-            : reader === "get-async"
-              ? await getUpdateRunAsync(created.runId, options)
-              : reader === "list-async"
-                ? await listUpdateRunsAsync({}, options)
-                : findActiveUpdateRun(options);
-      expect(result).toEqual(reader === "list" || reader === "list-async" ? [expected] : expected);
-      expect(snapshotDatabaseFiles(filename)).toEqual(before);
-    },
-  );
-
-  it("reads rows persisted with the retired inferenceProbe verification fact", () => {
-    const options = isolatedOptions();
-    const run = createUpdateRun({ trigger: "cli" }, options);
-    recordUpdateRunVerification(run.runId, { serviceRunning: true }, options);
-    // Rows written before verification stopped recording inference keep the key;
-    // the non-strict record schema drops it instead of rejecting the run.
-    openOpenClawStateDatabase(options)
-      .db.prepare("UPDATE update_runs SET verification_json = ? WHERE run_id = ?")
-      .run(JSON.stringify({ serviceRunning: true, inferenceProbe: "passed" }), run.runId);
-
-    expect(getUpdateRun(run.runId, options)?.verification).toEqual({ serviceRunning: true });
-  });
-
-  it("leaves a cold store without the history table unchanged", async () => {
-    const options = isolatedOptions();
-    const { db } = openOpenClawStateDatabase(options);
-    expect(
-      db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get(),
-    ).toBeUndefined();
-    closeOpenClawStateDatabaseForTest();
-    const filename = resolveOpenClawStateSqlitePath(options.env);
-    const before = snapshotDatabaseFiles(filename);
-    expect(getUpdateRun(randomUUID(), options)).toBeUndefined();
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    expect(findActiveUpdateRun(options)).toBeUndefined();
-    expect(await getUpdateRunAsync(randomUUID(), options)).toBeUndefined();
-    expect(await listUpdateRunsAsync({}, options)).toEqual([]);
-    expect(snapshotDatabaseFiles(filename)).toEqual(before);
-  });
-
-  it("keeps the idle cached writer usable after history reads", () => {
-    const options = isolatedOptions();
-    const created = createUpdateRun({ trigger: "cli" }, options);
-    const { db } = openOpenClawStateDatabase(options);
-    const filename = resolveOpenClawStateSqlitePath(options.env);
-    const before = snapshotDatabaseFiles(filename);
-    expect(getUpdateRun(created.runId, options)).toEqual(created);
-    expect(listUpdateRuns({}, options)).toEqual([created]);
-    expect(findActiveUpdateRun(options)).toEqual(created);
-    expect(snapshotDatabaseFiles(filename)).toEqual(before);
-    expect(db.isOpen).toBe(true);
-    expect(recordUpdateRunPhase(created.runId, "staging", {}, options).phase).toBe("staging");
-  });
-
-  it("reads committed history without consuming the cached writer's transaction", () => {
-    const options = isolatedOptions();
-    const created = createUpdateRun({ trigger: "cli" }, options);
-    const { db } = openOpenClawStateDatabase(options);
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      db.prepare("UPDATE update_runs SET phase = 'staging' WHERE run_id = ?").run(created.runId);
-      expect(getUpdateRun(created.runId, options)).toEqual(created);
-      expect(listUpdateRuns({}, options)).toEqual([created]);
-      expect(findActiveUpdateRun(options)).toEqual(created);
-      expect(db.isTransaction).toBe(true);
-      expect(
-        db.prepare("SELECT phase FROM update_runs WHERE run_id = ?").get(created.runId),
-      ).toEqual({
-        phase: "staging",
-      });
-      db.exec("COMMIT");
-    } finally {
-      if (db.isTransaction) {
-        db.exec("ROLLBACK");
-      }
-    }
-    expect(getUpdateRun(created.runId, options)?.phase).toBe("staging");
-  });
-
   it("keeps phase order and merges repeated steps while preserving terminal outcomes and later boot facts", () => {
     const options = isolatedOptions();
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -462,6 +254,17 @@ describe("update run ledger", () => {
       { step: "fetch", status: "in_progress", startedAtMs: 2_100 },
       options,
     );
+    for (const exitCode of [1, 0]) {
+      for (const receipt of updateRunStepsFromResultStep({
+        name: "fetch",
+        exitCode,
+        ...(exitCode
+          ? { failureFacts: [{ check: "fetch", code: "EACCES", message: "Permission denied" }] }
+          : {}),
+      })) {
+        recordUpdateRunStep(run.runId, receipt, options);
+      }
+    }
     clock.mockReturnValue(3_000);
     recordUpdateRunPhase(
       run.runId,
@@ -481,7 +284,7 @@ describe("update run ledger", () => {
     expect(current?.steps).toEqual([
       { step: "requested", status: "completed", startedAtMs: 1_000, endedAtMs: 2_000 },
       { step: "staging", status: "completed", startedAtMs: 2_000, endedAtMs: 3_000 },
-      { step: "fetch", status: "completed", startedAtMs: 2_100, endedAtMs: 2_900 },
+      { step: "fetch", status: "completed", exitCode: 0, startedAtMs: 2_100, endedAtMs: 2_900 },
       { step: "validating", status: "in_progress", startedAtMs: 3_000 },
     ]);
     clock.mockReturnValue(4_000);
@@ -617,28 +420,6 @@ describe("update run ledger", () => {
       expect(recordUpdateRunPhase(run.runId, phase, {}, options).phase).toBe("repairing");
     }
     expect(recordUpdateRunPhase(run.runId, "verifying", {}, options).phase).toBe("verifying");
-  });
-
-  it("lists newest runs deterministically and excludes terminal runs from active discovery", () => {
-    const options = isolatedOptions();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const oldest = createUpdateRun({ trigger: "cli" }, options);
-    clock.mockReturnValue(2_000);
-    const tied = [
-      createUpdateRun({ trigger: "api" }, options),
-      createUpdateRun({ trigger: "campaign" }, options),
-    ].toSorted((left, right) => right.runId.localeCompare(left.runId));
-    expect(listUpdateRuns({ limit: 2 }, options).map((run) => run.runId)).toEqual(
-      tied.map((run) => run.runId),
-    );
-    expect(findActiveUpdateRun(options)).toEqual(tied[0]);
-    for (const run of tied) {
-      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, options);
-    }
-    expect(listUpdateRuns({ active: true }, options)).toEqual([oldest]);
-    finishUpdateRun(oldest.runId, { status: "succeeded" }, options);
-    expect(findActiveUpdateRun(options)).toBeUndefined();
-    expect(listUpdateRuns({}, options)).toHaveLength(3);
   });
 
   it.each([

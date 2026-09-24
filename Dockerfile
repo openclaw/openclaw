@@ -76,6 +76,7 @@ COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
 COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
+COPY cli-root-options.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs ./
 COPY node-host-launcher.mjs ./
 COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
@@ -281,6 +282,7 @@ COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-sqlite.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-update.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
+COPY --from=runtime-assets --chown=node:node /app/cli-root-options.mjs /app/gateway-run-argv.mjs /app/gateway-shutdown-budget.mjs ./
 COPY --from=runtime-assets --chown=node:node /app/node-host-launcher.mjs .
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
 COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}

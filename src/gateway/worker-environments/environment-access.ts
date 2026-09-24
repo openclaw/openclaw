@@ -106,6 +106,20 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   const identityResolverFor = options.identityResolverFor;
   const serviceError = options.serviceError;
   const withLock = options.withLock;
+  let desktopEnabled = options.getConfig().cloudWorkers?.desktop === true;
+  let desktopPolicy = new AbortController();
+
+  const requireDesktopPolicy = (operation: "observe" | "launch", policy: AbortController) => {
+    if (options.getConfig().cloudWorkers?.desktop !== true) {
+      throw serviceError(
+        "invalid_state",
+        `worker desktop ${operation} is disabled; enable the Desktop lab in Control UI Settings -> Labs (config: cloudWorkers.desktop)`,
+      );
+    }
+    if (policy.signal.aborted) {
+      throw serviceError("invalid_state", "Worker desktop policy changed; retry the request");
+    }
+  };
 
   const requireCurrentRecord = (environmentId: string) => {
     if (options.isStopping()) {
@@ -136,7 +150,9 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
 
   const project = (record: WorkerEnvironmentRecord) => {
     const desktopAvailable =
-      inState(record, "ready", "idle", "attached") && record.desktop !== null;
+      options.getConfig().cloudWorkers?.desktop === true &&
+      inState(record, "ready", "idle", "attached") &&
+      record.desktop !== null;
     const nodeTunnelStatus = nodeTunnels?.status(record.environmentId);
     return {
       ...record,
@@ -152,6 +168,21 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
           ? nodeTunnelStatus
           : (tunnels?.status(record.environmentId) ?? nodeTunnelStatus ?? ("stopped" as const)),
     };
+  };
+
+  const resolveSshIdentity = async (environmentId: string) => {
+    const record = store.get(environmentId);
+    if (!record) {
+      throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
+    }
+    if (!record.leaseId || !record.sshEndpoint) {
+      throw serviceError(
+        "invalid_state",
+        `Worker environment ${environmentId} has no active SSH endpoint`,
+      );
+    }
+    const provider = providerFor(record.providerId);
+    return await identityResolverFor(record, provider, record.leaseId)(record.sshEndpoint.keyRef);
   };
 
   const bindPreparedWorkspace = async (
@@ -348,20 +379,29 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     requester?: DesktopObserveRequester;
   }): Promise<WorkerDesktopObserveResult> => {
     const stopping = options.isStopping();
-    if (options.getConfig().cloudWorkers?.desktop !== true) {
-      throw serviceError(
-        "invalid_state",
-        "worker desktop observe is disabled; enable the Desktop lab in Control UI Settings -> Labs (config: cloudWorkers.desktop)",
-      );
-    }
+    const policy = desktopPolicy;
+    const assertPolicy = () => requireDesktopPolicy("observe", policy);
+    assertPolicy();
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
+    const requester: DesktopObserveRequester = {
+      ...request.requester,
+      signal: request.requester?.signal
+        ? AbortSignal.any([policy.signal, request.requester.signal])
+        : policy.signal,
+      isCurrent: () =>
+        !policy.signal.aborted &&
+        !options.isStopping() &&
+        options.getConfig().cloudWorkers?.desktop === true &&
+        request.requester?.isCurrent() !== false,
+    };
     let startup: ReturnType<WorkerTunnelManager["desktop"]["acquire"]> | undefined;
     let nodeStartup: ReturnType<WorkerNodeDesktopCarrier["observe"]> | undefined;
     let ownerEpoch: number | undefined;
     let canResize = false;
     await withLock(request.environmentId, async () => {
+      assertPolicy();
       const { record, desktop, leaseId } = requireDesktopRecord(request.environmentId);
       ownerEpoch = record.ownerEpoch;
       // Node observation remains usable without its provisioning plugin. Missing
@@ -389,14 +429,16 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         nodeStartup = nodeDesktop.observe({
           record,
           control: request.control,
-          requester: request.requester,
+          requester,
         });
         return;
       }
       throw serviceError("invalid_state", "Worker environment has no desktop transport");
     });
     if (nodeStartup) {
-      return { ...(await nodeStartup), ...(canResize ? { canResize } : {}) };
+      const observed = await nodeStartup;
+      assertPolicy();
+      return { ...observed, ...(canResize ? { canResize } : {}) };
     }
     if (!startup || ownerEpoch === undefined) {
       throw serviceError("invalid_state", "Worker desktop tunnel failed to start");
@@ -404,11 +446,12 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     const acquired = await startup;
     const { DESKTOP_OBSERVE_PATH, mintDesktopObserverToken } =
       await import("../desktop/observe-bridge.js");
+    assertPolicy();
     const minted = mintDesktopObserverToken({
       sourceKey: request.environmentId,
       ownerEpoch,
       control: request.control,
-      requester: request.requester,
+      requester,
       attachment: acquired.attachment,
       nowMs: now(),
     });
@@ -427,16 +470,14 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     app: "browser" | "terminal";
   }): Promise<WorkerDesktopLaunchResult> => {
     const stopping = options.isStopping();
-    if (options.getConfig().cloudWorkers?.desktop !== true) {
-      throw serviceError(
-        "invalid_state",
-        "worker desktop launch is disabled; enable the Desktop lab in Control UI Settings -> Labs (config: cloudWorkers.desktop)",
-      );
-    }
+    const policy = desktopPolicy;
+    const assertPolicy = () => requireDesktopPolicy("launch", policy);
+    assertPolicy();
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
     const requireLaunchable = () => {
+      assertPolicy();
       const { record, desktop, leaseId } = requireDesktopRecord(request.environmentId);
       const app = desktop.apps?.find((candidate) => candidate.id === request.app);
       if (!app) {
@@ -515,22 +556,36 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     return { app: request.app, status: "ready" };
   };
 
-  const stopTunnelOwners = async (stops: Array<Promise<void> | undefined>): Promise<void> => {
-    const results = await Promise.allSettled(stops.filter((stop) => stop !== undefined));
-    const failure = results.find((result) => result.status === "rejected");
-    if (failure) {
-      throw failure.reason;
-    }
-  };
-
   const stopTunnel = async (environmentId: string, ownerEpoch?: number): Promise<void> => {
     await withLock(environmentId, async () =>
-      stopTunnelOwners([
+      joinWorkerTunnelStops([
         tunnels?.stop(environmentId, ownerEpoch),
         nodeTunnels?.stop(environmentId, ownerEpoch),
         nodeDesktop?.stop(environmentId, ownerEpoch),
       ]),
     );
+  };
+
+  const reconcileDesktopPolicy = async (): Promise<void> => {
+    const enabled = options.getConfig().cloudWorkers?.desktop === true;
+    if (enabled && desktopEnabled) {
+      return;
+    }
+    if (enabled !== desktopEnabled) {
+      desktopEnabled = enabled;
+      if (enabled) {
+        desktopPolicy.abort();
+        desktopPolicy = new AbortController();
+      }
+    }
+    if (!enabled) {
+      desktopPolicy.abort();
+      // The registry also owns host and paired-node desktops; stop only worker sources.
+      await joinWorkerTunnelStops([
+        ...store.list().map((record) => tunnels?.desktop.stop(record.environmentId)),
+        nodeDesktop?.stopAll(),
+      ]);
+    }
   };
 
   return {
@@ -543,9 +598,11 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     list: () => store.list().map(project),
     observeDesktop,
     project,
+    reconcileDesktopPolicy,
+    resolveSshIdentity,
     startTunnel,
     stopAllTunnels: () =>
-      stopTunnelOwners([tunnels?.stopAll(), nodeTunnels?.stopAll(), nodeDesktop?.stopAll()]),
+      joinWorkerTunnelStops([tunnels?.stopAll(), nodeTunnels?.stopAll(), nodeDesktop?.stopAll()]),
     stopTunnel,
   };
 }

@@ -115,10 +115,10 @@ async function withDiscordTlsFixture<T>(
   );
 }
 
-async function listenOnLoopback(server: Server): Promise<number> {
+async function listenOnLoopback(server: Server, host = "127.0.0.1"): Promise<number> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, host, () => {
       server.off("error", reject);
       const address = server.address();
       if (address === null || typeof address === "string") {
@@ -329,7 +329,7 @@ describe("SSRF external proxy routing", () => {
     target = null;
   });
 
-  it("routes normal HTTP and WebSocket egress through an operator-managed proxy even when NO_PROXY includes loopback", async () => {
+  it("keeps runtime loopback HTTP and WebSocket requests direct with managed proxy enabled", async () => {
     target = createServer((_req, res) => {
       res.writeHead(218, { "content-type": "text/plain" });
       res.end("from loopback target");
@@ -349,7 +349,7 @@ describe("SSRF external proxy routing", () => {
       ws.close(1000, "done");
     });
     const targetPort = await listenOnLoopback(target);
-    const globalFetchTargetPort = await listenOnLoopback(globalFetchTarget);
+    const globalFetchTargetPort = await listenOnLoopback(globalFetchTarget, "::1");
     const wsTargetPort = await listenOnLoopback(wsTarget);
     const gatewayBypassWsTargetPort = await listenOnLoopback(gatewayBypassWsTarget);
 
@@ -480,8 +480,8 @@ describe("SSRF external proxy routing", () => {
         ...process.env,
         OPENCLAW_PROXY_URL: `http://127.0.0.1:${proxyPort}`,
         OPENCLAW_TEST_TARGET_URL: `http://127.0.0.1:${targetPort}/private-metadata`,
-        OPENCLAW_TEST_GLOBAL_FETCH_TARGET_URL: `http://127.0.0.1:${globalFetchTargetPort}/global-fetch-metadata`,
-        OPENCLAW_TEST_NODE_HTTP_TARGET_URL: `http://127.0.0.1:${targetPort}/node-http-metadata`,
+        OPENCLAW_TEST_GLOBAL_FETCH_TARGET_URL: `http://[::1]:${globalFetchTargetPort}/global-fetch-metadata`,
+        OPENCLAW_TEST_NODE_HTTP_TARGET_URL: `http://localhost:${targetPort}/node-http-metadata`,
         OPENCLAW_TEST_EXPLICIT_AGENT_TARGET_URL: `http://127.0.0.1:${targetPort}/explicit-agent`,
         OPENCLAW_TEST_NODE_HTTPS_TARGET_URL: `https://127.0.0.1:${httpsLikeTargetPort}/https-connect-proof`,
         OPENCLAW_TEST_WS_TARGET_URL: `ws://127.0.0.1:${wsTargetPort}/websocket-proxied`,
@@ -498,15 +498,7 @@ describe("SSRF external proxy routing", () => {
     expect(child.stdout).toContain('"nodeHttp":{"status":218');
     expect(child.stdout).toContain('"explicitAgent":{"status":218');
     expect(child.stdout).toContain('"body":"from loopback target"');
-    expect(seenConnectTargets).toContain(`127.0.0.1:${wsTargetPort}`);
-    expect(seenConnectTargets).toContain(`127.0.0.1:${httpsLikeTargetPort}`);
-    expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/private-metadata`);
-    expect(seenConnectTargets).toContain(
-      `http://127.0.0.1:${globalFetchTargetPort}/global-fetch-metadata`,
-    );
-    expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/node-http-metadata`);
-    expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/explicit-agent`);
-    expect(seenConnectTargets).not.toContain(`127.0.0.1:${gatewayBypassWsTargetPort}`);
+    expect(seenConnectTargets).toEqual(["gateway.example.com:443"]);
   });
 
   it("preserves the target TLS hostname for Node HTTPS requests through the managed proxy", async () => {

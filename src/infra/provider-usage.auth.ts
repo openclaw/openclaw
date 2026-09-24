@@ -42,6 +42,7 @@ export type ProviderAuth = {
 type AuthStore = ReturnType<typeof ensureAuthProfileStore>;
 
 type UsageAuthState = {
+  signal?: AbortSignal;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   agentDir?: string;
@@ -64,6 +65,7 @@ function resolveProviderApiKeyFromConfig(params: {
   providerIds: string[];
   envDirect?: Array<string | undefined>;
 }): string | undefined {
+  params.state.signal?.throwIfAborted();
   const envDirect = params.envDirect?.map(normalizeSecretInput).find(Boolean);
   if (envDirect) {
     return envDirect;
@@ -219,7 +221,9 @@ async function resolveProviderApiKeyCandidatesFromConfigAndStore(params: {
         profileId,
         agentDir: params.state.agentDir,
       });
+      params.state.signal?.throwIfAborted();
     } catch {
+      params.state.signal?.throwIfAborted();
       // Preserve the remaining credential candidates when one SecretRef fails.
       continue;
     }
@@ -299,6 +303,7 @@ async function resolveOAuthToken(params: {
   provider: string;
   excludeProfileIds?: string[];
 }): Promise<ProviderAuth | null> {
+  params.state.signal?.throwIfAborted();
   if (!params.state.allowAuthProfileStore) {
     return null;
   }
@@ -328,6 +333,7 @@ async function resolveOAuthToken(params: {
         profileId,
         agentDir: params.state.agentDir,
       });
+      params.state.signal?.throwIfAborted();
       if (!resolved) {
         continue;
       }
@@ -352,6 +358,7 @@ async function resolveOAuthToken(params: {
         ...(cred.email ? { email: cred.email } : {}),
       };
     } catch {
+      params.state.signal?.throwIfAborted();
       // ignore
     }
   }
@@ -368,6 +375,7 @@ async function resolveProviderUsageAuthViaPlugin(params: {
     config: params.state.cfg,
     env: params.state.env,
     context: {
+      signal: params.state.signal,
       config: params.state.cfg,
       agentDir: params.state.agentDir,
       env: params.state.env,
@@ -486,6 +494,7 @@ function hasAuthProfileCredentialSource(params: {
 }
 
 export async function resolveProviderAuths(params: {
+  signal?: AbortSignal;
   providers: UsageProviderId[];
   auth?: ProviderAuth[];
   getStore?: () => AuthStore;
@@ -495,11 +504,13 @@ export async function resolveProviderAuths(params: {
   env?: NodeJS.ProcessEnv;
   onError?: (provider: UsageProviderId, error: unknown) => void;
 }): Promise<ProviderAuth[]> {
+  params.signal?.throwIfAborted();
   if (params.auth) {
     return params.auth;
   }
 
   const stateBase = {
+    signal: params.signal,
     cfg: params.config ?? getRuntimeConfig(),
     env: params.env ?? process.env,
     agentDir: params.agentDir,
@@ -522,6 +533,7 @@ export async function resolveProviderAuths(params: {
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {
+    params.signal?.throwIfAborted();
     try {
       const directCredentialState = { ...stateBase, allowAuthProfileStore: false };
       const credentialProviderIds = resolveUsageCredentialProviderIds({
@@ -561,6 +573,7 @@ export async function resolveProviderAuths(params: {
           state,
           provider,
         });
+        params.signal?.throwIfAborted();
         if (pluginAuth.auth) {
           auths.push(pluginAuth.auth);
           continue;
@@ -573,10 +586,12 @@ export async function resolveProviderAuths(params: {
         state,
         provider,
       });
+      params.signal?.throwIfAborted();
       if (fallbackAuth) {
         auths.push(fallbackAuth);
       }
     } catch (error) {
+      params.signal?.throwIfAborted();
       if (!params.onError) {
         throw error;
       }

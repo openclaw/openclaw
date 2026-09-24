@@ -24,6 +24,8 @@ type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "s
   Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
 
 type RuntimeWriteConfigOptions = {
+  /** Revalidate caller authority at guarded publication; accepted writes still settle. */
+  assertCurrent?: () => void;
   envSnapshotForRestore?: Record<string, string | undefined>;
   expectedConfigPath?: string;
   unsetPaths?: string[][];
@@ -331,6 +333,7 @@ type RuntimeRunEmbeddedAgent = (
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
+  decisions: import("../../decisions/types.js").DecisionRuntimeV1;
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */
     current: () => DeepReadonly<import("../../config/types.openclaw.js").OpenClawConfig>;

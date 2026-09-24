@@ -22,7 +22,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { probePortalReachable, type PortalReachability } from "./portal-reachability.ts";
-import { resolvePortalUrl } from "./portal-url.ts";
+import { portalNeedsNewTab, portalNeedsRemoteIngress } from "./portal-url.ts";
 import "./portals.css";
 
 registerPortalsEnglish();
@@ -32,7 +32,7 @@ const PORTAL_FRAME_SANDBOX =
 
 type PortalProbeState = {
   key: string;
-  status: "probing" | PortalReachability;
+  status: "probing" | "ingress-required" | "new-tab-required" | PortalReachability;
 };
 
 class PortalsPage extends OpenClawLightDomElement {
@@ -257,24 +257,25 @@ class PortalsPage extends OpenClawLightDomElement {
     }
   }
 
-  private portalUrl(portal: PortalSummary, tokenQuery: string): string {
-    return resolvePortalUrl(
-      { ...portal, tokenQuery },
-      this.context.gateway.connection.gatewayUrl,
-      window.location.origin,
-    );
-  }
-
   private ensurePortalProbe(portal: PortalSummary, force = false) {
-    const tokenQuery = portal.tokenQuery;
-    if (!tokenQuery) {
+    if (!portal.tokenQuery || !portal.url) {
       this.portalProbeGeneration += 1;
       this.portalProbeState = null;
       return;
     }
-    const url = this.portalUrl(portal, tokenQuery);
+    const url = portal.url;
     const key = `${portal.id}\u0000${url}`;
     if (!force && this.portalProbeState?.key === key) {
+      return;
+    }
+    if (portalNeedsRemoteIngress(url, this.context.gateway.connection.gatewayUrl)) {
+      this.portalProbeGeneration += 1;
+      this.portalProbeState = { key, status: "ingress-required" };
+      return;
+    }
+    if (portalNeedsNewTab(url, location.href)) {
+      this.portalProbeGeneration += 1;
+      this.portalProbeState = { key, status: "new-tab-required" };
       return;
     }
     const cached = force ? undefined : this.portalProbeCache.get(key);
@@ -286,8 +287,8 @@ class PortalsPage extends OpenClawLightDomElement {
     const generation = ++this.portalProbeGeneration;
     this.portalProbeState = { key, status: "probing" };
     void probePortalReachable(url).then((reachability) => {
-      this.portalProbeCache.set(key, reachability);
       if (generation === this.portalProbeGeneration && this.portalProbeState?.key === key) {
+        this.portalProbeCache.set(key, reachability);
         this.portalProbeState = { key, status: reachability };
       }
     });
@@ -405,7 +406,7 @@ class PortalsPage extends OpenClawLightDomElement {
   }
 
   private renderPortal(portal: PortalSummary) {
-    if (!portal.tokenQuery) {
+    if (!portal.tokenQuery || !portal.url) {
       return html`
         <section class="portals-preview">
           <div class="portals-preview__notice" role="status">
@@ -417,7 +418,7 @@ class PortalsPage extends OpenClawLightDomElement {
         </section>
       `;
     }
-    const portalUrl = this.portalUrl(portal, portal.tokenQuery);
+    const portalUrl = portal.url;
     const displayUrl = new URL(portalUrl);
     displayUrl.search = "";
     const frameKey = `${portal.id}\u0000${portalUrl}`;
@@ -460,13 +461,29 @@ class PortalsPage extends OpenClawLightDomElement {
                   <div class="portals-empty__title">${t("portalsPage.loading")}</div>
                 </div>
               `
-            : probeStatus === "unreachable"
+            : probeStatus === "unreachable" ||
+                probeStatus === "ingress-required" ||
+                probeStatus === "new-tab-required"
               ? html`
                   <div class="portals-preview__notice" role="status">
                     <div class="portals-preview__notice-title">
-                      ${t("portalsPage.unreachableTitle")}
+                      ${t(
+                        probeStatus === "new-tab-required"
+                          ? "portalsPage.newTabRequiredTitle"
+                          : probeStatus === "ingress-required"
+                            ? "portalsPage.ingressRequiredTitle"
+                            : "portalsPage.unreachableTitle",
+                      )}
                     </div>
-                    <p>${t("portalsPage.unreachableBody")}</p>
+                    <p>
+                      ${t(
+                        probeStatus === "new-tab-required"
+                          ? "portalsPage.newTabRequiredBody"
+                          : probeStatus === "ingress-required"
+                            ? "portalsPage.ingressRequiredBody"
+                            : "portalsPage.unreachableBody",
+                      )}
+                    </p>
                     <a
                       class="portals-preview__notice-url"
                       href=${portalUrl}

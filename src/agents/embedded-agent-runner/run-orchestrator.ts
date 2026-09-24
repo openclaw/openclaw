@@ -12,6 +12,7 @@ import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
+  assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -436,7 +437,9 @@ async function runEmbeddedAgentInternal(
                 sessionId: params.sessionId,
                 tracker: startupStages,
               });
-              params.onExecutionStarted?.({ lifecycleGeneration });
+              await params.onExecutionStarted?.({ lifecycleGeneration });
+              throwIfAborted();
+              assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
               notifyExecutionPhase("runner_entered");
               const canonicalWorkspace = resolveUserPath(
                 resolveAgentWorkspaceDir(preparedModelRuntime.config, preparedAgentId),

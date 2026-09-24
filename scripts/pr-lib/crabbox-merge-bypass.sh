@@ -47,15 +47,10 @@ verify_crabbox_admin_merge_bypass() {
   rm -rf "$proof_dir"
   mkdir -p "$proof_dir"
   read_required_checks_for_crabbox_bypass "$pr" "$proof_dir/required-checks.json" || return 1
-  # A relay's REST /user cannot establish the mutation writer's admin authority.
-  pr_gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer >"$proof_dir/actor.json" || return 1
-  pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/pulls/$pr" >"$proof_dir/pull-request.json" || return 1
   local actor
-  actor=$(jq -r '.login // empty' "$proof_dir/actor.json")
-  if [ -z "$actor" ]; then
-    echo "Crabbox merge bypass failed: authenticated actor login is missing." >&2
-    return 1
-  fi
+  actor=$(pr_gh_writer_login) || return 1
+  jq -n --arg login "$actor" '{login:$login}' >"$proof_dir/actor.json" || return 1
+  pr_gh_plain "${api_read[@]}" "repos/$repo_nwo/pulls/$pr" >"$proof_dir/pull-request.json" || return 1
 
   if ! pr_gh_plain "${api_read[@]}" --paginate --slurp \
     "repos/$repo_nwo/commits/$head_sha/check-runs?filter=latest&per_page=100" \

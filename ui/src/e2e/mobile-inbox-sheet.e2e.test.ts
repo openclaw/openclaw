@@ -3,7 +3,11 @@ import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -33,6 +37,89 @@ async function setTheme(page: import("playwright").Page, theme: "dark" | "light"
 }
 
 suite.define(() => {
+  it("closes both mobile surfaces for Inbox destinations but keeps local actions in place", async () => {
+    await suite.withPage(
+      { viewport, reducedMotion: "reduce", serviceWorkers: "block" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          presenceUsers: [
+            {
+              self: true,
+              id: "viewer",
+              identity: { type: "profile", id: "viewer" },
+              name: "Viewer",
+            },
+          ],
+          featureMethods: [...defaultControlUiFeatureMethods, "mentions.list", "mentions.dismiss"],
+          methodResponses: {
+            "mentions.list": {
+              gatewayInstanceId: "e2e-gateway-boot",
+              revision: 1,
+              items: [
+                {
+                  id: "mobile-mention",
+                  senderProfileId: "riley",
+                  senderLabel: "Riley",
+                  sessionKey: "agent:main:main",
+                  agentId: "main",
+                  sessionTitle: "Release checklist",
+                  messageId: "message-1",
+                  createdAt: 1_000,
+                  expiresAt: 10_000,
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "activity");
+        const panel = page.locator("#sidebar-issues-panel");
+        const drawer = page.locator(".nav-drawer");
+        const openInbox = async () => {
+          await page.getByRole("button", { name: "Expand sidebar" }).click();
+          await drawer.waitFor();
+          await page.locator(".sidebar-issues-button:visible").click();
+          await panel.waitFor();
+        };
+        const expectClosed = async () => {
+          await panel.waitFor({ state: "hidden" });
+          await page.locator('.nav-drawer[aria-hidden="true"]').waitFor({ state: "attached" });
+        };
+        await openInbox();
+        await panel.getByRole("tab", { name: /Mentions/ }).click();
+        expect(await drawer.getAttribute("aria-hidden")).toBeNull();
+        await panel.getByRole("button", { name: "Close", exact: true }).click();
+        await panel.waitFor({ state: "hidden" });
+        expect(await drawer.getAttribute("aria-hidden")).toBeNull();
+        await page.locator(".sidebar-issues-button:visible").click();
+        await panel.locator('[data-mention-id="mobile-mention"] a').click();
+        await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
+        await expectClosed();
+        // An Inbox link to the already-open session must close the drawer too.
+        await openInbox();
+        await panel.locator('[data-mention-id="mobile-mention"] a').click();
+        await expectClosed();
+        expect(await gateway.getRequests("mentions.dismiss")).toHaveLength(0);
+        await gateway.emitGatewayEvent("exec.approval.requested", {
+          id: "mobile-approval",
+          createdAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+          request: { command: "pnpm test", agentId: "main", sessionKey: "agent:main:main" },
+        });
+        await openInbox();
+        await panel.locator('[data-approval-id="mobile-approval"] a').click();
+        await expectClosed();
+        expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
+        await openInbox();
+        await panel.getByRole("link", { name: "Notification settings" }).click();
+        await expectClosed();
+        await waitForControlUiRoute(page, {
+          pathname: "/settings/notifications",
+          routeId: "notifications",
+        });
+      },
+    );
+  });
+
   it("rises from the bottom with a continuous header and compact close control", async () => {
     const results: Array<{
       closeBackground: string;

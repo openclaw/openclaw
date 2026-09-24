@@ -84,10 +84,16 @@ describe("deduplicateBlockSentMedia", () => {
         text: "hey",
         mediaUrl,
         mediaUrls: ["/tmp/cat.jpg", "/tmp/bird.jpg"],
+        attachments: [{ name: "Cat.jpg" }, { name: "Bird.jpg" }, { name: "Dog.jpg" }],
       };
       const sent = new Set(["/tmp/cat.jpg"]);
       const result = deduplicateBlockSentMedia(payload, sent);
-      expect(result).toEqual({ text: "hey", mediaUrl, mediaUrls: ["/tmp/bird.jpg"] });
+      expect(result).toEqual({
+        text: "hey",
+        mediaUrl,
+        mediaUrls: ["/tmp/bird.jpg"],
+        attachments: [{ name: "Bird.jpg" }, { name: "Dog.jpg" }],
+      });
     },
   );
 

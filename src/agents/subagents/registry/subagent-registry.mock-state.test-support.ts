@@ -19,7 +19,6 @@ import type {
   persistSubagentRunsToDiskOrThrow,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
 
@@ -98,15 +97,6 @@ export function createSubagentRegistryMockState() {
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
     runSubagentAnnounceFlow: vi.fn(async (): Promise<SubagentAnnounceFlowOutcome> => "delivered"),
-    maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
-      async (wakeParams: {
-        settledEntry: SubagentRunRecord;
-        completeBatch(batch: readonly SubagentRunRecord[]): void;
-      }) => {
-        wakeParams.completeBatch([wakeParams.settledEntry]);
-        return false;
-      },
-    ),
     getGlobalHookRunner: vi.fn(() => null),
     ensureContextEnginesInitialized: vi.fn(),
     loadAgentRuntimePluginRegistryHandle: vi.fn(),

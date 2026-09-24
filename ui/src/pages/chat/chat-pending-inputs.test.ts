@@ -80,6 +80,26 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it.each(["held", "failed", "waiting-reconnect"] as const)(
+    "describes interrupted input with a %s browser owner accurately",
+    (sendState) => {
+      const items = buildPendingInputItems([{ ...input, state: "interrupted" }], undefined, [
+        {
+          id: "retained-input",
+          text: "Retained input",
+          createdAt: 1,
+          sendRunId: input.runId,
+          sendState,
+        },
+      ]);
+      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
+        sendState === "waiting-reconnect"
+          ? "Interrupted by a Gateway restart. This saved message will resume when the session is ready."
+          : "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+      ]);
+    },
+  );
+
   it("shows a durable receipt while an accepted input waits for workspace sync", () => {
     const queued = { ...input, state: "queued" as const };
 

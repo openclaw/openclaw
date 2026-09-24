@@ -39,6 +39,7 @@ function claimPluginDiagnostic(seen: Set<string>, diagnostic: WorkspacePluginDia
     diagnostic.level,
     diagnostic.pluginId ?? "",
     diagnostic.code ?? "",
+    diagnostic.errorCode ?? "",
     diagnostic.source ?? "",
     diagnostic.message,
   ]
@@ -224,8 +225,24 @@ function pluginDiagnosticToHealthFinding(
     ...(diagnostic.pluginId ? { path: `plugins.entries.${diagnostic.pluginId}` } : {}),
     ...(diagnostic.pluginId ? { target: diagnostic.pluginId } : {}),
     ...(diagnostic.source ? { source: diagnostic.source } : {}),
+    ...(diagnostic.errorCode ? { errorCode: diagnostic.errorCode } : {}),
     ...(diagnostic.code ? { requirement: diagnostic.code } : { requirement: "plugin-diagnostic" }),
   };
+}
+
+/** Runtime failures belong to this Doctor run, independently of metadata-only inventory. */
+export function collectPluginLoadHealthFindings(
+  diagnostics: readonly WorkspacePluginDiagnostic[],
+): HealthFinding[] {
+  const seen = new Set<string>();
+  return diagnostics
+    .filter((diagnostic) => claimPluginDiagnostic(seen, diagnostic))
+    .map((diagnostic) =>
+      pluginDiagnosticToHealthFinding(
+        diagnostic,
+        `Plugin ${diagnostic.pluginId}: ${diagnostic.message}${diagnostic.errorCode ? ` [${diagnostic.errorCode}]` : ""} (${diagnostic.source})`,
+      ),
+    );
 }
 
 function taskFlowRecoveryToHealthFinding(finding: TaskFlowRecoveryFinding): HealthFinding {

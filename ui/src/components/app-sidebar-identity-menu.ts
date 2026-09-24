@@ -37,7 +37,7 @@ type SidebarIdentityMenuParams = {
   gatewayVersion: string | null;
   updateAttentionDismissed: boolean;
   profileViewer?: PresenceViewer;
-  offline: boolean;
+  canRetryConnection: boolean;
   themeMode: ThemeMode;
   triggerWidth: number;
   onTabAway: () => void;
@@ -278,7 +278,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       ${renderSidebarHelpMenu()}
       ${
-        params.offline
+        params.canRetryConnection
           ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>
               <wa-dropdown-item
                 class="sidebar-customize-menu__item sidebar-identity-menu__retry"

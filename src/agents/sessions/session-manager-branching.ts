@@ -1,8 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { replaceSessionWithBranchedTranscript } from "../../config/sessions/session-accessor.js";
-import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
+import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
-import type { SessionManagerPersistenceTarget } from "./session-manager-core.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import type {
@@ -11,6 +10,7 @@ import type {
   SessionEntry,
   SessionHeader,
 } from "./session-manager-types.js";
+import type { SessionManagerPersistenceTarget } from "./session-manager-view-types.js";
 
 export class SessionManagerBranching extends SessionManagerEntries {
   private collectBranchedSessionPath(leafId: string): {

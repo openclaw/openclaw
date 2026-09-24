@@ -167,6 +167,7 @@ function runIdentityVerification(params: {
 function runAdvisoryStatus(overrides: Record<string, string> = {}) {
   const runId = "123456";
   const runAttempt = "1";
+  const effectiveRunAttempt = overrides.GITHUB_RUN_ATTEMPT ?? runAttempt;
   const targetSha = "a".repeat(40);
   const workdir = tempDirs.make("openclaw-telegram-advisory-status-");
   const githubOutput = join(workdir, "github-output");
@@ -183,6 +184,7 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
       BUILD_STATUS: "success",
       CANDIDATE_ARTIFACT_DIGEST: "d".repeat(64),
       CANDIDATE_ARTIFACT_ID: "123",
+      CANDIDATE_RUN_ATTEMPT: runAttempt,
       CANDIDATE_VERSION: "2026.7.1-beta.3",
       EVIDENCE_ARTIFACT_DIGEST: "e".repeat(64),
       EVIDENCE_ARTIFACT_ID: "456",
@@ -211,7 +213,7 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
     workdir,
     ".artifacts",
     "release-check-status",
-    `qa_live_telegram_release_checks-${runId}-${runAttempt}.env`,
+    `qa_live_telegram_release_checks-${runId}-${effectiveRunAttempt}.env`,
   );
   const evidenceFile = statusFile.replace(/\.env$/u, ".json");
   return {
@@ -444,6 +446,10 @@ describe("release Telegram QA workflow", () => {
     const runJob = job("run_telegram");
     expect(runJob.environment).toBe("qa-live-shared");
     expect(runJob["timeout-minutes"]).toBe(60);
+    const advisoryStatusStep = step("advisory_status", "Record advisory status");
+    expect(advisoryStatusStep.env?.CANDIDATE_RUN_ATTEMPT).toBe(
+      "${{ needs.build_candidate.outputs.run_attempt }}",
+    );
     expect(requireRun("advisory_status", "Record advisory status").trim()).toBe(
       "set -euo pipefail\nnode scripts/release-telegram-qa.mjs advisory-status",
     );
@@ -956,6 +962,23 @@ describe("release Telegram QA workflow", () => {
     expect(failure.outputs.status).toBe("failure");
     expect(failure.evidence.candidateArtifact).toMatchObject({ id: "123" });
     expect(failure.statusFile).toContain("build:failure");
+  });
+
+  it("records reused candidate and fresh evidence attempts independently", () => {
+    const runId = "123456";
+    const targetSha = "a".repeat(40);
+    const rerun = runAdvisoryStatus({
+      GITHUB_RUN_ATTEMPT: "2",
+      EVIDENCE_ARTIFACT_NAME: `release-qa-live-telegram-${runId}-2-${targetSha}`,
+    });
+
+    expect(rerun.result.status, rerun.result.stderr).toBe(0);
+    expect(rerun.evidence).toMatchObject({
+      runAttempt: 2,
+      candidateArtifact: { runAttempt: 1 },
+      evidenceArtifact: { runAttempt: 2 },
+    });
+    expect(rerun.statusFile).toContain("run_attempt=2");
   });
 
   it.runIf(process.platform === "linux")("retains only bounded, allowlisted diagnostics", () => {

@@ -8,6 +8,7 @@ import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-eve
 
 let transcriptUpdateHandler: ((update: InternalSessionTranscriptUpdate) => void) | undefined;
 let authRevoked = false;
+let requestAuthorityCurrent = true;
 let gatewayConfig: {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
@@ -65,6 +66,7 @@ vi.mock("./http-utils.js", () => ({
     cfg: { gateway: {} },
     requestAuth: {
       trustDeclaredOperatorScopes: true,
+      hasCurrentClientAuthority: () => requestAuthorityCurrent,
       ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     },
     operatorScopes: ["operator.read"],
@@ -402,6 +404,7 @@ async function expectStreamClosedWithoutMessage(res: MockRes, text: string) {
 afterEach(() => {
   transcriptUpdateHandler = undefined;
   authRevoked = false;
+  requestAuthorityCurrent = true;
   authCheckCalls = 0;
   transcriptReadError = undefined;
   authenticatedUserProfile = undefined;
@@ -445,6 +448,8 @@ describe("session history SSE auth revocation", () => {
     { accept: "text/event-stream", change: "reset" },
     { accept: "application/json", change: "authentication" },
     { accept: "text/event-stream", change: "authentication" },
+    { accept: "application/json", change: "ingress policy" },
+    { accept: "text/event-stream", change: "ingress policy" },
   ] as const)(
     "withholds initial $accept history after $change during its read",
     async ({ accept, change }) => {
@@ -478,6 +483,8 @@ describe("session history SSE auth revocation", () => {
         } else if (change === "reset") {
           currentLifecycleRevision = "after-reset";
           currentSessionStartedAt = 2;
+        } else if (change === "ingress policy") {
+          requestAuthorityCurrent = false;
         } else {
           authRevoked = true;
         }

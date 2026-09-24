@@ -23,7 +23,6 @@ import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
 import { retryQueuedChatMessage, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { formatChatWorkContext } from "./chat-work-context.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
@@ -35,12 +34,45 @@ useChatSendBrowserFixture();
 describe("structured Goal admission", () => {
   const intent = { kind: "session-goal-start", version: 1, issuedAtMs: 1_788_000_000_000 } as const;
 
+  it("keeps an idle Goal behind an older queued message", async () => {
+    const host = makeChatHost({
+      chatRunId: "active-run",
+      chatMessage: "Start this objective after the queued work",
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: { key: "agent:main", hasActiveRun: false, status: "done" },
+        },
+        "chat.send": { status: "started", runId: "queued-run" },
+      },
+    });
+    await handleSendChat(host, "older queued input", { followUpMode: "queue" });
+    host.chatRunId = null;
+
+    await handleSendChat(host, undefined, { intent });
+
+    const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.[1]).toMatchObject({ message: "older queued input" });
+    expect(sends[0]?.[1]).not.toHaveProperty("intent");
+    expect(host.chatQueue).toContainEqual(
+      expect.objectContaining({
+        text: "Start this objective after the queued work",
+        intent,
+        sendAttempts: 0,
+      }),
+    );
+  });
+
   it.each(["pause the rollout", "/stop", "  /goal clear\nkeep   this literal  "])(
     "sends %j as an objective without command interpretation",
     async (objective) => {
       const host = makeChatHost({
         chatMessage: objective,
-        getWorkContext: () => "Ambient context must not become a Goal objective",
+        getWorkContext: () => ({
+          page: "chat",
+          title: "Ambient context must not become a Goal objective",
+        }),
         currentSessionId: "incarnation-a",
         chatDisplayedLeafEntryId: "leaf-a",
         requestHandlers: { "chat.send": { status: "started" } },
@@ -166,14 +198,14 @@ describe("human mention submission", () => {
         text: "Unselected @Other quote",
         senderLabel: "Reader",
       },
-      getWorkContext: () => "Unselected @Other work context",
+      getWorkContext: () => ({ page: "chat", title: "Unselected @Other work context" }),
       requestHandlers: { "chat.send": { status: "started" } },
     });
 
     await handleSendChat(host);
 
     const expected =
-      "> **Reader:** Unselected @Other quote\n\nUnselected @Other context\n\n🔎 @Alex please review\n\nUnselected @Other work context";
+      "> **Reader:** Unselected @Other quote\n\nUnselected @Other context\n\n🔎 @Alex please review";
     expect(findChatSendPayload(host)).toMatchObject({
       message: expected,
       mentions: [
@@ -253,33 +285,48 @@ describe("human mention submission", () => {
 });
 
 describe("Home work context admission", () => {
+  it("freezes the context with queued input rather than following navigation", async () => {
+    const context = { page: "chat", title: "Original work" };
+    const host = makeChatHost({
+      connected: false,
+      chatMessage: "Review this",
+      getWorkContext: () => context,
+    });
+    await handleSendChat(host);
+    context.title = "Later work";
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "Review this",
+      workContext: { page: "chat", title: "Original work" },
+    });
+  });
+
   it.each([true, false])(
     "sends an inspectable context only when included (%s)",
     async (included) => {
-      const text = formatChatWorkContext({
+      const context = {
         page: "chat",
         title: "Review parser",
         sessionKey: "agent:main:parser",
-      });
+      };
       const host = makeChatHost({
         chatMessage: "Explain this task",
-        getWorkContext: () => (included ? text : undefined),
+        getWorkContext: () => (included ? context : undefined),
         requestHandlers: { "chat.send": { status: "started" } },
       });
       await handleSendChat(host);
-      expect(findChatSendPayload(host).message).toBe(
-        included ? `Explain this task\n\n${text}` : "Explain this task",
-      );
+      expect(findChatSendPayload(host).message).toBe("Explain this task");
+      expect(findChatSendPayload(host).workContext).toEqual(included ? context : undefined);
       expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(
         "Explain this task",
       );
     },
   );
 
-  it.each(["/new", "/stop", "/review-this", ""])(
+  it.each(["/new", "/stop", "/review-this", "!status", "stop", "停止", ""])(
     "does not attach ambient context to %j",
     async (message) => {
-      const getWorkContext = vi.fn(() => "Unrelated work context");
+      const getWorkContext = vi.fn(() => ({ page: "chat", title: "Unrelated work context" }));
       const host = makeChatHost({
         chatMessage: message,
         getWorkContext,

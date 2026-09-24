@@ -15,10 +15,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { isSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
-import {
-  deliveryContextFromSession,
-  mergeDeliveryContext,
-} from "../../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,

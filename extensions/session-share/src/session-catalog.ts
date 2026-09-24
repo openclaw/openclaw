@@ -1,3 +1,7 @@
+import {
+  areDiagnosticsEnabledForProcess,
+  createSubsystemLogger,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -7,6 +11,7 @@ import {
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
 import { createSessionCatalogGitHubLinker } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sessionShareNodeBinding } from "./config.js";
 import {
   SESSION_SHARE_COMMANDS,
@@ -18,6 +23,72 @@ import { parseSessionSharePage, parseSessionShareTranscriptPage } from "./wire.j
 type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
 type GitHubLinker = ReturnType<typeof createSessionCatalogGitHubLinker>;
 type CatalogIdentity = NonNullable<NonNullable<SessionCatalogSession["createdActor"]>["identity"]>;
+
+const log = createSubsystemLogger("gateway/session-catalog");
+const nodeErrorCodes = new Set([
+  "TIMEOUT",
+  "NOT_CONNECTED",
+  "PAIRING_CHANGED",
+  "ROUTE_CHANGED",
+  "ABORTED",
+  "UNAVAILABLE",
+  "POLICY_CHANGED",
+  "APPROVAL_AUTHORITY_CLOSED",
+]);
+
+function observeCatalogPhase<T>(phase: "discovery" | "invoke", operation: () => Promise<T>) {
+  if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("warn")) {
+    return operation();
+  }
+  const started = performance.now();
+  const finish = (outcome: "resolved" | "rejected", error?: unknown) => {
+    try {
+      if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("warn")) {
+        return;
+      }
+      const elapsedMs = performance.now() - started;
+      if (elapsedMs < 1_000) {
+        return;
+      }
+      const details = asOptionalRecord(asOptionalRecord(error)?.details);
+      const nodeError = asOptionalRecord(details?.nodeError);
+      const nodeErrorCode = nodeError?.code;
+      log.warn("slow Session Share catalog phase", {
+        phase,
+        elapsedMs: Math.round(elapsedMs),
+        outcome,
+        ...(nodeError
+          ? {
+              nodeErrorCode:
+                typeof nodeErrorCode === "string" && nodeErrorCodes.has(nodeErrorCode)
+                  ? nodeErrorCode
+                  : "unknown",
+            }
+          : {}),
+        ...(typeof details?.nodeCommandDispatched === "boolean"
+          ? { nodeCommandDispatched: details.nodeCommandDispatched }
+          : {}),
+      });
+    } catch {
+      // A diagnostic sink must not replace the catalog result or error.
+    }
+  };
+  try {
+    return operation().then(
+      (value) => {
+        finish("resolved");
+        return value;
+      },
+      (error: unknown) => {
+        finish("rejected", error);
+        throw error;
+      },
+    );
+  } catch (error) {
+    finish("rejected", error);
+    throw error;
+  }
+}
 
 function namespaceIdentity(identity: CatalogIdentity, hostId: string): CatalogIdentity {
   // The receiver owns this namespace; the wire domain is untrusted and must not alias another node.
@@ -107,15 +178,17 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       if (cursor !== undefined) {
         sessionCatalogPaging.decodeCursor(cursor);
       }
-      const raw = await invoke(
-        node.nodeId,
-        SESSION_SHARE_LIST_COMMAND,
-        {
-          limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
-          ...(query.search ? { searchTerm: query.search } : {}),
-          ...(cursor !== undefined ? { cursor } : {}),
-        },
-        query.signal,
+      const raw = await observeCatalogPhase("invoke", () =>
+        invoke(
+          node.nodeId,
+          SESSION_SHARE_LIST_COMMAND,
+          {
+            limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
+            ...(query.search ? { searchTerm: query.search } : {}),
+            ...(cursor !== undefined ? { cursor } : {}),
+          },
+          query.signal,
+        ),
       );
       query.signal?.throwIfAborted();
       const page = parseSessionSharePage(raw);
@@ -156,7 +229,12 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       query.signal?.throwIfAborted();
       let nodes: CatalogNode[];
       try {
-        nodes = (await (query.listNodes?.() ?? api.runtime.nodes.list())).nodes;
+        nodes = (
+          await observeCatalogPhase(
+            "discovery",
+            () => query.listNodes?.() ?? api.runtime.nodes.list(),
+          )
+        ).nodes;
       } catch {
         query.signal?.throwIfAborted();
         return [];

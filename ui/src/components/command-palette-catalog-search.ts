@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type {
   AgentsListResult,
   CronJobsListResult,
+  CronCompactJob,
   GatewaySessionRow,
   SkillStatusReport,
 } from "../api/types.ts";
@@ -323,7 +324,7 @@ export async function loadCommandPaletteCatalogItems(params: {
       : null;
   const [agents, automations, skills, plugins, models] = await Promise.all([
     params.agents().catch(() => null),
-    requestIfAvailable<CronJobsListResult>("cron.list", {
+    requestIfAvailable<CronJobsListResult<CronCompactJob>>("cron.list", {
       includeDisabled: true,
       limit: 200,
       offset: 0,
@@ -355,7 +356,6 @@ export async function loadCommandPaletteCatalogItems(params: {
       icon: "calendarClock" as const,
       category: "automations" as const,
       routeId: "cron" as const,
-      description: job.description,
       searchText: [job.id, job.declarationKey, job.name, job.agentId].filter(Boolean).join(" "),
     })),
     ...(skills?.skills ?? []).map((skill) => ({

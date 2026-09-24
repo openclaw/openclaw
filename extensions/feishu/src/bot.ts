@@ -15,12 +15,11 @@ import {
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  createChannelHistoryWindow,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+  resolvePromptHistoryLimit,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   resolveDefaultGroupPolicy,
@@ -81,6 +80,7 @@ import {
   resolveFeishuReplyPolicy,
 } from "./policy.js";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
+import { shouldSendNoVisibleReplyFallback } from "./reply-delivery-result.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
@@ -97,27 +97,6 @@ export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-
-function shouldSendNoVisibleReplyFallback(dispatchResult: {
-  settledReceipt?: {
-    anyVisibleDelivered: boolean;
-    counts: { final: { failedBeforeSend: number } };
-  };
-  noVisibleReplyFallbackEligible?: boolean;
-  sendPolicyDenied?: boolean;
-  sourceReplyDeliveryMode?: string;
-}): boolean {
-  const emptyEligibleDispatch =
-    dispatchResult.noVisibleReplyFallbackEligible === true &&
-    dispatchResult.settledReceipt?.anyVisibleDelivered !== true;
-  const finalFailedBeforeSend =
-    (dispatchResult.settledReceipt?.counts.final.failedBeforeSend ?? 0) > 0;
-  return (
-    dispatchResult.sendPolicyDenied !== true &&
-    dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" &&
-    (emptyEligibleDispatch || finalFailedBeforeSend)
-  );
-}
 
 function isFeishuTopicSessionScope(
   scope: ReturnType<typeof resolveConfiguredFeishuGroupSessionScope>,
@@ -302,6 +281,7 @@ export async function handleFeishuMessage(params: {
   processingClaim?: FeishuMessageProcessingClaim;
   messageDedupeKey?: string;
   turnAdoptionLifecycle?: FeishuIngressLifecycle;
+  trackTask?: (task: Promise<void>) => void;
 }): Promise<void> {
   const {
     event,
@@ -505,9 +485,8 @@ export async function handleFeishuMessage(params: {
     log(`feishu[${account.accountId}]: detected @ forward request, targets: [${names}]`);
   }
 
-  const historyLimit = Math.max(
-    0,
-    feishuCfg?.historyLimit ?? cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+  const historyLimit = resolvePromptHistoryLimit(
+    feishuCfg?.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
   );
   const groupConfig = isGroup
     ? resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId })
@@ -1324,14 +1303,13 @@ export async function handleFeishuMessage(params: {
           mode: contextVisibilityMode,
           kind: "history",
         });
-        const relevantMessages =
-          (senderScoped
-            ? allowlistedMessages.filter(
-                (msg) =>
-                  msg.senderType === "app" ||
-                  (msg.senderId !== undefined && senderIds.has(msg.senderId.trim())),
-              )
-            : allowlistedMessages) ?? [];
+        const relevantMessages = senderScoped
+          ? allowlistedMessages.filter(
+              (msg) =>
+                msg.senderType === "app" ||
+                (msg.senderId !== undefined && senderIds.has(msg.senderId.trim())),
+            )
+          : allowlistedMessages;
 
         const threadStarterBody = rootMsg?.content ?? relevantMessages[0]?.content;
         const includeStarterInHistory = Boolean(rootMsg?.content || ctx.rootId);
@@ -1375,6 +1353,7 @@ export async function handleFeishuMessage(params: {
       const contextBinding = {
         agentId,
         sessionKey: agentSessionKey,
+        nativeChannelId: ctx.chatId,
         messageId: ctx.messageId,
         inboundEventKind: "user_request" as const,
       };
@@ -1564,6 +1543,7 @@ export async function handleFeishuMessage(params: {
         return;
       }
       const broadcastSettlement = createFeishuBroadcastIngressSettlement({
+        trackTask: params.trackTask,
         lifecycle: turnAdoptionLifecycle,
         replayClaim: broadcastClaim.kind === "claimed" ? broadcastClaim.handle : undefined,
         onReplayCommitError: (err) =>

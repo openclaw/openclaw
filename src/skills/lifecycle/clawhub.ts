@@ -1,5 +1,9 @@
 // ClawHub lifecycle facade: public API plus install/update coordination.
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
+import {
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { downloadClawHubSkillArchive } from "../../infra/clawhub-artifacts.js";
 import type { ClawHubTrustErrorCode } from "../../infra/clawhub-install-trust.js";
@@ -37,7 +41,6 @@ import { normalizeTrackedSkillSlug } from "./install-paths.js";
 
 export { readVerifiedClawHubSkillSourceUrl } from "./clawhub-install-core.js";
 export {
-  readLocalSkillCardContentSync,
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
 } from "./clawhub-status.js";
@@ -115,6 +118,13 @@ export async function preflightSkillFromClawHub(params: {
   logger?: Logger;
 }): Promise<ClawHubSkillInstallPreflightResult> {
   try {
+    const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
+    const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+    if (access && !access.clawHubSkills) {
+      throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
+    }
+    const preflightOwner =
+      access?.clawHubSkills?.preflightSkillOwnerState ?? preflightSkillOwnerState;
     const requested = parseRequestedClawHubSkillRef(params.slug);
     const resolved = await resolveInstallVersion({
       slug: requested.slug,
@@ -151,7 +161,7 @@ export async function preflightSkillFromClawHub(params: {
 
     if (params.expectedIntegrity) {
       const integrity = normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
-      const owner = await preflightSkillOwnerState({
+      const owner = await preflightOwner({
         workspaceDir: params.workspaceDir,
         requested,
         requestedLabel: params.slug,
@@ -176,7 +186,7 @@ export async function preflightSkillFromClawHub(params: {
           error: `Skill ${params.slug}@${params.version} did not resolve a valid artifact integrity.`,
         };
       }
-      const owner = await preflightSkillOwnerState({
+      const owner = await preflightOwner({
         workspaceDir: params.workspaceDir,
         requested,
         requestedLabel: params.slug,
@@ -226,10 +236,18 @@ export async function updateSkillsFromClawHub(params: {
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 }): Promise<UpdateClawHubSkillResult[]> {
-  const lock = await readClawHubSkillsLockfile(params.workspaceDir);
+  const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
+  const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+  if (access && !access.clawHubSkills) {
+    throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
+  }
+  const tracking = access?.clawHubSkills;
+  const lock = await (tracking?.readClawHubSkillsLockfile ?? readClawHubSkillsLockfile)(
+    params.workspaceDir,
+  );
   const slugs = params.slug
     ? [
-        await resolveRequestedUpdateSlug({
+        await (tracking?.resolveRequestedUpdateSlug ?? resolveRequestedUpdateSlug)({
           workspaceDir: params.workspaceDir,
           requestedSlug: params.slug,
           lock,
@@ -238,7 +256,7 @@ export async function updateSkillsFromClawHub(params: {
     : Object.keys(lock.skills).map((slug) => normalizeTrackedSkillSlug(slug));
   const results: UpdateClawHubSkillResult[] = [];
   for (const slug of slugs) {
-    const tracked = await resolveTrackedUpdateTarget({
+    const tracked = await (tracking?.resolveTrackedUpdateTarget ?? resolveTrackedUpdateTarget)({
       workspaceDir: params.workspaceDir,
       slug,
       lock,
@@ -255,7 +273,9 @@ export async function updateSkillsFromClawHub(params: {
         if (!params.force) {
           // Carry the verified digests into the install transaction. Re-resolving the
           // live path after download would leave another check-to-backup race.
-          const local = await guardTrackedSkillLocalState({
+          const local = await (
+            tracking?.guardTrackedSkillLocalState ?? guardTrackedSkillLocalState
+          )({
             workspaceDir: params.workspaceDir,
             slug: tracked.slug,
             previousVersion: tracked.previousVersion,

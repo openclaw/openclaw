@@ -21,6 +21,11 @@ export const triageMaintenanceRuntimeEntrypoints = {
 } as const;
 
 export const triageTestRuntimeEntrypoints = {
+  sealedRuntime: {
+    currentModuleUrl,
+    sourceWorkerName: "sealed-runtime-registry",
+    distWorkerPath: "infra/sealed-runtime-registry.js",
+  },
   requester: {
     currentModuleUrl,
     sourceWorkerName: "update-requester-authority",

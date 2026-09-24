@@ -17,6 +17,15 @@ import {
   type FileIdentity,
   type PathBinding,
 } from "../shared/path-binding.js";
+import {
+  canonicalTargetForSymlinkError,
+  captureWriteBinding,
+  fileWriteError as err,
+  openBoundWriteRoot,
+  symlinkRedirectError,
+  writeFsSafeError,
+  type FileWriteError,
+} from "./file-write-path.js";
 import { rejectCanonicalPathChange } from "./path-errors.js";
 
 const MAX_CONTENT_BYTES = 16 * 1024 * 1024; // 16 MB
@@ -44,104 +53,10 @@ type FileWriteSuccess = {
   rejectHardlinks?: true;
 };
 
-type FileWriteError = {
-  ok: false;
-  code: string;
-  message: string;
-  canonicalPath?: string;
-};
-
 type FileWriteResult = FileWriteSuccess | FileWriteError;
 
 function sha256Hex(buf: Buffer): string {
   return crypto.createHash("sha256").update(buf).digest("hex");
-}
-
-function err(code: string, message: string, canonicalPath?: string): FileWriteError {
-  return { ok: false, code, message, ...(canonicalPath ? { canonicalPath } : {}) };
-}
-
-async function canonicalTargetForSymlinkError(
-  error: FsSafeError,
-  targetPath: string,
-): Promise<string | undefined> {
-  // fs-safe may attach the canonical target to the error cause; when it does
-  // not, resolve it here: realpath covers a final-component symlink, and the
-  // existing-ancestor walk covers a symlinked parent of a missing leaf.
-  const causeCanonical =
-    error.cause &&
-    typeof error.cause === "object" &&
-    "canonicalPath" in error.cause &&
-    typeof error.cause.canonicalPath === "string"
-      ? error.cause.canonicalPath
-      : undefined;
-  if (causeCanonical) {
-    return causeCanonical;
-  }
-  try {
-    return await fs.realpath(targetPath);
-  } catch {
-    return await canonicalPathFromExistingAncestor(targetPath).catch(() => undefined);
-  }
-}
-
-function symlinkRedirectError(code: string, canonicalPath?: string): FileWriteError {
-  return err(
-    code,
-    "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowWritePaths to the canonical path)",
-    canonicalPath,
-  );
-}
-
-function writeFsSafeError(error: FsSafeError, targetPath: string): FileWriteError {
-  if (error.code === "symlink") {
-    return err(
-      "SYMLINK_TARGET_DENIED",
-      `path is a symlink; refusing to write through it: ${targetPath}`,
-    );
-  }
-  if (error.code === "not-file") {
-    return err("IS_DIRECTORY", `path resolves to a directory: ${targetPath}`);
-  }
-  if (error.code === "already-exists") {
-    return err("EXISTS_NO_OVERWRITE", `file already exists and overwrite is false: ${targetPath}`);
-  }
-  return err("WRITE_ERROR", error.message, targetPath);
-}
-
-async function captureWriteBinding(
-  canonicalTargetPath: string,
-  targetIdentity?: FileIdentity,
-): Promise<Extract<PathBinding, { kind: "write" }>> {
-  let anchorPath = path.dirname(canonicalTargetPath);
-  for (;;) {
-    try {
-      const stats = await fs.stat(anchorPath, { bigint: true });
-      if (!stats.isDirectory()) {
-        throw new Error(`write anchor is not a directory: ${anchorPath}`);
-      }
-      const anchor = fileIdentity(stats);
-      return {
-        kind: "write",
-        anchorPath,
-        anchorDevice: anchor.device,
-        anchorInode: anchor.inode,
-        ...(targetIdentity
-          ? { targetDevice: targetIdentity.device, targetInode: targetIdentity.inode }
-          : {}),
-      };
-    } catch (error) {
-      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-      if (code !== "ENOENT") {
-        throw error;
-      }
-      const parent = path.dirname(anchorPath);
-      if (parent === anchorPath) {
-        throw error;
-      }
-      anchorPath = parent;
-    }
-  }
 }
 
 async function writeBoundTarget(input: {
@@ -195,34 +110,11 @@ async function writeBoundTarget(input: {
     }
   }
 
-  let anchorRoot: Awaited<ReturnType<typeof root>>;
-  try {
-    anchorRoot = await root(input.binding.anchorPath);
-    const anchorStats = await fs.stat(anchorRoot.rootReal, { bigint: true });
-    if (
-      !matchesFileIdentity(anchorStats, {
-        device: input.binding.anchorDevice,
-        inode: input.binding.anchorInode,
-      })
-    ) {
-      throw new Error("write anchor changed");
-    }
-  } catch {
-    return err(
-      "CANONICAL_PATH_CHANGED",
-      "filesystem identity differs from the authorized target",
-      input.canonicalTargetPath,
-    );
+  const anchor = await openBoundWriteRoot(input);
+  if (!anchor.ok) {
+    return anchor;
   }
-  const relativeTarget = path.relative(anchorRoot.rootReal, input.canonicalTargetPath);
-  if (
-    !relativeTarget ||
-    path.isAbsolute(relativeTarget) ||
-    relativeTarget === ".." ||
-    relativeTarget.startsWith(`..${path.sep}`)
-  ) {
-    return err("WRITE_ERROR", "write target is outside the authorized anchor");
-  }
+  const { anchorRoot, relativeTarget } = anchor;
   try {
     await anchorRoot.create(relativeTarget, input.buffer, { mkdir: true });
     const opened = await anchorRoot.open(relativeTarget);

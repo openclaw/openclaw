@@ -56,8 +56,6 @@ final class MacDesktopAvailabilityCoordinator {
     static let shared = MacDesktopAvailabilityCoordinator()
     static let unattendedEnabledKey = "desktopUnattendedHostingEnabled"
     private static let executionLifetime: TimeInterval = 3600
-    private static let assertionLifetime: TimeInterval = 15
-    private static let assertionRefreshInterval: TimeInterval = 5
     private static let maximumExecutions = 128
 
     private(set) var state: State = .unknown
@@ -74,8 +72,7 @@ final class MacDesktopAvailabilityCoordinator {
     private var legacyInputScopeID = UUID()
     private var legacyInputPermit: Permit?
     private var admissionOverflowed = false
-    private var assertion: UInt32?
-    private var assertionRefreshAt: TimeInterval = 0
+    private let idleAssertion: MacDesktopIdleAssertion
     private var stopMonitoring: (@MainActor () -> Void)?
 
     init(
@@ -83,13 +80,14 @@ final class MacDesktopAvailabilityCoordinator {
         platform: (any MacDesktopAvailabilityPlatform)? = nil)
     {
         self.defaults = defaults
-        self.platform = platform ?? LiveMacDesktopAvailabilityPlatform()
+        let platform = platform ?? LiveMacDesktopAvailabilityPlatform()
+        self.platform = platform
+        self.idleAssertion = MacDesktopIdleAssertion(platform: platform)
         self.unattendedEnabled = defaults.bool(forKey: Self.unattendedEnabledKey)
     }
 
     isolated deinit {
         self.stopMonitoring?()
-        if let assertion = self.assertion { self.platform.releaseIdleAssertion(assertion) }
     }
 
     /// A retired route cannot be restored by a delayed callback with the same epoch.
@@ -128,7 +126,7 @@ final class MacDesktopAvailabilityCoordinator {
         let now = self.platform.uptime
         let expired = self.executions.values.filter { $0.phase == .active && $0.expiresAt <= now }
         self.revokeExecutions(expired.map(\.permit.recordID), reason: "execution-expired")
-        self.reconcileAssertion(now: now)
+        self.reconcileAssertion()
         if changed { self.onStateChanged?(observed) }
         return observed
     }
@@ -158,8 +156,8 @@ final class MacDesktopAvailabilityCoordinator {
             expiresAt: self.platform.uptime + Self.executionLifetime,
             phase: .active)
         // The reservation is visible before dispatch can suspend or a close can arrive.
-        self.reconcileAssertion(now: self.platform.uptime)
-        guard self.assertion != nil else {
+        self.reconcileAssertion()
+        guard self.idleAssertion.isHeld else {
             throw AvailabilityError.assertionFailed
         }
         return permit
@@ -267,7 +265,7 @@ final class MacDesktopAvailabilityCoordinator {
         self.executions = self.executions
             .filter { $0.value.phase != .retired && $0.value.phase != .closedBeforeAdmission }
         self.admissionOverflowed = false
-        self.releaseAssertion()
+        self.idleAssertion.release()
     }
 
     private func revokeExecutions(_ ids: [UUID]? = nil, reason: String) {
@@ -292,38 +290,21 @@ final class MacDesktopAvailabilityCoordinator {
             if let permit = self.executions[id]?.permit { revoked.append(permit) }
         }
         if !revoked.isEmpty {
-            self.releaseAssertion()
+            self.idleAssertion.release()
             self.onExecutionsRevoked?(revoked.sorted { ($0.executionId ?? "") < ($1.executionId ?? "") }, reason)
         }
     }
 
-    private func reconcileAssertion(now: TimeInterval) {
+    private func reconcileAssertion() {
         let active = self.executions.values.filter { $0.phase == .active }
         let unattended = self.unattendedEnabled && self.hostingEnabled
         guard self.connected, self.state == .unlocked, unattended || !active.isEmpty else {
-            self.releaseAssertion()
+            self.idleAssertion.release()
             return
         }
-        guard self.assertion == nil || now >= self.assertionRefreshAt else { return }
-        let remaining = unattended ? Self.assertionLifetime :
-            min(Self.assertionLifetime, (active.map(\.expiresAt).min() ?? now) - now)
-        guard remaining > 0 else {
-            self.releaseAssertion()
-            return
-        }
-        let previous = self.assertion
-        self.assertion = self.platform.makeIdleAssertion(timeout: remaining)
-        if let previous { self.platform.releaseIdleAssertion(previous) }
-        self.assertionRefreshAt = now + min(Self.assertionRefreshInterval, remaining)
-        if self.assertion == nil {
+        if !self.idleAssertion.refresh(until: unattended ? nil : active.map(\.expiresAt).min()) {
             self.revokeExecutions(reason: "idle-assertion-unavailable")
         }
-    }
-
-    private func releaseAssertion() {
-        guard let assertion = self.assertion else { return }
-        self.assertion = nil
-        self.platform.releaseIdleAssertion(assertion)
     }
 
     private func updateMonitoring() {

@@ -458,6 +458,28 @@ describe("plugin-sdk facade loader", () => {
     );
   });
 
+  it("loads a facade when Windows reports the root and module through physical aliases", () => {
+    const tempRoot = createTempDirSync("openclaw-facade-loader-root-alias-");
+    const physicalRoot = path.join(tempRoot, "physical-root");
+    const admittedRoot = path.join(tempRoot, "admitted-root");
+    const modulePath = path.join(physicalRoot, "api.js");
+    fs.mkdirSync(physicalRoot);
+    fs.writeFileSync(modulePath, 'module.exports = { marker: "alias" };\n', "utf8");
+    fs.symlinkSync(physicalRoot, admittedRoot, process.platform === "win32" ? "junction" : "dir");
+    const loadModule = vi.fn(() => ({ marker: "alias" }));
+
+    withMockedWindowsPlatform(() => {
+      expect(
+        loadFacadeModuleAtLocationSync<{ marker: string }>({
+          location: { modulePath, boundaryRoot: admittedRoot },
+          trackedPluginId: "root-alias",
+          loadModule,
+        }).marker,
+      ).toBe("alias");
+    });
+    expect(loadModule).toHaveBeenCalledWith(modulePath);
+  });
+
   it("shares loaded facade ids with facade-runtime", () => {
     const fixture = createBundledPluginFixture({
       prefix: "openclaw-facade-loader-ids-",

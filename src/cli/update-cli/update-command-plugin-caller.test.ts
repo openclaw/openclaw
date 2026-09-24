@@ -24,8 +24,9 @@ import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import * as postCore from "./update-command-post-core.js";
-import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
+import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import * as postCoreResume from "./update-command-resume.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
@@ -35,6 +36,13 @@ const transport = vi.hoisted(() => ({ exec: vi.fn(), command: vi.fn() }));
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: transport.exec,
+  runUtf8CommandWithTimeout: async ([command, ...args]: string[], options: unknown) => ({
+    ...(await transport.exec(command, args, options)),
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  }),
   runCommandWithTimeout: transport.command,
 }));
 // Native Doctor delegation has real-child coverage. Keep this suite focused on
@@ -409,7 +417,7 @@ describe("connected in-process plugin finalization authority", () => {
             reason: "update-executor-settlement-failed",
             steps: [
               {
-                name: "update executor settlement",
+                name: "update-executor-settlement",
                 exitCode: 1,
                 stderrTail: expect.stringContaining(
                   scenario.endsWith("run-replaced") || scenario.endsWith("fence-replaced")

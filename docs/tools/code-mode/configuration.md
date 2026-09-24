@@ -1,32 +1,45 @@
 ---
 summary: "Code Mode configuration fields, automatic per-model activation, and the activation order"
 title: "Code Mode configuration"
+doc-schema-version: 1
 read_when:
-  - You are setting Code Mode limits, languages, or the runtime
+  - You are setting Code Mode limits or the runtime
   - You need the preferred-model list and the compat catalog flag
   - You need the exact activation precedence for a run
 ---
 
 ## Configuration
 
-`tools.codeMode.enabled` sets the global activation default. It defaults to
-`false`, including when the Code Mode object configures other fields. Set
-`true` or `"auto"` explicitly, or use an [agent or model override](/tools/code-mode/quickstart#override-one-model).
+An absent global `tools.codeMode` setting defaults to `"auto"`. If you author a
+Code Mode object, its activation stays off unless that object explicitly sets
+`enabled`; this lets you stage executor or limit settings without enabling the
+feature. Shorthand `false` also disables it. Agent and model overrides retain
+their existing precedence.
 
-| Field                 | Default                        | Clamp                                           |
-| --------------------- | ------------------------------ | ----------------------------------------------- |
-| `enabled`             | `false`                        | `false`, `true`, or `"auto"` (per-model)        |
-| `runtime`             | `"quickjs-wasi"`               | only supported value                            |
-| `mode`                | `"only"`                       | exposes control/direct tools, catalogs the rest |
-| `languages`           | `["javascript", "typescript"]` | any subset of the two                           |
-| `timeoutMs`           | `10000`                        | `100`-`60000`                                   |
-| `memoryLimitBytes`    | `67108864`                     | `1048576`-`1073741824`                          |
-| `maxOutputBytes`      | `65536`                        | `1024`-`10485760`                               |
-| `maxSnapshotBytes`    | `10485760`                     | `1024`-`268435456`                              |
-| `maxPendingToolCalls` | `16`                           | `1`-`128`                                       |
-| `snapshotTtlSeconds`  | `900`                          | `1`-`86400`                                     |
-| `searchDefaultLimit`  | `8`                            | clamped to `maxSearchLimit`                     |
-| `maxSearchLimit`      | `50`                           | `1`-`50`                                        |
+| Field                 | Default    | Clamp                                           |
+| --------------------- | ---------- | ----------------------------------------------- |
+| `enabled`             | See above  | `false`, `true`, or `"auto"` (per-model)        |
+| `executor`            | `"node"`   | `"node"` or `"quickjs"`                         |
+| `mode`                | `"only"`   | exposes control/direct tools, catalogs the rest |
+| `timeoutMs`           | `10000`    | `100`-`60000`                                   |
+| `memoryLimitBytes`    | `67108864` | `1048576`-`1073741824`                          |
+| `maxOutputBytes`      | `65536`    | `1024`-`10485760`                               |
+| `maxSnapshotBytes`    | `10485760` | `1024`-`268435456`                              |
+| `maxPendingToolCalls` | `16`       | `1`-`128`                                       |
+| `snapshotTtlSeconds`  | `900`      | `1`-`86400`                                     |
+| `searchDefaultLimit`  | `8`        | clamped to `maxSearchLimit`                     |
+| `maxSearchLimit`      | `50`       | `1`-`50`                                        |
+
+Code Mode executes JavaScript only. Doctor and eligible Gateway startup
+migrations remove the retired `languages` setting from global and per-agent
+Code Mode config, preserving activation and limits.
+
+The default Node executor uses `node:vm` for trusted execution, not security
+isolation. Select `executor: "quickjs"` for the bundled hardened guest runtime.
+Agent-level executor settings override the global selection. See
+[Code Mode executors](/tools/code-mode/executors) for security, memory, wait,
+and upgrade behavior. `maxSnapshotBytes` caps QuickJS VM snapshots and the
+shared saved-result allowance; it does not cap Node's retained live context.
 
 `timeoutMs` is a wall-clock budget per `exec` or `wait` call. Worker preparation, guest
 computation, and inline tool waits share that budget; approval waits pause it.
@@ -39,23 +52,26 @@ headless wall-clock deadline. A checkpoint does not reset that wall deadline.
 When the shell `exec` tool is available, use it for heavier computation
 and keep guest JavaScript focused on coordinating tools and processing results.
 
-If code mode is enabled but QuickJS-WASI cannot load, OpenClaw fails closed
+If code mode is enabled but the selected executor cannot load, OpenClaw fails closed
 for that run; it does not silently expose normal tools as a fallback. This
 holds for `true` and for `"auto"` runs where the model resolves as preferred:
-an engaged run never silently falls back to broad direct tool exposure.
+an engaged run never silently falls back to another executor or broad direct
+tool exposure.
 
 ## Automatic per-model activation
 
 `tools.codeMode.enabled` accepts three values:
 
-- `false` (default): code mode is off unless an agent or model override enables it.
+- `false`: code mode is off unless an agent or model override enables it.
 - `true`: code mode engages for tool-capable runs unless an override disables it.
 - `"auto"`: code mode engages only when the run's model is flagged as a
   preferred code-mode performer in its provider catalog.
 
-These values supply the default when no agent or model override takes
-precedence. `"auto"` uses catalog capability; an explicit per-model boolean
-bypasses that capability preference.
+When the global setting is completely absent, OpenClaw behaves as if it were
+`"auto"`. An authored object without `enabled` behaves as `false`. These values
+supply the default when no agent or model override takes precedence. `"auto"`
+uses catalog capability; an explicit per-model boolean bypasses that capability
+preference.
 
 ### The `compat.codeMode` catalog flag
 
@@ -77,15 +93,18 @@ Bundled provider catalogs currently flag these models as `"preferred"`:
 
 | Provider  | Models                                                                                                                                                           |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`, `claude-haiku-4-5`                                                   |
+| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`                                                                       |
 | deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                                           |
 | google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash` |
 | kimi      | `k3`, `k3-256k`                                                                                                                                                  |
 | minimax   | `MiniMax-M3`                                                                                                                                                     |
 | moonshot  | `kimi-k3`                                                                                                                                                        |
 | openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                                              |
-| xiaomi    | `mimo-v2.5`                                                                                                                                                      |
+| xiaomi    | `mimo-v2.6-pro`, `mimo-v2.6-flash`                                                                                                                               |
 | zai       | `glm-5.3`, `glm-5.2`, `glm-5.1`                                                                                                                                  |
+
+`claude-haiku-4-5` is marked `"capable"`: it remains available through an
+explicit `true` agent or model setting, but `"auto"` does not engage it.
 
 Everything else, including all Ollama-served local models, stays unflagged and
 keeps normal tool exposure under `"auto"`.
@@ -121,14 +140,13 @@ changes that routing decision.
 
 ### Choosing when to enable
 
-In A/B evaluations on the preferred models above, code mode reduced total
-token usage by roughly 30-50% at equal-or-better task pass rates, mostly by
-replacing many full tool schemas and per-tool round trips with one compact
-program surface. Models below the preferred tier showed no consistent win and
-sometimes regressed, which is why `"auto"` leaves them on direct tools.
+Code Mode can reduce token use by replacing repeated full tool schemas and
+intermediate model turns with a compact catalog and one program. Results depend
+on the model and workload. Compare correctness and full root-plus-descendant
+token use on representative tasks before forcing it broadly.
 
-Use `"auto"` when agents switch between models: strong models get the compact
-surface, weaker or local ones keep the exposure they handle best. Use `true`
+Use `"auto"` when agents switch between models: preferred models get the compact
+surface, while other models keep normal tool exposure. Use `true`
 on an exact model entry when you have verified an unflagged model performs well
 with code mode. For open-weight or uncached serving where every prompt token is billed or
 recomputed, prefer enabling per model (via `"auto"` or an explicit model override)

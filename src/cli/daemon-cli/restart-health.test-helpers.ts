@@ -6,6 +6,7 @@ import {
 import type { GatewayService } from "../../daemon/service.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import type { ConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 
@@ -29,6 +30,25 @@ export function gatewayResponseError(message: string): GatewayProtocolRequestErr
   retainGatewayResponsePayload(error, undefined);
   return error;
 }
+export const requestStartupProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
+
+vi.mock("../../gateway/local-http-probe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gateway/local-http-probe.js")>();
+  return {
+    ...actual,
+    createConfiguredGatewayLocalProbe: (
+      ...args: Parameters<typeof actual.createConfiguredGatewayLocalProbe>
+    ) => {
+      const probe = actual.createConfiguredGatewayLocalProbe(...args);
+      return {
+        ...probe,
+        requestHttp: (params: Parameters<ConfiguredGatewayLocalProbe["requestHttp"]>[0]) =>
+          params.pathname === "/startupz" ? requestStartupProbe(params) : probe.requestHttp(params),
+      };
+    },
+  };
+});
+
 export const createConfigIO = vi.fn();
 export const readBestEffortConfig = vi.fn(async () => ({}));
 export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
@@ -237,11 +257,15 @@ export async function waitForStoppedFreeGatewayRestart(
 }
 
 export function resetRestartHealthMocks() {
+  requestStartupProbe.mockReset();
+  requestStartupProbe.mockResolvedValue(null);
   monotonicClock.nowMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => monotonicClock.nowMs);
   inspectPortUsage.mockReset();
   readBestEffortConfig.mockReset();
-  readBestEffortConfig.mockResolvedValue({});
+  // These transport-mocked lifecycle tests spoof OS state; they must not load
+  // native credential storage under a platform different from the running host.
+  readBestEffortConfig.mockResolvedValue({ gateway: { auth: { mode: "none" } } });
   createConfigIO.mockReset();
   createConfigIO.mockReturnValue({
     readBestEffortConfig: () => readBestEffortConfig(),

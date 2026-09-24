@@ -619,28 +619,32 @@ describe("provider public artifacts", () => {
     }
   });
 
-  it("does not load public policy code from untrusted external plugins", () => {
-    const pluginRoot = writeExternalPolicyFixture();
-    try {
-      expect(
-        resolveProviderPolicySurface("fixture-provider", {
-          manifestRegistry: {
-            plugins: [
-              {
-                id: "fixture-provider",
-                origin: "external",
-                rootDir: pluginRoot,
-                providers: ["fixture-provider"],
-                cliBackends: [],
-              } as never,
-            ],
-          },
-        }),
-      ).toBeNull();
-    } finally {
-      fs.rmSync(pluginRoot, { recursive: true, force: true });
-    }
-  });
+  it.each([false, true])(
+    "does not load public policy code from untrusted external plugins (configured=%s)",
+    (configured) => {
+      const pluginRoot = writeExternalPolicyFixture();
+      try {
+        expect(
+          resolveProviderPolicySurface("fixture-provider", {
+            config: configured ? { plugins: { allow: ["fixture-provider"] } } : undefined,
+            manifestRegistry: {
+              plugins: [
+                {
+                  id: "fixture-provider",
+                  origin: "external",
+                  rootDir: pluginRoot,
+                  providers: ["fixture-provider"],
+                  cliBackends: [],
+                } as never,
+              ],
+            },
+          }),
+        ).toBeNull();
+      } finally {
+        fs.rmSync(pluginRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("resolves multi-provider policy artifacts by manifest-owned provider id", async () => {
     const bundledPluginsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-"));

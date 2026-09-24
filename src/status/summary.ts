@@ -27,6 +27,7 @@ import {
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
+import { getGatewayInstallationReplacement } from "../gateway/stale-install.js";
 import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
 import { resolveHeartbeatSummariesForAgents } from "../infra/heartbeat-summary-projection.js";
 import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
@@ -47,7 +48,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { readOpenClawStateWalHealth } from "../state/openclaw-state-db-cache.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { buildStatusCliProjection } from "./cli-projection.js";
 import {
@@ -537,6 +538,7 @@ export async function getStatusSummary(
     queuedSystemEvents,
     startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
     startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
+    installationReplacementWarning: getGatewayInstallationReplacement()?.message,
     secretEgressProxy: getSecretEgressCertificateStatus(),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
       ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {

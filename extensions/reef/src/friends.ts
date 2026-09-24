@@ -46,11 +46,18 @@ export class ReefFriendManager {
     private readonly authoritySignal?: AbortSignal,
   ) {}
 
-  mintCode() {
-    return this.#serialize((signal) => this.transport.mintFriendCode(signal));
+  mintCode(assertOwnerCurrent?: () => void) {
+    return this.#serialize((signal) => {
+      assertOwnerCurrent?.();
+      return this.transport.mintFriendCode(signal);
+    });
   }
 
-  request(peer: string, code?: string): Promise<{ status: string }> {
+  request(
+    peer: string,
+    code?: string,
+    assertOwnerCurrent?: () => void,
+  ): Promise<{ status: string }> {
     return this.#serialize(async (signal) => {
       const normalized = normalizeReefTarget(peer);
       if (!normalized) {
@@ -58,6 +65,7 @@ export class ReefFriendManager {
       }
       // Persist owner intent before the relay side effect. Once the peer
       // accepts, this marker authorizes pinning without a second approval.
+      assertOwnerCurrent?.();
       const requestId = this.trust.recordOutboundRequest(normalized);
       let result: { status: string };
       try {
@@ -92,13 +100,14 @@ export class ReefFriendManager {
     });
   }
 
-  remove(peer: string): Promise<void> {
+  remove(peer: string, assertOwnerCurrent?: () => void): Promise<void> {
     return this.#serialize(async () => {
       const normalized = normalizeReefTarget(peer);
       if (!normalized) {
         throw new Error(`Invalid Reef peer handle: ${peer}`);
       }
       // Once trust is revoked, finish cleanup even if the account closes.
+      assertOwnerCurrent?.();
       this.trust.remove(normalized);
       const results = await Promise.allSettled([
         this.#removePairingApprovalsForPeer(normalized),
@@ -122,8 +131,13 @@ export class ReefFriendManager {
     });
   }
 
-  setAutonomy(peer: string, autonomy: ReefAutonomy): Promise<void> {
+  setAutonomy(
+    peer: string,
+    autonomy: ReefAutonomy,
+    assertOwnerCurrent?: () => void,
+  ): Promise<void> {
     return this.#serialize(() => {
+      assertOwnerCurrent?.();
       this.trust.setAutonomy(peer, autonomy);
     });
   }

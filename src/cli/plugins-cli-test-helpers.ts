@@ -587,24 +587,19 @@ vi.mock("../plugins/status.js", () => ({
   formatPluginCompatibilityNotice: (entry: { message: string }) => entry.message,
 }));
 
-vi.mock("../plugins/status-snapshot.js", () => ({
-  buildPluginRegistrySnapshotReport: ((
-    ...args: Parameters<
-      (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"]
-    >
-  ) =>
-    invokeMock<
-      Parameters<
-        (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"]
-      >,
-      ReturnType<
-        (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"]
-      >
-    >(
-      buildPluginRegistrySnapshotReportMock,
-      ...args,
-    )) as (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"],
-}));
+vi.mock("../plugins/status-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/status-snapshot.js")>();
+  return {
+    ...actual,
+    buildPluginRegistrySnapshotReport: (
+      ...args: Parameters<typeof actual.buildPluginRegistrySnapshotReport>
+    ) =>
+      invokeMock<
+        Parameters<typeof actual.buildPluginRegistrySnapshotReport>,
+        ReturnType<typeof actual.buildPluginRegistrySnapshotReport>
+      >(buildPluginRegistrySnapshotReportMock, ...args),
+  };
+});
 
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: ((...args: unknown[]) =>

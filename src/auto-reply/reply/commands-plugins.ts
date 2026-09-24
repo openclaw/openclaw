@@ -180,7 +180,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
       if (missingAdminScope) {
         return missingAdminScope;
       }
-      if (!params.command.senderIsOwner && !hasGatewayAdminScope(params)) {
+      if (!hasGatewayAdminScope(params)) {
         const nonOwner = rejectNonOwnerCommand(params, "/plugins write");
         if (nonOwner) {
           return nonOwner;
@@ -198,6 +198,9 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
         getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
       const context = resolveContext?.();
       const assertInvokerOwned = () => {
+        if (!hasGatewayAdminScope(params)) {
+          params.command.assertOwnerCurrent?.();
+        }
         params.commandInvocationSignal?.throwIfAborted();
         params.opts?.abortSignal?.throwIfAborted();
         if (resolveContext && (!context || resolveContext() !== context)) {
@@ -293,6 +296,9 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           pluginId: plugin.id,
           enabled: pluginsCommand.action === "enable",
           action: pluginsCommand.action,
+          assertCurrent: hasGatewayAdminScope(params)
+            ? undefined
+            : params.command.assertOwnerCurrent,
           ...resolvePluginCapabilityConsentCliOptions({
             acceptCapabilities:
               pluginsCommand.action === "enable" && pluginsCommand.acceptCapabilities,

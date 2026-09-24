@@ -9,6 +9,9 @@ import type { LocalSkillLoadDiagnostic } from "./local-loader.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { compactSkillPath } from "./skill-paths.js";
 import { findContainingAllowedSkillSymlinkTarget, tryRealpath } from "./symlink-targets.js";
+import type { ResolvedSkillDiscoveryLimits } from "./workspace-skill-sources.types.js";
+
+export type { ResolvedSkillDiscoveryLimits } from "./workspace-skill-sources.types.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 
@@ -23,12 +26,6 @@ const MAX_GROUPED_SKILL_SCAN_DEPTH = 6;
 const MAX_CONFIGURED_ROOT_GROUPED_SKILL_SCAN_DEPTH = 2;
 
 type SkillDiscoveryReporter = (diagnostic: LocalSkillLoadDiagnostic) => void;
-
-export type ResolvedSkillDiscoveryLimits = {
-  maxCandidatesPerRoot: number;
-  maxSkillsLoadedPerSource: number;
-  maxSkillFileBytes: number;
-};
 
 export type CandidateSkillDir = {
   skillDir: string;

@@ -46,12 +46,10 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
+import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
-import {
-  mockAcceptedWaitingStatusRun,
-  registerWaitingStatusCases,
-} from "./agent-runner.runreplyagent.waiting-status.cases.js";
+import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
@@ -4848,41 +4846,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   registerImmediateFailurePolicyCases({ createMinimalRun, state });
 
+  registerReasoningFallbackTests({
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
+    createMinimalRun,
+  });
+
   registerWaitingStatusCases({
     createMinimalRun,
     runEmbeddedAgentMock: state.runEmbeddedAgentMock,
-  });
-  it.each([
-    { label: "default status" },
-    { label: "explicit status", acknowledgment: "Research started; results will follow." },
-    {
-      label: "room event",
-      acknowledgment: "Research started; results will follow.",
-      roomEvent: true,
-      warning: true,
-    },
-    { label: "empty acknowledgment", acknowledgment: "[[reply_to_current]]", warning: true },
-  ])("resolves an earlier tool warning with $label", async (testCase) => {
-    const toolWarning = setReplyPayloadMetadata(
-      { text: "⚠️ Bash failed", isError: true },
-      { toolErrorWarning: { toolName: "bash" } },
-    );
-    await mockAcceptedWaitingStatusRun(state.runEmbeddedAgentMock, {
-      payloads: [toolWarning],
-      meta: { durationMs: 0, yielded: true, yieldAcknowledgment: testCase.acknowledgment },
-    });
-    const { run } = createMinimalRun({
-      currentInboundEventKind: testCase.roomEvent ? "room_event" : undefined,
-    });
-
-    await expect(run()).resolves.toMatchObject({
-      text: testCase.warning
-        ? "⚠️ Bash failed"
-        : (testCase.acknowledgment ??
-          "I’m continuing this work and will send the result when it is ready."),
-      ...(testCase.warning ? { isError: true } : {}),
-      replyToId: "msg",
-    });
   });
 
   it.each([
@@ -6291,6 +6262,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 });
 
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

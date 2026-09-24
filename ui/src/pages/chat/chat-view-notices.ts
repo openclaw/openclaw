@@ -34,6 +34,7 @@ type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
   connected?: boolean;
   messages: readonly unknown[];
   providerPolicyNotice?: ProviderPolicyNotice | null;
+  providerReviewNotice?: TemplateResult | typeof nothing;
   runError?: { summary: string } | null;
   onRefresh?: () => void;
   onDismissWorkspaceConflict?: () => void;
@@ -167,6 +168,7 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
       </button>`
     : nothing;
   return html`
+    ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
     ${props.runError ? renderErrorNotice(props.runError.summary, refresh) : nothing}
     ${renderWorkspaceConflictNotice({

@@ -18,13 +18,15 @@ import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
 } from "../../../process/gateway-work-admission.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { captureTaskRegistryReadFence } from "../../../tasks/task-registry-listener-state.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
+import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
@@ -43,11 +45,11 @@ export function expectDeferredSubagentAnnouncement(
 
 /** Hold the real lazy settlement dependency without replacing its completion policy. */
 export function gateSubagentRequesterSettlement(
-  settle: SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"],
+  settle: typeof maybeWakeRequesterAfterAllChildrenSettled,
 ) {
   const released = createDeferred();
   let pending: Promise<boolean> | undefined;
-  const run = vi.fn<SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]>((params) => {
+  const run = vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>((params) => {
     pending = (async () => {
       await released.promise;
       return await settle(params);
@@ -66,6 +68,8 @@ export function gateSubagentRequesterSettlement(
 /** Gates owned by a test must be released before waiting for imports and detached tails. */
 export async function settleSubagentRegistryPersistenceWork() {
   await vi.dynamicImportSettled();
+  // Accepted task events can outlive both reset and synchronous task reads.
+  await captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission);
   await vi.waitFor(() => {
     const holders = getActiveGatewayRootWorkHolders();
     expect(
@@ -78,7 +82,6 @@ export async function settleSubagentRegistryPersistenceWork() {
 type PersistenceCleanup = {
   stateDir: string;
   resetRegistry: () => void;
-  resetDeps: () => void;
   closeDatabases?: () => void | Promise<void>;
 };
 
@@ -87,7 +90,6 @@ export async function cleanupSubagentRegistryPersistenceTest(params: Persistence
   params.resetRegistry();
   await cleanupSessionStateForTest({ stateDir: params.stateDir });
   await params.closeDatabases?.();
-  params.resetDeps();
   await fs.rm(params.stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
 
@@ -191,27 +193,6 @@ export async function removeSubagentSessionEntry(params: {
     skipMaintenance: true,
   });
   return storePath;
-}
-
-/** Builds default dependency mocks used by subagent registry persistence tests. */
-export function createSubagentRegistryTestDeps(
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return {
-    cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-    captureSubagentCompletionReply: vi.fn(async () => undefined),
-    ensureContextEnginesInitialized: vi.fn(),
-    loadAgentRuntimePluginRegistryHandle: vi.fn(),
-    getRuntimeConfig: vi.fn(() => ({})),
-    resolveAgentTimeoutMs: vi.fn(() => 100),
-    resolveContextEngine: vi.fn(async () => ({
-      info: { id: "test", name: "Test", version: "0.0.1" },
-      ingest: vi.fn(async () => ({ ingested: false })),
-      assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
-      compact: vi.fn(async () => ({ ok: false, compacted: false })),
-    })),
-    ...extra,
-  };
 }
 
 export function createDeliveredWake(

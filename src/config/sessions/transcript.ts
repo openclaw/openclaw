@@ -45,11 +45,15 @@ import {
   type TranscriptEntryAnchor,
   type TranscriptEvent,
 } from "./session-accessor.js";
+import type { LatestTranscriptAssistantText } from "./session-accessor.types.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
-import { recordAssistantManagedMediaUrls } from "./transcript-assistant-delivery.js";
+import {
+  projectAssistantTranscriptText,
+  recordAssistantManagedMediaUrls,
+} from "./transcript-assistant-delivery.js";
 import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
@@ -113,12 +117,6 @@ export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appen
   [ASSISTANT_DISPLAY_CONTENT_FIELD]?: Array<Record<string, unknown>>;
 };
 
-type AssistantTranscriptText = {
-  id?: string;
-  text: string;
-  timestamp?: number;
-};
-
 export type SessionRecentConversationText = {
   id?: string;
   role: "user" | "assistant";
@@ -156,12 +154,12 @@ class SessionTranscriptAgentScopeMismatchError extends Error {
   }
 }
 
-export type LatestAssistantTranscriptText = AssistantTranscriptText;
+export type LatestAssistantTranscriptText = LatestTranscriptAssistantText;
 
 function parseAssistantTranscriptText(
   line: string,
   options?: { excludeTranscriptOnlyOpenClawAssistant?: boolean },
-): AssistantTranscriptText | undefined {
+): LatestAssistantTranscriptText | undefined {
   const parsed = JSON.parse(line) as {
     id?: unknown;
     message?: unknown;
@@ -178,17 +176,7 @@ function parseAssistantTranscriptText(
   ) {
     return undefined;
   }
-  const text = extractAssistantPhaseText(message)?.trim();
-  if (!text) {
-    return undefined;
-  }
-  return {
-    ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
-    text,
-    ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
-      ? { timestamp: message.timestamp }
-      : {}),
-  };
+  return projectAssistantTranscriptText(message, parsed.id);
 }
 
 type SessionConversationTranscriptTarget = {

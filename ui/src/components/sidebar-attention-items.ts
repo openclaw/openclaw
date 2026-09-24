@@ -1,10 +1,13 @@
 import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { isCronJobActiveFailure, isCronJobRunning } from "../lib/cron-status.ts";
 import { clampText, formatTimeAgo } from "../lib/format.ts";
 import { isMonitoredAuthProvider, listEffectiveModelAuthProviders } from "../lib/model-auth.ts";
 import type { CustodianAlert } from "./custodian-alert-contract.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
+
+registerSidebarAttentionEnglish();
 
 // A cron job counts as overdue when its next planned run is this far in the
 // past; mirrors the threshold the Overview attention list used.
@@ -14,6 +17,16 @@ const SIDEBAR_ATTENTION_PRIORITY: Record<SidebarAttentionItem["kind"], number> =
   modelAuthExpired: 0,
   cronFailed: 1,
   cronOverdue: 2,
+};
+
+export type CronAttentionJob = Pick<
+  CronJob,
+  "id" | "name" | "agentId" | "enabled" | "updatedAtMs"
+> & {
+  state: Pick<
+    CronJob["state"],
+    "lastRunStatus" | "lastStatus" | "lastRunAtMs" | "nextRunAtMs" | "runningAtMs" | "autoDisabled"
+  >;
 };
 
 export function compareSidebarAttentionEntries(
@@ -29,7 +42,7 @@ type SidebarAttentionContent = Omit<
 >;
 
 export function buildSidebarAttentionEntries(params: {
-  cronJobs: readonly CronJob[];
+  cronJobs: readonly CronAttentionJob[];
   cronSchedulerEnabled: boolean | null;
   cronOwnerByJobId?: ReadonlyMap<string, string>;
   modelAuthStatus: ModelAuthStatusResult | null;
@@ -37,8 +50,8 @@ export function buildSidebarAttentionEntries(params: {
   now: number;
 }): SidebarAttentionItem[] {
   const entries: SidebarAttentionItem[] = [];
-  const cronJobName = (job: CronJob) => job.name?.trim() || job.id;
-  const cronMeta = (job: CronJob, status: string, time: string) => {
+  const cronJobName = (job: CronAttentionJob) => job.name?.trim() || job.id;
+  const cronMeta = (job: CronAttentionJob, status: string, time: string) => {
     const context = params.cronOwnerByJobId?.get(job.id);
     return { ...(context ? { context } : {}), status, time };
   };

@@ -12,7 +12,6 @@ import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
-import type { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentCompletionRequest,
@@ -31,36 +30,6 @@ export type SubagentRegistrySweeperOptions = {
     source: string,
   ) => Promise<void>;
   getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
-  abandonSubagentRestartRecoveryLaunch: ReturnType<
-    typeof createSubagentRunManager
-  >["abandonSubagentRestartRecoveryLaunch"];
-  clearAcceptedSubagentRestartRecovery: ReturnType<
-    typeof createSubagentRunManager
-  >["clearAcceptedSubagentRestartRecovery"];
-  clearPendingSubagentRecoveryNotice: ReturnType<
-    typeof createSubagentRunManager
-  >["clearPendingSubagentRecoveryNotice"];
-  resumeSettledSubagentRestartRecovery: ReturnType<
-    typeof createSubagentRunManager
-  >["resumeSettledSubagentRestartRecovery"];
-  replaceSubagentRunAfterSteer: ReturnType<
-    typeof createSubagentRunManager
-  >["replaceSubagentRunAfterSteer"];
-  markSubagentRestartRecoveryLaunchAttempted: ReturnType<
-    typeof createSubagentRunManager
-  >["markSubagentRestartRecoveryLaunchAttempted"];
-  markSubagentRestartRecoveryLaunchAccepted: ReturnType<
-    typeof createSubagentRunManager
-  >["markSubagentRestartRecoveryLaunchAccepted"];
-  markSubagentRestartRecoveryLaunchConsumed: ReturnType<
-    typeof createSubagentRunManager
-  >["markSubagentRestartRecoveryLaunchConsumed"];
-  reserveSubagentRestartRecoveryLaunch: ReturnType<
-    typeof createSubagentRunManager
-  >["reserveSubagentRestartRecoveryLaunch"];
-  resetSubagentRestartRecoveryLaunchAttempt: ReturnType<
-    typeof createSubagentRunManager
-  >["resetSubagentRestartRecoveryLaunchAttempt"];
   finalizeInterruptedSubagentRun: ReturnType<
     typeof createSubagentRegistryCompletionRuntime
   >["finalizeInterruptedSubagentRun"];

@@ -236,10 +236,18 @@ export function handleMarkdownTableInteraction(event: Event): void {
   }
   const copy = target.closest<HTMLElement>(".markdown-table__copy");
   if (copy) {
+    const text = markdownTableCopyText(table);
     const attempt = (tableCopyAttempts.get(copy) ?? 0) + 1;
     tableCopyAttempts.set(copy, attempt);
-    const isCurrent = () => copy.isConnected && tableCopyAttempts.get(copy) === attempt;
-    void copyToClipboard(markdownTableCopyText(table), isCurrent).then((copied) => {
+    // A streaming table retains its controls, but only the current payload
+    // may start fallback copying or update their feedback.
+    const isCurrent = () =>
+      copy.isConnected &&
+      table.isConnected &&
+      tableCopyAttempts.get(copy) === attempt &&
+      shell.querySelector("table") === table &&
+      markdownTableCopyText(table) === text;
+    void copyToClipboard(text, isCurrent).then((copied) => {
       if (!isCurrent()) {
         return;
       }

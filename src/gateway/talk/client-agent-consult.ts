@@ -567,6 +567,22 @@ export function createTalkClientAgentConsultRunner(params: {
       },
       text: prompt,
       getSteeringContext: () => confirmationRetryContext,
+      createUserTurnTranscriptRecorder:
+        owner.source === "native-delegation"
+          ? (text) =>
+              createUserTurnTranscriptRecorder({
+                input: { text, display: false },
+                target: {
+                  agentId,
+                  sessionId: identity.sessionId,
+                  sessionKey: canonicalKey,
+                  storePath,
+                  expectedSessionId: identity.sessionId,
+                  sessionEntry: undefined,
+                  config: params.config,
+                },
+              })
+          : undefined,
       mode: "steer",
     });
     if (!result.ok || result.queued !== true || !isOwnerCurrent(owner, identity.sessionId)) {

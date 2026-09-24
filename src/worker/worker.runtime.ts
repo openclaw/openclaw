@@ -15,29 +15,14 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
-import {
-  WorkerAdmissionDeadlineExceededError,
-  type WorkerAdmissionDeadlineResult,
-} from "./worker-connection-contract.js";
+import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
+import type { WorkerRuntimeResult } from "./worker-process-protocol.js";
 import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
-
-// Cross-process contract: serialized to stdout by runWorkerCommand and parsed by the
-// gateway worker turn launcher.
-export type WorkerRuntimeResult =
-  | WorkerAdmissionDeadlineResult
-  | { status: "completed"; transcriptLeafId: string | null; transcriptNextSeq: number }
-  | {
-      status: "failed";
-      reason: "turn-failed";
-      transcriptLeafId: string | null;
-      transcriptNextSeq: number;
-    }
-  | { status: "fenced"; reason: "credential-replaced" | "owner-epoch-mismatch" };
 
 const WORKER_REMOTE_CANCEL_GRACE_MS = 1_000;
 declare const WORKER_DEPLOY_BUILD: boolean;

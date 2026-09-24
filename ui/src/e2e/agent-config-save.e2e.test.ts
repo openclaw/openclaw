@@ -63,6 +63,10 @@ suite.define(() => {
         await gateway.waitForRequest("agents.list");
         await gateway.waitForRequest("config.get");
         const agentsPage = page.locator("openclaw-agents-page");
+        const primary = agentsPage.locator(
+          'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
+        );
+        const decision = agentsPage.locator("openclaw-select-picker:has(#agent-decision-model)");
         const reload = agentsPage.getByRole("button", { name: "Reload Config" });
         await reload.waitFor();
         if (captureUiProof) {
@@ -81,11 +85,7 @@ suite.define(() => {
           .filter({ hasText: "Agent configuration unavailable" });
         await expect.poll(() => error.isVisible()).toBe(true);
         await expect
-          .poll(() =>
-            agentsPage
-              .locator(".model-picker__select .picker-select__trigger")
-              .getAttribute("disabled"),
-          )
+          .poll(() => primary.locator(".picker-select__trigger").getAttribute("disabled"))
           .not.toBeNull();
 
         await gateway.setMethodResponse("config.get", {
@@ -102,14 +102,10 @@ suite.define(() => {
         await gateway.waitForRequest("config.get", { after: readsBefore });
         await expect.poll(() => error.count()).toBe(0);
         await expect
-          .poll(() =>
-            agentsPage
-              .locator(".model-picker__select .picker-select__trigger")
-              .getAttribute("disabled"),
-          )
+          .poll(() => primary.locator(".picker-select__trigger").getAttribute("disabled"))
           .toBeNull();
 
-        const primary = agentsPage.locator("openclaw-select-picker.model-picker__select");
+        expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
         const indicator = page.locator("openclaw-settings-save-indicator");
         const writesBeforeReconnect = (await gateway.getRequests("config.set")).length;
         await gateway.deferNext("config.set");
@@ -177,6 +173,7 @@ suite.define(() => {
             hash: "saved-agent-config",
           });
           await expect.poll(() => pickerValue(primary)).toBe("openai/after-reload");
+          expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
           await expect.poll(() => indicator.textContent()).toContain("Saved");
         } finally {
           if (captureUiProof) {

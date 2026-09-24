@@ -118,7 +118,7 @@ beforeEach(async () => {
     DELETE FROM skill_workshop_proposals;
   `);
   await fs.rm(path.join(stateDir, "skill-workshop"), { recursive: true, force: true });
-  await fs.rm(path.join(stateDir, "workshop-skills"), { recursive: true, force: true });
+  await fs.rm(workshopSkillsDir(), { recursive: true, force: true });
 });
 
 afterEach(async () => {

@@ -906,6 +906,11 @@ describe("gateway chat metadata lifecycle", () => {
 
       expect(mocks.invalidate).not.toHaveBeenCalled();
       expect(mocks.refresh).toHaveBeenCalledTimes(refreshes ? 3 : 2);
+      if (refreshes) {
+        expect(mocks.refresh).toHaveBeenLastCalledWith({
+          notifyIfUnchanged: refreshStatusChanged,
+        });
+      }
     },
   );
 

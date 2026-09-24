@@ -18,7 +18,10 @@ const { TEST_STATE_DIR, PREVIOUS_OPENCLAW_STATE_DIR, SANDBOX_REGISTRY_PATH } = v
   };
 });
 
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import {
   readBrowserRegistry,
@@ -36,12 +39,14 @@ type SandboxBrowserRegistryEntry = import("./registry.js").SandboxBrowserRegistr
 type SandboxRegistryEntry = import("./registry.js").SandboxRegistryEntry;
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(path.join(TEST_STATE_DIR, "state"), { recursive: true, force: true });
   await fs.rm(SANDBOX_REGISTRY_PATH, { force: true });
 });
 
 afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(TEST_STATE_DIR, { recursive: true, force: true });
   if (PREVIOUS_OPENCLAW_STATE_DIR === undefined) {

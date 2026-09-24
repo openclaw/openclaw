@@ -106,6 +106,7 @@ function createRunContext(params: {
       ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: "/tmp",
     backendResolved: {
       id: "test-cli",

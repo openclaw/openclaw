@@ -218,6 +218,28 @@ ports.
 Tabs backed by plugin-managed auth keep their direct iframe behavior and do not
 request or require this Gateway grant.
 
+Authenticated, same-origin plugin tabs can request session navigation without
+loosening the iframe sandbox. Send this session-only message to the parent
+after a user click:
+
+```typescript
+window.parent.postMessage(
+  { type: "openclaw-plugin-session-open", sessionKey: "agent:writer:project-review" },
+  window.location.origin,
+);
+```
+
+Only `type`, `sessionKey`, and an optional `agentId` are accepted. Omit absent
+fields. The key must be routable, at most 512 UTF-16 code units, and contain no
+control characters or surrounding whitespace. An explicit agent must match the
+agent in a qualified key. The host checks the currently mounted frame,
+authenticated descriptor, connection, and frame-grant lifetime before using
+normal session navigation. This message grants no session access, accepts no
+arbitrary URL, and returns no credentials or session content. Standalone pages
+should retain an ordinary Control UI link as their non-embedded path. Use
+`buildControlUiSessionPath` from `openclaw/plugin-sdk/session-discussion` to build
+that path.
+
 ```typescript
 api.session.controls.registerControlUiDescriptor({
   surface: "tab",
@@ -449,13 +471,17 @@ The UI clears removed contributions and ignores stale request results.
 
 The `linkReader` fields are:
 
-| Field           | Contract                                                                                                                                                                               |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                            |
-| `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable. |
-| `detailMethod`  | Same-plugin read method receiving `{ url, refresh? }` and returning a `ControlUiLinkReaderDocument`.                                                                                   |
-| `previewMethod` | Optional same-plugin read method receiving `{ url }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews.        |
-| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                               |
+| Field           | Contract                                                                                                                                                                                  |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                               |
+| `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable.    |
+| `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh? }` and returning a `ControlUiLinkReaderDocument`.                                                                            |
+| `previewMethod` | Optional same-plugin read method receiving `{ url, agentId? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |
+| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                                  |
+
+Preview and detail requests include the selected `agentId` when available; detail
+requests also accept `refresh: true`. The receiving owner must authorize identity
+selection rather than treating this hint as access authority.
 
 Method names are bounded to 128 characters. Credentials in URLs and non-HTTPS
 URLs are never intercepted. A descriptor is a routing hint, not authorization
@@ -469,7 +495,64 @@ optional comments and changed-file patches, totals, and explicit partial or
 truncated flags. Comment IDs and source links, review context labels, and badge
 text come from the plugin rather than service-specific conditions in core.
 `filesExpanded` optionally selects the initial file-diff view. Badge tones are
-`neutral`, `positive`, `negative`, `attention`, and `accent`.
+`neutral`, `positive`, `negative`, `attention`, and `accent`. Metadata entries may
+include `tone: "positive" | "negative"` to emphasize their values with the theme’s
+green/red colors in previews and the reader. Omit `tone` for neutral values; the
+host does not infer it from labels or signed numbers. Use an empty metadata label
+for a compact value-only preview, and return a fuller metadata list in the detail
+document when needed.
+
+`authorUrl` optionally links the primary author to an HTTPS profile on the source
+origin. `coAuthors` carries a bounded list of `{ name, imageUrl? }` entries, with
+`coAuthorCount` for the total when not all names are included. Hovercards show up
+to three available portraits and a `+N` remainder; missing portraits remain in
+that count. Failed images retain initials without dropping an author. Names are
+also available to assistive technology and in the full reader. Author images
+keep the preview’s anonymous-image rules; these are not Gateway user identities.
+
+A document can also include passive `checks`:
+
+```typescript
+checks?: {
+  state: "success" | "failure" | "pending" | "neutral" | "unavailable";
+  summary: string;
+  total: number;
+  items: Array<{
+    name: string;
+    state: "success" | "failure" | "pending" | "neutral";
+    detail?: string;
+    url?: string;
+  }>;
+  truncated?: boolean;
+  url?: string;
+  commit?: string;
+};
+```
+
+The plugin owns summaries, item details, bounded HTTPS source links, aggregation,
+and exact source revision (`commit`). The host renders these facts, not service
+rules or a mergeability decision. `total` is the known check-context count and
+can be incomplete when `truncated` or `unavailable`. Set `truncated` when the
+item list is incomplete, including when a source could not be read. Preserve
+the document body if an optional checks request fails, and never report success
+from incomplete data. An empty complete list is `neutral`.
+
+The bundled GitHub reader reads check runs and legacy commit statuses anonymously
+for the pull request's exact head SHA, not its base or test-merge commit. It reads
+one page of at most 100 entries from each API and returns at most 100 items; it
+does not follow pagination links. GitHub's `filter=latest` selects check runs;
+the reader retains every distinct run ID rather than inferring workflow identity
+from an app and job name. Identically named jobs from different workflows remain
+separate, so a newer success cannot hide an independent failure. Legacy statuses
+remain separate from check runs and use the latest case-insensitive context.
+Known failures outrank pending work, which
+outranks unavailable data; only complete data can produce success or neutral.
+Canceled, timed-out, stale, and action-required runs count as failures; skipped
+and neutral runs remain neutral. Partial results retain known items and an
+explicit incomplete summary. PR snapshots share the existing document cache
+for 30 seconds; an explicit refresh rereads the PR and both CI sources for that
+response's head. This surface neither evaluates required-check rules nor claims
+that a PR can merge.
 
 Return only bounded data appropriate for the caller. Rendered content cannot
 activate embedded app widgets, script, file actions, or code execution. Inline

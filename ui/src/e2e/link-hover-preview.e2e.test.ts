@@ -13,12 +13,13 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Link hover previews" });
 const url = "https://example.com/field-guide";
+const repositoryUrl = "https://github.com/openclaw/openclaw";
 const historyMessages = [
   { role: "user", content: "Can you share the guide and the project?", timestamp: 1000 },
   {
     role: "assistant",
     content:
-      "Start with the [Field guide](https://example.com/field-guide) for a practical introduction.\n\nThe [project update](https://github.com/openclaw/openclaw/pull/42) has the implementation details.\n\nYou can also read the [reference notes](https://example.org/notes).",
+      "Start with the [Field guide](https://example.com/field-guide) for a practical introduction.\n\nExplore the [OpenClaw repository](https://github.com/openclaw/openclaw). The [project update](https://github.com/openclaw/openclaw/pull/42) has the implementation details.\n\nYou can also read the [reference notes](https://example.org/notes).",
     timestamp: 2000,
   },
 ];
@@ -71,6 +72,7 @@ suite.define(() => {
             "controlUi.linkPreview": {
               cases: [
                 { match: { url }, response: preview },
+                { match: { url: repositoryUrl }, response: preview },
                 { match: { url: "https://example.org/notes" }, response: {} },
               ],
             },
@@ -150,6 +152,24 @@ suite.define(() => {
           ),
         ).toBe(false);
         expect(await link.evaluate((element) => element === document.activeElement)).toBe(true);
+        const repository = page.getByRole("link", { name: "OpenClaw repository", exact: true });
+        await repository.hover();
+        await card.getByText(preview.title, { exact: true }).waitFor();
+        await card
+          .locator(".link-hovercard__image")
+          .evaluate((image: HTMLImageElement) => image.decode());
+        expect(await card.locator("a").getAttribute("href")).toBe(repositoryUrl);
+        expect(await card.locator(".link-hovercard__identity").textContent()).toContain(
+          "github.com",
+        );
+        const repositoryBounds = await card.boundingBox();
+        expect(repositoryBounds!.x).toBeGreaterThanOrEqual(0);
+        expect(repositoryBounds!.x + repositoryBounds!.width).toBeLessThanOrEqual(width);
+        expect(repositoryBounds!.y + repositoryBounds!.height).toBeLessThanOrEqual(height);
+        await page.screenshot({
+          path: path.join(artifacts, "repository.png"),
+          animations: "disabled",
+        });
         const github = page.getByRole("link", { name: "project update", exact: true });
         await github.hover();
         await page
@@ -169,7 +189,7 @@ suite.define(() => {
         });
         expect(
           (await gateway.getRequests("controlUi.linkPreview")).map((request) => request.params),
-        ).toEqual([{ url }, { url: "https://example.org/notes" }]);
+        ).toEqual([{ url }, { url: repositoryUrl }, { url: "https://example.org/notes" }]);
         await page.mouse.move(0, 0);
         await expect.poll(() => card.count()).toBe(0);
         await gateway.setMethodResponse("controlUi.linkPreview", {
@@ -208,11 +228,14 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "chat");
       const link = page.getByRole("link", { name: "Field guide", exact: true });
-      const failed = page.waitForEvent("requestfailed", (request) =>
-        request.url().includes("link-reader-hovercard-"),
-      );
-      await link.hover();
-      await failed;
+      // A missing hashed chunk reloads the page; wait before hovering the new document.
+      await Promise.all([
+        page.waitForEvent("requestfailed", (request) =>
+          request.url().includes("link-reader-hovercard-"),
+        ),
+        page.waitForEvent("domcontentloaded"),
+        link.hover(),
+      ]);
       await page.mouse.move(0, 0);
       await link.hover();
       await page.locator(".tooltip-content").filter({ hasText: "Guide details" }).waitFor();

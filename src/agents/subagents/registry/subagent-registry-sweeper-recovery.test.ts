@@ -12,6 +12,10 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../../infra/agent-events.js";
+import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -53,10 +57,6 @@ vi.mock("./subagent-registry-restart-recovery.js", async (importOriginal) => {
     recoverInterruptedSubagentRow: recoverRow,
   };
 });
-vi.mock("../../../infra/agent-events.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../infra/agent-events.js")>()),
-  isAgentEventLifecycleGenerationCurrent: () => true,
-}));
 vi.mock("../../../infra/agent-run-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/agent-run-registry.js")>()),
   getAgentRunContext,
@@ -193,26 +193,38 @@ describe("subagent registry recovery scheduling", () => {
       });
   });
 
-  it("makes four dispatch attempts and three separate terminal attempts", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
-    recoverRow.mockResolvedValue({ status: "retry", error: "gateway unavailable" });
-    const { entry, finalizeInterruptedSubagentRun, sweeper, warn } = createHarness(runtime);
+  it.each(["lifecycle", "runtime"] as const)(
+    "does not finalize interrupted work after its Gateway %s changes during classification",
+    async (change) => {
+      const runtime = { current: {} as GatewayRecoveryRuntime };
+      const classification = createDeferred<{ status: "terminal"; error: string }>();
+      recoverRow.mockReturnValue(classification.promise);
+      const { finalizeInterruptedSubagentRun, completeSubagentRunWithRecovery, sweeper } =
+        createHarness(runtime);
+      const pending = sweeper.sweepOnce();
+      await vi.waitFor(() => expect(recoverRow).toHaveBeenCalledOnce());
+      if (change === "lifecycle") {
+        rotateAgentEventLifecycleGeneration();
+      } else {
+        runtime.current = {} as GatewayRecoveryRuntime;
+      }
+      classification.resolve({ status: "terminal", error: "Gateway restart" });
+      await pending;
+      expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+      expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
+    },
+  );
 
+  it("retries terminal settlement without dispatching a child", async () => {
+    recoverRow.mockResolvedValue({ status: "terminal", error: "Gateway restart" });
+    const { entry, finalizeInterruptedSubagentRun, sweeper } = createHarness({});
+    finalizeInterruptedSubagentRun.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
     await sweeper.sweepOnce();
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(recoverRow).toHaveBeenCalledTimes(4);
-    expect(finalizeInterruptedSubagentRun).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(finalizeInterruptedSubagentRun).toHaveBeenCalledTimes(2);
     expect(
       finalizeInterruptedSubagentRun.mock.calls.every(([params]) => params.expectedEntry === entry),
     ).toBe(true);
-    expect(warn).toHaveBeenCalledWith(
-      "subagent interrupted terminal projection remains incomplete",
-      { runId: "interrupted-run" },
-    );
-    recoverRow.mockResolvedValue({ status: "handled" });
-    await sweeper.runTick();
-    expect(recoverRow).toHaveBeenCalledTimes(5);
   });
 
   it.each(["ordinary", "collector group", "collector launch"])(
@@ -363,7 +375,7 @@ describe("subagent registry recovery scheduling", () => {
 
   it("coalesces duplicate schedules before the owner pass starts", async () => {
     const runtime = { current: {} as GatewayRecoveryRuntime };
-    recoverRow.mockResolvedValue({ status: "handled" });
+    recoverRow.mockResolvedValue({ status: "ignored" });
     const { sweeper } = createHarness(runtime);
 
     sweeper.schedule({ delayMs: 1 });
@@ -373,10 +385,10 @@ describe("subagent registry recovery scheduling", () => {
     expect(recoverRow).toHaveBeenCalledOnce();
   });
 
-  it("re-resolves a missing runtime without consuming the dispatch budget", async () => {
+  it("rechecks deferred ownership when the runtime becomes available", async () => {
     const runtime: { current?: GatewayRecoveryRuntime } = {};
     recoverRow.mockImplementation(async ({ gatewayRuntime }) =>
-      gatewayRuntime ? { status: "handled" } : { status: "deferred" },
+      gatewayRuntime ? { status: "ignored" } : { status: "deferred" },
     );
     const { finalizeInterruptedSubagentRun, sweeper } = createHarness(runtime);
 
@@ -389,7 +401,7 @@ describe("subagent registry recovery scheduling", () => {
     expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
   });
 
-  it("never terminalizes deferred accepted-run reconciliation", async () => {
+  it("never terminalizes a deferred live owner", async () => {
     const runtime = { current: {} as GatewayRecoveryRuntime };
     recoverRow.mockResolvedValue({ status: "deferred" });
     const { finalizeInterruptedSubagentRun, sweeper } = createHarness(runtime);
@@ -408,7 +420,7 @@ describe("subagent registry recovery scheduling", () => {
       requestedAt: Date.now(),
       reason: "killed",
       sessionId: "session-id",
-      lifecycleGeneration: "test-generation",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       sessionLifecycleRevision: "session-revision",
     };
     getAgentRunContext.mockReturnValue({});
@@ -482,7 +494,7 @@ describe("subagent registry recovery scheduling", () => {
       requestedAt: Date.now(),
       reason: "killed",
       sessionId: "session-id",
-      lifecycleGeneration: "test-generation",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       sessionLifecycleRevision: "session-revision",
     };
     const runs = new Map([[entry.runId, entry]]);
@@ -518,7 +530,7 @@ describe("subagent registry recovery scheduling", () => {
       requestedAt: Date.now(),
       reason: "killed",
       sessionId: "session-id",
-      lifecycleGeneration: "test-generation",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       sessionLifecycleRevision: "session-revision",
     };
     const runs = new Map([[entry.runId, entry]]);
@@ -901,7 +913,7 @@ describe("subagent registry recovery scheduling", () => {
     const runtime = { current: {} as GatewayRecoveryRuntime };
     recoverRow
       .mockRejectedValueOnce(new Error("unexpected recovery failure"))
-      .mockResolvedValue({ status: "handled" });
+      .mockResolvedValue({ status: "ignored" });
     const { sweeper, warn } = createHarness(runtime);
 
     await sweeper.runTick();

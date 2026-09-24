@@ -8,12 +8,8 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 async function stopMaintenanceTimers(
   timers: ReturnType<typeof import("./server-maintenance.js").startGatewayMaintenanceTimers>,
 ): Promise<void> {
-  clearInterval(timers.tickInterval);
-  clearInterval(timers.healthInterval);
-  clearInterval(timers.dedupeCleanup);
-  clearInterval(timers.worktreeCleanup);
-  await timers.stopMediaCleanup();
-  await timers.stopSessionColdStorageMaintenance();
+  await timers.stopPeriodicTasks();
+  await timers.skillUsageCleanup();
 }
 
 describe("gateway tool-event recipient maintenance", () => {

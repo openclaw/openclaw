@@ -56,7 +56,8 @@ const enDesktop = {
     reconnect: en.desktop.reconnect,
     passwordPrompt: "Enter the VNC password for this machine.",
     passwordLabel: "VNC password",
-    accountPrompt: "Enter a macOS account to authenticate Screen Sharing.",
+    accountPrompt:
+      "Enter a macOS account allowed in System Settings → General → Sharing. Remote Management also requires Observe/Control permissions.",
     usernameLabel: "macOS username",
     accountPasswordLabel: "macOS password",
     controlTaken: "Another operator took control",

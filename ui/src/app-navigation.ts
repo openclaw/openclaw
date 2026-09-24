@@ -211,6 +211,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
     routes: [
       "agents",
       "model-providers",
+      "search",
       "plugin-settings",
       "skill-settings",
       "mcp",
@@ -238,6 +239,7 @@ const NON_ADMIN_SETTINGS_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   "devices",
   "agents",
   "model-providers",
+  "search",
   "plugin-settings",
   "skill-settings",
   "memory",
@@ -253,8 +255,17 @@ export function isSettingsNavigationRouteVisible(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): boolean {
-  if (routeId === "device" || routeId === "device-permissions") {
+  if (routeId === "device") {
     return nativeDeviceSettings !== null;
+  }
+  if (routeId === "device-permissions") {
+    const snapshot = nativeDeviceSettings?.snapshot;
+    return Boolean(
+      snapshot &&
+      (snapshot.permissions.entries.length > 0 ||
+        snapshot.permissions.location ||
+        snapshot.capabilities?.activeComputerPresenceEnabled !== undefined),
+    );
   }
   if (routeId === "updates") {
     return canAdmin || nativeDeviceSettings !== null;
@@ -268,6 +279,9 @@ export function deviceSettingsGroupLabelKey(
   const device = snapshot?.device;
   if (device?.platform === "macos") {
     return "nav.settingsGroupDevice";
+  }
+  if (device?.platform === "linux" || device?.platform === "windows") {
+    return "nav.settingsGroupThisComputer";
   }
   if (device?.platform === "ios") {
     if (device.formFactor === "phone") {
@@ -338,8 +352,8 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   usage: navigationPresentation("coins", "usage"),
   cron: navigationPresentation("calendarClock", "cron"),
   tasks: navigationPresentation("listChecks", "tasks"),
-  skills: navigationPresentation("zap", "skills"),
-  "skill-settings": navigationPresentation("zap", "skills"),
+  skills: navigationPresentation("bookOpenText", "skills"),
+  "skill-settings": navigationPresentation("bookOpenText", "skills"),
   plugins: navigationPresentation("plug", "plugins"),
   "plugin-settings": navigationPresentation("plug", "plugins"),
   "skill-workshop": navigationPresentation("wrench", "skillWorkshop"),
@@ -360,6 +374,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   automation: navigationPresentation("terminal", "automation"),
   mcp: navigationPresentation("wrench", "mcp"),
   memory: navigationPresentation("book", "memory"),
+  search: navigationPresentation("search", "search"),
   talk: navigationPresentation("mic", "talk"),
   infrastructure: navigationPresentation("globe", "infrastructure"),
   labs: navigationPresentation("flaskConical", "labs"),
@@ -450,23 +465,18 @@ export function titleForRoute(routeId: NavigationRouteId): string {
 
 /** Window/tab title, markers leftmost because tabs truncate from the right.
  * A disconnected Gateway replaces the approval count (a stale queue is not
- * actionable) and carries the pending-outbox total; titles already ending in the brand
+ * actionable); titles already ending in the brand
  * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
   gatewayDisconnected?: boolean;
-  queuedCount?: number;
 }): string {
   const base = options.context.endsWith("OpenClaw")
     ? options.context
     : `${options.context} — OpenClaw`;
   if (options.gatewayDisconnected) {
-    const queued =
-      options.queuedCount && options.queuedCount > 0
-        ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
-        : "";
-    return `(${t("connection.disconnectedTitle")}${queued}) ${base}`;
+    return `(${t("connection.disconnectedTitle")}) ${base}`;
   }
   if (options.attentionCount && options.attentionCount > 0) {
     return `(${options.attentionCount}) ${base}`;

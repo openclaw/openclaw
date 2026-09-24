@@ -59,6 +59,32 @@ describe("reply payload terminal content", () => {
     ["commentary", { text: "working", isCommentary: true }, false],
     ["status", { text: "compacting", isStatusNotice: true }, false],
     [
+      "fresh text with TTS audio",
+      {
+        text: "answer",
+        mediaUrl: "file:///tmp/answer.mp3",
+        ttsSupplement: { spokenText: "answer" },
+      },
+      true,
+    ],
+    [
+      "already-delivered text with TTS audio",
+      {
+        text: "answer",
+        mediaUrl: "file:///tmp/answer.mp3",
+        ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
+      },
+      false,
+    ],
+    [
+      "audio-only TTS supplement",
+      {
+        mediaUrl: "file:///tmp/answer.mp3",
+        ttsSupplement: { spokenText: "answer" },
+      },
+      false,
+    ],
+    [
       "TTS supplement",
       {
         mediaUrl: "file:///tmp/answer.mp3",

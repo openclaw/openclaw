@@ -1,5 +1,6 @@
 // Vitest process config wires the process test shard.
 import type { ViteUserConfig } from "vitest/config";
+import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createProcessVitestConfig(
@@ -8,6 +9,7 @@ export function createProcessVitestConfig(
   const config = createScopedVitestConfig(["src/process/**/*.test.ts"], {
     dir: "src",
     env,
+    exclude: databaseWorkerCoreTestFiles,
     includeOpenClawRuntimeSetup: false,
     name: "process",
     passWithNoTests: true,

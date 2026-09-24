@@ -3,7 +3,7 @@
 {"seq":3,"at":0,"dir":"out","kind":"sendChatAction","data":{"payload":{"action":"typing"},"result":true,"target":"4242"}}
 {"seq":4,"at":0,"dir":"in","kind":"partial","data":{"text":"Deploy status:"}}
 {"seq":5,"at":300,"dir":"in","kind":"partial","data":{"text":"Deploy status: build is green."}}
-{"seq":6,"at":300,"dir":"out","kind":"sendMessage","data":{"payload":{"parse_mode":"HTML","reply_parameters":{"allow_sending_without_reply":true,"message_id":1},"text":"Deploy status: build is green."},"result":{"message_id":1001},"target":"4242"}}
+{"seq":6,"at":300,"dir":"out","kind":"sendMessage","data":{"payload":{"parse_mode":"HTML","reply_parameters":{"allow_sending_without_reply":true,"message_id":1,"quote":"run the deploy","quote_position":0},"text":"Deploy status: build is green."},"result":{"message_id":1001},"target":"4242"}}
 {"seq":7,"at":600,"dir":"in","kind":"block-final","data":{"text":"Deploy status: build is green."}}
 {"seq":8,"at":600,"dir":"in","kind":"partial","data":{"text":"Rolling out to production now."}}
 {"seq":9,"at":900,"dir":"in","kind":"final","data":{"text":"Deploy status: build is green.\n\nRolling out to production now."}}

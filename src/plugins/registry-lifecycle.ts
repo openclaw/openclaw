@@ -2,8 +2,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
-import { getPluginCache, type PluginCache } from "./plugin-cache.js";
+import {
+  getPluginCache,
+  releasePluginCacheInstance,
+  retainPluginCacheInstance,
+  type PluginCache,
+} from "./plugin-cache.js";
 import {
   getPluginInstance,
   getPluginInstanceOwner,
@@ -19,7 +25,12 @@ type PluginRegistryLifecycleState = {
   controller?: AbortController;
 };
 
+type PluginRegistryLifetime = { retain: () => () => void | Promise<void> };
+
 type PluginRegistryLifecycleStore = {
+  loadRegistryDisposer?: () => Promise<
+    typeof import("./runtime.js").disposePluginRegistryInstances
+  >;
   retiredRegistries: WeakSet<PluginRegistry>;
   activatedRegistries: WeakSet<PluginRegistry>;
   registryEpochs: WeakMap<PluginRegistry, PluginRegistryLifecycleState>;
@@ -27,6 +38,7 @@ type PluginRegistryLifecycleStore = {
   loaderCaches?: WeakMap<PluginRegistry, Set<PluginLoaderCacheState<PluginRegistry>>>;
   registryLoads?: WeakMap<PluginCache, PluginLoaderCacheState<PluginRegistry>>;
   registryResourceOwners?: WeakMap<PluginRegistry, PluginRegistry>;
+  registryLifetimes?: WeakMap<PluginRegistry, PluginRegistryLifetime>;
 };
 
 const lifecycle = resolveGlobalSingleton<PluginRegistryLifecycleStore>(
@@ -44,6 +56,16 @@ const preparation = (lifecycle.preparation ??= new AsyncLocalStorage());
 const loaderCaches = (lifecycle.loaderCaches ??= new WeakMap());
 const registryLoads = (lifecycle.registryLoads ??= new WeakMap());
 const registryResourceOwners = (lifecycle.registryResourceOwners ??= new WeakMap());
+const registryLifetimes = (lifecycle.registryLifetimes ??= new WeakMap());
+const loadRegistryDisposer = (lifecycle.loadRegistryDisposer ??= createLazyRuntimeNamedExport(
+  () => import("./runtime.js"),
+  "disposePluginRegistryInstances",
+));
+
+/** Prime the same import edge retained by cache callbacks, including copied SDK graphs. */
+export async function preparePluginRegistryCacheShutdown(): Promise<void> {
+  await loadRegistryDisposer();
+}
 
 /** Projection changes contributions, not custody of the loaded instances. */
 export function bindPluginRegistryResourceOwner(
@@ -61,6 +83,18 @@ export function getPluginRegistryResourceOwner(registry: PluginRegistry): Plugin
   return registryResourceOwners.get(registry) ?? registry;
 }
 
+/** The creation owner lends existing custody; lookup never takes ownership of an external host. */
+export function getPluginRegistryLifetime(registry: PluginRegistry) {
+  return registryLifetimes.get(getPluginRegistryResourceOwner(registry));
+}
+
+export function bindPluginRegistryLifetime(
+  registry: PluginRegistry,
+  lifetime: PluginRegistryLifetime,
+): void {
+  registryLifetimes.set(getPluginRegistryResourceOwner(registry), lifetime);
+}
+
 export function getPluginLoaderCacheState(cache = getPluginCache()) {
   const cached = registryLoads.get(cache);
   if (cached) {
@@ -75,7 +109,7 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
     for (const record of registry.plugins) {
       const instance = getPluginInstance(record);
       if (instance) {
-        cache.instances.add(instance);
+        retainPluginCacheInstance(instance, cache);
       }
     }
   });
@@ -90,7 +124,7 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
       }
       // Publication transfers exact instances to their runtime owner, including adopted records.
       if (isPluginRecordActive(owner.registry, owner.record)) {
-        cache.instances.delete(instance);
+        releasePluginCacheInstance(instance, cache);
       } else if (registryEpochs.get(owner.registry)?.epoch === undefined) {
         instance.quiesce();
         registries.add(owner.registry);
@@ -103,7 +137,7 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
       return { cleanupCount: 0, failures: [] };
     }
     // Lookup invalidation never reaches this terminal owner; runtime cleanup stays lazy until retirement.
-    const { disposePluginRegistryInstances } = await import("./runtime.js");
+    const disposePluginRegistryInstances = await loadRegistryDisposer();
     const results = await Promise.allSettled(
       [...registries].map((registry) => disposePluginRegistryInstances(registry)),
     );
@@ -161,6 +195,12 @@ function closePluginRegistryAdmissions(
           owner.revoked = true;
         }
         if (owner.instance) {
+          for (const entry of registry.decisionProviders) {
+            entry.host.cancelConsumer(record.id);
+            if (entry.pluginId === record.id) {
+              entry.host.retire();
+            }
+          }
           instances.add(owner.instance);
         }
       }

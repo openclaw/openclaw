@@ -226,7 +226,7 @@ Unarchiving, or an authorized human message that reopens the archived session, r
 
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. For a Gateway source, New Session dispatches the completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation. The separate `repository: { url, ref? }` create input starts a remote-owned repository session without a Gateway path or `worktree: true`.
 
-`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a crustacean-themed fallback. For a new session with an initial message or task, creation returns the admitted session and run before worktree preparation finishes. The chat shows the submitted message and naming, checkout, and setup progress; failures remain visible and retryable in the same session. The agent starts only after the finalized worktree is bound. Creation without an initial turn still waits for preparation and returns the worktree in the create result. The bound checkout is persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show its checkout and branch. When session deletion cannot finish that cleanup, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
+`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a two-word, crustacean-themed fallback if naming fails or exceeds the 30-second wait. Raw first-message text is never a branch-name fallback. A title that arrives later updates the session without renaming its existing branch. For a new session with an initial message or task, creation returns the admitted session and run before worktree preparation finishes. The chat shows the submitted message and naming, checkout, and setup progress; failures remain visible and retryable in the same session. The agent starts only after the finalized worktree is bound. Creation without an initial turn still waits for preparation and returns the worktree in the create result. The bound checkout is persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show its checkout and branch. When session deletion cannot finish that cleanup, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
 
 An explicit session base must resolve to a commit. Local refs are checked before the session is saved; remote-project refs are checked after cloning. A missing remote ref is refreshed from the recorded project URL and retried only in a Gateway-managed clone, never an operator-registered checkout. Once accepted, the commit stays pinned across setup failures and retries while the original ref remains publication metadata. Invalid explicit refs never silently switch to the repository default. Managed-clone refresh uses an isolated Git repository for network transport, so checkout-local URL rewrites and hooks cannot redirect or execute during the fetch.
 
@@ -278,17 +278,123 @@ Restore recreates `openclaw/<name>` at the original pre-snapshot commit, reusing
 
 A branch at a shallow history boundary can still be snapshotted and restored. If a later depth-limited fetch makes the snapshot commit itself shallow, Git may no longer resolve its parent. Restore then preserves the snapshot and reports the repository and snapshot commit with `git fetch --unshallow` guidance. OpenClaw does not deepen automatically: origin may not contain the local snapshot, so even a successful fetch cannot guarantee recovery. If the snapshot remains shallow after fetching, recover its parent from the original repository before retrying.
 
+## Exact-state detached retirement
+
+Ordinary removal, forced removal, and `--if-lossless` still refuse a detached
+HEAD. To retire a deliberately detached managed checkout without changing its
+recorded branch or staging state, use an explicit owner-fenced request:
+
+```bash
+openclaw worktrees remove <id> --exact-state /path/to/retirement.json --json
+openclaw worktrees restore <id> --json
+```
+
+The request contains the current registry owner and lifecycle timestamps from
+`worktrees list --json`, the detached `HEAD` commit, the recorded branch's commit,
+and the SHA-256 of the original Git index bytes. For example:
+
+```json
+{
+  "ownerKind": "session",
+  "ownerId": "example-session",
+  "createdAt": 1800000000000,
+  "lastActiveAt": 1800000000001,
+  "head": "1111111111111111111111111111111111111111",
+  "branchHead": "2222222222222222222222222222222222222222",
+  "indexSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
+```
+
+Use actual observed values, not the example. Omit `ownerId` for a manual record
+without an owner ID. This option cannot be combined with `--force` or
+`--if-lossless`. A live run lease, foreign Git lock, changed owner/lifecycle, or
+changed HEAD, branch, index, or captured files preserves the checkout. It does
+not authorize removing another session's active work.
+
+The versioned snapshot keeps the detached commit and separate recorded branch
+tip, the original index bytes and split-index dependency, and objects referenced
+only by staging, cache-tree, or resolve-undo state. It saves raw tracked and
+non-ignored untracked bytes, symbolic links, permission mode bits, and modification
+times. Ignored-file selection in this snapshot stays unchanged: only the native
+provisioned-file ledger and staged-input contract preserve eligible ignored files.
+Object-only recovery does not reproduce filesystem identities such as inode
+numbers or change times. The recorded branch stays at its original commit.
+
+**Exact retirement is archival, not immediate disk reclamation.** It moves the
+original checkout through native Git to a private recovery name and removes the
+live managed-worktree binding. The original checkout and its native registration
+remain under the same 30-day recovery retention as the immutable snapshot. The
+result includes `recoveryPath` and `recoveryRetainedUntil`. This retains writes
+from processes that already held a working directory or open file descriptor;
+Git index/ref locks alone cannot make deleting those bytes safe. The recovery
+path is not an active workspace. Snapshot expiration deletes this retained
+checkout, so do not continue working there or treat it as permanent storage.
+
+Exact-state retirement requires a full, non-sparse checkout with Git file refs
+and supported Git index extensions. It holds native Git index and ref locks while
+revalidating its index, refs, files, and authority before archival finalization.
+A validation failure moves the complete checkout back when its original path is
+still available. Neither move overwrites a recreated source path.
+
+Restore normally moves the retained original checkout back, preserving its index,
+metadata, ignored caches, and even workfile writes made through old handles after
+capture. If its HEAD or index changed, restore refuses and preserves both recovery
+sources. If the retained checkout and its registration are both unavailable,
+restore instead materializes the immutable snapshot directly from Git objects,
+without filters, line-ending conversion, or working-tree encoding. That fallback
+restores only the snapshot's eligible ignored files, not unrelated caches. Both
+routes restore detached HEAD without replacing the recorded branch. If restore
+is interrupted after its native move, retry restore: it recognizes only the
+captured original directory incarnation at the live path and never adopts a
+recreated replacement directory.
+
+Object-only restoration also keeps a versioned native Git recovery receipt for
+the newly allocated directory incarnation. It publishes complete files and the
+original index atomically while native Git locks exclude staging and HEAD
+writers through registry finalization. Retry the same restore command after an
+interruption; it resumes only that receipt-owned directory and preserves changed
+or replacement sources. Publishing the exact index is the restoration commit
+point: a retry after that point preserves subsequent workfile edits and only
+finishes registry cleanup. The receipt is cleared after successful finalization.
+A retry after interrupted snapshot expiration can finish the expired registry
+entry without guessing the identity of an unknown retained directory.
+
+Snapshots use `refs/openclaw/snapshots/exact-v1/<id>` and the existing 30-day
+retention owner. Keep repository objects, retained recovery checkout, and the
+shared-state database together. Use a runtime supporting this option; older
+restore implementations cannot preserve the extra index state. Ordinary
+snapshots retain their existing behavior.
+
+If the native archival move completes but registry finalization is interrupted,
+reconcile and restore with the original request:
+
+```bash
+openclaw worktrees restore <id> --recover-exact-state /path/to/retirement.json --json
+```
+
+Recovery requires the matching completed capture and unchanged owner and recorded
+branch. Recovery holds the existing removal claim while the registry still shows
+a live row, rejecting active runs and new run admission until it settles. A retry
+recognizes the captured original directory already moved back; it never adopts an
+unknown occupied path. An inconsistent source/registration preserves all recovery
+material and refuses to overwrite it. Listing and garbage collection
+do not infer completed retirement from the missing original path. Preserve
+unfinished source and recovery for inspection; do not force another removal,
+reset the index, reattach HEAD, or prune the registration.
+
 ## CLI
 
 ```bash
 openclaw worktrees list [--json]
 openclaw worktrees create <repo-root> [--name <name>] [--base-ref <ref>] [--source-profile <name>]... [--json]
-openclaw worktrees remove <id> [--force | --if-lossless] [--json]
-openclaw worktrees restore <id> [--json]
+openclaw worktrees remove <id> [--force | --if-lossless | --exact-state <file>] [--json]
+openclaw worktrees restore <id> [--recover-exact-state <file>] [--json]
 openclaw worktrees gc [--json]
 ```
 
 The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
+
+Leave **Base branch** empty to fetch and use the remote default branch. Branch suggestions do not select a base; choosing or entering a branch or commit uses that exact ref without fetching. Clearing the field restores automatic selection. Fetching updates remote-tracking refs, not the source checkout's local `main`; the local-`HEAD` fallback described above still applies when the remote default is unavailable.
 
 `--if-lossless --json` returns `removed` plus the recorded `cleanup` outcome. A retained checkout returns `removed: false`; it is not a successful deletion. The explicit `--if-lossless` option is CLI-only; Gateway removal retains its archival behavior and result format.
 

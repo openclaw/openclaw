@@ -2,24 +2,39 @@
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import {
-  resetSubagentRegistryForTests,
-  testing,
-} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { testing as schedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { LegacyContextEngine } from "../../context-engine/legacy.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.test-support.js";
-import * as taskControlRuntime from "../../tasks/task-registry-control.runtime.js";
-import {
-  resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryControlRuntimeForTests,
-} from "../../tasks/task-registry.test-support.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+
+vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-recovery-runtime-context.js")>()),
+  bindGatewayLifecycleRequest:
+    () =>
+    async ({ method }: { method: string }) => {
+      if (method !== "agent.wait") {
+        throw new Error(`Unexpected registry RPC ${method}`);
+      }
+      return await new Promise<never>(() => {});
+    },
+}));
+vi.mock("../../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: async () => {},
+}));
+vi.mock("../../agents/runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../../plugins/registry-empty.js");
+  return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
+});
+vi.mock("../../context-engine/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../context-engine/registry.js")>()),
+  resolveContextEngine: async () => new LegacyContextEngine(),
+}));
 
 export function useChatAbortRegistryFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
@@ -37,20 +52,6 @@ export function useChatAbortRegistryFixture() {
     );
     clearConfigCache();
     clearRuntimeConfigSnapshot();
-    // Supply the real ESM owner through the existing CJS runtime seam.
-    setTaskRegistryControlRuntimeForTests(taskControlRuntime);
-    testing.setDepsForTest({
-      // These cancellation fixtures own no browser sessions; browser cleanup has its own tests.
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      resolveContextEngine: async () => new LegacyContextEngine(),
-      callGateway: async ({ method }) => {
-        if (method !== "agent.wait") {
-          throw new Error(`Unexpected registry RPC ${method}`);
-        }
-        return await new Promise<never>(() => {});
-      },
-    });
   });
   afterEach(async () => {
     try {
@@ -59,9 +60,7 @@ export function useChatAbortRegistryFixture() {
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       schedulerTesting.reset();
-      resetTaskRegistryControlRuntimeForTests();
       await cleanupSessionStateForTest({ stateDir });
-      testing.setDepsForTest();
       clearConfigCache();
       clearRuntimeConfigSnapshot();
       await rm(stateDir, { recursive: true, force: true });

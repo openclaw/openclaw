@@ -4,7 +4,7 @@ import OpenClawKit
 extension DeviceSettingsPermission {
     static let macOSPermissions: [Self] = [
         .notifications, .accessibility, .screenRecording, .microphone,
-        .camera, .speechRecognition, .location, .automation,
+        .camera, .speechRecognition, .location,
     ]
 
     var capability: Capability? {
@@ -16,7 +16,6 @@ extension DeviceSettingsPermission {
         case .camera: .camera
         case .speechRecognition: .speechRecognition
         case .location: .location
-        case .automation: .appleScript
         case .contacts, .calendars, .reminders, .photos: nil
         }
     }
@@ -26,7 +25,9 @@ extension DeviceSettingsPermissionStatus {
     init(_ status: CapabilityAuthorizationStatus?) {
         switch status {
         case .granted: self = .granted
-        case .notGranted: self = .denied
+        // Binary macOS checks cannot distinguish a denial from an unrequested grant.
+        // Keep them requestable using the vocabulary understood by shipped Gateway UIs.
+        case .notGranted: self = .notDetermined
         case .unknown, nil: self = .unavailable
         }
     }

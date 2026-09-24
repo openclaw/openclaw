@@ -47,18 +47,18 @@ import {
   IMAGE_ONLY_USER_MESSAGE,
   renderConversationToolCall,
 } from "./agent-prompt.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   parseGatewayJsonRequest,
   sendInvalidRequest,
   sendJson,
   sendMissingScopeForbidden,
+  sendUnauthorized,
   setSseHeaders,
   watchClientDisconnect,
   writeDone,
 } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
+import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeOpenAiCompatibleHttpSession,
@@ -68,7 +68,7 @@ import {
   isUnknownGatewayAgentError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
@@ -77,25 +77,16 @@ import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai
 import {
   readOpenAiHttpRunTerminal,
   runOpenAiCompatibleAgentCommand,
+  type OpenAiCompatibleHttpOptions,
 } from "./openai-compatible-agent-run.js";
 import {
   applyToolChoice,
   isToolChoiceConstraintSatisfied,
+  resolveChatToolChoice,
   resolveUnsatisfiedToolChoiceMessage,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
-import type { GatewayContextResolver } from "./server-methods/types.js";
-
-type OpenAiHttpOptions = {
-  auth: ResolvedGatewayAuth;
-  config?: GatewayHttpChatCompletionsConfig;
-  maxBodyBytes?: number;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-  resolveGatewayContext?: GatewayContextResolver;
-};
 
 type OpenAiChatMessage = {
   role?: unknown;
@@ -208,35 +199,6 @@ function extractClientToolsFromChatRequest(tools: unknown): ClientToolDefinition
     });
   }
   return clientTools;
-}
-
-function resolveChatToolChoice(toolChoice: unknown): ToolChoiceConstraint | "none" | undefined {
-  if (toolChoice == null || toolChoice === "auto") {
-    return undefined;
-  }
-  if (toolChoice === "none") {
-    return "none";
-  }
-  if (toolChoice === "required") {
-    return { type: "required" };
-  }
-  if (typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
-    throw new Error("tool_choice must be a string or object");
-  }
-  const choiceType = (toolChoice as { type?: unknown }).type;
-  if (choiceType === "function") {
-    const targetName = normalizeOptionalString(
-      (toolChoice as { function?: { name?: unknown } }).function?.name,
-    );
-    if (!targetName) {
-      throw new Error("tool_choice.function.name is required");
-    }
-    return { type: "function", name: targetName };
-  }
-  if (typeof choiceType !== "string") {
-    throw new Error("unsupported tool_choice type");
-  }
-  throw new Error(`tool_choice ${choiceType} is not supported`);
 }
 
 type ChatCompletionStreamIdentity = { runId: string; model: string; created: number };
@@ -534,6 +496,7 @@ async function resolveImagesForRequest(
   activeTurnContext: Pick<ActiveTurnContext, "imageUrls">,
   limits: ResolvedOpenAiChatCompletionsLimits,
   signal: AbortSignal,
+  assertCurrent: () => void,
 ): Promise<ImageContent[]> {
   signal.throwIfAborted();
   if (activeTurnContext.imageUrls.kind === "invalid") {
@@ -550,6 +513,7 @@ async function resolveImagesForRequest(
   const images: ImageContent[] = [];
   let totalBytes = 0;
   for (const url of urls) {
+    assertCurrent();
     const source = parseImageUrlToSource(url);
     if (source.type === "base64") {
       const sourceBytes = estimateBase64DecodedBytes(source.data);
@@ -730,19 +694,16 @@ function resolveChatCompletionTokenCap(value: unknown, field: string): number | 
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: OpenAiHttpOptions,
+  opts: OpenAiCompatibleHttpOptions<GatewayHttpChatCompletionsConfig>,
 ): Promise<boolean> {
   const limits = resolveOpenAiChatCompletionsLimits(opts.config);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
+    ...opts,
     pathname: "/v1/chat/completions",
     requiredOperatorMethod: "chat.send",
     // Compat HTTP uses a different scope model from generic HTTP helpers:
     // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
+    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes: opts.maxBodyBytes ?? limits.maxBodyBytes,
   });
   if (handled === false) {
@@ -910,9 +871,16 @@ export async function handleOpenAiHttpRequest(
   }
   let images: ImageContent[];
   try {
-    images = await resolveImagesForRequest(activeTurnContext, limits, abortController.signal);
+    assertGatewayHttpRequestCurrent(handled.requestAuth);
+    images = await resolveImagesForRequest(activeTurnContext, limits, abortController.signal, () =>
+      assertGatewayHttpRequestCurrent(handled.requestAuth),
+    );
   } catch (err) {
     if (abortController.signal.aborted) {
+      return true;
+    }
+    if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
+      sendUnauthorized(res);
       return true;
     }
     logWarn(`openai-compat: invalid image_url content: ${String(err)}`);
@@ -942,7 +910,10 @@ export async function handleOpenAiHttpRequest(
       runId,
       messageChannel,
       senderIsOwner,
+      requestAuth: handled.requestAuth,
+      operatorScopes: handled.operatorScopes,
       abortSignal: abortController.signal,
+      hasCurrentClientAuthority: handled.requestAuth.hasCurrentClientAuthority,
       streamParams,
       resolveGatewayContext: opts.resolveGatewayContext,
     });

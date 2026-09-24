@@ -4,14 +4,17 @@ import { performance } from "node:perf_hooks";
 import { constants as zlibConstants, deflateRawSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import {
+  WebSocket,
+  WebSocketServer,
+} from "../../../../packages/gateway-client/src/websocket.test-support.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import {
   connectOk,
   connectReq,
-  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   startTestGatewayServer,
@@ -132,19 +135,20 @@ describe("authenticated operator request starts", () => {
     };
     setTestPluginRegistry(registry);
     const token = "gateway-operator-start-fairness-test-token";
-    const port = await getGatewayTestPort();
-    const capture = captureGatewayConnection(port);
+    let capture: ReturnType<typeof captureGatewayConnection> | undefined;
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let ws: WebSocket | undefined;
     let restoreClock: (() => void) | undefined;
     let allResponses: Promise<unknown> | undefined;
     try {
-      server = await startTestGatewayServer(port, {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      server = await startTestGatewayServer(portClaim, {
         auth: { mode: "token", token },
         bind: "loopback",
         controlUiEnabled: false,
       });
-      ws = await openOperatorSocket(port, token);
+      capture = captureGatewayConnection(portClaim.port);
+      ws = await openOperatorSocket(portClaim.port, token);
       await expect(sendTraceRequest(ws, "warmup")).resolves.toMatchObject({ ok: true });
       const { stream } = capture.get();
       const compressedRequests = ws.extensions.includes("permessage-deflate");
@@ -201,7 +205,7 @@ describe("authenticated operator request starts", () => {
       try {
         await server?.close();
       } finally {
-        capture.restore();
+        capture?.restore();
         resetTestPluginRegistry();
       }
     }
@@ -220,16 +224,16 @@ describe("authenticated operator request starts", () => {
     };
     setTestPluginRegistry(registry);
     const token = "gateway-operator-control-test-token";
-    const port = await getGatewayTestPort();
-    const server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const server = await startTestGatewayServer(portClaim, {
       auth: { mode: "token", token },
       bind: "loopback",
       controlUiEnabled: false,
     });
-    const capture = captureGatewayConnection(port);
+    const capture = captureGatewayConnection(portClaim.port);
     let ws: WebSocket | undefined;
     try {
-      ws = await openOperatorSocket(port, token);
+      ws = await openOperatorSocket(portClaim.port, token);
       await sendTraceRequest(ws, "warmup");
       const { socket, stream } = capture.get();
       const signal = AbortSignal.timeout(2_000);
@@ -286,16 +290,16 @@ describe("authenticated operator request starts", () => {
     };
     setTestPluginRegistry(registry);
     const token = "gateway-operator-close-test-token";
-    const port = await getGatewayTestPort();
-    const server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const server = await startTestGatewayServer(portClaim, {
       auth: { mode: "token", token },
       bind: "loopback",
       controlUiEnabled: false,
     });
-    const capture = captureGatewayConnection(port);
+    const capture = captureGatewayConnection(portClaim.port);
     let ws: WebSocket | undefined;
     try {
-      ws = await openOperatorSocket(port, token);
+      ws = await openOperatorSocket(portClaim.port, token);
       await sendTraceRequest(ws, "warmup");
       const { socket, stream } = capture.get();
       const signal = AbortSignal.timeout(2_000);
@@ -335,19 +339,20 @@ describe("authenticated operator request starts", () => {
     "retains native control-frame yielding for %s sockets",
     async (role) => {
       const token = "gateway-native-control-fairness-test-token";
-      const port = await getGatewayTestPort();
-      const capture = captureGatewayConnection(port);
+      let capture: ReturnType<typeof captureGatewayConnection> | undefined;
       let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
       let ws: WebSocket | undefined;
       let sentinel: ReturnType<typeof setImmediate> | undefined;
       let removePingObserver: (() => void) | undefined;
       try {
-        server = await startTestGatewayServer(port, {
+        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        server = await startTestGatewayServer(portClaim, {
           auth: { mode: "token", token },
           bind: "loopback",
           controlUiEnabled: false,
         });
-        ws = new WebSocket(`ws://127.0.0.1:${port}`);
+        capture = captureGatewayConnection(portClaim.port);
+        ws = new WebSocket(`ws://127.0.0.1:${portClaim.port}`);
         trackConnectChallengeNonce(ws);
         await once(ws, "open");
         if (role === "node") {
@@ -388,7 +393,7 @@ describe("authenticated operator request starts", () => {
         try {
           await server?.close();
         } finally {
-          capture.restore();
+          capture?.restore();
           resetTestPluginRegistry();
         }
       }
@@ -402,17 +407,18 @@ describe("authenticated operator request starts", () => {
     };
     setTestPluginRegistry(registry);
     const token = "gateway-frame-limit-test-token";
-    const port = await getGatewayTestPort();
-    const capture = captureGatewayConnection(port);
+    let capture: ReturnType<typeof captureGatewayConnection> | undefined;
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let ws: WebSocket | undefined;
     try {
-      server = await startTestGatewayServer(port, {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      server = await startTestGatewayServer(portClaim, {
         auth: { mode: "token", token },
         bind: "loopback",
         controlUiEnabled: false,
       });
-      ws = await openOperatorSocket(port, token);
+      capture = captureGatewayConnection(portClaim.port);
+      ws = await openOperatorSocket(portClaim.port, token);
       expect(ws.extensions).toBe("");
       const { stream } = capture.get();
       // Cover both live session/tool events and ordinary final agent results.
@@ -451,7 +457,7 @@ describe("authenticated operator request starts", () => {
       try {
         await server?.close();
       } finally {
-        capture.restore();
+        capture?.restore();
         resetTestPluginRegistry();
       }
     }
@@ -459,17 +465,18 @@ describe("authenticated operator request starts", () => {
 
   it("rejects an operator handshake visibly when the receiver handoff field is not writable", async () => {
     const token = "gateway-receiver-contract-test-token";
-    const port = await getGatewayTestPort();
-    const capture = captureGatewayConnection(port);
+    let capture: ReturnType<typeof captureGatewayConnection> | undefined;
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let ws: WebSocket | undefined;
     try {
-      server = await startTestGatewayServer(port, {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      server = await startTestGatewayServer(portClaim, {
         auth: { mode: "token", token },
         bind: "loopback",
         controlUiEnabled: false,
       });
-      ws = new WebSocket(`ws://127.0.0.1:${port}`);
+      capture = captureGatewayConnection(portClaim.port);
+      ws = new WebSocket(`ws://127.0.0.1:${portClaim.port}`);
       trackConnectChallengeNonce(ws);
       await once(ws, "open");
       const { socket } = capture.get();
@@ -494,7 +501,7 @@ describe("authenticated operator request starts", () => {
       try {
         await server?.close();
       } finally {
-        capture.restore();
+        capture?.restore();
         resetTestPluginRegistry();
       }
     }

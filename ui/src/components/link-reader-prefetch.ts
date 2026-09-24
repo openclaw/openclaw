@@ -1,10 +1,7 @@
 import { nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
-import {
-  prefetchLinkReader,
-  previewTargetForAnchor,
-} from "./link-reader-hovercard-registration.ts";
+import { prefetchLinkReader, previewTargetForAnchor } from "./link-reader-prefetch-request.ts";
 import { LINK_READER_HOVERCARD_PROVIDER_TAG, linkReaderTargetKey } from "./link-reader-target.ts";
 
 const PREFETCH_LIMIT = 8;

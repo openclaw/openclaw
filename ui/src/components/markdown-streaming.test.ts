@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import * as markdownDetails from "./markdown-details.ts";
 import { splitStableStreamingMarkdown } from "./markdown-streaming.ts";
+import * as markdownText from "./markdown-text.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
 
@@ -153,6 +154,22 @@ describe("toStreamingMarkdownParts", () => {
     expect(toStreamingMarkdownParts(completed, {}, "citation-prefix-replacement").join("")).toBe(
       toStreamingMarkdownParts(completed).join(""),
     );
+  });
+
+  it("normalizes an appended CRLF boundary without rescanning the prefix", () => {
+    const key = "incremental-line-ending-normalization";
+    const expected = toStreamingMarkdownParts("before\r\nafter").join("");
+    const normalize = vi.spyOn(markdownText, "normalizeMarkdownLineBreaks");
+    try {
+      toStreamingMarkdownParts("before\r", {}, key);
+      normalize.mockClear();
+
+      expect(toStreamingMarkdownParts("before\r\nafter", {}, key).join("")).toBe(expected);
+      expect(normalize).toHaveBeenCalledWith("\nafter");
+      expect(normalize).not.toHaveBeenCalledWith("before\r\nafter");
+    } finally {
+      normalize.mockRestore();
+    }
   });
 
   it.each(["- item", "1. item"])(

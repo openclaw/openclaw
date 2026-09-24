@@ -3,35 +3,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256File } from "../infra/crypto-digest.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
-import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
-import {
-  isCaseSensitiveDirectory,
-  TRANSCRIPT_EXPORT_FILE_NAMES,
-  transcriptSessionExportKey,
-  transcriptSessionSelector,
-} from "./store-artifacts.js";
+import { isCaseSensitiveDirectory, TRANSCRIPT_EXPORT_FILE_NAMES } from "./store-artifacts.js";
 import {
   parseTranscriptExportManifest,
   parseTranscriptPendingExports,
 } from "./store-export-state.js";
-import { meetingTranscriptDb, type MeetingTranscriptSessionRow } from "./store-sqlite.js";
+import type {
+  readTranscriptExportPathCollisions,
+  readTranscriptExportPathOwners,
+} from "./store-sqlite-read.js";
+import type { MeetingTranscriptSessionRow } from "./store-sqlite.js";
 
 type ExportOwnershipParams = {
-  session: TranscriptSessionDescriptor;
+  selector: string;
   exportRootDir: string;
-  databaseOptions: OpenClawStateDatabaseOptions;
 };
-
-function database(options: OpenClawStateDatabaseOptions) {
-  ensureMeetingTranscriptsSchema(options);
-  return openOpenClawStateDatabase(options);
-}
 
 async function transcriptArtifactsMatchOwner(
   sessionDir: string,
@@ -59,17 +45,11 @@ async function transcriptArtifactsMatchOwner(
 }
 
 export async function assertTranscriptExportPathAvailable(
-  params: ExportOwnershipParams,
+  params: ExportOwnershipParams & {
+    collisions: ReturnType<typeof readTranscriptExportPathCollisions>;
+  },
 ): Promise<void> {
-  const stateDatabase = database(params.databaseOptions);
-  const collisions = executeSqliteQuerySync(
-    stateDatabase.db,
-    meetingTranscriptDb(stateDatabase.db)
-      .selectFrom("meeting_transcript_sessions")
-      .select(["session_id", "started_at", "selector", "export_pending_json"])
-      .where("export_key", "=", transcriptSessionExportKey(params.session))
-      .orderBy("selector", "asc"),
-  ).rows;
+  const { collisions } = params;
   if (collisions.length <= 1) {
     return;
   }
@@ -109,26 +89,18 @@ export async function assertTranscriptExportPathAvailable(
       ownerSelector = pendingOwners[0]?.selector;
     }
   }
-  ownerSelector ??= transcriptSessionSelector(params.session);
-  if (ownerSelector !== transcriptSessionSelector(params.session)) {
+  ownerSelector ??= params.selector;
+  if (ownerSelector !== params.selector) {
     throw new Error(
-      `transcript export path collides case-insensitively with another session: ${path.join(params.exportRootDir, transcriptSessionSelector(params.session))}`,
+      `transcript export path collides case-insensitively with another session: ${path.join(params.exportRootDir, params.selector)}`,
     );
   }
 }
 
 export async function hasAliasedCanonicalTranscriptExportPathOwner(
-  params: ExportOwnershipParams,
+  params: ExportOwnershipParams & { owners: ReturnType<typeof readTranscriptExportPathOwners> },
 ): Promise<boolean> {
-  const stateDatabase = database(params.databaseOptions);
-  const owners = executeSqliteQuerySync(
-    stateDatabase.db,
-    meetingTranscriptDb(stateDatabase.db)
-      .selectFrom("meeting_transcript_sessions")
-      .select(["session_id", "started_at", "export_manifest_json", "export_pending_json"])
-      .where("export_key", "=", transcriptSessionExportKey(params.session))
-      .orderBy("selector", "asc"),
-  ).rows;
+  const { owners } = params;
   if (owners.length === 0) {
     return false;
   }
@@ -143,7 +115,7 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
   if (await isCaseSensitiveDirectory(params.exportRootDir)) {
     return false;
   }
-  const sessionDir = path.join(params.exportRootDir, transcriptSessionSelector(params.session));
+  const sessionDir = path.join(params.exportRootDir, params.selector);
   let entries;
   try {
     entries = await fs.readdir(sessionDir, { withFileTypes: true });

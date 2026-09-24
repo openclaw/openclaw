@@ -20,7 +20,6 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
@@ -140,10 +139,14 @@ export async function completeSubagentRunAttempt(
     if (!entry) {
       return;
     }
-    if (completeParams.expectedEntry && entry !== completeParams.expectedEntry) {
+    if (
+      (completeParams.expectedEntry && entry !== completeParams.expectedEntry) ||
+      completeParams.isRecoveryCurrent?.() === false
+    ) {
       return;
     }
-    suppressSessionEffects ||= shouldSuppressSubagentRecoverySessionEffects(entry);
+    context.bindTerminalSessionEffects(entry, completeParams.isChildSessionEffectsCurrent);
+    suppressSessionEffects ||= context.shouldSuppressSessionEffects(entry);
     params.clearPendingLifecycleError(completeParams.runId);
     const currentEntry = entry;
     entrySnapshot = structuredClone(entry);

@@ -1,4 +1,5 @@
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { withCronMutationCommitHook } from "../mutation-completion.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import {
   adjudicateActiveCronRunReceiptInDatabase,
@@ -7,8 +8,8 @@ import {
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
-  type CronRunReceiptHandle,
 } from "../store/run-receipt-store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
@@ -243,6 +244,7 @@ export async function persistQueuedCronRunReservations(params: {
   scheduleMode?: "advance" | "preserve";
   manualRun?: {
     runId?: string;
+    commitGuard?: () => void;
     terminalTracker?: { emitted: boolean };
     scheduleOwnershipAtMs?: number;
     onExit?: {
@@ -269,6 +271,7 @@ export async function persistQueuedCronRunReservations(params: {
         state: params.state,
         job: params.manualRun?.onExit ? { ...job, enabled: false } : job,
         startedAtMs: params.reservedAtMs,
+        requestRunId: params.manualRun?.runId,
       }),
     ]),
   );
@@ -280,8 +283,9 @@ export async function persistQueuedCronRunReservations(params: {
         state: params.state,
         jobIds: pendingJobs.keys(),
         operationLabel: "cron.run-reservation",
+        transactionHooks: params.manualRun ? withCronMutationCommitHook("cron.run") : undefined,
         mutate: ({ database, jobs }) => {
-          params.manualRun?.onExit?.commitGuard();
+          (params.manualRun?.commitGuard ?? params.manualRun?.onExit?.commitGuard)?.();
           const jobIds = [...pendingJobs.keys()].toSorted();
           for (const jobId of jobIds) {
             if (!params.state.queuedRunReservationsByJobId.has(jobId)) {
@@ -351,6 +355,7 @@ export async function persistQueuedCronRunReservations(params: {
           }
           return {
             upsertJobIds: committed.map((job) => job.id),
+            runHooks: reservations.length > 0,
             value: reservations,
           };
         },
@@ -384,7 +389,7 @@ export async function persistQueuedCronRunReservations(params: {
         return committedReservations;
       }
       // A failed refresh cannot orphan committed markers before local ownership.
-      await ensureLoaded(params.state, { forceReload: true, skipRecompute: true }).catch(() =>
+      await ensureLoaded(params.state, { forceReload: true }).catch(() =>
         applyCronRuntimeRowsToState(params.state, committedJobs),
       );
       const receiptByJobId = new Map(
@@ -420,7 +425,7 @@ export async function persistQueuedCronRunReservations(params: {
       pendingJobs.delete(error.candidate.jobId);
     }
   }
-  await ensureLoaded(params.state, { forceReload: true, skipRecompute: true });
+  await ensureLoaded(params.state, { forceReload: true });
   return [];
 }
 
@@ -567,7 +572,7 @@ export async function executeQueuedCronRun(params: {
   const { state } = params;
   const executeAdmitted = async () => {
     const started = await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      await ensureLoaded(state, { forceReload: true });
       if (params.isUnavailable?.() || state.stopped) {
         params.onUnavailable?.();
         return undefined;

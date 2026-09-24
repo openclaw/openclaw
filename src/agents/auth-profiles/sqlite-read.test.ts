@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-snapshot-source.js";
-import * as sourceHandle from "../../infra/sqlite-source-handle.js";
 import * as identity from "../../infra/sqlite-worker-identity.js";
 import * as coordinator from "../../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -46,11 +45,7 @@ beforeEach(() => {
       assertCurrent: () => {},
     },
   });
-  vi.spyOn(coordinator, "prepareStateDatabaseCanonicalMutation").mockReturnValue(undefined);
   vi.spyOn(coordinator, "prepareStateDatabaseSourceExclusion").mockReturnValue(undefined);
-  vi.spyOn(sourceHandle, "withSqliteSourceHandleAsync").mockImplementation(async (_, operation) =>
-    operation(),
-  );
   child.read.mockReset().mockResolvedValue(rows);
 });
 
@@ -122,12 +117,31 @@ describe("prepared auth profile row reads", () => {
         expect(unregisterRoot).not.toHaveBeenCalled();
 
         cleanup.mockResolvedValue(true);
-        await reader.dispose();
-        await reader.dispose();
-        expect(cleanup).toHaveBeenCalledTimes(3);
-        expect(resources.hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
-        expect(unregisterAgent).toHaveBeenCalledTimes(1);
-        expect(unregisterRoot).toHaveBeenCalledTimes(1);
+        // Disposal releases this reader without requiring unrelated readers to close.
+        const unrelated = {
+          agentId: "other",
+          path: "/fixture/unrelated.sqlite",
+          revoke: vi.fn(),
+          close: vi.fn(async () => {}),
+        };
+        const unregisterUnrelated = resources.registerOpenClawAgentDatabaseAsyncResource(unrelated);
+        try {
+          await reader.dispose();
+          await reader.dispose();
+          expect(cleanup).toHaveBeenCalledTimes(3);
+          expect(
+            resources.revokeAgentDatabaseResources({
+              path: "/fixture/auth.sqlite",
+              agentId: "main",
+            }),
+          ).toEqual([]);
+          expect(unregisterAgent).toHaveBeenCalledTimes(1);
+          expect(unregisterRoot).toHaveBeenCalledTimes(1);
+          expect(unrelated.revoke).not.toHaveBeenCalled();
+          expect(unrelated.close).not.toHaveBeenCalled();
+        } finally {
+          unregisterUnrelated();
+        }
       } finally {
         cleanup.mockResolvedValue(true);
         await reader.dispose();

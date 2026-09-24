@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -44,10 +45,12 @@ import { withShimFixture } from "./direct-run-entrypoints.test-support.js";
 const tempDirs: string[] = [];
 const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const artifactTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const dependencyTempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repoRoot = process.cwd();
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
 let bundledSetupPath: string;
+let preparedDependencyRoot: string | undefined;
 const fakeCrabboxBinDirs = new Map<string, string>();
 const fakeGitBinDirs = new Map<string, string>();
 const timingPreloads = new Map<string, string>();
@@ -245,6 +248,15 @@ async function main() {
     return;
   }
   const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
+  if (process.env.OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE) {
+    const git = (args) => execFileSync("git", args, { encoding: "utf8" }).trim();
+    const changed = git(["diff", "--name-only", "--no-renames", "main"]).split("\n").filter(Boolean);
+    fs.writeFileSync(process.env.OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE, JSON.stringify({
+      base: git(["rev-parse", "main"]), source: git(["rev-parse", "HEAD"]),
+      head: fs.readFileSync(".git/HEAD", "utf8").trim(),
+      changed,
+    }));
+  }
   if (process.env.OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO) fs.copyFileSync(bundlePath, process.env.OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO);
   process.stdout.write(JSON.stringify({ args, cwd: process.cwd(), scriptContent }) + "\n");
 }
@@ -612,9 +624,13 @@ function normalizeShellLineEndings(value: string): string {
   return value.replace(/\r\n/g, "\n");
 }
 
-async function waitForCondition(predicate: () => boolean, timeoutMs = 8_000): Promise<void> {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 8_000,
+  now = Date.now,
+): Promise<void> {
+  const started = now();
+  while (now() - started < timeoutMs) {
     if (predicate()) {
       return;
     }
@@ -675,7 +691,6 @@ async function runWrapperCleanupProof(proof: WrapperCleanupProof): Promise<void>
       const runSpawnedPath = path.join(fixtureRoot, "run.spawned");
       const removalFailurePath = path.join(fixtureRoot, "removal.json");
       const releasePath = path.join(fixtureRoot, "escaped.release");
-      const wrapperPidPath = path.join(fixtureRoot, "wrapper.pid");
       const wrapperExitPath = path.join(fixtureRoot, "wrapper-exit.json");
       const terminalCommandPidPath = path.join(fixtureRoot, "terminal-command.pid");
       const phasesPath = path.join(fixtureRoot, "readiness-phases.json");
@@ -697,9 +712,9 @@ const phase = (name) => {
 if (entry === ${JSON.stringify(wrapperPath)}) phase("entrypoint started");
 if (entry === ${JSON.stringify(implementationPath)}) {
   phase("loading wrapper");
-  fs.writeFileSync(${JSON.stringify(wrapperPidPath)}, String(process.pid));
-  process.once("exit", (code) => fs.writeFileSync(${JSON.stringify(wrapperExitPath)}, JSON.stringify({ code })));
+  // Stall at phase publication; teardown must already own this PID.
   if (${proof.kind === "readiness"}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  process.once("exit", (code) => fs.writeFileSync(${JSON.stringify(wrapperExitPath)}, JSON.stringify({ code })));
   const childProcess = require("node:child_process");
   const spawn = childProcess.spawn;
   childProcess.spawn = (command, args, options) => {
@@ -851,7 +866,21 @@ if (entry === ${JSON.stringify(implementationPath)}) {
       const readinessTimeoutMs = 8_000;
       const waitForReadiness = async (file: string) => {
         try {
-          await waitForCondition(() => existsSync(file), readinessTimeoutMs);
+          let deliberatelyStalled = false;
+          await waitForCondition(
+            () => {
+              if (proof.kind === "readiness") {
+                const phases: WrapperReadinessPhase[] = JSON.parse(
+                  readFileSync(phasesPath, "utf8"),
+                );
+                deliberatelyStalled = phases.some(({ phase }) => phase === "loading wrapper");
+              }
+              return existsSync(file);
+            },
+            readinessTimeoutMs,
+            // Startup stays real; expire only after the fixture publishes its deliberate hang.
+            () => Date.now() + (deliberatelyStalled ? readinessTimeoutMs : 0),
+          );
         } catch (cause) {
           const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
           const startedAt = phases[0]!.at;
@@ -1002,7 +1031,8 @@ child.once("exit", (code, signal) => {
                 ? 130
                 : 143;
         expect(result, output).toEqual({ status: expectedStatus, signal: null });
-        const wrapperPid = Number.parseInt(readFileSync(wrapperPidPath, "utf8"), 10);
+        const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
+        const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")!.pid!;
         // A pnpm interruption status is not the implementation's cleanup receipt.
         await waitForCondition(() => !isProcessAlive(wrapperPid), 12_000);
         expect(JSON.parse(readFileSync(wrapperExitPath, "utf8")), output).toEqual({
@@ -1120,9 +1150,8 @@ child.once("exit", (code, signal) => {
             }
           }
         }
-        const wrapperPid = existsSync(wrapperPidPath)
-          ? Number.parseInt(readFileSync(wrapperPidPath, "utf8"), 10)
-          : 0;
+        const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
+        const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")?.pid ?? 0;
         identity ??= existsSync(identityPath)
           ? JSON.parse(readFileSync(identityPath, "utf8"))
           : undefined;
@@ -1136,9 +1165,10 @@ child.once("exit", (code, signal) => {
           ? Number.parseInt(readFileSync(terminalCommandPidPath, "utf8"), 10)
           : 0;
         const ownedPids = new Set([
+          // The atomic phase record owns its PID even before later readiness receipts.
+          ...phases.map(({ pid }) => pid),
           entrypointPid,
           terminalCommandPid,
-          wrapperPid,
           identity?.pid,
           preparationIdentity?.pid,
           descendantPid,
@@ -4249,6 +4279,8 @@ process.on("uncaughtExceptionMonitor", (error) => {
         OPENCLAW_CRABBOX_SYNC_TMPDIR: path.join(root, "sync"),
         OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
         OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO: capturedBundle,
+        OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE:
+          provider === "blacksmith-testbox" ? path.join(root, "native-sync.json") : "",
         OPENCLAW_FAKE_CRABBOX_PRIVACY_PATHS: JSON.stringify([
           "private-canary.txt",
           "protected-deleted.ignored",
@@ -4401,6 +4433,16 @@ process.on("uncaughtExceptionMonitor", (error) => {
         );
         expect(result.status, failureDetail(result)).toBe(0);
         const run = expectSuccessfulWrapperRun(result);
+        let changed: string[] = [];
+        if (provider === "blacksmith-testbox") {
+          const native = JSON.parse(
+            readFileSync(env.OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE, "utf8"),
+          );
+          const source = git(producer, ["rev-parse", "HEAD"]);
+          expect(native).toMatchObject({ base, source, head: source });
+          expect(native.changed).toContain(".openclaw-crabbox-changed-gate.bundle");
+          changed = native.changed;
+        }
         expect(existsSync(run.output.cwd)).toBe(false);
         expect(readdirSync(path.join(root, "sync"))).toEqual([]);
         return {
@@ -4412,6 +4454,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
             ? run.output.args.slice(run.output.args.indexOf("--") + 1)
             : [],
           bundle: readFileSync(capturedBundle),
+          changed,
         };
       };
       const receive = (
@@ -4527,12 +4570,16 @@ process.on("uncaughtExceptionMonitor", (error) => {
         const { environment } = pnpmLockfileDocuments(
           readFileSync(path.join(repoRoot, "pnpm-lock.yaml"), "utf8"),
         );
+        const dependencyRoot =
+          preparedDependencyRoot ?? dependencyTempDirs.make("openclaw-capsule-dependencies-");
+        const hydratedSource = path.join(dependencyRoot, "a");
+        const selectedSource = path.join(dependencyRoot, "b");
         const dependencyEnv = {
           ...env,
           CI: "true",
           PATH: [path.dirname(process.execPath), env.PATH].join(path.delimiter),
-          PNPM_CONFIG_STORE_DIR: path.join(root, "dependency-store"),
-          PNPM_CONFIG_CACHE_DIR: path.join(root, "dependency-cache"),
+          PNPM_CONFIG_STORE_DIR: path.join(dependencyRoot, "store"),
+          PNPM_CONFIG_CACHE_DIR: path.join(dependencyRoot, "cache"),
         };
         const runPnpm = (directory: string, args: string[]) => {
           const runner = resolvePnpmRunner({ cwd: directory, env: dependencyEnv });
@@ -4588,10 +4635,20 @@ process.on("uncaughtExceptionMonitor", (error) => {
               "\nnode_modules/\n.capsule-proof/\n",
           );
         };
-        writeDependencySource(producer, "b");
-        const version = runPnpm(producer, ["--version"]);
-        expect("pnpm@" + version.stdout.trim()).toBe(packageManager.split("+")[0]);
-        runPnpm(producer, ["install", "--lockfile-only"]);
+        if (!preparedDependencyRoot) {
+          writeDependencySource(hydratedSource, "a");
+          writeDependencySource(selectedSource, "b");
+          const version = runPnpm(hydratedSource, ["--version"]);
+          expect("pnpm@" + version.stdout.trim()).toBe(packageManager.split("+")[0]);
+          runPnpm(hydratedSource, ["install", "--lockfile-only"]);
+          runPnpm(hydratedSource, ["install", "--frozen-lockfile"]);
+          runPnpm(selectedSource, ["install", "--lockfile-only"]);
+          preparedDependencyRoot = dependencyRoot;
+        }
+        // Copy relative package links verbatim; each receiver owns its modules while
+        // retaining the prepared store identity required by pnpm's install metadata.
+        const copyOptions = { recursive: true, verbatimSymlinks: true };
+        cpSync(selectedSource, producer, copyOptions);
         mkdirSync(path.dirname(path.join(producer, installOwner)), { recursive: true });
         writeFileSync(path.join(producer, installOwner), installer);
         writeFileSync(
@@ -4662,14 +4719,12 @@ process.on("uncaughtExceptionMonitor", (error) => {
           true,
           [],
           (receiver) => {
-            writeDependencySource(receiver, "a");
-            runPnpm(receiver, ["install", "--lockfile-only"]);
-            runPnpm(receiver, ["install", "--frozen-lockfile"]);
+            cpSync(hydratedSource, receiver, copyOptions);
             const probe = runCommand(
               process.execPath,
               [
                 "-e",
-                'process.stdout.write(require("node:module").createRequire(process.cwd() + "/packages/consumer/package.json")("capsule-proof-dep"))',
+                'const dependency = require("node:module").createRequire(process.cwd() + "/packages/consumer/package.json"); process.stdout.write(JSON.stringify({ graph: dependency("capsule-proof-dep"), file: dependency.resolve("capsule-proof-dep") }))',
               ],
               {
                 cwd: receiver,
@@ -4679,7 +4734,9 @@ process.on("uncaughtExceptionMonitor", (error) => {
             );
             expect(probe.error, failureDetail(probe)).toBeUndefined();
             expect(probe.status, failureDetail(probe)).toBe(0);
-            preparedGraph = probe.stdout;
+            const prepared: { graph: string; file: string } = JSON.parse(probe.stdout);
+            preparedGraph = prepared.graph;
+            expect(prepared.file.startsWith(receiver + path.sep)).toBe(true);
           },
         );
         expect(preparedGraph).toBe("graph-a");
@@ -4883,6 +4940,8 @@ process.on("uncaughtExceptionMonitor", (error) => {
 
       writeFileSync(path.join(producer, "owner.txt"), "committed\n");
       git(producer, ["add", "owner.txt"]);
+      writeFileSync(path.join(producer, "committed-only.txt"), "committed source\n");
+      git(producer, ["add", "committed-only.txt"]);
       if (replacedHistory) {
         rmSync(path.join(producer, "removed-kind.ignored"));
         mkdirSync(path.join(producer, "removed-kind.ignored"));
@@ -4987,6 +5046,23 @@ process.on("uncaughtExceptionMonitor", (error) => {
         ? readFileSync(path.join(producer, ".git", "shallow"))
         : undefined;
       const candidate = runSender();
+      if (provider === "blacksmith-testbox") {
+        expect(candidate.changed).toEqual(
+          expect.arrayContaining([
+            "committed-only.txt",
+            "owner.txt",
+            "deleted.txt",
+            "rename-before.txt",
+            "renamed.txt",
+            "staged.ignored",
+            "untracked.txt",
+          ]),
+        );
+        expect(candidate.changed).not.toContain("unchanged.bin");
+        for (const file of privatePaths) {
+          expect(candidate.changed).not.toContain(file);
+        }
+      }
       // A change must not resend the unchanged, incompressible base blob.
       expect(candidate.bundle.length).toBeLessThan(unchanged.length);
       expect(git(producer, ["rev-parse", "HEAD"])).toBe(headBefore);
@@ -6016,6 +6092,7 @@ cp.spawnSync = (command, args, options) => {
         expect(failure.message).toContain(
           "wrapper readiness not observed within 8 s; last observed phase loading wrapper",
         );
+        expect(failure.message).not.toContain("fixture teardown could not be verified");
         expect(failure.message).not.toContain("fixture writers did not settle");
         expect(failure.message).not.toContain("fixture ownership receipts are incomplete");
         expect(existsSync(path.join(retained, "run.spawned"))).toBe(false);

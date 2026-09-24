@@ -99,8 +99,11 @@ with `Goal error: goal already exists` until the current one is cleared.
 ## Statuses
 
 - `active`: the session is pursuing the goal.
-- `paused`: the operator paused the goal. `/goal resume` makes it active
-  again.
+- `paused`: the operator paused the goal, or its run ended with an error or
+  timeout. `/goal resume` makes it active again. A failed run preserves the
+  objective and records the error as a status note; sending an ordinary message
+  does not automatically resume the goal. Errors that recover through a retry
+  do not pause it.
 - `blocked`: the agent or operator reported a real blocker. `/goal resume`
   makes it active again when new information or state is available.
 - `budget_limited`: the configured token budget was reached. `/goal resume`
@@ -191,13 +194,22 @@ the objective as a normal chat draft. Complete pasted commands such as
 
 Starting a Goal saves the Goal, its user turn, and the run admission together
 before acknowledging Send. A failed admission leaves the draft intact and
-does not create a Goal. Start and Resume require an idle local session with
-recoverable history. They are not queued or steered into another run. The UI
-reports unsupported or busy sessions rather than creating an inactive Goal.
+does not create a Goal. Start and Resume require the built-in OpenClaw runtime
+and an idle local session with recoverable history. They are unavailable for
+native Codex and other external runtimes, and are not queued or steered into
+another run. The UI reports unsupported or busy sessions rather than creating
+an inactive Goal.
 
 The web Control UI shows the goal as a compact pill above the chat composer:
 a status icon, the status label (for example `Pursuing goal`), the truncated
 objective, and a live elapsed timer.
+
+Active goals use a green target icon. Paused goals use a yellow pause icon and
+a frozen elapsed timer. Blocked or limited goals use a yellow warning icon;
+completed goals use a green check. Status labels identify each state without
+relying on color. Hover or focus a paused or blocked goal's status label to read
+its status note, including the reason for an error pause. The expanded details
+also show the full note.
 
 The pill carries inline controls:
 
@@ -212,8 +224,19 @@ The pill carries inline controls:
 
 Edit, Pause, and Clear do not send slash commands or add chat turns. Controls
 target the displayed Goal ID, so a stale button cannot change a replacement
-Goal. If a request is interrupted, retry it unchanged. A successful replay
-refreshes the current state instead of restoring an old Goal snapshot.
+Goal. If a request is interrupted or its acknowledgment does not arrive within
+30 seconds, the UI reports an unconfirmed outcome. Use **Check outcome** in the
+recovery notice, even if the goal changed or was cleared. This retries the saved action
+unchanged to reconcile it with the Gateway receipt. The original request stays
+in this browser tab across reconnects and reloads; it is never retried
+automatically. The UI does not send goal controls if the connection has no
+account-scoped recovery identity. Incognito requests stay in memory only. A successful replay
+refreshes the current state instead of restoring an old Goal snapshot or
+starting another continuation. Dismissing an error or cancelling an editor
+does not cancel a mutation already sent to the Gateway. After 24 hours, the saved
+request expires and its literal payload is removed; **Review current goal** refreshes
+state before another decision. Forgetting this browser or switching authenticated
+accounts removes that Gateway's previous account recovery payloads.
 
 The action buttons are unavailable without a connection. The expand chevron
 keeps working. Concurrent Goal actions are rejected while an operation is

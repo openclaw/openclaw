@@ -17,6 +17,8 @@ const profiles = {
   sparse: { messages: 10_000, markers: false, reset: false },
   markers: { messages: 10_000, markers: true, reset: false },
   reset: { messages: 10_000, markers: true, reset: true },
+  branch: { messages: 10_000, markers: true, reset: false },
+  "sparse-branch": { messages: 10_000, markers: false, reset: false },
   trailing: { messages: 5_000, markers: false, reset: false },
 } as const;
 type Profile = keyof typeof profiles;
@@ -85,8 +87,28 @@ function fixture(profile: Profile): TranscriptEvent[] {
         display: index % 2 === 0,
       });
     }
-    if (profile === "sparse" && index % 1000 === 0) {
+    if ((profile === "sparse" || profile === "sparse-branch") && index % 1000 === 0) {
       append({ type: "compaction", id: `compaction-${index}`, summary: "Synthetic compaction" });
+    }
+  }
+  if (profile === "branch" || profile === "sparse-branch") {
+    parentId = profile === "branch" ? "message-0" : `message-${spec.messages - 101}`;
+    append({
+      type: "custom_message",
+      id: "branch-marker",
+      customType: "benchmark-notice",
+      content: "Synthetic branch notice",
+      display: true,
+    });
+    for (let index = 0; index < 1000; index += 1) {
+      append({
+        type: "message",
+        id: `branch-message-${index}`,
+        message: {
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: [{ type: "text", text: `Synthetic branch ${index}: ${"x".repeat(1024)}` }],
+        },
+      });
     }
   }
   if (profile === "trailing") {
@@ -334,7 +356,7 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
 async function main() {
   if (values.help) {
     console.log(
-      "Usage: node --import tsx scripts/bench-session-history.ts [--profile small,long,sparse,markers,reset,trailing] [--operation recent|page|gateway-tail] [--samples 30] [--analyze] [--output report.json]\nReports a fresh-process first read and warm p50/p95, CPU, RSS, heap deltas, and separate SQL/JSON tracing. Fixtures are synthetic and automatically removed; OS caches are not flushed.",
+      "Usage: node --import tsx scripts/bench-session-history.ts [--profile small,long,sparse,markers,reset,branch,sparse-branch,trailing] [--operation recent|page|gateway-tail] [--samples 30] [--analyze] [--output report.json]\nReports a fresh-process first read and warm p50/p95, CPU, RSS, heap deltas, and separate SQL/JSON tracing. Fixtures are synthetic and automatically removed; OS caches are not flushed.",
     );
     return;
   }

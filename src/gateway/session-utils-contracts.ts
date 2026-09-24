@@ -5,6 +5,7 @@ import {
 import type {
   SessionOwner,
   SessionParticipant,
+  SessionPerson,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
 import type { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
@@ -50,6 +51,12 @@ export type SessionIdentityProjection = {
     identities: Map<string, SessionActorProfileIdentity | undefined> | undefined,
     cfg: OpenClawConfig,
   ): ReadonlyMap<string, SessionParticipant>;
+  people(
+    this: void,
+    entry: InternalSessionEntry,
+    identities: Map<string, SessionActorProfileIdentity | undefined>,
+    owner?: SessionOwnerFacetIdentity,
+  ): readonly SessionPerson[];
 };
 
 export type GatewaySessionModelSource = {

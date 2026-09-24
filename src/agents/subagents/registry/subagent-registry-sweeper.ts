@@ -111,16 +111,6 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
     runs,
     getRunsForChildSession: params.getRunsForChildSession,
     getGatewayRuntime: params.getGatewayRecoveryRuntime,
-    abandonLaunch: params.abandonSubagentRestartRecoveryLaunch,
-    clearAcceptedRecovery: params.clearAcceptedSubagentRestartRecovery,
-    clearPendingNotice: params.clearPendingSubagentRecoveryNotice,
-    resumeAcceptedRecovery: params.resumeSettledSubagentRestartRecovery,
-    replaceRun: params.replaceSubagentRunAfterSteer,
-    markLaunchAttempted: params.markSubagentRestartRecoveryLaunchAttempted,
-    markLaunchAccepted: params.markSubagentRestartRecoveryLaunchAccepted,
-    markLaunchConsumed: params.markSubagentRestartRecoveryLaunchConsumed,
-    reserveLaunch: params.reserveSubagentRestartRecoveryLaunch,
-    resetLaunchAttempt: params.resetSubagentRestartRecoveryLaunchAttempt,
     finalizeRun: params.finalizeInterruptedSubagentRun,
     recoverRow: async (recoveryParams) =>
       (await restartRecoveryLoader.load()).recoverInterruptedSubagentRow(recoveryParams),
@@ -242,7 +232,6 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
             : freezeSessionIdentity(entry.childSessionKey),
         );
       }
-      recovery.prune();
       for (const [runId, entry] of runEntries) {
         if (runs.get(runId) !== entry) {
           continue;
@@ -325,11 +314,10 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
           continue;
         }
         if (
-          (entry.resumptionNotice !== undefined ||
-            entry.execution.restartRecovery?.phase === "accepted" ||
+          (entry.execution.restartRecovery !== undefined ||
             entry.terminalOwner === "interrupted-recovery" ||
             (!getAgentRunContext(runId) && typeof entry.execution.endedAt !== "number")) &&
-          (await recovery.recover(runId, entry, now))
+          (await recovery.recover(runId, entry))
         ) {
           continue;
         }
@@ -691,7 +679,6 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
     runTick,
     reset() {
       stop();
-      recovery.reset();
       sweepInProgress = false;
       lastWarnedSuspendedCount = undefined;
     },

@@ -12,7 +12,9 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSessionTranscriptQuestionAnswer } from "./session-transcript-read-fence.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
 import {
   isSessionTranscriptLeafControl,
   parseSessionTranscriptTreeEntry,
@@ -90,7 +92,7 @@ export function canRebasePreparedAssistantInTransaction(
           "identity.event_id",
           "identity.seq",
           /* kysely-allow-raw: bound newer-message validation before hydrating event JSON. */
-          sql<number>`OCTET_LENGTH(event.event_json)`.as("serialized_bytes"),
+          transcriptEventReadBytesSql("event").as("serialized_bytes"),
         ])
         .where("identity.session_id", "=", sessionId)
         .where("identity.event_type", "=", "message")
@@ -138,20 +140,26 @@ export function canRebasePreparedAssistantInTransaction(
           "active.message_position",
           "rewrite.generation",
           /* kysely-allow-raw: validate the canonical message role without hydrating content. */
-          sql<string>`json_extract(event.event_json, '$.message.role')`.as("message_role"),
+          sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.role')`.as(
+            "message_role",
+          ),
           /* kysely-allow-raw: only exact canonical booleans exempt a command from model context. */
-          sql<number | null>`json_type(event.event_json, '$.message.excludeFromContext') = 'true'
-            AND json_type(event.event_json, '$.message.__openclaw.contextFreeCommand') = 'true'`.as(
+          sql<
+            number | null
+          >`json_type(${transcriptEventNavigationSql("event")}, '$.message.excludeFromContext') = 'true'
+            AND json_type(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.contextFreeCommand') = 'true'`.as(
             "context_free_command",
           ),
           /* kysely-allow-raw: classify realtime voice records without hydrating content. */
-          sql<string | null>`json_extract(event.event_json, '$.message.provenance.kind')`.as(
+          sql<
+            string | null
+          >`json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance.kind')`.as(
             "provenance_kind",
           ),
           /* kysely-allow-raw: pair the kind with its channel so a partial marker cannot match. */
           sql<
             string | null
-          >`json_extract(event.event_json, '$.message.provenance.sourceChannel')`.as(
+          >`json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance.sourceChannel')`.as(
             "provenance_source_channel",
           ),
         ])
@@ -307,9 +315,9 @@ function readActiveTranscriptAppendParentId(
       .innerJoin("transcript_events as te", (join) =>
         join.onRef("te.session_id", "=", "ti.session_id").onRef("te.seq", "=", "ti.seq"),
       )
-      .select((eb) => [
+      .select([
         "ti.event_type",
-        projectTranscriptNavigationSql(eb.ref("te.event_json")).as("event_json"),
+        projectTranscriptNavigationSql(transcriptEventNavigationSql("te")).as("event_json"),
       ])
       .where("ti.session_id", "=", sessionId)
       .orderBy("ti.seq", "desc")
@@ -388,7 +396,7 @@ function readTranscriptNavigationEvents(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select((eb) => projectTranscriptNavigationSql(eb.ref("event_json")).as("event_json"))
+        .select(projectTranscriptNavigationSql(transcriptEventNavigationSql()).as("event_json"))
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     ),

@@ -13,6 +13,11 @@ export async function shouldPreserveOrphanCandidate(
   managedPaths: ReadonlySet<string>,
   customRoots: ReadonlySet<string>,
 ): Promise<boolean> {
+  // Exact retirement owns this namespace through its retained snapshot. An
+  // interrupted native operation can leave it without a .git marker.
+  if (/^\.openclaw-retiring-[a-f0-9-]{36}$/u.test(path.basename(target))) {
+    return true;
+  }
   const targetKey = await canonicalPathKey(target);
   if (
     managedPaths.has(targetKey) ||

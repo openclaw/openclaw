@@ -5,13 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   BACKEND_GATEWAY_CLIENT,
   connectReq,
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
   createSignedDevice,
-  getGatewayTestPort,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   readConnectChallengeNonce,
@@ -177,8 +177,9 @@ describe("gateway auth compatibility baseline", () => {
       previousCredential = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "token", token: "secret" };
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim);
     });
 
     afterAll(async () => {
@@ -344,8 +345,9 @@ describe("gateway auth compatibility baseline", () => {
         rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 },
       };
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim);
     });
 
     afterAll(async () => {
@@ -387,8 +389,9 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "password", password: "secret" };
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim);
     });
 
     afterAll(async () => {
@@ -444,8 +447,9 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "none" };
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port, { controlUiEnabled: true });
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim, { controlUiEnabled: true });
     });
 
     afterAll(async () => {

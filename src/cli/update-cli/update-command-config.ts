@@ -19,6 +19,7 @@ import { parsePluginInstallRecordMap } from "../../config/plugin-install-record-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { shouldWarnOnTouchedVersion } from "../../config/version.js";
+import { composeConfigWriteAssertions } from "../../config/write-authority.js";
 import { normalizeUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -39,10 +40,7 @@ export function withUpdateConfigWriteAuthority(
   return {
     ...writeOptions,
     observe: false,
-    assertCurrent: () => {
-      assertOwner?.();
-      assertCurrent();
-    },
+    assertCurrent: composeConfigWriteAssertions(assertOwner, assertCurrent),
   };
 }
 

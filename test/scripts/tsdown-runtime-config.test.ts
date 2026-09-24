@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
+import type { TsdownPluginOption } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPluginSdkPackageExports } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
@@ -26,7 +27,7 @@ type TsdownConfigEntry = {
   outputOptions?: { codeSplitting?: boolean; chunkFileNames?: string };
   outExtensions?: () => { js: string };
   outDir?: string;
-  plugins?: Array<{ name?: string }>;
+  plugins?: TsdownPluginOption;
 };
 
 type TsdownLog = {
@@ -59,6 +60,21 @@ type TsdownExternalFunction = (
 
 function asConfigArray(config: unknown): TsdownConfigEntry[] {
   return Array.isArray(config) ? (config as TsdownConfigEntry[]) : [config as TsdownConfigEntry];
+}
+
+// Keep config assertions aligned with tsdown's nested, async plugin slots.
+async function resolvePluginNames(plugins: TsdownPluginOption): Promise<string[]> {
+  const resolved = await plugins;
+  if (!resolved) {
+    return [];
+  }
+  if (Array.isArray(resolved)) {
+    return (await Promise.all(resolved.map(resolvePluginNames))).flat();
+  }
+  if (!("name" in resolved)) {
+    throw new Error("expected a named plugin in build config assertions");
+  }
+  return [resolved.name];
 }
 
 function entryKeys(config: TsdownConfigEntry): string[] {
@@ -207,7 +223,7 @@ describe("tsdown config", () => {
     expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
   });
 
-  it("installs schema inlining only on executable runtime graphs", () => {
+  it("installs schema inlining only on executable runtime graphs", async () => {
     const configs = asConfigArray(tsdownConfig);
     const unifiedGraph = requireUnifiedDistGraph();
     const workerGraph = configs.find(
@@ -220,6 +236,7 @@ describe("tsdown config", () => {
       unifiedGraph,
       expectDefined(workerGraph, "deploy worker graph"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
+      requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
       expectDefined(handoffGraph, "managed handoff graph"),
       requireNativeHookRelayGraph(),
       requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
@@ -230,13 +247,14 @@ describe("tsdown config", () => {
     ]);
 
     for (const config of configs) {
-      const inlinePlugins =
-        config.plugins?.filter((plugin) => plugin.name === STATE_SCHEMA_INLINE_PLUGIN_NAME) ?? [];
+      const inlinePlugins = (await resolvePluginNames(config.plugins)).filter(
+        (name) => name === STATE_SCHEMA_INLINE_PLUGIN_NAME,
+      );
       expect(inlinePlugins).toHaveLength(executableGraphs.has(config) ? 1 : 0);
     }
   });
 
-  it("isolates relay startup from shared runtime chunks while retaining lazy fallback", () => {
+  it("isolates relay startup from shared runtime chunks while retaining lazy fallback", async () => {
     const relay = requireNativeHookRelayGraph();
     expect(entrySources(relay)).toEqual({
       "native-hook-relay/entry": "src/cli/native-hook-relay-entry.ts",
@@ -246,8 +264,8 @@ describe("tsdown config", () => {
     expect(relay.outputOptions?.codeSplitting).not.toBe(false);
     expect(relay.outputOptions?.chunkFileNames).toBe("native-hook-relay/[name]-[hash].mjs");
     // Only the shared graph may publish the global plugin ownership manifest.
-    expect(relay.plugins).not.toContainEqual(
-      expect.objectContaining({ name: "openclaw:runtime-dependency-ownership" }),
+    expect(await resolvePluginNames(relay.plugins)).not.toContain(
+      "openclaw:runtime-dependency-ownership",
     );
   });
 

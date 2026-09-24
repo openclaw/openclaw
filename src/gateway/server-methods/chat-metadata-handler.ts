@@ -10,6 +10,11 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { hiddenSessionNotFound } from "../session-sharing-policy.js";
+import {
+  createSessionListEntryFilter,
+  SessionMutationAuthorizationChangedError,
+} from "../session-sharing.js";
 import { retainGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
@@ -27,6 +32,7 @@ export function resolveChatMetadataReadParams(
   const { respond, context, client, signal } = options;
   const cfg = context.getRuntimeConfig();
   if (params.sessionKey) {
+    const sessionKey = params.sessionKey;
     const requested = resolveRequestedSessionAgentId(
       cfg,
       params.sessionKey,
@@ -42,6 +48,15 @@ export function resolveChatMetadataReadParams(
     const profileInput = client?.authenticatedUserProfile?.profileId;
     const userInput = client?.authenticatedUserId;
     const session = retainGatewaySessionEntryReadOnly(params.sessionKey, requested.agentId);
+    const assertVisible = () => {
+      const visible = createSessionListEntryFilter({ client, cfg: context.getRuntimeConfig() });
+      if (
+        session.entry &&
+        visible?.(session.legacyKey ?? session.canonicalKey, session.entry) === false
+      ) {
+        throw new SessionMutationAuthorizationChangedError(hiddenSessionNotFound(sessionKey));
+      }
+    };
     const isCurrent = () =>
       !signal?.aborted &&
       readGatewayAccessRevision() === accessRevision &&
@@ -49,6 +64,7 @@ export function resolveChatMetadataReadParams(
       client?.authenticatedUserId === userInput &&
       session.isCurrent();
     try {
+      assertVisible();
       return {
         agentId: resolveSessionAgentId({
           sessionKey: params.sessionKey,
@@ -60,6 +76,7 @@ export function resolveChatMetadataReadParams(
         sessionEntry: session.entry,
         isCurrent,
         assertCurrent: () => {
+          assertVisible();
           if (
             !isCurrent() ||
             context.getRuntimeConfig() !== cfg ||

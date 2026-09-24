@@ -38,14 +38,16 @@ cleanup joins its process tree and callback work before removing those inputs.
 Outer suites and the remaining checkout contract cases stay sequential.
 
 Once admitted, canonical Linux CI permits up to 96 concurrent Node test jobs.
-The manifest separately enforces total-job budgets: 64 Node rows for canonical
-pushes and 120 for canonical PRs, including precise and plugin plans. GitHub
+The manifest separately enforces total-job budgets: 70 Node rows for canonical
+pushes and 130 for canonical PRs, including precise and plugin plans. GitHub
 also caps one job's combined outputs at 1 MiB measured in UTF-16, so preflight
-has 524,288 characters for every matrix together. Grouped Node rows list each
-striped test file explicitly. The manifest projects the five fields consumed by
+has 524,288 characters for every matrix together. Node rows list each
+striped test file explicitly. The manifest projects the fields consumed by
 the shard runner, then uses gzip+base64 (`groups_gzip_base64`) when the target
-contains the codec. Historical targets without that capability receive the same
-projection through legacy `groups` JSON. Workflow tests keep the complete
+contains the codec. Flat configuration rows, including manual CI and exact-head
+PR release gates, use one packed group while retaining their original jobs and
+test selections. Targets without that capability retain their original flat
+fields or projected legacy `groups` JSON. Workflow tests keep the complete
 generated output under half of the cap. The smaller
 fast/check lanes remain capped at 12; Windows is capped at two
 and Android at two because those runner pools are narrower. Compact whole-config batches run

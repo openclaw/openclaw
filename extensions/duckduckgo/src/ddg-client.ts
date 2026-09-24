@@ -1,7 +1,7 @@
 // Duckduckgo plugin module implements ddg client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { decodeHtmlEntities as decodeHtmlEntity } from "openclaw/plugin-sdk/html-entity-runtime";
-import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
+import { ProviderHttpError, readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
@@ -182,8 +182,9 @@ export async function runDuckDuckGoSearch(params: {
     async (response) => {
       if (!response.ok) {
         const detail = (await readResponseText(response, { maxBytes: 64_000 })).text;
-        throw new Error(
+        throw new ProviderHttpError(
           `DuckDuckGo search error (${response.status}): ${detail || response.statusText}`,
+          { status: response.status },
         );
       }
 

@@ -26,6 +26,7 @@ permissions: {}
 
 jobs:
   sweep:
+    if: github.repository == 'openclaw/openclaw'
     permissions:
       contents: read
     runs-on: ubuntu-24.04

@@ -6,6 +6,49 @@ import type { AgentConfigEntryTarget } from "../../lib/config/config-state-model
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
 
+export function createAgentModelActions(params: {
+  getRuntimeConfig: () => RuntimeConfig;
+  canUpdate: (agentId: string) => boolean;
+  onPrimaryChanged: () => void;
+}) {
+  return {
+    onModelChange: (agentId: string, modelId: string | null) => {
+      if (params.canUpdate(agentId)) {
+        stageAgentPrimaryModel(params.getRuntimeConfig(), agentId, modelId);
+        params.onPrimaryChanged();
+      }
+    },
+    onDecisionModelChange: (agentId: string, modelId: string | null) => {
+      if (params.canUpdate(agentId)) {
+        stageAgentDecisionModel(params.getRuntimeConfig(), agentId, modelId);
+      }
+    },
+    onModelFallbacksChange: (agentId: string, fallbacks: string[]) => {
+      if (params.canUpdate(agentId)) {
+        stageAgentModelFallbacks(params.getRuntimeConfig(), agentId, fallbacks);
+      }
+    },
+  };
+}
+
+/** Null inherits; an empty string is an explicit per-agent disable. */
+function stageAgentDecisionModel(
+  runtimeConfig: RuntimeConfig,
+  agentId: string,
+  model: string | null,
+) {
+  const target = runtimeConfig.agentEntry(agentId, { ensure: model !== null });
+  if (!target) {
+    return;
+  }
+  const path = [...target.path, "decisionModel"];
+  if (model === null) {
+    runtimeConfig.removeFormValue(path);
+  } else {
+    runtimeConfig.patchForm(path, model);
+  }
+}
+
 function modelEntry(target: AgentConfigEntryTarget) {
   return {
     path: [...target.path, "model"] as Array<string | number>,
@@ -52,7 +95,7 @@ function existingModelParts(existing: unknown): {
 }
 
 /** Stage a primary-model change; clearing falls back to the inherited default. */
-export function stageAgentPrimaryModel(
+function stageAgentPrimaryModel(
   runtimeConfig: RuntimeConfig,
   agentId: string,
   modelId: string | null,
@@ -68,7 +111,7 @@ export function stageAgentPrimaryModel(
 }
 
 /** Stage an explicit fallback chain without changing primary inheritance. */
-export function stageAgentModelFallbacks(
+function stageAgentModelFallbacks(
   runtimeConfig: RuntimeConfig,
   agentId: string,
   fallbacks: string[],

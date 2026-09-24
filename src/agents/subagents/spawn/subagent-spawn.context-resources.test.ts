@@ -12,6 +12,7 @@ import { PluginRegistryInspectionResources } from "../../../plugins/registry-ins
 import { retireInspectionInstances } from "../../../plugins/registry-inspection.test-support.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import type { SubagentRegistrationScope } from "../registry/subagent-registry.types.js";
 import {
   loadSubagentSpawnModuleForTest,
   createSubagentSpawnTestConfig,
@@ -249,20 +250,38 @@ describe("spawn context-engine resource custody", () => {
       return { rollback };
     });
     resolveEngine.mockImplementation(() => fixture.resolve());
-    registerRun.mockImplementation(({ runId }: { runId: string }) => {
-      expect(scheduler.removeQueuedSwarmRun(runId)).toBe(true);
-    });
+    const settleFailedLaunch = vi.fn(async () => {});
+    const cancelledScope = {
+      waitForClaim: () => undefined,
+      canLaunch: () => false,
+      canCleanupSession: () => true,
+      canAcceptLaunch: () => true,
+      canRetireReservation: () => false,
+      settleFailedLaunch,
+    } satisfies SubagentRegistrationScope;
+    registerRun.mockImplementation(
+      async (
+        { runId }: { runId: string },
+        options: { retainOwnership?: (scope: SubagentRegistrationScope) => void },
+      ) => {
+        options.retainOwnership?.(cancelledScope);
+        expect(scheduler.removeQueuedSwarmRun(runId)).toBe(true);
+      },
+    );
     try {
       await expect(
         spawn(
           { task: "withdrawn child", collect: true, groupId: "withdrawn-group" },
           { agentSessionKey: "main" },
         ),
-      ).rejects.toThrow("swarm scheduler reservation missing");
+      ).resolves.toMatchObject({ status: "accepted" });
+      expect(callGateway.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
+      expect(settleFailedLaunch).not.toHaveBeenCalled();
       expect(childPrepared).toBe(false);
       expect(rollback).toHaveBeenCalledTimes(1);
       expect(fixture.engineDisposal).toHaveBeenCalledTimes(1);
       expect(fixture.retired).toHaveBeenCalledTimes(1);
+      expect(fixture.database.isOpen).toBe(false);
     } finally {
       await fixture.cleanup();
     }
@@ -326,12 +345,8 @@ describe("spawn context-engine resource custody", () => {
           throw new GatewayDrainingError();
         }
         if (mode === "draining") {
-          if (launches === 1) {
-            throw new GatewayDrainingError();
-          }
           retryStarted.resolve();
-          await retryGate.promise;
-          fixture.read();
+          throw new GatewayDrainingError();
         }
         return { runId: request.params?.idempotencyKey, status: "accepted" };
       },
@@ -399,6 +414,13 @@ describe("spawn context-engine resource custody", () => {
             await Promise.resolve();
             expect(closed).toBe(false);
             expect(fixture.database.isOpen).toBe(true);
+          } else if (mode === "draining") {
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+            expect(launches).toBe(1);
+            expect(settleLaunchFailure).not.toHaveBeenCalled();
+            closing = scheduler.closeSwarmScheduler();
           }
           retryGate.resolve();
           await closing;

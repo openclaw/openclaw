@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import {
   captureWorkspaceSnapshot,
@@ -14,6 +15,77 @@ import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("settles private Git-input staging before a cancelled tree read returns", async () => {
+  const root = tempDirs.make("workspace-tree-input-cancel-");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const controller = new AbortController();
+  const content = Buffer.from("snapshot");
+  const payload = new TextEncoder().encode(
+    JSON.stringify({
+      inputPath: path.join(root, "input"),
+      ref: "refs/heads/snapshot",
+      entries: [
+        {
+          path: "file.txt",
+          type: "file",
+          mode: 0o644,
+          size: content.length,
+          sha256: createHash("sha256").update(content).digest("hex"),
+        },
+      ],
+      source: { root, tree: "a".repeat(40) },
+    }),
+  );
+  const outcome = runGitWorkerOperation(
+    { type: "workspace.manifest.tree-input", input: { payload } },
+    {
+      inputBytes: payload.byteLength,
+      signal: controller.signal,
+      git: {
+        text: async () => {
+          throw new Error("Unexpected text Git request");
+        },
+        buffered: async (_cwd, args) => {
+          const listing = args.includes("ls-tree");
+          if (!listing) {
+            expect(args[0]).toBe("cat-file");
+            entered.resolve();
+            await release.promise;
+          }
+          return {
+            stdout: listing ? Buffer.from(`100644 blob ${"b".repeat(40)}\tfile.txt\0`) : content,
+            stderr: Buffer.alloc(0),
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+          };
+        },
+      },
+    },
+  ).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    await Promise.race([
+      entered.promise,
+      outcome.then(() => {
+        throw new Error("Tree read ended before its blob request");
+      }),
+    ]);
+    controller.abort(new Error("cancel tree input"));
+    release.resolve();
+    expect(await outcome).toBeInstanceOf(Error);
+    expect(await fs.readdir(root)).toEqual([]);
+  } finally {
+    controller.abort();
+    release.resolve();
+    await outcome;
+  }
+});
 
 it("does not create or return an implicit hash memo for an uncached capture", async () => {
   const root = await fs.realpath(tempDirs.make("workspace-uncached-capture-"));

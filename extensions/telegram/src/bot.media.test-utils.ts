@@ -1,5 +1,5 @@
 // Telegram helper module supports bot.media utils behavior.
-import { clearTimeout as cancelTimeout, setTimeout as scheduleTimeout } from "node:timers";
+import type { PhotoSize } from "grammy/types";
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
@@ -20,16 +20,8 @@ export const TELEGRAM_TEST_TIMINGS = {
   textFragmentGapMs: 30,
 } as const;
 
-export function holdTelegramMediaTimeouts(delayMs: number) {
-  return vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
-    const handle = scheduleTimeout(callback, delay, ...args);
-    // Only media deadlines are flushed manually; worker timers keep their
-    // native scheduling and handles, including ref/unref lifecycle methods.
-    if (delay === delayMs) {
-      cancelTimeout(handle);
-    }
-    return handle;
-  });
+export function createTelegramPhotoForTest(fileId: string): PhotoSize {
+  return { file_id: fileId, file_unique_id: `unique-${fileId}`, width: 100, height: 100 };
 }
 
 let createTelegramBotRef: typeof import("./bot.js").createTelegramBot;

@@ -5,6 +5,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { deviceIcons } from "../../components/icons-devices.ts";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
+import { resolveCloudProfileIcon } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { resolveMacFormFactorFromName } from "../../lib/mac-form-factor.ts";
@@ -194,9 +195,12 @@ export function renderWhereChip(params: {
   onConnectMachine: () => void;
   onManageCloudWorkers: () => void;
 }) {
+  const cloudPresentation = resolveCloudProfileIcon(
+    params.state.cloudProfiles.find((profile) => profile.id === params.cloudProfileId),
+  );
   const icon =
     params.state.kind === "cloud"
-      ? icons.cloud
+      ? cloudPresentation.icon
       : params.state.kind === "local"
         ? icons.home
         : params.state.kind === "auto-device"
@@ -238,6 +242,8 @@ export function renderWhereChip(params: {
           t("newSession.cloud"),
           profile.id,
           profile.providerId,
+          profile.providerDisplayId,
+          resolveCloudProfileIcon(profile).label,
           profile.trust === "disposable"
             ? t("newSession.environmentDisposable")
             : profile.trust === "persistent"
@@ -296,9 +302,12 @@ export function renderWhereChip(params: {
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
         }"
-        aria-label="${t("newSession.where")}: ${label}${
-          configurationSummary ? `, ${configurationSummary}` : ""
-        }"
+        aria-label="${t("newSession.where")}: ${label}${configurationSummary ? `, ${configurationSummary}` : ""}"
+        aria-description=${
+          params.state.kind === "cloud" && cloudPresentation.label
+            ? t("newSession.cloudWorkerProvider", { provider: cloudPresentation.label })
+            : nothing
+        }
         data-cloud-profile=${params.cloudProfileId || nothing}
         data-machine-class=${params.machineClass || nothing}
         data-os=${params.os || nothing}
@@ -313,7 +322,7 @@ export function renderWhereChip(params: {
         <span class="new-session-page__trigger-label">${label}</span>
         ${
           configurationSummary
-            ? html`<span class="new-session-page__trigger-summary">· ${configurationSummary}</span>`
+            ? html`<span class="new-session-page__trigger-summary">${configurationSummary}</span>`
             : nothing
         }
         <span
@@ -513,7 +522,6 @@ export function renderWhereChip(params: {
               onSelectOs: params.onSelectCloudOs,
               onSelectMachine: params.onSelectCloudMachine,
               submitting: destinationDisabled,
-              icon: icons.cloud,
               compact: true,
               disabled: Boolean(params.cloudDisabledReason),
               disabledReason: params.cloudDisabledReason,

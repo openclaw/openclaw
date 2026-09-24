@@ -9,13 +9,15 @@ import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import {
-  deliveryContextFromChannelRoute,
   deliveryContextFromSession,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../../utils/delivery-context.read.js";
+import {
+  deliveryContextFromChannelRoute,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryState,
-  sessionDeliveryOrigin,
-  sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {

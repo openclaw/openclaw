@@ -73,6 +73,7 @@
   "keyed-async-queue",
   "llm",
   "markdown-table-runtime",
+  "media-ffmpeg",
   "media-generation-runtime",
   "meeting-page-script-runtime",
   "memory-core-host-embedding-registry",
@@ -154,6 +155,7 @@
   "realtime-voice",
   "realtime-voice-activation",
   "realtime-voice-audio-queue",
+  "realtime-voice-playback",
   "realtime-voice-provider",
   "reply-payload-testing",
   "reply-reference",
@@ -197,6 +199,7 @@
   "test-node-mocks",
   "test-state",
   "text-autolink-runtime",
+  "text-grapheme",
   "text-utility-runtime",
   "thread-bindings-runtime",
   "thread-bindings-session-runtime",
@@ -210,5 +213,6 @@
   "video-generation-runtime",
   "web-content-extractor",
   "webhook-targets",
-  "windows-spawn"
+  "windows-spawn",
+  "worker-task-server"
 ]

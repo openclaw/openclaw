@@ -6,7 +6,7 @@ import {
   type RealtimeVoiceBridgeCallbacks,
 } from "./provider-types.js";
 import { createRealtimeVoiceBridgeSession } from "./session-runtime.js";
-import { makeBridge } from "./session-runtime.test-support.js";
+import { makeBridge, makeVoiceProvider } from "./session-runtime.test-support.js";
 
 function expectBridgeRequest(
   request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined,
@@ -30,15 +30,10 @@ describe("realtime voice bridge session runtime", () => {
           }),
       );
       const session = createRealtimeVoiceBridgeSession({
-        provider: {
-          id: "test",
-          label: "Test",
-          isConfigured: () => true,
-          createBridge: (request) => {
-            callbacks = request;
-            return makeBridge();
-          },
-        },
+        provider: makeVoiceProvider((request) => {
+          callbacks = request;
+          return makeBridge();
+        }),
         providerConfig: {},
         audioSink: { sendAudio: vi.fn() },
         runAgentConsult: consult,
@@ -70,15 +65,10 @@ describe("realtime voice bridge session runtime", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const consult = vi.fn(async () => ({ text: "Answer" }));
     const session = createRealtimeVoiceBridgeSession({
-      provider: {
-        id: "test",
-        label: "Test",
-        isConfigured: () => true,
-        createBridge: (request) => {
-          callbacks = request;
-          return makeBridge();
-        },
-      },
+      provider: makeVoiceProvider((request) => {
+        callbacks = request;
+        return makeBridge();
+      }),
       providerConfig: {},
       audioSink: { sendAudio: vi.fn() },
       runAgentConsult: consult,
@@ -99,15 +89,10 @@ describe("realtime voice bridge session runtime", () => {
       const acknowledgeMark = vi.fn();
       const bridge = makeBridge({ acknowledgeMark });
       const session = createRealtimeVoiceBridgeSession({
-        provider: {
-          id: "test",
-          label: "Test",
-          isConfigured: () => true,
-          createBridge: (request) => {
-            callbacks = request;
-            return bridge;
-          },
-        },
+        provider: makeVoiceProvider((request) => {
+          callbacks = request;
+          return bridge;
+        }),
         providerConfig: {},
         audioSink: { isOpen: () => open, sendAudio: vi.fn(), sendMark },
       });
@@ -133,15 +118,10 @@ describe("realtime voice bridge session runtime", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const onResponseDone = vi.fn();
     const onError = vi.fn();
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        return makeBridge();
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      return makeBridge();
+    });
     createRealtimeVoiceBridgeSession({
       provider,
       providerConfig: {},
@@ -159,15 +139,10 @@ describe("realtime voice bridge session runtime", () => {
   it("routes provider output through an open audio sink", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const bridge = makeBridge();
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        return bridge;
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      return bridge;
+    });
     const sendAudio = vi.fn();
     const clearAudio = vi.fn();
     const sendMark = vi.fn();
@@ -212,15 +187,10 @@ describe("realtime voice bridge session runtime", () => {
 
   it("passes the requested agent scope and audio format to the provider bridge", () => {
     let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (nextRequest) => {
-        request = nextRequest;
-        return makeBridge();
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((nextRequest) => {
+      request = nextRequest;
+      return makeBridge();
+    });
 
     expectTypeOf<() => Promise<void>>().toExtend<
       NonNullable<RealtimeVoiceBridgeCallbacks["onTranscript"]>
@@ -249,15 +219,10 @@ describe("realtime voice bridge session runtime", () => {
 
   it("passes the host-selected agent to the provider bridge", () => {
     let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (nextRequest) => {
-        request = nextRequest;
-        return makeBridge();
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((nextRequest) => {
+      request = nextRequest;
+      return makeBridge();
+    });
 
     createRealtimeVoiceBridgeSession({
       provider,
@@ -271,15 +236,10 @@ describe("realtime voice bridge session runtime", () => {
 
   it("passes the audio auto-response preference to the provider bridge", () => {
     let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (nextRequest) => {
-        request = nextRequest;
-        return makeBridge();
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((nextRequest) => {
+      request = nextRequest;
+      return makeBridge();
+    });
 
     createRealtimeVoiceBridgeSession({
       provider,
@@ -293,15 +253,10 @@ describe("realtime voice bridge session runtime", () => {
 
   it("passes the audio interrupt preference to the provider bridge", () => {
     let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (nextRequest) => {
-        request = nextRequest;
-        return makeBridge();
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((nextRequest) => {
+      request = nextRequest;
+      return makeBridge();
+    });
 
     createRealtimeVoiceBridgeSession({
       provider,
@@ -316,15 +271,10 @@ describe("realtime voice bridge session runtime", () => {
   it("can acknowledge provider marks without transport mark support", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const bridge = makeBridge();
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        return bridge;
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      return bridge;
+    });
     const sendMark = vi.fn();
 
     createRealtimeVoiceBridgeSession({
@@ -343,15 +293,10 @@ describe("realtime voice bridge session runtime", () => {
   it("can ignore provider marks", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const bridge = makeBridge();
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        return bridge;
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      return bridge;
+    });
     const sendMark = vi.fn();
 
     createRealtimeVoiceBridgeSession({
@@ -370,15 +315,10 @@ describe("realtime voice bridge session runtime", () => {
   it("passes tool calls the active session and triggers initial greeting on ready", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const bridge = makeBridge();
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        return bridge;
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      return bridge;
+    });
     const onToolCall = vi.fn();
 
     const session = createRealtimeVoiceBridgeSession({
@@ -407,15 +347,10 @@ describe("realtime voice bridge session runtime", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const onError = vi.fn();
     const syncFailure = new Error("sync callback failed");
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        return makeBridge();
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      return makeBridge();
+    });
     const onToolCall = vi
       .fn()
       .mockImplementationOnce(() => {
@@ -449,15 +384,10 @@ describe("realtime voice bridge session runtime", () => {
     const onError = vi.fn(() => {
       throw new Error("error callback failed");
     });
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        return makeBridge();
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      return makeBridge();
+    });
     createRealtimeVoiceBridgeSession({
       provider,
       providerConfig: {},
@@ -485,15 +415,10 @@ describe("realtime voice bridge session runtime", () => {
     const close = vi.fn();
     const bridge = makeBridge({ close });
     const onError = vi.fn();
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        return bridge;
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      return bridge;
+    });
     const session = createRealtimeVoiceBridgeSession({
       provider,
       providerConfig: {},
@@ -521,12 +446,7 @@ describe("realtime voice bridge session runtime", () => {
 
   it("forwards the close disposition to the provider bridge", async () => {
     const close = vi.fn();
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: () => makeBridge({ close }),
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider(() => makeBridge({ close }));
     const session = createRealtimeVoiceBridgeSession({
       provider,
       providerConfig: {},
@@ -547,15 +467,10 @@ describe("realtime voice bridge session runtime", () => {
     const sendProviderAudio = vi.fn();
     const sendSinkAudio = vi.fn();
     const onTranscript = vi.fn();
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        return makeBridge({ close, connect, sendAudio: sendProviderAudio });
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      return makeBridge({ close, connect, sendAudio: sendProviderAudio });
+    });
     const session = createRealtimeVoiceBridgeSession({
       provider,
       providerConfig: {},
@@ -583,15 +498,10 @@ describe("realtime voice bridge session runtime", () => {
     const sendSinkAudio = vi.fn();
     const onClose = vi.fn();
     const getPlaybackState = vi.fn(() => [{ itemId: "closed-item", audioEndMs: 100 }]);
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        return makeBridge({ close, sendAudio: sendProviderAudio });
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      return makeBridge({ close, sendAudio: sendProviderAudio });
+    });
     const session = createRealtimeVoiceBridgeSession({
       provider,
       providerConfig: {},
@@ -621,16 +531,11 @@ describe("realtime voice bridge session runtime", () => {
     const sendSinkAudio = vi.fn();
     const onClose = vi.fn();
     const onReady = vi.fn();
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        request.onClose?.("error");
-        return makeBridge({ connect, sendAudio: sendProviderAudio });
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      request.onClose?.("error");
+      return makeBridge({ connect, sendAudio: sendProviderAudio });
+    });
     const session = createRealtimeVoiceBridgeSession({
       provider,
       providerConfig: {},
@@ -667,15 +572,10 @@ describe("realtime voice bridge session runtime", () => {
     let rejectToolCall: ((error: Error) => void) | undefined;
     const connect = vi.fn(async () => {});
     const onError = vi.fn();
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        return makeBridge({ connect });
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      return makeBridge({ connect });
+    });
     const session = createRealtimeVoiceBridgeSession({
       provider,
       providerConfig: {},
@@ -706,12 +606,7 @@ describe("realtime voice bridge session runtime", () => {
     const acceptance = Promise.resolve();
     const submitToolResult = vi.fn(() => acceptance);
     const bridge = makeBridge({ submitToolResult });
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: () => bridge,
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider(() => bridge);
     const session = createRealtimeVoiceBridgeSession({
       provider,
       providerConfig: {},
@@ -738,12 +633,7 @@ describe("realtime voice bridge session runtime", () => {
       submitToolResult,
       supportsToolResultSuppression: false,
     });
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: () => bridge,
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider(() => bridge);
     const session = createRealtimeVoiceBridgeSession({
       provider,
       providerConfig: {},
@@ -767,17 +657,12 @@ describe("realtime voice bridge session runtime", () => {
       name: "lookup",
       args: {},
     };
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: (request) => {
-        callbacks = request;
-        request.onReady?.();
-        request.onToolCall?.(event);
-        return bridge;
-      },
-    };
+    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
+      callbacks = request;
+      request.onReady?.();
+      request.onToolCall?.(event);
+      return bridge;
+    });
 
     const session = createRealtimeVoiceBridgeSession({
       provider,

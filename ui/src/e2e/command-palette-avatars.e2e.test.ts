@@ -182,9 +182,9 @@ suite.define(() => {
           .toBe(2);
         await expect.poll(() => results.getAttribute("aria-busy")).toBe("false");
         await expect.poll(() => results.getByRole("option").count()).toBe(3);
-        expect(await page.locator(".cmd-palette").getByRole("status").allTextContents()).toEqual([
-          "Some models could not be refreshed. Open Models to try again.",
-        ]);
+        expect(
+          await page.locator(".cmd-palette__search").getByRole("status").allTextContents(),
+        ).toEqual(["Some models could not be refreshed. Open Models to try again."]);
         expect(
           await page.getByText(/Search notices|Indexing older messages|may be incomplete/).count(),
         ).toBe(0);

@@ -262,7 +262,11 @@ export async function prepareWorkspaceBuildGroup(
       options.assertCurrent?.(candidate);
       const { config, agentId } = candidate;
       for (const provider of withAgentRosterFactsBatch(config, () => {
-        const refs = collectPreparedModelRuntimeConfiguredRefs(config, agentId);
+        const refs = collectPreparedModelRuntimeConfiguredRefs(
+          config,
+          agentId,
+          candidate.readOnly ? candidate.runtimePluginSelections : undefined,
+        );
         configuredModelRefs.push(...refs);
         return [
           ...collectPreparedModelRuntimeProviderIds(config, {}, false, refs, agentId),
@@ -288,7 +292,7 @@ export async function prepareWorkspaceBuildGroup(
     ].toSorted((left, right) => left.localeCompare(right));
     const staticProviderCatalogStartedAt = performance.now();
     reportStage("static provider catalog");
-    let preparedStaticProviderCatalog = reusablePluginGeneration
+    let preparedStaticProviderCatalog = reuseRuntimeFacts
       ? reusablePluginGeneration.preparedStaticProviderCatalog
       : catalogMode === "static"
         ? await prepareImplicitProviderStaticCatalog({
@@ -323,7 +327,7 @@ export async function prepareWorkspaceBuildGroup(
         ]),
       });
     }
-    const staticProviderCatalogMs = reusablePluginGeneration
+    const staticProviderCatalogMs = reuseRuntimeFacts
       ? 0
       : performance.now() - staticProviderCatalogStartedAt;
     const preparedSyntheticAuthProviders = preparedStaticProviderCatalog?.providers ?? [];

@@ -210,6 +210,7 @@ function dispatch(
     io: { emitAcceptance: vi.fn(), emitFinal },
     context: fixture.context,
     taskTrackingMode,
+    assertSettlementCurrent() {},
     onSettled,
     cronCreatorAuthority: { runId: fixture.runId, callerOrigin: { kind: "unknown" }, bindRunScope },
   });

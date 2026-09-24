@@ -291,7 +291,9 @@ export async function pruneMemoryEntryOrigins(params: {
   }
   // Keep diary origins through backup rotation; callers hold the workspace lock.
   const diaries = await Promise.all(
-    DREAMS_FILENAMES.map((name) => readDreamsFile(path.join(params.workspaceDir, name))),
+    DREAMS_FILENAMES.map((name) =>
+      readDreamsFile(path.join(params.workspaceDir, name), params.workspaceDir),
+    ),
   );
   const diaryKeys = new Set(diaries.flatMap(extractPromotionKeys));
   for (const agentId of new Set(params.agentIds)) {

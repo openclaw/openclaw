@@ -30,6 +30,8 @@ import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-suppor
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { reconcileHarnessCompletionDelivery } from "../agent-harness-completion-delivery.js";
+import { resolveSourceReplyDelivery } from "../embedded-agent-runner/delivery-evidence.js";
+import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import { deliverAgentCommandResult } from "./delivery.js";
 
@@ -316,4 +318,61 @@ describe("native completion final-send custody", () => {
       },
     );
   }
+});
+
+describe("message-tool source reply custody", () => {
+  it.each([
+    {
+      name: "confirmed source reply",
+      result: { didDeliverSourceReplyViaMessageTool: true },
+      expected: "delivered",
+    },
+    {
+      name: "current-source receipt",
+      result: { sourceReplyDelivered: true },
+      expected: "delivered",
+    },
+    {
+      name: "source final payload",
+      result: {
+        messagingToolSourceReplyPayloads: [{ text: "Done", sourceReplyFinal: true }],
+      },
+      expected: "delivered",
+    },
+    {
+      name: "source progress without a final",
+      result: {
+        sourceReplyDelivered: true,
+        messagingToolSourceReplyPayloads: [{ text: "Working", sourceReplyFinal: false }],
+      },
+      expected: "missing",
+    },
+    {
+      name: "pending source delivery",
+      result: { sourceReplyDeliveryState: "pending" },
+      expected: "pending",
+    },
+    {
+      name: "an unrelated outbound send",
+      result: { didSendViaMessagingTool: true, messagingToolSentTexts: ["Elsewhere"] },
+      expected: "missing",
+    },
+  ] satisfies Array<{ name: string; result: Partial<EmbeddedAgentRunResult>; expected: string }>)(
+    "preserves reply satisfaction for $name when automatic delivery is disabled",
+    async ({ result, expected }) => {
+      setActivePluginRegistry(createTestRegistry());
+      const delivered = await deliverAgentCommandResult({
+        cfg: {},
+        deps: {},
+        runtime: { log: () => {}, error: () => {}, exit: () => {} },
+        opts: { message: "Private completion", deliver: false },
+        outboundSession: undefined,
+        sessionEntry: undefined,
+        payloads: [],
+        result: { meta: { durationMs: 1 }, ...result },
+      });
+
+      expect(resolveSourceReplyDelivery(delivered)).toBe(expected);
+    },
+  );
 });

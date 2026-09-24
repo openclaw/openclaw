@@ -29,7 +29,7 @@ import {
   FollowupRunDeferredError,
   type FollowupRun,
 } from "./queue.js";
-import type { QueuedFollowupReplyBatch } from "./queue/types.js";
+import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 type FollowupDrainDisposition =
@@ -104,8 +104,7 @@ export function createFollowupRunner(
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
     let queuedFollowupAdmitted = false;
-    const initiallyAborted =
-      queued.abortSignal?.aborted === true || queued.queueAbortSignal?.aborted === true;
+    const initiallyAborted = isFollowupRunAborted(queued);
     const endDeliveryCorrelations = initiallyAborted
       ? []
       : (queued.deliveryCorrelations ?? [])
@@ -253,7 +252,18 @@ export function createFollowupRunner(
       // Source recovery has its own queued callback; this execution still closes once.
       terminalPayloads = delivery.kind === "completed" ? delivery.payloads : [];
     } catch (error) {
-      if (error instanceof FollowupRunDeferredError) {
+      let operatorAuthorityLost = false;
+      try {
+        queued.operatorAuthority?.assertCurrent();
+      } catch {
+        operatorAuthorityLost = true;
+      }
+      if (operatorAuthorityLost) {
+        // Revoked input is terminal; retrying it would hold the queue indefinitely.
+        disposition = { kind: "consumed" };
+        completion = { kind: "aborted" };
+        defaultRuntime.error?.("followup queue: canceled input after loss of operator authority");
+      } else if (error instanceof FollowupRunDeferredError) {
         disposition = { kind: "deferred", reason: error.message };
       } else if (
         operation?.result?.kind === "aborted" &&

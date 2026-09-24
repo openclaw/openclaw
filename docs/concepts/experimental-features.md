@@ -27,20 +27,22 @@ Custom plugin UI flag below controls user-installed native browser code only.
 | Cloud workers    | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
 | Custom plugin UI | `gateway.controlUi.experimental.customPlugins`                          | You want trusted user-installed plugins to add native Control UI views or replace built-in views                                  | [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui)                    |
 | Host Desktop     | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
-| Tool Search      | `tools.toolSearch.enabled`                                              | You want to defer tool schemas for all models instead of using each model's default                                               | [Tool Search](/tools/tool-search)                                                      |
+| Tool Search      | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
 
 ## Control UI Labs
 
-Open **Settings → Agents & Tools → Labs** to manage experiments that have a
+Open **Settings → Labs** to manage experiments that have a
 Control UI switch. Enabling or disabling a lab patches the canonical Gateway
-config immediately; the page shows a restart hint only when a feature requires
-one.
+config immediately without restarting the Gateway.
 
 Labs includes Code Mode, Tool Search for all models, Custom plugin UI,
-Host Desktop, and Cloud Worker Desktop. Custom plugin UI and both desktop
-features require a Gateway restart. Custom plugin UI also requires reloading
-connected browser tabs. Code Mode and Tool Search changes normally take effect
-for future agent runs without restarting.
+Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
+plugin views and desktop availability update in connected Control UI pages.
+Code Mode and Tool Search changes take effect for future agent runs.
+Reload browser tabs after disabling Custom plugin UI to clear plugin JavaScript
+that already ran. The Cloud Worker Desktop lab controls access to existing
+desktop-capable workers; changing a profile's `settings.desktop` affects only
+newly provisioned workers.
 
 Custom plugin UI is off by default. Enabled bundled plugins, including
 Workboard, retain their native UI with the setting off. Backend APIs and
@@ -52,8 +54,9 @@ Code Mode remains disabled until you turn on its Labs switch or explicitly set
 engages only for models marked as preferred Code Mode performers; it does not
 force Code Mode on for every model.
 
-Local models use Tool Search automatically when `tools.toolSearch` is unset.
-The Labs switch enables an override for all models.
+Tool Search is enabled by default when `tools.toolSearch` is unset.
+Turning its Labs switch off disables the global default; turning it on restores
+that default.
 
 ## Local model lean mode
 

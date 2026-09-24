@@ -139,7 +139,7 @@ describe("loadControlUiGitHubPreview", () => {
               },
             }),
           )
-        : githubJson({ private: false }),
+        : githubJson({ private: false, visibility: "public" }),
     );
 
     const first = await loadControlUiGitHubPreview(target, firstIdentity, fetchMock);
@@ -190,7 +190,7 @@ describe("loadControlUiGitHubPreview", () => {
             ? []
             : url.includes("/pulls/")
               ? previewPayload({ user: { login: "octocat" } })
-              : { private: false },
+              : { private: false, visibility: "public" },
         );
       });
       await expect(
@@ -222,7 +222,7 @@ describe("loadControlUiGitHubPreview", () => {
       return githubJson(
         requestUrl(input).includes("/issues/")
           ? previewPayload({ user: { login: "octocat" } })
-          : { private: false },
+          : { private: false, visibility: "public" },
       );
     });
     const target = { kind: "issue" as const, number: 88125, owner: "openclaw", repo: "openclaw" };
@@ -231,7 +231,7 @@ describe("loadControlUiGitHubPreview", () => {
     await started.promise;
     const second = loadControlUiGitHubPreview(target, follower, fetchMock);
     connected = false;
-    repository.resolve(githubJson({ private: false }));
+    repository.resolve(githubJson({ private: false, visibility: "public" }));
     await rejected;
     await expect(second).resolves.toMatchObject({ login: "octocat" });
     const calls = fetchMock.mock.calls.length;
@@ -399,7 +399,7 @@ describe("loadControlUiGitHubPreview", () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const url = requestUrl(input);
       if (!url.includes("/issues/")) {
-        return githubJson({ private: false });
+        return githubJson({ private: false, visibility: "public" });
       }
       const authorization = new Headers(init?.headers).get("Authorization");
       return githubJson(
@@ -474,7 +474,7 @@ describe("loadControlUiGitHubPreview", () => {
     selectFixtureToken("github-test-token");
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(githubJson({ private: false }))
+      .mockResolvedValueOnce(githubJson({ private: false, visibility: "public" }))
       .mockResolvedValueOnce(
         githubJson(
           previewPayload({
@@ -483,7 +483,7 @@ describe("loadControlUiGitHubPreview", () => {
           }),
         ),
       )
-      .mockResolvedValueOnce(githubJson({ private: false }));
+      .mockResolvedValueOnce(githubJson({ private: false, visibility: "public" }));
     const target = { kind: "issue" as const, number: 70003, owner: "openclaw", repo: "public" };
 
     await loadControlUiGitHubPreview(target, undefined, fetchMock);
@@ -532,14 +532,14 @@ describe("loadControlUiGitHubPreview", () => {
     selectFixtureToken("github-test-token");
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(githubJson({ private: false }))
+      .mockResolvedValueOnce(githubJson({ private: false, visibility: "public" }))
       .mockResolvedValueOnce(
         new Response(null, {
           status: 301,
           headers: { Location: "/repos/openclaw/renamed/issues/70007" },
         }),
       )
-      .mockResolvedValueOnce(githubJson({ private: false }))
+      .mockResolvedValueOnce(githubJson({ private: false, visibility: "public" }))
       .mockResolvedValueOnce(
         githubJson(
           previewPayload({
@@ -548,7 +548,7 @@ describe("loadControlUiGitHubPreview", () => {
           }),
         ),
       )
-      .mockResolvedValueOnce(githubJson({ private: false }));
+      .mockResolvedValueOnce(githubJson({ private: false, visibility: "public" }));
 
     const preview = await loadControlUiGitHubPreview(
       { kind: "issue", number: 70007, owner: "openclaw", repo: "old-name" },
@@ -580,7 +580,7 @@ describe("loadControlUiGitHubPreview", () => {
     });
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(githubJson({ private: false }))
+      .mockResolvedValueOnce(githubJson({ private: false, visibility: "public" }))
       .mockResolvedValueOnce(redirectResponse);
 
     await expect(
@@ -602,7 +602,7 @@ describe("loadControlUiGitHubPreview", () => {
       const url = requestUrl(input);
       if (url.endsWith("/repos/openclaw/openclaw")) {
         visibilityChecks.push(url);
-        return githubJson({ private: false });
+        return githubJson({ private: false, visibility: "public" });
       }
       if (url.endsWith("/repos/openclaw/secret")) {
         visibilityChecks.push(url);
@@ -643,38 +643,37 @@ describe("loadControlUiGitHubPreview", () => {
     ).toHaveLength(0);
   });
 
-  it("stops private and missing repositories before fetching item metadata", async () => {
-    selectFixtureToken("github-test-token");
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(githubJson({ private: true }))
-      .mockResolvedValueOnce(githubJson({ message: "Not Found" }, 404));
+  it.each([
+    { repo: "private", repository: { private: true, visibility: "private" }, status: 200 },
+    { repo: "internal", repository: { private: false, visibility: "internal" }, status: 200 },
+    { repo: "missing-visibility", repository: { private: false }, status: 200 },
+    { repo: "missing", repository: { message: "Not Found" }, status: 404 },
+  ])(
+    "stops $repo repositories before fetching item metadata",
+    async ({ repo, repository, status }) => {
+      selectFixtureToken("github-test-token");
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(githubJson(repository, status));
 
-    for (const [repo, number] of [
-      ["private", 70010],
-      ["missing", 70011],
-    ] as const) {
       await expect(
         loadControlUiGitHubPreview(
-          { kind: "issue", number, owner: "openclaw", repo },
+          { kind: "issue", number: 70010, owner: "openclaw", repo },
           undefined,
           fetchMock,
         ),
       ).rejects.toMatchObject({ statusCode: 404 } satisfies Partial<ControlUiGitHubError>);
-    }
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
-      "https://api.github.com/repos/openclaw/private",
-      "https://api.github.com/repos/openclaw/missing",
-    ]);
-  });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toBe(
+        `https://api.github.com/repos/openclaw/${repo}`,
+      );
+    },
+  );
 
   it("does not expose metadata transferred into a private repository", async () => {
     selectFixtureToken("github-test-token");
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(githubJson({ private: false }))
+      .mockResolvedValueOnce(githubJson({ private: false, visibility: "public" }))
       .mockResolvedValueOnce(
         new Response(null, {
           status: 301,
@@ -705,7 +704,7 @@ describe("loadControlUiGitHubPreview", () => {
     selectFixtureToken("github-test-token");
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(githubJson({ private: false }))
+      .mockResolvedValueOnce(githubJson({ private: false, visibility: "public" }))
       .mockResolvedValueOnce(
         githubJson(
           previewPayload({
@@ -714,7 +713,7 @@ describe("loadControlUiGitHubPreview", () => {
           }),
         ),
       )
-      .mockResolvedValueOnce(githubJson({ private: false }))
+      .mockResolvedValueOnce(githubJson({ private: false, visibility: "public" }))
       .mockResolvedValueOnce(githubJson({ private: true }));
 
     await loadControlUiGitHubPreview(

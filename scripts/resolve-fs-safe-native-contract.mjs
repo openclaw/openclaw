@@ -13,6 +13,8 @@ const LEGACY_PYTHON_ONLY_CONTRACTS = new Set([
   "2026.7.33:0.4.1",
   // 2026.7.34 retains the same Python-only dependency and runtime contract.
   "2026.7.34:0.4.1",
+  // 2026.7.35 retains the same Python-only dependency and runtime contract.
+  "2026.7.35:0.4.1",
 ]);
 
 function listContainingBranches(ref) {

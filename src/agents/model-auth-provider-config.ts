@@ -472,7 +472,9 @@ export async function resolveProviderEntryApiKeyBinding(params: {
   store: AuthProfileStore;
   agentDir?: string;
   secretSentinels?: boolean;
+  signal?: AbortSignal;
 }): Promise<ProviderEntryApiKeyBindingResolution> {
+  params.signal?.throwIfAborted();
   const reference = resolveProviderEntryApiKeyProfileReference(params);
   if (reference.kind === "none" || reference.kind === "marker") {
     return { kind: "none" };
@@ -487,7 +489,9 @@ export async function resolveProviderEntryApiKeyBinding(params: {
       store: params.store,
       profileId: reference.profileId,
       agentDir: params.agentDir,
+      signal: params.signal,
     });
+    params.signal?.throwIfAborted();
     if (!resolved) {
       return { kind: "profile-unresolved", profileId: reference.profileId };
     }
@@ -504,6 +508,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
       }),
     };
   } catch (err) {
+    params.signal?.throwIfAborted();
     if (err instanceof SecretSurfaceUnavailableError) {
       throw err;
     }

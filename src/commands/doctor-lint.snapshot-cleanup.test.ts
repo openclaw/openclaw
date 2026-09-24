@@ -17,6 +17,18 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
   return {
     ...actual,
+    async prepareSqliteReadOnlyLocation(
+      ...args: Parameters<typeof actual.prepareSqliteReadOnlyLocation>
+    ) {
+      const prepared = await actual.prepareSqliteReadOnlyLocation(...args);
+      return {
+        ...prepared,
+        cleanupAsync: vi
+          .fn()
+          .mockRejectedValueOnce(new Error("SQLite read-only worker snapshot cleanup failed"))
+          .mockImplementation(prepared.cleanupAsync),
+      };
+    },
     prepareSqliteReadOnlyLocationSync(pathname: string) {
       const prepared = actual.prepareSqliteReadOnlyLocationSync(pathname);
       return {
@@ -42,6 +54,7 @@ it.each([
   { update: true, blocking: false, all: false },
   { update: true, blocking: true, all: false },
   { update: true, blocking: false, all: true },
+  { update: true, blocking: true, all: true },
 ])(
   "keeps snapshot cleanup diagnostic separate during lint (%j)",
   async ({ update, blocking, all }) => {

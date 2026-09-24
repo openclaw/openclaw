@@ -36,7 +36,7 @@ export function bindUserTurnTranscriptAnnotation(params: {
   const owner = getUserTurnTranscriptAdmissionOwner(params.recorder);
   const receipt = owner?.receipt();
   const message = owner?.message();
-  if (!owner || !receipt || !message || owner.blocked() || message.display === false) {
+  if (!owner || !receipt || !message || owner.blocked() || message.excludeFromContext === true) {
     return undefined;
   }
   let admission = structuredClone(receipt);

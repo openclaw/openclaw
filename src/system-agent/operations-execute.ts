@@ -471,6 +471,7 @@ export async function executeSystemAgentOperation(
                   : {}),
               },
               ...(operation.role ? { role: operation.role } : {}),
+              ...(operation.purpose ? { purpose: operation.purpose } : {}),
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
               ...(ctx.assertPersistentApply
                 ? { beforePersistentApply: ctx.assertPersistentApply }

@@ -65,6 +65,7 @@ describe("update schedule hydration", () => {
           currentSha: "a".repeat(40),
           upstreamRef: "origin/main",
           upstreamSha: "b".repeat(40),
+          repositoryUrl: "https://github.com/example/openclaw",
           commitsBehind: 3,
           commits: [
             { sha: "b0b0b0b", subject: "Improve update scheduling" },
@@ -79,6 +80,7 @@ describe("update schedule hydration", () => {
       currentSha: "a".repeat(40),
       upstreamRef: "origin/main",
       upstreamSha: "b".repeat(40),
+      repositoryUrl: "https://github.com/example/openclaw",
       commitsBehind: 3,
       commits: [
         { sha: "b0b0b0b", subject: "Improve update scheduling" },

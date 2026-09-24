@@ -135,6 +135,31 @@ async function activeGatewayIdentity(page: Page) {
 }
 
 suite.define(() => {
+  it.each([false, true])("keeps narrow row actions visible (touch: %s)", async (hasTouch) => {
+    await suite.withPage({ viewport: { width: 1000, height: 900 }, hasTouch }, async ({ page }) => {
+      await installMockGateway(page, {
+        featureMethods: ["secrets.store.list", "secrets.store.set", "secrets.store.delete"],
+        methodResponses: {
+          "secrets.store.list": { entries: [secretEntry] },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/secrets`);
+      const row = page.getByRole("row", { name: secretEntry.name });
+      const trigger = row.getByRole("button", { name: `Actions: ${secretEntry.name}` });
+      await trigger.waitFor({ state: "visible" });
+      await row.hover();
+      await page.evaluate(() => document.fonts.ready);
+      const [buttonBox, tableBox] = await Promise.all([
+        trigger.boundingBox(),
+        page.locator(".secrets-store__table-wrap").boundingBox(),
+      ]);
+      if (!buttonBox || !tableBox) {
+        throw new Error("Expected row actions and table to have layout boxes");
+      }
+      expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(tableBox.x + tableBox.width);
+    });
+  });
+
   it("keeps long secret names inside the Name column", async () => {
     await suite.withPage(
       {

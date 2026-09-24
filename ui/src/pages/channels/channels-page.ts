@@ -108,6 +108,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       }
     },
     false,
+    "visible",
   );
 
   private readonly subscriptions = new SubscriptionsController(this)

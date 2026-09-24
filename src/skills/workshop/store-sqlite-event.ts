@@ -93,11 +93,11 @@ export function readStoredSkillProposalEvent(
   return row ? parseStoredSkillProposalEventRow(row) : null;
 }
 
-export function listStoredSkillProposalEvents(
-  input: SkillProposalEventsListInput,
-  options: SkillWorkshopStoreOptions = {},
+export function listStoredSkillProposalEventsInDatabase(
+  database: DatabaseSync,
+  input: Pick<SkillProposalEventsListInput, "agentId" | "proposalId" | "afterSequence" | "limit">,
 ): SkillProposalEventsListResult {
-  const { database, kysely } = openSkillWorkshopStore(options);
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const limit = Math.min(Math.max(input.limit ?? 100, 1), 200);
   let query = kysely
     .selectFrom("skill_workshop_proposal_events")
@@ -128,7 +128,7 @@ export function listStoredSkillProposalEvents(
     query = query.where("skill_workshop_proposals.owner_agent_id", "is not", null);
   }
   const rows = executeSqliteQuerySync(
-    database.db,
+    database,
     query.orderBy("skill_workshop_proposal_events.sequence", "asc").limit(limit + 1),
   ).rows;
   let hasMore = rows.length > limit;

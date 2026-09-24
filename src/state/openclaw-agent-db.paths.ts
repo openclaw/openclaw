@@ -1,4 +1,5 @@
 // Agent database path helpers resolve per-agent persisted database paths.
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -17,6 +18,24 @@ type OpenClawAgentSqlitePathOptions = {
 };
 
 export const INCOGNITO_AGENT_SQLITE_BASENAME = "incognito-openclaw-agent.sqlite";
+
+class IncognitoAgentDatabasePathCollisionError extends Error {
+  readonly path: string;
+
+  constructor(pathname: string) {
+    super(
+      `Incognito agent database sentinel path already exists: ${pathname}. This filename is reserved for in-memory incognito state; move or rename the file and retry.`,
+    );
+    this.name = "IncognitoAgentDatabasePathCollisionError";
+    this.path = pathname;
+  }
+}
+
+export function assertIncognitoAgentDatabasePathAvailable(pathname: string): void {
+  if (existsSync(pathname)) {
+    throw new IncognitoAgentDatabasePathCollisionError(pathname);
+  }
+}
 
 const agentSqlitePaths = new Map<string, string>();
 // Keep the FIFO cursor so eviction never rescans deleted Map entries.

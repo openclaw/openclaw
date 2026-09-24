@@ -1,4 +1,4 @@
-import { afterEach, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
@@ -166,6 +166,20 @@ export async function enterQuery(palette: CommandPalette, query: string) {
   input.value = query;
   input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
   await palette.updateComplete;
+}
+
+export function expectPalettePromptMode(palette: CommandPalette) {
+  const searchPanel = palette.querySelector('[inert][aria-hidden="true"]');
+  expect(searchPanel).not.toBeNull();
+  const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+  expect(input.hasAttribute("aria-controls")).toBe(false);
+  expect(input.hasAttribute("aria-activedescendant")).toBe(false);
+  expect(input.closest("[inert]")).toBeNull();
+  for (const searchElement of palette.querySelectorAll(
+    ".cmd-palette__filters, .cmd-palette__results, .cmd-palette__source-error, .cmd-palette__empty, .cmd-palette__no-results",
+  )) {
+    expect(searchElement.closest('[inert][aria-hidden="true"]')).toBe(searchPanel);
+  }
 }
 
 export function findPaletteOption(palette: CommandPalette, label: string, exact = false) {

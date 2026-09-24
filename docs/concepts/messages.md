@@ -166,12 +166,12 @@ The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) is ne
 Silence policy resolves by conversation type:
 
 - Direct conversations never receive `NO_REPLY` prompt guidance. An undelivered required answer still needs recovery; the token cannot waive that obligation.
-- Unaddressed groups/channels allow silence by default. Mentions and authorized commands require a response. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`.
-- Internal helper turns can remain silent.
+- Accepted group/channel requests require a reply by default, including unmentioned messages admitted with `requireMention: false`. Mention and access gates still decide which messages reach the agent. To allow unaddressed requests to finish silently, explicitly set `silentReply.group: "allow"` at one of the configuration scopes below; mentions and authorized commands still require a response.
+- [Ambient room events](/channels/ambient-room-events) and internal helper turns can remain silent. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`.
 
 Defaults live under `agents.defaults.silentReply`; `surfaces.<id>.silentReply` can override group/internal policy per surface.
 
-Generic internal runner failures stay quiet for optional turns that have not shown visible output, so unaddressed groups do not receive gateway boilerplate. Required turns still receive an error. Classified recovery guidance, such as missing-auth, rate-limit, or overload notices, remains deliverable, and visible progress receives a failure outcome rather than being left unfinished. Direct chats show compact failure copy by default; raw runner details show only when `/verbose full` is enabled.
+Generic internal runner failures stay quiet for optional turns that have not shown visible output, including groups explicitly configured to allow silence. Required turns still receive an error. Classified recovery guidance, such as missing-auth, rate-limit, or overload notices, remains deliverable, and visible progress receives a failure outcome rather than being left unfinished. Direct chats show compact failure copy by default; raw runner details show only when `/verbose full` is enabled.
 
 Reply requirements come from admission, not model control tokens. Confirmed delivery or still-owned delivery prevents duplicate recovery; see [Reply shaping](/concepts/agent-loop#reply-shaping).
 

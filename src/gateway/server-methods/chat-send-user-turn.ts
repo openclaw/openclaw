@@ -2,6 +2,7 @@ import path from "node:path";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
@@ -212,6 +213,9 @@ export function prepareChatSendUserTurn(params: {
   const ctx: MsgContext = {
     ...buildTextContext(commandBody),
     InputProvenance: request.systemInputProvenance,
+    ...(isProgressCardRefreshInputProvenance(request.systemInputProvenance)
+      ? { InternalTurnSource: "progress-card-refresh" as const }
+      : {}),
     SessionKey: session.sessionKey,
     AgentId: session.agentId,
     OriginatingTo: originatingTo,

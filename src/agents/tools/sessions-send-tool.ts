@@ -71,7 +71,7 @@ import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
-  runWithGatewayToolCleanupContext,
+  runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
@@ -1075,8 +1075,8 @@ export function createSessionsSendTool(opts?: {
               return;
             }
             // Detached turns must not retain the caller's resource or runtime generation scope.
-            runWithGatewayToolCleanupContext(() => {
-              void runWithGatewayDetachedWorkContinuation(
+            void runWithGatewayToolContinuationContext(() =>
+              runWithGatewayDetachedWorkContinuation(
                 () =>
                   runOutsidePreparedModelRuntimePluginGenerationScope(() =>
                     runWithoutOwnedSessionTranscriptWrites(() =>
@@ -1102,11 +1102,11 @@ export function createSessionsSendTool(opts?: {
                     ),
                   ),
                 "session:a2a-send",
-              ).catch((err: unknown) => {
-                log.warn("sessions_send announce flow admission failed", {
-                  runId,
-                  error: formatErrorMessage(err),
-                });
+              ),
+            ).catch((err: unknown) => {
+              log.warn("sessions_send announce flow admission failed", {
+                runId,
+                error: formatErrorMessage(err),
               });
             });
           };
@@ -1155,7 +1155,7 @@ export function createSessionsSendTool(opts?: {
             return jsonResult({
               runId,
               status: "timeout",
-              error: result.error,
+              error: result.error ?? "agent run timed out",
               sentBeforeError: true,
               sessionKey: displayKey,
               ...watchField,

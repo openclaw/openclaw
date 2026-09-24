@@ -468,6 +468,12 @@ jobs:
       telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
       telegram_scenarios: ${{ steps.profile.outputs.telegram_scenarios }}
     steps:
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Resolve called package tooling identity
         id: tooling_identity
         env:

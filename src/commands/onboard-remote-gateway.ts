@@ -10,10 +10,10 @@ import type {
   WizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDeviceIdentityForGatewayCall } from "../gateway/call-device-auth.js";
 import {
   isGatewayClientRequestError,
   isGatewayTransportError,
-  resolveDeviceIdentityForGatewayCall,
   type CallGatewayCliOptions,
 } from "../gateway/call.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";

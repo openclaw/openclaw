@@ -25,11 +25,13 @@ import * as queueCleanup from "../auto-reply/reply/queue/cleanup.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
 import { getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { callGatewayCli } from "./call.js";
 import * as chatAbort from "./chat-abort.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   agentCommandMock,
+  connectOk,
+  createGatewaySuiteHarness,
   installGatewayTestHooks,
   onceMessage,
   prepareGatewayReplyRuntimeForTest,
@@ -38,13 +40,16 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-let harness: GatewayServerHarness;
+const gatewayToken = "abort-authorization-test-token";
+let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let registration: MockInstance<typeof chatAbort.registerChatAbortController>;
 let childCancellation: MockInstance<typeof subagentControl.killAllControlledSubagentRuns>;
 let queueClearing: MockInstance<typeof queueCleanup.clearSessionQueues>;
 
 beforeAll(async () => {
-  harness = await startGatewayServerHarness();
+  harness = await createGatewaySuiteHarness({
+    serverOptions: { auth: { mode: "token", token: gatewayToken }, bind: "loopback" },
+  });
   // Observe production admission and effects without replacing their implementations.
   registration = vi.spyOn(chatAbort, "registerChatAbortController");
   childCancellation = vi.spyOn(subagentControl, "killAllControlledSubagentRuns");
@@ -68,15 +73,17 @@ afterAll(async () => {
 
 async function openOperator(device: string, scopes = ["operator.write"]) {
   const deviceIdentityPath = path.join(process.env.OPENCLAW_STATE_DIR!, `${device}.sqlite`);
-  const client = await harness.openClient({
+  const ws = await harness.openWs();
+  const hello = await connectOk(ws, {
+    token: gatewayToken,
     scopes,
     deviceIdentityPath,
     prePairDevice: true,
   });
-  expect(client.hello).toMatchObject({ auth: { role: "operator", scopes } });
+  expect(hello).toMatchObject({ auth: { role: "operator", scopes } });
   return {
-    ...client,
-    hello: client.hello as HelloOk,
+    ws,
+    hello: hello as HelloOk,
     deviceId: loadOrCreateDeviceIdentity({ path: deviceIdentityPath }).deviceId,
   };
 }
@@ -109,7 +116,7 @@ async function startNativeRun(owner: Awaited<ReturnType<typeof openOperator>>, n
     // Production relays the admitted controller signal into the native attempt.
     command.abortSignal!.addEventListener("abort", abort, { once: true });
     setActiveEmbeddedRun(command.sessionId!, handle, sessionKey);
-    command.onExecutionStarted?.();
+    await command.onExecutionStarted?.();
     started.resolve();
     try {
       await finish.promise;
@@ -282,6 +289,42 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
       stopper.ws.close();
     }
   });
+
+  test.each(["chat.abort", "sessions.abort"])(
+    "lets a local shared-token CLI cancel another connection's native run with %s",
+    async (method) => {
+      const owner = await openOperator(`cli-owner-${method}`);
+      const run = await startNativeRun(owner, `cli-${method}`);
+      const options = {
+        url: `ws://127.0.0.1:${harness.port}`,
+        token: gatewayToken,
+        method,
+        params:
+          method === "chat.abort"
+            ? { sessionKey: run.sessionKey, runId: run.runId }
+            : { key: run.sessionKey, runId: run.runId },
+      };
+      try {
+        // Explicit scope restrictions still reach, and fail, run ownership checks.
+        await expect(callGatewayCli({ ...options, scopes: ["operator.write"] })).rejects.toThrow(
+          "unauthorized",
+        );
+        expect(run.entry.controller.signal.aborted).toBe(false);
+        expect(run.nativeAbort).not.toHaveBeenCalled();
+
+        await expect(callGatewayCli(options)).resolves.toMatchObject(
+          method === "chat.abort"
+            ? { aborted: true, runIds: [run.runId] }
+            : { status: "aborted", abortedRunId: run.runId },
+        );
+        expect(run.entry.controller.signal.aborted).toBe(true);
+        expect(run.nativeAbort).toHaveBeenCalledTimes(1);
+      } finally {
+        await run.finish();
+        owner.ws.close();
+      }
+    },
+  );
 
   test("preserves controller-less native Stop", async () => {
     const owner = await openOperator("recovered-owner");

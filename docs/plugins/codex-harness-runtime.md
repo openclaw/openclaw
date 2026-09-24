@@ -125,6 +125,11 @@ the legacy runtime. When Codex emits a native image-generation item with a
 `savedPath`, OpenClaw forwards that exact file through the normal reply-media
 path even if the Codex turn has no assistant text.
 
+Sending an attachment suppresses only the matching generated image on the same
+destination; other generated images remain available. Internal UI source replies
+keep their delivered attachment without adding a second generated copy. Partial
+delivery receipts do not suppress images whose delivery was not confirmed.
+
 ## Where each section moved
 
 Every section of the single-page version now lives on this page or on one of the

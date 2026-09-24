@@ -145,18 +145,18 @@ describe("firecrawl tools", () => {
       ),
     ) as typeof fetch;
 
-    await expect(
-      firecrawlClientTesting.postFirecrawlJson(
-        {
-          url: "https://api.firecrawl.dev/v2/search",
-          timeoutSeconds: 5,
-          apiKey: "firecrawl-key",
-          body: { query: "openclaw" },
-          errorLabel: "Firecrawl search",
-        },
-        async () => "ok",
-      ),
-    ).rejects.toSatisfy(
+    const failure = firecrawlClientTesting.postFirecrawlJson(
+      {
+        url: "https://api.firecrawl.dev/v2/search",
+        timeoutSeconds: 5,
+        apiKey: "firecrawl-key",
+        body: { query: "openclaw" },
+        errorLabel: "Firecrawl search",
+      },
+      async () => "ok",
+    );
+    await expect(failure).rejects.toMatchObject({ status: 400, statusCode: 400 });
+    await expect(failure).rejects.toSatisfy(
       (error: unknown) =>
         error instanceof Error &&
         /<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/.test(error.message) &&

@@ -560,7 +560,11 @@ describe("scheduled message actions", () => {
               },
             },
           },
-          tools: { allow: creator !== "trusted" ? ["message", "automations"] : ["message"] },
+          tools: {
+            // The scripted provider asserts the direct message schema and scheduled authority.
+            toolSearch: false,
+            allow: creator !== "trusted" ? ["message", "automations"] : ["message"],
+          },
           ...(nativeCreator
             ? { commands: { ownerAllowFrom: [`discord:${nativeRequesterId}`] } }
             : {}),

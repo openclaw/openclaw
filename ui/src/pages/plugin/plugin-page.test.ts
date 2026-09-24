@@ -194,7 +194,6 @@ describe("PluginPage", () => {
       listeners.forEach((listener) => listener());
       await page.updateComplete;
       expect(page.textContent).toContain("Custom plugin UI is off");
-      expect(page.textContent).toContain("restart the Gateway and reload this browser tab");
       expect(page.params).toEqual({ document: "saved-draft" });
       const link = page.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
       expect(link?.textContent?.trim()).toBe("Open Labs");

@@ -6234,7 +6234,7 @@ describe("syncPluginsForUpdateChannel", () => {
   });
 
   it("uses the provided env when matching bundled load and install paths", async () => {
-    const bundledHome = "/tmp/openclaw-home";
+    const bundledHome = makeTrackedTempDir("openclaw-plugin-update-home", tempDirs);
     mockBundledSources(
       createBundledSource({
         localPath: `${bundledHome}/plugins/feishu`,

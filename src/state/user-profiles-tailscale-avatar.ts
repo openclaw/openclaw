@@ -2,8 +2,8 @@ import type { FetchLike } from "../media/fetch.js";
 import {
   MAX_USER_PROFILE_AVATAR_BYTES,
   USER_PROFILE_AVATAR_MIME_TYPES,
-  type UserProfileAvatarMime,
-} from "./user-profiles.types.js";
+} from "../shared/avatar-limits.js";
+import type { UserProfileAvatarMime } from "./user-profiles.types.js";
 
 const TAILSCALE_AVATAR_FETCH_TIMEOUT_MS = 5_000;
 const TAILSCALE_AVATAR_MAX_REDIRECTS = 3;

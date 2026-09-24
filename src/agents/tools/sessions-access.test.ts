@@ -587,7 +587,10 @@ describe("createSessionVisibilityGuard", () => {
     const now = Date.now();
     const stateDir = tempDirs.make("openclaw-session-access-audit-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const stopWriter = startAgentLocalAuditWriter({ stateDir });
+    const stopWriter = startAgentLocalAuditWriter(
+      { logging: { audit: { executionIdentity: true } } },
+      { stateDir },
+    );
     if (!stopWriter) {
       throw new Error("expected an isolated direct-local audit writer");
     }

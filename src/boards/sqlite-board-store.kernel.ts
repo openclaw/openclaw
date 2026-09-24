@@ -69,7 +69,7 @@ function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolea
   return true;
 }
 
-export function ensureBoardSchema(database: OpenClawAgentDatabase): void {
+export function ensureBoardSchema(database: BoardDatabaseHandle): void {
   if (ensuredBoardDatabases.has(database.db)) {
     return;
   }

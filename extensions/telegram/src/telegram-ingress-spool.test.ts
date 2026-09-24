@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -40,6 +41,7 @@ async function withTempState<T>(
     options: Parameters<typeof createPluginStateKeyedStoreForTests<StoreValue>>[1],
   ) => createPluginStateKeyedStoreForTests<StoreValue>("telegram", options);
   setTelegramRuntime({
+    channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
     state: {
       resolveStateDir: () => stateDir,
       openKeyedStore,

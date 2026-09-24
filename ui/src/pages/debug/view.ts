@@ -103,18 +103,13 @@ function renderDiagnosticsError(error: string | null) {
   `;
 }
 
-function renderSnapshotActivity(props: DebugProps) {
-  const active = props.connected ? props.loading : props.offlineStable;
-  if (!active) {
+function renderSnapshotOffline(props: DebugProps) {
+  if (props.connected || !props.offlineStable) {
     return nothing;
   }
-  const refreshing = props.connected;
   return renderSettingsRow({
-    title: renderSettingsStatus({
-      kind: refreshing ? "accent" : "muted",
-      label: t(refreshing ? "common.refreshing" : "common.offline"),
-    }),
-    description: t(refreshing ? "debug.refreshingSnapshots" : "debug.offlineSnapshots"),
+    title: renderSettingsStatus({ kind: "muted", label: t("common.offline") }),
+    description: t("debug.offlineSnapshots"),
   });
 }
 
@@ -145,7 +140,7 @@ export function renderDebug(props: DebugProps) {
       `,
     },
     html`
-      ${renderSnapshotActivity(props)} ${renderDiagnosticsError(props.diagnosticsError)}
+      ${renderSnapshotOffline(props)} ${renderDiagnosticsError(props.diagnosticsError)}
       ${renderSecurityRow(props)} ${renderJsonRow(t("debug.status"), props.status)}
       ${renderJsonRow(t("debug.health"), props.health)}
       ${renderJsonRow(t("debug.lastHeartbeat"), props.heartbeat)}

@@ -84,7 +84,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     await settlement?.settle(false);
   };
   let didDeliverVisiblePartialReply = false;
-  const { onBlockReply, flush: flushBlockTtsText } = createDispatchBlockReplyHandler(state);
+  const {
+    onBlockReply,
+    onPreparedBlockReply,
+    flush: flushBlockTtsText,
+  } = createDispatchBlockReplyHandler(state);
   const flushDeferredFinalText = async () => {
     const delivered = await flushDispatchDeferredFinalText({
       deferFinalTtsText,
@@ -433,6 +437,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 onPatchSummary: (payload) =>
                   forwardToolProgress(() => state.onPatchSummaryFromReplyOptions?.(payload)),
                 onBlockReply,
+                onPreparedBlockReply,
               },
               state.preparedReplyDispatchRuntime && !params.configOverride
                 ? undefined
