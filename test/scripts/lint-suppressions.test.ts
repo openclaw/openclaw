@@ -232,6 +232,8 @@ describe("production lint suppressions", () => {
         // Cleanup is retained in AggregateError.errors; extraction remains the primary cause.
         "src/commands/backup-restore.ts|preserve-caught-error|1",
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
+        "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
+        "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Intl.Collator.compare is a getter returning a bound function.
         "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
         // Both list callers sort their own freshly filtered arrays.
