@@ -137,6 +137,55 @@ describe("qa compaction scenario catalog", () => {
     const writeTranscriptToolCallIdExpr = readSetExpression("writeTranscriptToolCallId");
     const continuationChainExpr = readSetExpression("continuationChain");
     const compactionSummaryRequestsExpr = readSetExpression("compactionSummaryRequests");
+    const sessionId = "seeded-transcript";
+    const allInputText = "Compaction retry mutating tool check QA-COMPACTION-DURABLE-MARKER";
+    const overflow = {
+      cursor: 1,
+      sessionId,
+      allInputText,
+      requestKind: "agent-initial",
+      outcome: "error",
+      errorCode: "context_length_exceeded",
+    };
+    const write = { cursor: 2, sessionId, plannedToolName: "write", allInputText };
+    const failedWrite = { ...write, cursor: 3, outcome: "error", toolOutput: "failed" };
+    const continuation = { cursor: 4, sessionId, requestKind: "tool-continuation", allInputText };
+    const failedContinuation = { ...continuation, cursor: 5, outcome: "error" };
+    const foreign = <T extends object>(request: T) => ({
+      ...request,
+      sessionId: `${sessionId}-other`,
+      allInputText: `${allInputText} ${sessionId}`,
+    });
+    const scope = {
+      sessionId,
+      config: scenario.execution.config,
+      overflowRequest: overflow,
+      writeRequest: write,
+      scenarioRequests: [
+        overflow,
+        foreign(overflow),
+        { ...overflow, outcome: "success" },
+        { ...overflow, errorCode: "other" },
+        write,
+        failedWrite,
+        foreign(write),
+        { ...write, cursor: 0 },
+        { ...write, plannedToolName: "read" },
+        { ...write, allInputText: "QA-COMPACTION-DURABLE-MARKER" },
+        { ...write, allInputText: "Compaction retry mutating tool check" },
+        continuation,
+        failedContinuation,
+        foreign(continuation),
+        { ...continuation, cursor: 1 },
+        { ...continuation, requestKind: "agent-initial" },
+      ],
+    };
+    expect(runInNewContext(readSetExpression("overflowRequests"), scope)).toEqual([overflow]);
+    expect(runInNewContext(writeRequestsExpr, scope)).toEqual([write, failedWrite]);
+    expect(runInNewContext(postWriteContinuationsExpr, scope)).toEqual([
+      continuation,
+      failedContinuation,
+    ]);
     const continuationAssertIndex = actionIndex((action) =>
       readFlowAssertExpression(action).includes("continuationChain.valid === true"),
     );
@@ -235,7 +284,6 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain("writeRequests.length === 1");
     expect(writeRequestsExpr).toContain("request.plannedToolName === 'write'");
     expect(writeRequestsExpr).toContain("request.cursor > overflowRequest.cursor");
-    expect(writeRequestsExpr).toContain("String(request.allInputText ?? '').includes(sessionId)");
     expect(writeRequestsExpr).toContain(
       "String(request.allInputText ?? '').includes(config.promptSnippet)",
     );
@@ -282,9 +330,6 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).not.toContain("transcript.successfulToolCallCounts.write === 1");
     expect(postWriteContinuationsExpr).toContain("request.requestKind === 'tool-continuation'");
     expect(postWriteContinuationsExpr).toContain("request.cursor > writeRequest.cursor");
-    expect(postWriteContinuationsExpr).toContain(
-      "String(request.allInputText ?? '').includes(sessionId)",
-    );
     expect(postWriteContinuationsExpr).not.toContain("request.outcome");
     expect(postWriteContinuationsExpr).not.toContain("request.plannedToolName");
     expect(postWriteContinuationsExpr).not.toContain("request.toolOutputCallId");

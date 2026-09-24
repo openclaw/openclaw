@@ -9,7 +9,10 @@ import type {
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
 import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
-import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import {
+  validateAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -244,7 +247,28 @@ export async function withGatewayToolCallerIdentity<T>(
     inheritedOwner?.fullPermission === false || identity.fullPermission === false
       ? false
       : (inheritedOwner?.fullPermission ?? identity.fullPermission);
-  const approvalAuthority = inheritedOwner?.approvalAuthority ?? identity.approvalAuthority;
+  let approvalAuthority = inheritedOwner?.approvalAuthority ?? identity.approvalAuthority;
+  if (
+    inheritedOwner?.approvalAuthority &&
+    identity.approvalAuthority &&
+    inheritedOwner.approvalAuthority !== identity.approvalAuthority
+  ) {
+    if (
+      validateAgentRunDelegatedAuthority(
+        identity.approvalAuthority,
+        inheritedOwner.approvalAuthority,
+      )
+    ) {
+      approvalAuthority = identity.approvalAuthority;
+    } else if (
+      !validateAgentRunDelegatedAuthority(
+        inheritedOwner.approvalAuthority,
+        identity.approvalAuthority,
+      )
+    ) {
+      throw new Error("agent tool caller approval scopes do not retain the same source");
+    }
+  }
   const operatorAuthority = inheritedOwner?.operatorAuthority ?? identity.operatorAuthority;
   const approvalAuthorityCheck =
     inheritedOwner?.approvalAuthorityCheck ?? identity.approvalAuthorityCheck;

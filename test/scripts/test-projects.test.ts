@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
-import { readTestSelectorSourceFacts } from "../../scripts/lib/test-selector-source-facts.mts";
+import {
+  isErasedTypeScriptModuleSource,
+  readTestSelectorSourceFacts,
+} from "../../scripts/lib/test-selector-source-facts.mts";
 import {
   listVitestRuntimeConsumerFiles,
   resolveVitestPretestBuildMode,
@@ -26,16 +29,17 @@ import {
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
   formatNoChangedTestTargetLines,
+  hasImportGraphImpactOnTargets,
   isTestFileTarget,
   orderFullSuiteSpecsForParallelRun,
   parseTestProjectsArgs,
   resolveChangedTestTargetPlanForArgs,
   resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
+  resolveAffectedTestsFromImportGraph,
   resolveControlUiTestConsumers,
+  resolveDependencyTestConsumers,
   resolveParallelFullSuiteConcurrency,
-  shouldRetryVitestNoOutputTimeout,
-  withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "../../scripts/test-projects.test-support.mts";
 import {
@@ -106,9 +110,19 @@ describe("test runtime prerequisites", () => {
       ["extensions/telegram/src/sticker-cache.selection.test.ts"],
       "runtime",
     ],
+    [
+      "Telegram native sticker pipeline",
+      ["extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts"],
+      "runtime",
+    ],
     ["Telegram polling runtime", ["extensions/telegram/src/polling-session.test.ts"], "runtime"],
     ["Telegram config", ["test/vitest/vitest.extension-telegram.config.ts"], "runtime"],
     ["ordinary Telegram test", ["extensions/telegram/src/sequential-key.test.ts"], undefined],
+    [
+      "ordinary Telegram worker test",
+      ["extensions/telegram/src/message-dispatch-dedupe.test.ts"],
+      undefined,
+    ],
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
     ["ACP CLI process", ["src/cli/acp-cli-exit.process.test.ts"], "runtime"],
@@ -944,7 +958,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes the Vitest fork patch and its fixture to lifecycle proof", () => {
     expectChangedTargets(
-      ["patches/vitest@5.0.0.patch"],
+      ["patches/vitest@5.0.1.patch"],
       [
         "test/scripts/run-vitest-profile.test.ts",
         "test/scripts/run-vitest-state-cleanup.test.ts",
@@ -1569,6 +1583,43 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("leaves actionlint validation external while retaining config consumers", () => {
+    for (const withConsumers of [false, true]) {
+      withTinyGitRepo(
+        {
+          ".github/actionlint.yaml": "self-hosted-runner: {}\n",
+          ".github/unknown-lint.yaml": "{}\n",
+          ...(withConsumers
+            ? {
+                "src/lint-config.ts":
+                  'export const config = new URL("../.github/actionlint.yaml", import.meta.url);\n',
+                "test/scripts/lint-import.test.ts": 'import "../../src/lint-config.js";\n',
+                "test/scripts/lint-reader.test.ts": 'const config = ".github/actionlint.yaml";\n',
+              }
+            : {}),
+        },
+        (cwd) => {
+          expect(
+            resolveChangedTestTargetPlan([".github/actionlint.yaml"], {
+              cwd,
+              forceFullImportGraph: true,
+              resolveAliases: true,
+              runtimeOnly: true,
+            }),
+          ).toEqual({
+            mode: "targets",
+            targets: withConsumers
+              ? ["test/scripts/lint-import.test.ts", "test/scripts/lint-reader.test.ts"]
+              : [],
+          });
+          expect(
+            resolveChangedTestTargetPlan([".github/unknown-lint.yaml"], { cwd }).targets,
+          ).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+        },
+      );
+    }
+  });
+
   it("keeps CI, dependency, and docs tooling edits on owner tests", () => {
     const changedScopeTestFamily = fs
       .readdirSync("src/scripts")
@@ -1972,6 +2023,323 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("retains configured Vitest setup, runner, and environment consumers", () => {
+    withTinyGitRepo(
+      {
+        "test/vitest/vitest.shared.config.ts": `
+          import "./vitest.extension-config.ts";
+          const runnerPath = path.join(repoRoot, "test", "runner.ts",);
+          export const config = {
+            setupFiles: [resolveRepoRootPath("test/setup.ts")],
+            globalSetup: [resolveRepoRootPath("test/global-setup.ts")],
+            runner: runnerPath,
+            include: ["src/unrelated.test.ts"],
+          };`,
+        "test/vitest/vitest.extension-config.ts": `
+          export const createConfig = () => ({ setupFiles: ["test/extension-setup.ts"] });`,
+        "test/vitest/vitest.ui.config.ts": `
+          import type { DOMWindow } from "jsdom";
+          import "./vitest.shared.config.ts";
+          export default { environment: "jsdom", setupFiles: ["ui/src/setup.ts"] };`,
+        "ui/vitest.config.ts": `
+          const nodeSetupFiles = ["./src/setup.ts"];
+          export default { environment: "jsdom", setupFiles: nodeSetupFiles };`,
+        "test/setup.ts": 'import "./helper.ts";',
+        "test/helper.ts": "export const helper = true;",
+        "test/runner.ts": 'import "./runner-helper.ts";',
+        "test/runner-helper.ts": "export const runnerHelper = true;",
+        "test/global-setup.ts": 'import "./global-helper.ts";',
+        "test/global-helper.ts": "export const globalHelper = true;",
+        "test/extension-setup.ts": 'import "./extension-helper.ts";',
+        "test/extension-helper.ts": "export const extensionHelper = true;",
+        "ui/src/setup.ts": 'import "./setup-helper.ts";',
+        "ui/src/setup-helper.ts": "export const uiSetup = true;",
+        "ui/src/component.test.ts": 'import "jsdom";',
+        "src/unrelated.test.ts": "export const unrelated = true;",
+      },
+      (cwd) => {
+        const options = { tooling: true, resolveAliases: true, runtimeOnly: true };
+        for (const helper of [
+          "test/helper.ts",
+          "test/runner-helper.ts",
+          "test/global-helper.ts",
+          "test/extension-helper.ts",
+        ]) {
+          expect(
+            hasImportGraphImpactOnTargets(
+              [helper],
+              ["test/vitest/vitest.ui.config.ts"],
+              cwd,
+              options,
+            ),
+            helper,
+          ).toBe(true);
+        }
+        expect(
+          hasImportGraphImpactOnTargets(
+            ["ui/src/setup-helper.ts"],
+            ["ui/vitest.config.ts"],
+            cwd,
+            options,
+          ),
+        ).toBe(true);
+        expect(
+          hasImportGraphImpactOnTargets(
+            ["src/unrelated.test.ts"],
+            ["test/vitest/vitest.ui.config.ts"],
+            cwd,
+            options,
+          ),
+        ).toBe(false);
+        const consumers = resolveDependencyTestConsumers(
+          [{ root: ".", dependencies: ["jsdom"] }],
+          cwd,
+          { runtimeOnly: true },
+        );
+        expect(consumers.unresolved).toEqual([]);
+        expect(consumers.sources.toSorted()).toEqual([
+          "test/vitest/vitest.ui.config.ts",
+          "ui/src/component.test.ts",
+          "ui/vitest.config.ts",
+        ]);
+      },
+    );
+  });
+
+  it("follows source aliases and package exports through shared test consumers for CI", () => {
+    withTinyGitRepo(
+      {
+        "tsconfig.json": JSON.stringify({
+          compilerOptions: {
+            paths: {
+              "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
+              "@openclaw/library/*": ["./packages/library/src/*.ts"],
+              "@test-fixture/*": ["./test/fixtures/*/index.test.ts"],
+            },
+          },
+        }),
+        "packages/library/package.json": JSON.stringify({
+          name: "@openclaw/library",
+          exports: {
+            ".": { default: "./src/index.ts" },
+            "./test-entry": { import: "./src/import.test.ts", require: "./src/require.test.ts" },
+          },
+        }),
+        "src/value.ts": "export const value = 1;\n",
+        "src/native-helper.js": 'export * from "./value.js";\n',
+        "src/script-consumer.test.ts": 'import "./native-helper.js";\n',
+        "src/plugin-sdk/public.ts": 'export * from "../value.js";\n',
+        "packages/library/src/index.ts": 'export * from "openclaw/plugin-sdk/public";\n',
+        "packages/library/src/other.ts": "export const unrelated = 1;\n",
+        "packages/library/src/import.test.ts": "export const importValue = 1;\n",
+        "packages/library/src/require.test.ts": "export const requireValue = 1;\n",
+        "test/fixtures/owner/index.test.ts": "export const value = 1;\n",
+        "extensions/consumer/conditional.test.ts": 'import "@openclaw/library/test-entry";\n',
+        "extensions/consumer/fixture.test.ts": 'import "@test-fixture/owner";\n',
+        "extensions/consumer/shared.test.ts": 'import "@openclaw/library";\n',
+        "extensions/consumer/downstream.test.ts": 'import "./shared.test.js";\n',
+        "extensions/consumer/direct.test.ts": 'require("openclaw/plugin-sdk/public");\n',
+        "extensions/consumer/type-only.test.ts":
+          'import type { value } from "openclaw/plugin-sdk/public";\n',
+        "extensions/consumer/other.test.ts": 'import "@openclaw/library/other";\n',
+      },
+      (cwd) => {
+        const expected = [
+          "extensions/consumer/direct.test.ts",
+          "extensions/consumer/downstream.test.ts",
+          "extensions/consumer/shared.test.ts",
+        ];
+        expect(resolveAffectedTestsFromImportGraph(["src/value.ts"], cwd)).toEqual([]);
+        expect(
+          resolveAffectedTestsFromImportGraph(["src/value.ts"], cwd, { resolveAliases: true }),
+        ).toEqual([...expected, "extensions/consumer/type-only.test.ts"]);
+        expect(
+          resolveAffectedTestsFromImportGraph(["src/value.ts"], cwd, {
+            resolveAliases: true,
+            runtimeOnly: true,
+          }),
+        ).toEqual(expected);
+        expect(
+          resolveAffectedTestsFromImportGraph(["extensions/consumer/shared.test.ts"], cwd, {
+            resolveAliases: true,
+            forceFull: true,
+          }),
+        ).toEqual(["extensions/consumer/downstream.test.ts"]);
+        expect(
+          resolveAffectedTestsFromImportGraph(["packages/library/src/other.ts"], cwd, {
+            resolveAliases: true,
+          }),
+        ).toEqual(["extensions/consumer/other.test.ts"]);
+        for (const target of [
+          "packages/library/src/import.test.ts",
+          "packages/library/src/require.test.ts",
+        ]) {
+          expect(
+            resolveAffectedTestsFromImportGraph([target], cwd, {
+              resolveAliases: true,
+              forceFull: true,
+            }),
+          ).toEqual(["extensions/consumer/conditional.test.ts"]);
+        }
+        expect(
+          resolveAffectedTestsFromImportGraph(["test/fixtures/owner/index.test.ts"], cwd, {
+            resolveAliases: true,
+            forceFull: true,
+          }),
+        ).toEqual(["extensions/consumer/fixture.test.ts"]);
+        expect(resolveAffectedTestsFromImportGraph("src/value.ts", cwd, { tooling: true })).toEqual(
+          ["src/script-consumer.test.ts"],
+        );
+        expect(
+          resolveAffectedTestsFromImportGraph(["src/value.ts"], cwd, {
+            tooling: true,
+            resolveAliases: true,
+            runtimeOnly: true,
+          }),
+        ).toEqual([...expected, "src/script-consumer.test.ts"]);
+        fs.unlinkSync(path.join(cwd, "extensions/consumer/shared.test.ts"));
+        expect(
+          resolveAffectedTestsFromImportGraph(["extensions/consumer/shared.test.ts"], cwd, {
+            resolveAliases: true,
+            forceFull: true,
+          }),
+        ).toEqual(["extensions/consumer/downstream.test.ts"]);
+      },
+    );
+  });
+
+  it("retains import consumers after a changed source is removed from the index", () => {
+    withTinyGitRepo({ "src/consumer.test.ts": 'export * from "./removed.js";\n' }, (cwd) => {
+      expect(
+        resolveAffectedTestsFromImportGraph(["src/removed.ts"], cwd, {
+          resolveAliases: true,
+        }),
+      ).toEqual(["src/consumer.test.ts"]);
+    });
+  });
+
+  it("routes changed resolved dependencies through scoped bare and subpath consumers", () => {
+    withTinyGitRepo(
+      {
+        "src/root.ts": 'import "dependency/runtime"; import "second-dependency";\n',
+        "src/type-owner.ts":
+          'import type { Shape } from "types-only"; export type Callback = <T>(value: T) => T;\n',
+        "src/root.test.ts": 'import "./root.js";\n',
+        "extensions/consumer/source.ts": 'require("dependency");\n',
+        "extensions/consumer/source.test.ts": 'import "./source.js";\n',
+        "extensions/consumer/direct.test.ts": 'import("dependency/entry");\n',
+        "extensions/consumer/other.test.ts": 'import "dependency-other";\n',
+        "test/scripts/tool.test.ts":
+          'require.resolve("dependency"); import.meta.resolve("dependency/runtime");\n',
+        "test/scripts/generated-cli.test.ts": 'spawnSync("node_modules/.bin/opaque-cli", []);\n',
+        "ui/src/element-view.tsx":
+          'export const view = <><span></span><Lazy load={() => import("dependency")} /></>;\n',
+        "ui/src/element-view.test.ts": 'import "./element-view.js";\n',
+        "ui/src/text-view.tsx":
+          'export const view = <div> // inline text {import("dependency")} </div>;\n',
+        "ui/src/text-view.test.ts": 'import "./text-view.js";\n',
+      },
+      (cwd) => {
+        expect(
+          resolveDependencyTestConsumers(
+            [{ root: "extensions/consumer", dependencies: ["dependency"] }],
+            cwd,
+          ).tests,
+        ).toEqual(["extensions/consumer/direct.test.ts", "extensions/consumer/source.test.ts"]);
+        const root = resolveDependencyTestConsumers(
+          [{ root: ".", dependencies: ["dependency"] }],
+          cwd,
+        );
+        expect(root.sources.toSorted()).toEqual([
+          "extensions/consumer/direct.test.ts",
+          "extensions/consumer/source.ts",
+          "src/root.ts",
+          "test/scripts/tool.test.ts",
+          "ui/src/element-view.tsx",
+          "ui/src/text-view.tsx",
+        ]);
+        expect(root.tests).toEqual([
+          "extensions/consumer/direct.test.ts",
+          "extensions/consumer/source.test.ts",
+          "src/root.test.ts",
+          "test/scripts/tool.test.ts",
+          "ui/src/element-view.test.ts",
+          "ui/src/text-view.test.ts",
+        ]);
+        expect(root.unresolved).toEqual([]);
+        const mixed = resolveDependencyTestConsumers(
+          [
+            {
+              root: ".",
+              dependencies: ["dependency", "second-dependency", "opaque-cli", "types-only"],
+            },
+          ],
+          cwd,
+          { runtimeOnly: true },
+        );
+        expect(mixed.tests).toEqual(root.tests);
+        expect(mixed.unresolved).toEqual([{ root: ".", dependency: "opaque-cli" }]);
+        expect(
+          resolveDependencyTestConsumers([{ root: ".", dependencies: ["types-only"] }], cwd, {
+            runtimeOnly: true,
+          }),
+        ).toEqual({
+          sources: [],
+          tests: [],
+          unresolved: [],
+        });
+      },
+    );
+  });
+
+  it("keeps root dependency changes behind nearer unchanged workspace bindings", () => {
+    withTinyGitRepo(
+      {
+        "src/root.test.ts": 'import "dependency";\n',
+        "ui/src/own.test.ts": 'import "dependency/subpath";\n',
+        "ui/src/shadowed.test.ts": 'import "workspace-only";\n',
+        "packages/own/src/value.ts": 'require("dependency");\n',
+        "packages/own/src/value.test.ts": 'import "./value.js";\n',
+        "src/package-consumer.test.ts": 'import "../packages/own/src/value.js";\n',
+        "extensions/own/value.test.ts": 'import "dependency";\n',
+        "extensions/undeclared/value.test.ts": 'import "dependency";\n',
+      },
+      (cwd) => {
+        const importerBindings = [".", "ui", "packages/own", "extensions/own"].map((root) => ({
+          root,
+          dependencies: root === "ui" ? ["dependency", "workspace-only"] : ["dependency"],
+        }));
+        expect(
+          resolveDependencyTestConsumers([{ root: ".", dependencies: ["dependency"] }], cwd, {
+            importerBindings,
+          }).tests,
+        ).toEqual(["extensions/undeclared/value.test.ts", "src/root.test.ts"]);
+        expect(
+          resolveDependencyTestConsumers(
+            [{ root: "packages/own", dependencies: ["dependency"] }],
+            cwd,
+            { importerBindings },
+          ).tests,
+        ).toEqual(["packages/own/src/value.test.ts", "src/package-consumer.test.ts"]);
+        expect(
+          resolveDependencyTestConsumers([{ root: "ui", dependencies: ["dependency"] }], cwd, {
+            importerBindings: importerBindings.filter(({ root }) => root !== "ui"),
+          }).tests,
+        ).toEqual(["ui/src/own.test.ts"]);
+        expect(
+          resolveDependencyTestConsumers([{ root: ".", dependencies: ["workspace-only"] }], cwd, {
+            importerBindings,
+          }).unresolved,
+        ).toEqual([{ root: ".", dependency: "workspace-only" }]);
+        expect(
+          resolveDependencyTestConsumers([{ root: "ui", dependencies: ["workspace-only"] }], cwd, {
+            importerBindings,
+          }).unresolved,
+        ).toEqual([]);
+      },
+    );
+  });
+
   it.each([false, true])(
     "keeps broad-name consumers complete without synchronous source opens (narrow importer: %s)",
     (includeNarrowImporter) => {
@@ -2026,9 +2394,18 @@ describe("scripts/test-projects changed-target routing", () => {
     "keeps tooling imports direct while preserving literal file references ($name)",
     ({ withRepo }) => {
       const files: Record<string, string> = {
+        "tsconfig.json": JSON.stringify({
+          compilerOptions: { paths: { "@fixture/tool": ["./scripts/fixture-bridge.mts"] } },
+        }),
         "scripts/fixture-source.mts": "export const value = 1;\n",
-        "scripts/fixture-bridge.mts": 'export * from "./fixture-source.mjs";\n',
+        "scripts/fixture-data.json": '{"value":1}\n',
+        "scripts/no-direct-owner.mts": "export const other = 1;\n",
+        "scripts/fixture-bridge.mts":
+          'import data from "./fixture-data.json" with { type: "json" }; export { data }; export * from "./fixture-source.mjs"; export * from "./no-direct-owner.mjs";\n',
+        "test/scripts/alias.consumer.test.ts": 'import "@fixture/tool";\n',
         "test/scripts/direct.consumer.test.ts": 'import "../../scripts/fixture-source.mjs";\n',
+        "test/scripts/type.consumer.test.ts":
+          'import type { Value } from "../../scripts/fixture-source.mjs";\n',
         "test/scripts/transitive.consumer.test.ts": 'import "../../scripts/fixture-bridge.mjs";\n',
         "test/scripts/literal.consumer.test.ts": 'const fixture = "scripts/fixture-source.mts";\n',
         "test/scripts/substring.consumer.test.ts":
@@ -2042,7 +2419,40 @@ describe("scripts/test-projects changed-target routing", () => {
           resolveChangedTestTargetPlan(["scripts/fixture-source.mts"], { cwd }).targets,
         ).toEqual([
           "test/scripts/direct.consumer.test.ts",
+          "test/scripts/type.consumer.test.ts",
           "test/scripts/literal.consumer.test.ts",
+        ]);
+        const ciOptions = {
+          cwd,
+          forceFullImportGraph: true,
+          resolveAliases: true,
+          runtimeOnly: true,
+        };
+        expect(
+          resolveChangedTestTargetPlan(["scripts/fixture-source.mts"], ciOptions).targets,
+        ).toEqual([
+          "test/scripts/alias.consumer.test.ts",
+          "test/scripts/direct.consumer.test.ts",
+          "test/scripts/transitive.consumer.test.ts",
+          "test/scripts/literal.consumer.test.ts",
+        ]);
+        expect(
+          resolveChangedTestTargetPlan(["scripts/no-direct-owner.mts"], { cwd }).targets,
+        ).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+        expect(
+          resolveChangedTestTargetPlan(["scripts/no-direct-owner.mts"], ciOptions).targets,
+        ).toEqual([
+          "test/scripts/alias.consumer.test.ts",
+          "test/scripts/transitive.consumer.test.ts",
+        ]);
+        expect(
+          resolveChangedTestTargetPlan(["scripts/fixture-data.json"], { cwd }).targets,
+        ).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+        expect(
+          resolveChangedTestTargetPlan(["scripts/fixture-data.json"], ciOptions).targets,
+        ).toEqual([
+          "test/scripts/alias.consumer.test.ts",
+          "test/scripts/transitive.consumer.test.ts",
         ]);
       });
     },
@@ -2080,15 +2490,27 @@ describe("scripts/test-projects changed-target routing", () => {
       (cwd) => {
         const options = { cwd, broad: true, forceFullImportGraph: true };
         for (const changed of [fixture, helper]) {
-          expect(resolveChangedTestTargetPlan([changed], options)).toEqual({
+          expect(resolveChangedTestTargetPlan([changed], { cwd, broad: true })).toEqual({
             mode: "targets",
             targets: [direct, indirect],
           });
+          expect(resolveChangedTestTargetPlan([changed], options)).toEqual({
+            mode: "targets",
+            targets: ["test/scripts/after-test.consumer.test.ts", direct, indirect],
+          });
         }
         // A literal reference alone cannot prove an opaque helper's complete frontier.
-        expect(resolveChangedTestTargetPlan([opaque, direct], options)).toEqual({
+        expect(resolveChangedTestTargetPlan([opaque, direct], { cwd, broad: true })).toEqual({
           mode: "targets",
           targets: [opaque, direct],
+        });
+        expect(resolveChangedTestTargetPlan([opaque, direct], options)).toEqual({
+          mode: "targets",
+          targets: [
+            "test/scripts/relative.opaque.consumer.test.ts",
+            "test/scripts/literal.opaque.consumer.test.ts",
+            direct,
+          ],
         });
         expect(buildVitestRunPlans([explicitHelper], cwd)).toEqual([
           {
@@ -3233,6 +3655,10 @@ describe("scripts/test-projects changed-target routing", () => {
   );
 
   it("routes explicit test-support helper files to affected tests", () => {
+    expectChangedTargets(
+      ["src/agents/bash-tools.process-liveness-child.test-support.ts"],
+      ["src/agents/bash-tools.process.liveness.test.ts"],
+    );
     expect(
       findUnmatchedExplicitTestTargets(["src/commands/onboard-non-interactive.test-helpers.ts"]),
     ).toEqual([]);
@@ -4822,10 +5248,115 @@ describe("test selector native source facts", () => {
     );
   });
 
+  it("separates executable imports from source fixtures and erased type declarations", () => {
+    expect(isErasedTypeScriptModuleSource("export type Callback = <T>(value: T) => T;")).toBe(true);
+    const regexContexts = {
+      arrow: `const pattern = () => /['"]/;`,
+      asyncArrow: `const pattern = async () => /['"]/;`,
+      typeof: `const pattern = typeof /['"]/;`,
+      void: `const pattern = void /['"]/;`,
+      delete: `const pattern = delete /['"]/.source;`,
+      binary: `const pattern = 1 + /['"]/.source;`,
+      comparison: `const pattern = 1 < /['"]/.source;`,
+      if: `if (true) /['"]/.test('');`,
+      while: `while (false) /['"]/.test('');`,
+      ifBlock: `if (true) {} /['"]/.test('');`,
+      functionDeclaration: `function example() {} /['"]/.test('');`,
+      asyncDeclaration: `async function example() {} /['"]/.test('');`,
+      classDeclaration: `class Example {} /['"]/.test('');`,
+      classExtends: `class Example extends factory({}) {} /['"]/.test('');`,
+      labeledBlock: `label: {} /['"]/.test('');`,
+      caseBlock: `switch (1) { case 1: {} /['"]/.test(''); }`,
+      asiDeclaration: `const value = 1\nfunction example() {} /['"]/.test('');`,
+    };
+    const divisionContexts = {
+      object: `const value = ({}) / await import('./during.js') / 2;`,
+      function: `const value = function() {} / await import('./during.js') / 2;`,
+      asyncFunction: `const value = async function() {} / await import('./during.js') / 2;`,
+      class: `const value = class {} / await import('./during.js') / 2;`,
+      arrowBody: `const value = (() => {}) / await import('./during.js') / 2;`,
+      increment: `let value = 1; value++ / await import('./during.js') / 2;`,
+      decrement: `let value = 1; value-- / await import('./during.js') / 2;`,
+    };
+    const syntaxFiles = Object.fromEntries(
+      Object.entries({ ...regexContexts, ...divisionContexts }).map(([name, prefix]) => [
+        `${name}.ts`,
+        `${prefix}\nawait import('./consumer.js');`,
+      ]),
+    );
+    syntaxFiles["ambiguous-template.ts"] =
+      `${regexContexts.labeledBlock} await import(\`./template-consumer.js\`);`;
+    withTinyFileTree(
+      {
+        ...syntaxFiles,
+        "source.ts": [
+          '// import "./comment.js";',
+          '/* export * from "./block-comment.js"; */',
+          `const fixture = 'import "./quoted.js";';`,
+          'const template = `import "./template.js"; ${import("./expression.js")}`;',
+          String.raw`const pattern = /import "\.\/regexp\.js"/;`,
+          'import type { Value } from "./types.js";',
+          'export type * from "./reexport-types.js";',
+          'import { type Value, type Other as Alias } from "./named-types.js";',
+          'import { type Value, runtime } from "./mixed.js";',
+          'type Shape = typeof import("./import-type.js");',
+          'interface Options { input: import("./interface-type.js").Value }',
+          'const runtimeTypeof = typeof import("./runtime-expression.js");',
+          'import type from "./default-value.js";',
+          'import {} from "./side-effect.js";',
+          'import { type as value } from "./named-value.js";',
+          'export { type Value } from "./shared.js";',
+          'import "./shared.js";',
+          'import /* boundary */ "./real.js";',
+        ].join("\n"),
+      },
+      (cwd) => {
+        const [facts, ...syntaxFacts] = readTestSelectorSourceFacts(
+          cwd,
+          [
+            { file: "source.ts", parseImports: true },
+            ...Object.keys(syntaxFiles).map((file) => ({ file, parseImports: true })),
+          ],
+          [],
+          16 * 1024 * 1024,
+        );
+        expect(facts?.imports).toEqual([
+          "./expression.js",
+          "./types.js",
+          "./reexport-types.js",
+          "./named-types.js",
+          "./mixed.js",
+          "./import-type.js",
+          "./interface-type.js",
+          "./runtime-expression.js",
+          "./default-value.js",
+          "./side-effect.js",
+          "./named-value.js",
+          "./shared.js",
+          "./real.js",
+        ]);
+        expect(facts?.typeOnlyImports).toEqual([
+          "./types.js",
+          "./reexport-types.js",
+          "./import-type.js",
+          "./interface-type.js",
+        ]);
+        const importsByFile = new Map(syntaxFacts.map(({ file, imports }) => [file, imports]));
+        expect(importsByFile.get("ambiguous-template.ts")).toEqual(["./template-consumer.js"]);
+        for (const [name, source] of Object.entries(regexContexts)) {
+          expect(importsByFile.get(`${name}.ts`), source).toEqual(["./consumer.js"]);
+        }
+        for (const [name, source] of Object.entries(divisionContexts)) {
+          expect(importsByFile.get(`${name}.ts`), source).toEqual(["./during.js", "./consumer.js"]);
+        }
+      },
+    );
+  });
+
   it("reads complete files without installed packages, inherited hooks, or reparsing cached imports", () => {
     withTinyFileTree(
       {
-        "large.mts": `${"// padding\n".repeat(220_000)}export type {\n Value\n } from "./barrel.js";\nimport(\n "./dynamic.mjs"\n);\nconst fixture = "scripts/tool.mts";\nnew URL(\n "./native-fixture.mjs?generation=1#child", import.meta.url,\n);\nnew URL("./other-base.mjs", "file:///elsewhere/");`,
+        "large.mts": `${"// padding\n".repeat(220_000)}export type {\n Value\n } from "./barrel.js";\nimport(\n "./dynamic.mjs"\n);\nconst fixture = "scripts/tool.mts";\nnew URL(\n "./native-fixture.mjs?generation=1#child", import.meta.url,\n);\nnew URL("./other-base.mjs", "file:///elsewhere/");\nrequire("dependency/runtime");\nrequire.resolve("dependency/package.json");\nimport.meta.resolve("other-dependency");`,
       },
       (cwd) => {
         const files = [
@@ -4833,12 +5364,30 @@ describe("test selector native source facts", () => {
           { file: "deleted.ts", parseImports: true },
         ];
         const expectedFacts = {
-          imports: ["./barrel.js", "./dynamic.mjs", "./native-fixture.mjs"],
+          imports: [
+            "./barrel.js",
+            "./dynamic.mjs",
+            "./native-fixture.mjs",
+            "dependency/runtime",
+            "dependency/package.json",
+            "other-dependency",
+          ],
+          typeOnlyImports: ["./barrel.js"],
           matches: ["scripts/tool.mts", "scripts/tool"],
           references: ["scripts/tool.mts"],
         };
-        const scanner = path.join(fs.realpathSync(cwd), "test-selector-source-facts.mts");
-        fs.copyFileSync(path.resolve("scripts/lib/test-selector-source-facts.mts"), scanner);
+        for (const file of [
+          "scripts/lib/test-selector-source-facts.mts",
+          "src/infra/node-runtime-executable.ts",
+        ]) {
+          const target = path.join(cwd, file);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.copyFileSync(path.resolve(file), target);
+        }
+        const scanner = path.join(
+          fs.realpathSync(cwd),
+          "scripts/lib/test-selector-source-facts.mts",
+        );
         const native = spawnSync(process.execPath, [scanner], {
           cwd,
           input: JSON.stringify({ files, terms: ["scripts/tool.mts", "scripts/tool"] }),
@@ -4871,6 +5420,7 @@ describe("test selector native source facts", () => {
             {
               file: "large.mts",
               imports: [],
+              typeOnlyImports: [],
               matches: ["scripts/tool.mts"],
               references: ["scripts/tool.mts"],
             },
@@ -5545,29 +6095,6 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
     expect(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS).toBeUndefined();
     expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("0");
     expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS).toBe("25000");
-  });
-
-  it("allows changed checks to disable automatic silent-run retries", () => {
-    expect(shouldRetryVitestNoOutputTimeout({})).toBe(true);
-    expect(shouldRetryVitestNoOutputTimeout({ CI: "true" })).toBe(false);
-    expect(shouldRetryVitestNoOutputTimeout({ CI: "1" })).toBe(false);
-  });
-
-  it("raises short shard no-output timeouts for the retry attempt", () => {
-    const spec = { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" } };
-    expect(withRetryNoOutputTimeout(spec).env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
-    const generous = { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "600000" } };
-    expect(withRetryNoOutputTimeout(generous)).toBe(generous);
-    const disabled = { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0" } };
-    expect(withRetryNoOutputTimeout(disabled)).toBe(disabled);
-    const unset = { env: {} };
-    expect(withRetryNoOutputTimeout(unset)).toBe(unset);
-    expect(shouldRetryVitestNoOutputTimeout({ GITHUB_ACTIONS: "true" })).toBe(false);
-    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1" })).toBe(true);
-    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0" })).toBe(false);
-    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "false" })).toBe(
-      false,
-    );
   });
 });
 

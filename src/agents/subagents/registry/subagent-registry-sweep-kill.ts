@@ -10,10 +10,8 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
-import {
-  finalizeTaskRunByRunId,
-  findDetachedTaskRun,
-} from "../../../tasks/detached-task-runtime.js";
+import { finalizeTaskRunByRunIdAsync } from "../../../tasks/detached-task-runtime.async.js";
+import { findDetachedTaskRun } from "../../../tasks/detached-task-runtime.js";
 import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-state.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
@@ -124,16 +122,31 @@ export async function reconcileDurableSubagentKillIntent(params: {
       const taskResolution = resolveSubagentTaskForRun(childRuns(), params.entry);
       const task = taskResolution.task;
       if (taskResolution.lookup === "unavailable" || isUnstableTask(task)) {
-        const finalized = finalizeTaskRunByRunId({
-          runId: task?.runId ?? params.entry.taskRunId ?? params.runId,
-          runtime: "subagent",
-          sessionKey: task?.childSessionKey ?? params.entry.childSessionKey,
-          status: "cancelled",
-          endedAt: killIntent.requestedAt,
-          lastEventAt: killIntent.requestedAt,
-          error: "Superseded subagent cancellation finalized.",
-          suppressDelivery: true,
-        });
+        const finalized = await finalizeTaskRunByRunIdAsync(
+          {
+            taskId: task?.taskId,
+            runId: task?.runId ?? params.entry.taskRunId ?? params.runId,
+            runtime: "subagent",
+            sessionKey: task?.childSessionKey ?? params.entry.childSessionKey,
+            status: "cancelled",
+            endedAt: killIntent.requestedAt,
+            lastEventAt: killIntent.requestedAt,
+            error: "Superseded subagent cancellation finalized.",
+            suppressDelivery: true,
+          },
+          () => {
+            if (
+              params.runs.get(params.runId) !== params.entry ||
+              params.entry.killIntent !== killIntent ||
+              getLatestSubagentRunByChildSessionKeyFromRuns(
+                childRuns(),
+                params.entry.childSessionKey,
+              ) === params.entry
+            ) {
+              throw new Error("superseded subagent kill owner changed before commit");
+            }
+          },
+        );
         if (taskResolution.lookup === "available" && finalized.length === 0) {
           params.warn("could not stabilize superseded durable kill task", {
             runId: params.runId,
@@ -449,19 +462,27 @@ export async function reconcileProvisionalSubagentKill(params: {
         ? entry.execution.outcome.error?.trim()
         : undefined;
     try {
-      const finalizedTasks = finalizeTaskRunByRunId({
-        runId: taskBefore?.runId ?? entry.taskRunId ?? runId,
-        runtime: "subagent",
-        sessionKey: taskBefore?.childSessionKey ?? entry.childSessionKey,
-        status: "cancelled",
-        endedAt: killedAt,
-        lastEventAt: killedAt,
-        error:
-          observedError && observedError !== SUBAGENT_KILL_TASK_ERROR
-            ? observedError
-            : "Subagent run cancellation finalized.",
-        suppressDelivery: true,
-      });
+      const finalizedTasks = await finalizeTaskRunByRunIdAsync(
+        {
+          taskId: taskBefore?.taskId,
+          runId: taskBefore?.runId ?? entry.taskRunId ?? runId,
+          runtime: "subagent",
+          sessionKey: taskBefore?.childSessionKey ?? entry.childSessionKey,
+          status: "cancelled",
+          endedAt: killedAt,
+          lastEventAt: killedAt,
+          error:
+            observedError && observedError !== SUBAGENT_KILL_TASK_ERROR
+              ? observedError
+              : "Subagent run cancellation finalized.",
+          suppressDelivery: true,
+        },
+        () => {
+          if (!isCurrentKill()) {
+            throw new Error("subagent kill owner changed before commit");
+          }
+        },
+      );
       if (finalizedTasks.length === 0) {
         const taskAfterResolution = resolveGeneration().taskResolution;
         const taskAfter = taskAfterResolution.task;

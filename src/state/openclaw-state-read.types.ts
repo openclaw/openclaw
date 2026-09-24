@@ -9,6 +9,8 @@ import type {
 import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { WorkspaceStateSnapshot } from "../agents/workspace-state-store.kernel.js";
+import type { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lease-owner.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import type {
   ExecutionIdentityInspectionQuery,
   ExecutionIdentityInspectionOutcome,
@@ -42,6 +44,7 @@ import type {
   DevicePairingReadReply,
 } from "../infra/device-pairing-read.types.js";
 import type { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import type { OutboundDeliveryStorageEntry } from "../infra/outbound/delivery-queue-storage.types.js";
 import type {
   ConversationRef,
   SessionBindingRecord,
@@ -75,6 +78,7 @@ import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-d
 import type { ConfigMachineState } from "./openclaw-state-db.generated.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
+import type { SessionRepositoryWorkspaceRecord } from "./session-repository-workspaces.types.js";
 import type {
   UserChannelIdentity,
   UserChannelIdentityLink,
@@ -100,6 +104,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
   | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
@@ -161,10 +166,15 @@ export type OpenClawStateReadCommand =
   | { type: "updateRuns.get"; runId: string }
   | { type: "updateRuns.list"; input: UpdateRunListInput }
   | { type: "updateRuns.interruptedCandidate" }
+  | { type: "worktrees.cleanupState" }
   | { type: "fleet.list" }
-  | { type: "workerPlacements.changeSnapshot" }
+  | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "fleet.get"; tenantId: string }
   | { type: "nodeHost.config" }
+  | {
+      type: "sessionRepositoryWorkspaces.find";
+      owners: readonly { agentId: string; sessionKey: string }[];
+    }
   | { type: "workspace.snapshot"; workspaceDir: string }
   | { type: "sandboxRegistry.list" }
   | { type: "sandboxRegistry.get"; containerName: string }
@@ -185,6 +195,12 @@ export type OpenClawStateReadRequest = {
   command: OpenClawStateReadCommand | { type: "admit" };
 };
 export type OpenClawStateReadReply = (
+  | {
+      ok: true;
+      type: "deliveryQueue.outbound";
+      sourceAdmitted: true;
+      entries: OutboundDeliveryStorageEntry[];
+    }
   | {
       ok: true;
       type: "acpSessions.metadata";
@@ -395,6 +411,13 @@ export type OpenClawStateReadReply = (
       sourceAdmitted: true;
       run: ReturnType<typeof readInterruptedUpdateCandidate>;
     }
+  | {
+      ok: true;
+      type: "worktrees.cleanupState";
+      sourceAdmitted: true;
+      records: ManagedWorktreeRecord[];
+      leases: ReturnType<typeof readWorktreeRunLeaseStateInDatabase>;
+    }
   | { ok: true; type: "fleet.list"; sourceAdmitted: true; cells: FleetCellRecord[] }
   | {
       ok: true;
@@ -408,6 +431,12 @@ export type OpenClawStateReadReply = (
       type: "nodeHost.config";
       sourceAdmitted: true;
       row: Pick<Selectable<ConfigMachineState>, "value_json" | "updated_at_ms"> | undefined;
+    }
+  | {
+      ok: true;
+      type: "sessionRepositoryWorkspaces.find";
+      sourceAdmitted: true;
+      workspaces: SessionRepositoryWorkspaceRecord[];
     }
   | { ok: true; type: "workspace.snapshot"; sourceAdmitted: true; snapshot: WorkspaceStateSnapshot }
   | {

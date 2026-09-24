@@ -15,7 +15,6 @@ import {
 } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { retainUserProfileCatalog } from "../state/user-profile-list.js";
-import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { ensureSessionGroupCatalog } from "./session-group-catalog.js";
 import { createSessionMembershipProjection } from "./session-membership-projection.js";
 import { createSessionProjectionDrain, yieldSessionListWork } from "./session-projection-work.js";
@@ -36,6 +35,7 @@ import {
 } from "./session-row-projection-archive.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
 import { createSessionRowProjectionCatalog } from "./session-row-projection-catalog.js";
+import { isIdentityScopesOnlyConfigChange } from "./session-row-projection-config.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
 import { createSessionRowCreatorIndex } from "./session-row-projection-identities.js";
 import {
@@ -52,23 +52,16 @@ import {
   selectMatchingSessionRows,
   selectSessionRowEntries,
 } from "./session-row-scope.js";
-import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 /** Committed publications own invalidation; each admitted physical store is hydrated once. */
-export async function createSessionRowProjection(params: {
-  cfg: OpenClawConfig;
-  getConfig?: () => OpenClawConfig;
-  modelCatalog?: records.Inputs["modelCatalog"];
-  getModelCatalog?: () => Promise<records.Inputs["modelCatalog"]>;
-  context?: Parameters<typeof readSessionRowFacts>[0]["context"];
-  placementFactsReader?: Pick<WorkerSessionPlacementStore, "readProjection">;
-}) {
+export async function createSessionRowProjection(params: records.ProjectionOptions) {
   // Publications may borrow startup admission; projection work retains its own authority.
   const inOwnerContext = AsyncLocalStorage.snapshot();
   while (!getSubagentSessionListReadSnapshotIdentity()) {
     await prepareSubagentSessionListReadCache();
   }
   let cfg = params.getConfig?.() ?? params.cfg;
+  const getPolicyConfig = (): OpenClawConfig => params.getPolicyConfig?.() ?? cfg;
   const rows = new Map<string, records.Row>();
   const creators = createSessionRowCreatorIndex();
   const membership = createSessionMembershipProjection();
@@ -119,7 +112,6 @@ export async function createSessionRowProjection(params: {
       if (changed) {
         // Rows served during renewal need new materializations only when their model facts changed.
         epoch++;
-        databaseRevision++;
         revisionToken = undefined;
         metadata.invalidate({ all: true, scope: "catalog" });
         archive.invalidateRows({ all: true, scope: "catalog" }, rows.values());
@@ -252,9 +244,11 @@ export async function createSessionRowProjection(params: {
     // Every stored identity must be visible before an earlier store selects a later parent.
     for (const { row, entry } of acquisitions) {
       const current = acquireEntry(row, entry);
-      if (current && !isCold(current)) {
+      if (current) {
         dirty.add(records.identity(current));
-        backfill.enqueue(records.identity(current));
+        if (!isCold(current)) {
+          backfill.enqueue(records.identity(current));
+        }
       }
     }
     membership.updateTargets(
@@ -276,13 +270,22 @@ export async function createSessionRowProjection(params: {
     topologyDirty = epoch !== revision;
   }
   function mark(change: SessionRowChange) {
+    if ("all" in change && change.scope === "config" && !change.factsInvalidated) {
+      const next = inOwnerContext(() => params.getConfig?.() ?? cfg);
+      if (isIdentityScopesOnlyConfigChange(cfg, next)) {
+        cfg = next;
+        void ensureMaterialized().catch(() => {});
+        return;
+      }
+    }
     epoch++;
     const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
     if (!presentationOnly) {
       revisionToken = undefined;
     }
     if ("all" in change) {
-      if (!presentationOnly) {
+      const catalogOnly = change.scope === "catalog" && !change.factsInvalidated;
+      if (!presentationOnly && !catalogOnly) {
         databaseRevision++;
       }
       placementFacts.invalidateChange(change);
@@ -291,15 +294,11 @@ export async function createSessionRowProjection(params: {
         catalog.invalidate();
       }
       // Renewal serves the old catalog until its replacement is adopted.
-      if (!presentationOnly && (change.scope !== "catalog" || !params.getModelCatalog)) {
+      if (!presentationOnly && (!catalogOnly || !params.getModelCatalog)) {
         archive.invalidateRows(
           change,
           typeof change.scope === "string" ? rows.values() : matching(change.scope),
         );
-      } else if (!presentationOnly) {
-        for (const row of rows.values()) {
-          row.pendingDatabaseFacts = undefined;
-        }
       }
     } else if (change.scope === "automation") {
       records.markAutomation(
@@ -322,15 +321,17 @@ export async function createSessionRowProjection(params: {
           previous.sharingEntry = entry;
           if (entry?.archivedAt !== undefined && !registryFactsReady) {
             // Committed row changes must survive an unrelated compact-facts refill.
-            return archive.deferAcquisition({ ...previous, hasBoard: undefined });
+            return archive.deferAcquisition(previous);
           }
           return isCold(previous) || records.changesRowStructure(previous, entry)
-            ? acquireEntry({ ...previous, hasBoard: undefined }, entry)
+            ? acquireEntry(previous, entry)
             : previous;
         });
-        if (row && !isCold(row)) {
+        if (row) {
           dirty.add(records.identity(row));
-          backfill.enqueue(records.identity(row));
+          if (!isCold(row)) {
+            backfill.enqueue(records.identity(row));
+          }
         }
       }
       if (
@@ -357,11 +358,13 @@ export async function createSessionRowProjection(params: {
             }
             return acquireEntry(row, entry);
           });
-          if (!admitted || isCold(admitted)) {
+          if (!admitted) {
             continue;
           }
           dirty.add(records.identity(admitted));
-          backfill.enqueue(records.identity(admitted));
+          if (!isCold(admitted)) {
+            backfill.enqueue(records.identity(admitted));
+          }
         }
       }
     }
@@ -608,6 +611,7 @@ export async function createSessionRowProjection(params: {
       topologyDirty: () => topologyDirty,
       topology,
       lookup,
+      stores: () => stores,
       owner: (): SessionRowReadView & { isCurrent: typeof isCurrent } => projection,
     });
   const projection = {
@@ -651,10 +655,6 @@ export async function createSessionRowProjection(params: {
       return readSessionRowModelFacts({
         cfg,
         ...row,
-        preparedAcpMeta:
-          row.materialized && !dirty.has(records.identity(row))
-            ? (row.materialized.source.thinkingProjection.acpMeta ?? null)
-            : undefined,
         source: { entry: row.storedEntry, readSourceEntry: (key) => readSourceEntry(row, key) },
         modelCatalog: catalog.current,
         rowContext: metadata.current,
@@ -673,6 +673,7 @@ export async function createSessionRowProjection(params: {
     get needsMaterialization() {
       return needsMaterialization();
     },
+    getPolicyConfig,
     get state() {
       if (!disposed) {
         prepareRead();
@@ -681,6 +682,7 @@ export async function createSessionRowProjection(params: {
         // Include replacements and lifecycle-only removals as well as publications/materialization.
         revision: (revisionToken ??= {}),
         cfg,
+        policyConfig: getPolicyConfig(),
         modelCatalog: catalog.current,
         rowContext: metadata.current,
         scope: scope.select,

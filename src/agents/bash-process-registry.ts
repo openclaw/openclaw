@@ -314,11 +314,17 @@ export function markExited(
   session.pendingOutput = pending.output;
   session.pendingOutputDropped = pending.outputDropped;
   moveToFinished(session);
+  if (!session.finalizing) {
+    settleExecSessionFinalization(session);
+  }
+}
+
+/** Releases scope joins after the process owner's task and notification work settles. */
+export function settleExecSessionFinalization(session: ProcessSession): void {
+  session.finalizing = false;
   const active = activeExecSessions.get(session.id);
   if (active?.session === session) {
     activeExecSessions.delete(session.id);
-    // The exec owner's synchronous task/notification callbacks run before
-    // these promise continuations resume and release the environment state.
     active.settled?.resolve();
   }
 }

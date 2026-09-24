@@ -13,6 +13,7 @@ import {
   resolveLocalVitestScheduling,
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
+import { resolveVitestBunSourceArgs } from "../../scripts/lib/vitest-process-env.mts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -509,7 +510,9 @@ export const sharedVitestConfig = {
     isolate: false,
     pool: workerConfig.pool,
     // Native imports keep the invocation owner's isolated source-cache policy.
-    execArgv: process.versions.bun ? [] : ["--import", resolveTsxImport(repoRoot)],
+    execArgv: process.versions.bun
+      ? resolveVitestBunSourceArgs()
+      : ["--import", resolveTsxImport(repoRoot)],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,

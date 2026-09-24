@@ -289,10 +289,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/node.json",
       hasLegacy: false,
     },
-    subagentRegistry: {
-      sourcePath: "/tmp/state/subagents/runs.json",
-      hasLegacy: false,
-    },
     rescuePending: {
       sourcePaths: ["/tmp/state/crestodian/rescue-pending", "/tmp/state/openclaw/rescue-pending"],
       hasLegacy: false,
@@ -471,10 +467,13 @@ vi.mock("./doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor-memory-search.js", () => ({
+vi.mock("./doctor-memory-recall.js", () => ({
   maybeRepairMemoryRecallHealth,
-  noteMemorySearchHealth,
   noteMemoryRecallHealth,
+}));
+
+vi.mock("./doctor-memory-search.js", () => ({
+  noteMemorySearchHealth,
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({

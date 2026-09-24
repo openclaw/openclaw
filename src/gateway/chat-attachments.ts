@@ -324,6 +324,8 @@ export async function parseMessageWithAttachments(
     supportsImages?: boolean | (() => Promise<boolean>);
     supportsInlineImages?: boolean;
     acceptNonImage?: boolean;
+    /** Ephemeral image-only callers keep bounded image bytes in their request, not the media store. */
+    imageStorage?: "inline";
   },
 ): Promise<ParsedMessageWithImages> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_BYTES;
@@ -443,7 +445,9 @@ export async function parseMessageWithAttachments(
       }
 
       const shouldOffload =
-        shouldForceImageOffload || !isImage || sizeBytes > OFFLOAD_THRESHOLD_BYTES;
+        shouldForceImageOffload ||
+        !isImage ||
+        (opts?.imageStorage !== "inline" && sizeBytes > OFFLOAD_THRESHOLD_BYTES);
 
       if (!shouldOffload) {
         images.push({ type: "image", data: b64, mimeType: finalMime, sourceIndex: idx });

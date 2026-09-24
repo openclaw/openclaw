@@ -173,6 +173,13 @@ are named in the warning; retained historical conflicts do not block update's
 post-session plugin repair. Preserve the originals and migration manifests while
 resolving those conflicts, then rerun `openclaw doctor --fix`.
 
+Normal Doctor output and `openclaw update status` show at most five
+`historical_transcript_deferred` examples per session store. Larger groups include
+the total and omitted counts; other warning types remain visible. For every
+finding, run `openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json`.
+This summary does not retire recovery references or make missing archives eligible
+for cleanup. Preserve the remaining originals and migration manifests for recovery.
+
 ### Changed archived registry
 
 `historical_transcript_deferred` can report that an archived session registry no
@@ -311,10 +318,14 @@ record why issue creation was skipped.
 
 Recovery selects the latest failed migration manifest, restores only the
 manifest's archived artifacts, validates the affected targets, and prepares
-sanitized `.failure.md` and `.failure.json` reports. Reports separate current
+sanitized `.failure.md` and `.failure.json` reports when failure evidence exists.
+Reports include the recorded run ID, failure timestamp (or `not recorded` for an
+older journal without one), target, and failure code and error. They separate current
 recovery findings from recorded migration and recovery evidence. A successful
 recovery can have zero current issues while preserving earlier failures for
 diagnosis; a target not inspected by this recovery is labeled accordingly.
+When recovery has no work, no current issues, and no recorded failure, Doctor prints
+`nothing to recover; no report filed` and does not prepare or open a GitHub issue.
 The JSON report keeps the combined `issues` evidence and adds `recoveryIssues`
 for inspected targets. The GitHub issue body avoids
 transcript contents, raw environment, secrets, and unbounded config. Once an

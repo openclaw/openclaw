@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import OpenClawKit
 import OpenClawProtocol
 import Testing
@@ -9481,6 +9482,244 @@ struct ChatViewModelTests {
         }
     }
 
+    @Test(arguments: ["main", "agent:main:main"], [false, true])
+    @MainActor
+    func `message invalidation recovers selected transcript`(
+        eventSessionKey: String,
+        refusesFirstRefresh: Bool) async throws
+    {
+        let recovered = chatTextMessage(role: "assistant", text: "Stored message recovered", timestamp: 1)
+        let historyCalls = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            activeAgentId: "main",
+            historyResponses: [
+                historyPayload(canonicalKey: "agent:main:main", agentId: "main"),
+                historyPayload(
+                    messages: [recovered],
+                    canonicalKey: "agent:main:main",
+                    agentId: "main"),
+            ],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() },
+            historyResponseHook: { _, index, _ in
+                if refusesFirstRefresh, index == 1 {
+                    throw GatewayResponseError(
+                        method: "chat.history", code: "UNAVAILABLE",
+                        message: "Session history is busy; retry shortly",
+                        details: ["retryable": AnyCodable(true), "retryAfterMs": AnyCodable(250)])
+                }
+                return nil
+            })
+        defer { vm.detachTransport() }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(vm.messages.isEmpty)
+
+        transport.emit(.sessionsChanged(.init(
+            sessionKey: eventSessionKey,
+            agentId: "main",
+            phase: "message")))
+
+        try await waitUntil("committed message recovers after invalidation") {
+            await MainActor.run {
+                vm.messages.contains { $0.content.contains { $0.text == "Stored message recovered" } }
+            }
+        }
+        #expect(await historyCalls.current() == (refusesFirstRefresh ? 3 : 2))
+    }
+
+    @Test @MainActor func `history invalidation survives a newer incremental message during retry`() async throws {
+        let recoveryGate = AsyncGate()
+        let historyCalls = AsyncCounter()
+        let missing = chatTextMessage(role: "assistant", text: "Missing message A", timestamp: 1)
+        let (transport, vm) = await makeViewModel(
+            activeAgentId: "main", historyResponses: [historyPayload()],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() },
+            historyResponseHook: { _, index, _ in
+                if index == 1 {
+                    throw GatewayResponseError(
+                        method: "chat.history", code: "UNAVAILABLE", message: "History is busy",
+                        details: ["retryable": AnyCodable(true), "retryAfterMs": AnyCodable(250)])
+                }
+                guard index > 1 else { return nil }
+                await recoveryGate.wait()
+                return historyPayload(messages: [missing])
+            })
+        defer { vm.detachTransport() }
+        var refresh: Task<Void, Never>?
+        do {
+            try await loadAndWaitBootstrap(vm: vm)
+            transport.emit(.sessionsChanged(.init(sessionKey: "main", agentId: "main", phase: "message")))
+            try await waitUntil("refused invalidation retries its history read") { await historyCalls.current() == 3 }
+            refresh = vm.historyInvalidationRefresh?.task
+            let pending = try #require(refresh)
+
+            transport.emit(.sessionMessage(OpenClawSessionMessageEventPayload(
+                sessionKey: "agent:main:main",
+                message: cacheMessage(role: "assistant", text: "Incremental message B", timestamp: 2),
+                messageId: "message-b", messageSeq: 2)))
+            try await waitUntil("newer incremental message is visible before recovery") {
+                await MainActor.run {
+                    vm.messages.contains { $0.content.contains { $0.text == "Incremental message B" } }
+                }
+            }
+            await recoveryGate.open()
+            try await waitUntil("incremental message recovery settles") {
+                await MainActor.run { vm.historyInvalidationRefresh == nil }
+            }
+            await pending.value
+            #expect(vm.messages.flatMap { $0.content.compactMap(\.text) } == [
+                "Missing message A", "Incremental message B",
+            ])
+            #expect(await historyCalls.current() == 3)
+        } catch {
+            let pending = refresh ?? vm.historyInvalidationRefresh?.task
+            vm.detachTransport()
+            await recoveryGate.open()
+            await pending?.value
+            throw error
+        }
+    }
+
+    @Test(arguments: ["session", "agent", "route", "newer-history", "detach"])
+    @MainActor
+    func `retired message invalidation does not retry a refused history read`(retirement: String) async throws {
+        let refusalGate = AsyncGate()
+        let historyCalls = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            sessionKey: "global", activeAgentId: "main",
+            historyResponses: [historyPayload(sessionKey: "global", canonicalKey: "global", agentId: "main")],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() },
+            historyResponseHook: { sessionKey, index, _ in
+                if index == 1 {
+                    await refusalGate.wait()
+                    throw GatewayResponseError(
+                        method: "chat.history", code: "UNAVAILABLE", message: "History is busy",
+                        details: ["retryable": AnyCodable(true), "retryAfterMs": AnyCodable(250)])
+                }
+                guard index > 1 else { return nil }
+                return historyPayload(
+                    sessionKey: sessionKey, sessionId: "replacement",
+                    messages: [chatTextMessage(role: "assistant", text: "Current transcript", timestamp: 2)],
+                    canonicalKey: sessionKey, agentId: retirement == "agent" ? "other" : "main")
+            })
+        defer { vm.detachTransport() }
+        var refresh: Task<Void, Never>?
+        do {
+            try await loadAndWaitBootstrap(vm: vm)
+            transport.emit(.sessionsChanged(.init(sessionKey: "global", agentId: "main", phase: "message")))
+            try await waitUntil("invalidation history read starts") { await historyCalls.current() == 2 }
+            refresh = vm.historyInvalidationRefresh?.task
+            let pending = try #require(refresh)
+            switch retirement {
+            case "session": vm.switchSession(to: "other")
+            case "agent": vm.syncActiveAgentId("other")
+            case "route": transport.emit(.routeChanged)
+            case "newer-history": vm.refresh()
+            default: vm.detachTransport()
+            }
+            if retirement != "detach" {
+                try await waitUntil("replacement history applies before refusal") {
+                    await MainActor.run { vm.sessionId == "replacement" }
+                }
+            }
+            await refusalGate.open()
+            try await waitUntil("retired invalidation owner settles") {
+                await MainActor.run { vm.historyInvalidationRefresh == nil }
+            }
+            await pending.value
+            #expect(await historyCalls.current() == (retirement == "detach" ? 2 : 3))
+            #expect(vm.messages.flatMap { $0.content.compactMap(\.text) } ==
+                (retirement == "detach" ? [] : ["Current transcript"]))
+            #expect(vm.sessionKey == (retirement == "session" ? "other" : "global"))
+            if retirement != "session" {
+                #expect(vm.currentSessionTarget.agentID == (retirement == "agent" ? "other" : "main"))
+            }
+        } catch {
+            let pending = refresh ?? vm.historyInvalidationRefresh?.task
+            vm.detachTransport()
+            await refusalGate.open()
+            await pending?.value
+            throw error
+        }
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor
+    func `message invalidation does not retry an authoritative history refusal`(retryableMarker: Bool) async throws {
+        let refusalGate = AsyncGate()
+        let historyCalls = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            activeAgentId: "main", historyResponses: [historyPayload()],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() },
+            historyResponseHook: { _, index, _ in
+                guard index > 0 else { return nil }
+                await refusalGate.wait()
+                throw GatewayResponseError(
+                    method: "chat.history", code: retryableMarker ? "INVALID_REQUEST" : "UNAVAILABLE",
+                    message: "History request refused",
+                    details: ["retryable": AnyCodable(retryableMarker), "retryAfterMs": AnyCodable(250)])
+            })
+        defer { vm.detachTransport() }
+        var refresh: Task<Void, Never>?
+        do {
+            try await loadAndWaitBootstrap(vm: vm)
+            transport.emit(.sessionsChanged(.init(sessionKey: "main", agentId: "main", phase: "message")))
+            try await waitUntil("authoritative history refusal starts") { await historyCalls.current() == 2 }
+            refresh = vm.historyInvalidationRefresh?.task
+            let pending = try #require(refresh)
+            await refusalGate.open()
+            try await waitUntil("authoritative history refusal settles") {
+                await MainActor.run { vm.historyInvalidationRefresh == nil }
+            }
+            await pending.value
+            #expect(await historyCalls.current() == 2)
+            #expect(vm.messages.isEmpty)
+        } catch {
+            let pending = refresh ?? vm.historyInvalidationRefresh?.task
+            vm.detachTransport()
+            await refusalGate.open()
+            await pending?.value
+            throw error
+        }
+    }
+
+    @Test @MainActor func `history retry backoff does not retain an abandoned presentation`() async throws {
+        let historyCalls = AsyncCounter()
+        let transport = TestChatTransport(
+            historyResponses: [historyPayload()],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() },
+            historyResponseHook: { _, index, _ in
+                guard index > 0 else { return nil }
+                throw GatewayResponseError(
+                    method: "chat.history", code: "UNAVAILABLE", message: "History is busy",
+                    details: ["retryable": AnyCodable(true), "retryAfterMs": AnyCodable(60000)])
+            })
+        var viewModel: OpenClawChatViewModel? = OpenClawChatViewModel(
+            sessionKey: "main", transport: transport, activeAgentId: "main")
+        let discarded = try weakReference(to: viewModel)
+        var refresh: Task<Void, Never>?
+        do {
+            viewModel?.load()
+            try await waitUntil("abandonment fixture bootstraps") {
+                await MainActor.run { discarded.value?.isLoading == false && discarded.value?.healthOK == true }
+            }
+            transport.emit(.sessionsChanged(.init(sessionKey: "main", agentId: "main", phase: "message")))
+            try await waitUntil("abandonment history refusal starts") { await historyCalls.current() == 2 }
+            refresh = viewModel?.historyInvalidationRefresh?.task
+            let pending = try #require(refresh)
+            viewModel = nil
+            try await waitUntil("retry backoff releases its abandoned presentation") {
+                await MainActor.run { discarded.value == nil }
+            }
+            await pending.value
+            #expect(await historyCalls.current() == 2)
+        } catch {
+            let pending = refresh ?? discarded.value?.historyInvalidationRefresh?.task
+            discarded.value?.detachTransport()
+            await pending?.value
+            throw error
+        }
+    }
+
     @Test @MainActor func `current session mutations refresh selected model availability`() async throws {
         let unavailable = modelChoice(
             id: "claude-opus-4-6",
@@ -9605,18 +9844,23 @@ struct ChatViewModelTests {
         #expect(vm.modelSelectionID == next.selectionID)
     }
 
-    @Test @MainActor func `failed newest catalog refresh retains the last accepted auth gate`() async throws {
-        let staleRefreshGate = AsyncGate()
+    @Test(arguments: [false, true])
+    @MainActor func `failed catalog refresh retains choices only without policy invalidation`(
+        modelSelectionChanged: Bool) async throws
+    {
+        let staleRefreshGate = SessionSubscribeGate()
         let unavailable = modelChoice(
-            id: "claude-opus-4-6",
-            name: "Claude Opus 4.6",
+            id: "previous",
+            name: "Previous choice",
+            provider: "fixture",
             available: false,
             unavailableReason: "auth-failed")
         let available = modelChoice(
-            id: "claude-opus-4-6",
-            name: "Claude Opus 4.6",
+            id: "previous",
+            name: "Previous choice",
+            provider: "fixture",
             available: true)
-        let (transport, vm) = await makeViewModel(
+        let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             sessionsResponses: [sessionsResponse(sessionEntry(
                 key: "main",
@@ -9642,15 +9886,34 @@ struct ChatViewModelTests {
         vm.input = "hello"
 
         let staleRefresh = Task { await vm.fetchModels() }
-        try await waitUntil("older catalog refresh starts") {
-            await transport.modelAgentIDs().count >= 2
+        await staleRefreshGate.waitUntilBlocked()
+        if modelSelectionChanged {
+            let failedRefresh = AsyncGate()
+            withObservationTracking {
+                _ = vm.modelCatalogMessage
+            } onChange: {
+                Task { await failedRefresh.open() }
+            }
+            let event = try #require(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
+                type: "event", event: "chat.metadata.changed",
+                payload: AnyCodable(["modelSelectionChanged": true]))))
+            vm.handleTransportEvent(event)
+            #expect(vm.modelChoices.isEmpty, "Policy retirement must happen before the queued refresh starts")
+            #expect(!vm.canSelectModel(available.selectionID))
+            #expect(!vm.canSelectDefaultModel)
+            await failedRefresh.wait()
+        } else {
+            await vm.fetchModels()
         }
-        await vm.fetchModels()
-        await staleRefreshGate.open()
+        await staleRefreshGate.release()
         await staleRefresh.value
 
-        #expect(vm.modelChoices.first?.available == false)
-        #expect(!vm.canSend)
+        #expect(vm.modelChoices == (modelSelectionChanged ? [] : [unavailable]))
+        #expect(vm.modelSelectionID == (modelSelectionChanged
+                ? OpenClawChatViewModel.defaultModelSelectionID : unavailable.selectionID))
+        #expect(vm.sessions.first?.model == unavailable.modelID)
+        #expect(vm.input == "hello")
+        if !modelSelectionChanged { #expect(!vm.canSend) }
     }
 
     @Test @MainActor func `offline draft remains eligible for durable queue despite auth failure`() async throws {

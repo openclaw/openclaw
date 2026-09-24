@@ -5,6 +5,7 @@ import type { SessionsSearchResult } from "../../../packages/gateway-protocol/sr
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { loadModelCatalog } from "../lib/model-catalog-store.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
   createContext,
@@ -102,6 +103,104 @@ describe("CommandPalette search", () => {
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(3);
   });
 
+  it("shows model results while another catalog is still pending", async () => {
+    const automations = createDeferred<{ jobs: { id: string; name: string }[] }>();
+    const { gateway } = createGateway(true, {
+      methods: ["cron.list", "models.list"],
+      request: vi.fn(async (method: string) => {
+        if (method === "cron.list") {
+          return automations.promise;
+        }
+        if (method === "models.list") {
+          return { models: [{ provider: "fixture", id: "needle", name: "Needle model" }] };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      }) as GatewayBrowserClient["request"],
+    });
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => null),
+      ),
+    );
+
+    await enterQuery(palette, "needle");
+    await vi.advanceTimersByTimeAsync(200);
+    await vi.waitFor(() => expect(findPaletteOption(palette, "Needle model")).toBeDefined());
+    expect(palette.textContent).toContain("Searching commands");
+    findPaletteOption(palette, "Needle model")?.click();
+    expect(palette.onNavigate).toHaveBeenCalledWith("model-providers");
+
+    await enterQuery(palette, "needle");
+    await vi.advanceTimersByTimeAsync(200);
+    automations.resolve({ jobs: [{ id: "needle-job", name: "Needle automation" }] });
+    await vi.waitFor(() => expect(findPaletteOption(palette, "Needle automation")).toBeDefined());
+    expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+    expect(palette.textContent).not.toContain("Searching commands");
+  });
+
+  it("clears a failed model search when another view publishes the catalog", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("catalog unavailable"))
+      .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "needle", name: "Needle" }] });
+    const { gateway } = createGateway(true, {
+      methods: ["models.list"],
+      request: (method, params) =>
+        method === "models.list" ? request(method, params) : { results: [], sessions: [] },
+    });
+    const { palette } = await mountPalette(createContext(gateway, async () => null));
+    await enterQuery(palette, "needle");
+    await vi.advanceTimersByTimeAsync(200);
+    await vi.waitFor(() =>
+      expect(palette.querySelector(".cmd-palette__source-error")?.textContent).toContain(
+        "Model search unavailable",
+      ),
+    );
+
+    await loadModelCatalog(gateway.snapshot.client!, { agentId: "main" });
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Needle")).toBeDefined();
+    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { restricted: false, matches: true },
+    { restricted: true, matches: false },
+  ])(
+    "searches agent primary models only when selection is unrestricted ($restricted)",
+    async ({ restricted, matches }) => {
+      const { gateway } = createGateway(true, {
+        methods: ["models.list"],
+        request: vi.fn(async () => ({
+          models: [],
+          modelSelectionPolicy: { restricted },
+        })) as GatewayBrowserClient["request"],
+      });
+      const context = createContext(
+        gateway,
+        vi.fn(async () => null),
+      );
+      const { palette } = await mountPalette({
+        ...context,
+        agents: {
+          ...context.agents,
+          ensureList: async () => ({
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "reviewer", name: "Reviewer", model: { primary: "fixture/hidden" } }],
+          }),
+        },
+      });
+      await enterQuery(palette, "fixture/hidden");
+      await vi.advanceTimersByTimeAsync(200);
+      await palette.updateComplete;
+      expect(Boolean(findPaletteOption(palette, "Reviewer"))).toBe(matches);
+    },
+  );
+
   it.each([false, true])(
     "shows an internal catalog failure and empty recovery (retained rows: %s)",
     async (hasRows) => {
@@ -190,38 +289,51 @@ describe("CommandPalette search", () => {
     expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
   });
 
-  it("retains model results during a failed publication read and retries on input", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "old", name: "Needle old" }] })
-      .mockRejectedValueOnce(new Error("catalog unavailable"))
-      .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "new", name: "Needle new" }] });
-    const harness = createGateway(true, {
-      methods: ["models.list"],
-      request: (method, params) =>
-        method === "models.list" ? request(method, params) : { results: [], sessions: [] },
-    });
-    const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
-    await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-    expect(findPaletteOption(palette, "Needle old")).toBeDefined();
+  it.each([
+    { event: "config.changed", payload: {}, retainsChoices: false },
+    {
+      event: "chat.metadata.changed",
+      payload: { modelSelectionChanged: true },
+      retainsChoices: false,
+    },
+    { event: "chat.metadata.changed", payload: {}, retainsChoices: true },
+  ])(
+    "handles a failed $event read (retains: $retainsChoices) and retries on input",
+    async ({ event, payload, retainsChoices }) => {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "old", name: "Needle old" }] })
+        .mockRejectedValueOnce(new Error("catalog unavailable"))
+        .mockResolvedValueOnce({
+          models: [{ provider: "fixture", id: "new", name: "Needle new" }],
+        });
+      const harness = createGateway(true, {
+        methods: ["models.list"],
+        request: (method, params) =>
+          method === "models.list" ? request(method, params) : { results: [], sessions: [] },
+      });
+      const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
+      await enterQuery(palette, "needle");
+      await vi.advanceTimersByTimeAsync(200);
+      await palette.updateComplete;
+      expect(findPaletteOption(palette, "Needle old")).toBeDefined();
 
-    harness.emit("chat.metadata.changed");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-    expect(palette.querySelector('.cmd-palette__search [role="status"]')?.textContent).toContain(
-      "Model search unavailable",
-    );
-    expect(findPaletteOption(palette, "Needle old")).toBeDefined();
+      harness.emit(event, payload);
+      await vi.advanceTimersByTimeAsync(200);
+      await palette.updateComplete;
+      expect(palette.querySelector('.cmd-palette__search [role="status"]')?.textContent).toContain(
+        "Model search unavailable",
+      );
+      expect(Boolean(findPaletteOption(palette, "Needle old"))).toBe(retainsChoices);
 
-    await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-    expect(findPaletteOption(palette, "Needle new")).toBeDefined();
-    expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
-    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
-  });
+      await enterQuery(palette, "needle");
+      await vi.advanceTimersByTimeAsync(200);
+      await palette.updateComplete;
+      expect(findPaletteOption(palette, "Needle new")).toBeDefined();
+      expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
+      expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+    },
+  );
 
   it.each(["agent", "source", "connection", "detach", "publication", "closed"])(
     "fences retained and pending catalog rows on %s replacement",

@@ -56,14 +56,17 @@ export async function runEmbeddedAttemptWithBackend(
       params.hostCapabilities?.assertActive();
     },
   });
+  const preparedParams = attachmentMedia?.length
+    ? { ...params, inputAttachmentMedia: attachmentMedia }
+    : params;
   const result = await runAgentHarnessAttempt(
     attachmentNote
       ? {
-          ...params,
+          ...preparedParams,
           prompt: `${params.prompt}\n\n${attachmentNote}`,
           transcriptPrompt: params.transcriptPrompt ?? params.prompt,
         }
-      : params,
+      : preparedParams,
     nativeSessionRuntime,
   );
   // Only the logical run can settle its full child batch after all retries.

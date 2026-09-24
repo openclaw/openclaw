@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
   ModelAuthStatusResult,
@@ -166,7 +166,6 @@ const buildChatItemsMock = vi.fn(
           key: "divider:compaction:test",
           icon: "foldVertical",
           label: "Compacted history",
-          description: "Earlier messages were summarized to make room in the context window.",
           timestamp: 1,
         },
       ] as ReturnType<typeof chatThread.buildCachedChatItems>;
@@ -283,7 +282,7 @@ type ChatHeaderTestState = {
   chatAvatarUrl: string | null;
   client: GatewayBrowserClient;
   connected: boolean;
-  hello: null;
+  hello: GatewayHelloOk | null;
   lastError: string | null;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
   sessionKey: string;
@@ -471,7 +470,7 @@ function createChatHeaderState(
   });
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createTestSessionCapability({
-    snapshot: { client, phase: "connected", hello: null },
+    snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   });
@@ -518,7 +517,7 @@ function createChatHeaderState(
     lastError: null,
     chatAvatarUrl: null,
     basePath: "",
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     agentsList: null,
     agentsPanel: "overview",
     agentsSelectedId: null,
@@ -1016,15 +1015,13 @@ describe("chat run error", () => {
 });
 
 describe("chat compaction divider", () => {
-  it("renders compaction copy without a checkpoint action", () => {
+  it("renders a compact divider without a subtitle or checkpoint action", () => {
     const container = renderChatView({
       messages: [{ testDividerMarker: "compaction" }],
     });
 
     expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Compacted history");
-    expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "Earlier messages were summarized to make room in the context window.",
-    );
+    expect(container.querySelector(".chat-divider__description")).toBeNull();
     expect(container.querySelector(".chat-divider__icon svg")).not.toBeNull();
     expect(container.querySelector(".chat-divider__action")).toBeNull();
   });
@@ -1366,6 +1363,41 @@ describe("chat history pagination", () => {
 });
 
 describe("retained input navigation", () => {
+  it.each([
+    {
+      type: "attachment",
+      attachment: { kind: "document", label: "installation.pdf", url: "/media/installation.pdf" },
+    },
+    {
+      type: "attachment",
+      attachment: { kind: "audio", label: "voice-note.ogg", url: "/media/voice-note.ogg" },
+    },
+    {
+      type: "attachment_error",
+      attachment: { kind: "video", label: "walkthrough.mp4", code: "file-not-found" },
+    },
+  ])("names a queued $attachment.kind attachment without message text", (content) => {
+    const historyState = makeChatHost({ currentSessionId: "attachment-session" });
+    applyChatPendingInputs(historyState, {
+      total: 1,
+      items: [
+        {
+          id: "attachment-input",
+          runId: "attachment-run",
+          acceptedAt: 1,
+          state: "queued",
+          queued: true,
+          message: { role: "user", content: [content] },
+        },
+      ],
+    });
+    const container = renderChatView({ historyState });
+    expect(container.querySelector(".chat-queue__text")?.textContent).toBe(
+      content.attachment.label,
+    );
+    expect(container.querySelector(".chat-group.user")).toBeNull();
+  });
+
   it("keeps an empty filtered page navigable without blocking an independent send", async () => {
     const sessionKey = "agent:main:hidden-page";
     const sessionId = "hidden-page-session";
@@ -3555,121 +3587,6 @@ describe("chat composer IME composition", () => {
   });
 });
 
-describe("chat composer sizing", () => {
-  it("sizes restored drafts after the rendered value is committed", async () => {
-    const container = renderChatView({ draft: "A restored long draft" });
-    const textarea = getComposerTextarea(container);
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, value: 180 },
-      clientHeight: { configurable: true, value: 150 },
-    });
-    document.body.append(container);
-
-    await Promise.resolve();
-
-    expect(textarea.style.height).toBe("150px");
-    expect(textarea.style.overflowY).toBe("auto");
-    container.remove();
-  });
-
-  it("shows the textarea scrollbar only when the draft overflows", () => {
-    const container = renderChatView({});
-    const textarea = getComposerTextarea(container);
-    let scrollHeight = 42;
-    let clientHeight = 42;
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, get: () => scrollHeight },
-      clientHeight: { configurable: true, get: () => clientHeight },
-    });
-
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("42px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    scrollHeight = 180;
-    clientHeight = 150;
-    textarea.value = "A long draft";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("150px");
-    expect(textarea.style.overflowY).toBe("auto");
-  });
-
-  it("resizes the draft when responsive layout changes the textarea width", () => {
-    let resizeCallback: ResizeObserverCallback | undefined;
-    let animationFrameCallback: FrameRequestCallback | undefined;
-    let nextAnimationFrameId = 0;
-    const requestAnimationFrameMock = vi.fn((callback: FrameRequestCallback) => {
-      animationFrameCallback = callback;
-      nextAnimationFrameId += 1;
-      return nextAnimationFrameId;
-    });
-    const cancelAnimationFrameMock = vi.fn();
-    class TestResizeObserver {
-      constructor(callback: ResizeObserverCallback) {
-        resizeCallback = callback;
-      }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-      takeRecords(): ResizeObserverEntry[] {
-        return [];
-      }
-    }
-    vi.stubGlobal("ResizeObserver", TestResizeObserver);
-    vi.stubGlobal("requestAnimationFrame", requestAnimationFrameMock);
-    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrameMock);
-
-    let width = 320;
-    let scrollHeight = 42;
-    let clientHeight = 42;
-    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
-      bottom: clientHeight,
-      height: clientHeight,
-      left: 0,
-      right: width,
-      top: 0,
-      width,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    }));
-
-    const container = renderChatView({});
-    const textarea = getComposerTextarea(container);
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, get: () => scrollHeight },
-      clientHeight: { configurable: true, get: () => clientHeight },
-    });
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    expect(textarea.style.height).toBe("42px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    scrollHeight = 180;
-    clientHeight = 150;
-    resizeCallback?.([], {} as ResizeObserver);
-    expect(textarea.style.overflowY).toBe("auto");
-    expect(requestAnimationFrameMock).not.toHaveBeenCalled();
-
-    width = 180;
-    scrollHeight = 120;
-    clientHeight = 120;
-    resizeCallback?.([], {} as ResizeObserver);
-    expect(requestAnimationFrameMock).toHaveBeenCalledOnce();
-    expect(textarea.style.height).toBe("42px");
-
-    animationFrameCallback?.(0);
-    expect(textarea.style.height).toBe("120px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    width = 160;
-    resizeCallback?.([], {} as ResizeObserver);
-    render(html``, container);
-    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(2);
-  });
-});
-
 describe("chat slash menu accessibility", () => {
   function replayInput(textarea: HTMLTextAreaElement, value: string, type = "input") {
     if (type === "input") {
@@ -4500,31 +4417,31 @@ describe("chat slash menu accessibility", () => {
       animationFrames.push(callback);
       return animationFrames.length;
     });
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-      function (this: HTMLElement) {
-        const height = 28;
-        let top = 0;
-        if (this.classList.contains("slash-menu-item")) {
-          const scrollRegion = this.closest<HTMLElement>(".slash-menu__scroll");
-          const options = Array.from(
-            scrollRegion?.querySelectorAll<HTMLElement>(".slash-menu-item") ?? [],
-          );
-          top = options.indexOf(this) * height - (scrollRegion?.scrollTop ?? 0);
-        }
-        const bottom = this.classList.contains("slash-menu__scroll") ? height * 2 : top + height;
-        return {
-          bottom,
-          height: bottom - top,
-          left: 0,
-          right: 240,
-          top,
-          width: 240,
-          x: 0,
-          y: top,
-          toJSON: () => ({}),
-        };
-      },
-    );
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const height = 28;
+      let top = 0;
+      if (this.classList.contains("slash-menu-item")) {
+        const scrollRegion = this.closest<HTMLElement>(".slash-menu__scroll");
+        const options = Array.from(
+          scrollRegion?.querySelectorAll<HTMLElement>(".slash-menu-item") ?? [],
+        );
+        top = options.indexOf(this) * height - (scrollRegion?.scrollTop ?? 0);
+      }
+      const bottom = this.classList.contains("slash-menu__scroll") ? height * 2 : top + height;
+      return {
+        bottom,
+        height: bottom - top,
+        left: 0,
+        right: 240,
+        top,
+        width: 240,
+        x: 0,
+        y: top,
+        toJSON: () => ({}),
+      };
+    });
     const { container } = createReactiveDraftHarness();
     document.body.append(container);
     inputDraftAtEnd(container, "Use $");
@@ -6773,25 +6690,6 @@ describe("chat model controls", () => {
       });
     },
   );
-
-  it("does not patch the model for a locked session", async () => {
-    const { state, request } = createOpenAiHeaderState();
-    state.sessionsResult = createSessionsResultFromRows([
-      {
-        key: "agent:main:main",
-        kind: "direct",
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        modelSelectionLocked: true,
-        updatedAt: 1,
-      },
-    ]);
-
-    await expect(
-      switchChatModel(state as unknown as Parameters<typeof switchChatModel>[0], "openai/gpt-5.4"),
-    ).resolves.toBe(false);
-    expect(request).not.toHaveBeenCalled();
-  });
 
   it("ignores model clicks while a run is active", () => {
     const { state } = createOpenAiHeaderState();

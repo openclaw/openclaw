@@ -92,9 +92,10 @@ describe("gateway WebSocket chat abort settlement", () => {
     "rejected",
     "queued-fulfilled",
     "queued-rejected",
+    "queued-terminalized",
     "accepted-injection",
   ] as const)(
-    "preserves an acknowledged abort and completes its preinstalled waiter after %s dispatch",
+    "preserves an acknowledged abort across %s dispatch settlement",
     async (settlement) => {
       const sessionDirectory = temporaryDirectories.make("openclaw-chat-abort-dispatch-");
       testState.sessionStorePath = path.join(sessionDirectory, "sessions.json");
@@ -216,6 +217,70 @@ describe("gateway WebSocket chat abort settlement", () => {
           });
         }
 
+        if (settlement === "queued-terminalized") {
+          expect(queuedLifecycle?.onDeferred?.()).toBe(true);
+          const custodyAccepted = onceMessage(
+            socket,
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "chat" &&
+              frame.payload?.runId === runId &&
+              frame.payload?.state === "final",
+            2_000,
+          );
+          frames.push(custodyAccepted);
+          dispatchRelease.resolve();
+          await custodyAccepted;
+          await expect(
+            rpcReq(socket, "agent.wait", { runId, timeoutMs: 0 }),
+          ).resolves.toMatchObject({
+            ok: true,
+            payload: { runId, status: "pending", timeoutPhase: "queue" },
+          });
+          const queue = await import("./chat-queued-turns.js");
+          const queuedAbort = vi.spyOn(queue, "abortQueuedChatTurnById");
+          try {
+            const aborted = await rpcReq(socket, "chat.abort", { sessionKey: "main", runId });
+            expect(aborted).toMatchObject({
+              ok: true,
+              payload: { aborted: true, runIds: [runId] },
+            });
+            expect(queuedAbort).toHaveBeenCalledExactlyOnceWith(
+              expect.any(Map),
+              expect.objectContaining({ runId, stopReason: "rpc" }),
+            );
+            expect(queuedLifecycle?.abortSignal?.aborted).toBe(true);
+            const outcome = {
+              runId,
+              status: "error",
+              error: "aborted",
+              stopReason: "aborted",
+              endedAt: expect.any(Number),
+            };
+            await expect(
+              rpcReq(socket, "agent.wait", { runId, timeoutMs: 0 }),
+            ).resolves.toMatchObject({
+              ok: true,
+              payload: outcome,
+            });
+            // Settling detached custody must not restore the earlier admission success.
+            queuedLifecycle?.onSettled?.();
+            await expect(
+              rpcReq(socket, "agent.wait", { runId, timeoutMs: 0 }),
+            ).resolves.toMatchObject({
+              ok: true,
+              payload: outcome,
+            });
+            const replay = await rpcReq(socket, "chat.send", sendParameters);
+            expect(replay.payload).toMatchObject({ runId, status: "timeout", summary: "aborted" });
+          } finally {
+            queuedAbort.mockRestore();
+          }
+          return;
+        }
+
+        // Hold the wait deadline while real abort and persistence work establishes ordering.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const waitResponse = rpcReq(socket, "agent.wait", { runId, timeoutMs: 2_000 });
         frames.push(waitResponse);
         void waitResponse.catch(() => {});
@@ -253,6 +318,7 @@ describe("gateway WebSocket chat abort settlement", () => {
           ok: true,
           payload: { runId, status: "error", stopReason: "rpc", endedAt: expect.any(Number) },
         });
+        vi.useRealTimers();
 
         // Replay can itself record an aborted receipt, so it must follow the original wait.
         // It also orders any contradictory terminal frame before this cached response.
@@ -261,6 +327,7 @@ describe("gateway WebSocket chat abort settlement", () => {
         expect(replay.payload).toMatchObject({ runId, status: "timeout", summary: "aborted" });
         expect(terminalStates).toEqual(["aborted"]);
       } finally {
+        vi.useRealTimers();
         dispatchRelease.resolve();
         await runQaGatewayFixture(
           () => closeGatewayTestWebSocket(socket),

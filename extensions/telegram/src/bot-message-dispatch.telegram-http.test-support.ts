@@ -106,6 +106,8 @@ export function createTelegramDispatchHttpFixture() {
           await Promise.race([held.release.promise, stopped]);
         }
         response.setHeader("content-type", "application/json");
+        // Idle keep-alive expiry must not race later fixture requests under load.
+        response.setHeader("connection", "close");
         const rejection = await Promise.race([
           Promise.resolve(respondToCall?.({ method, fields })),
           stopped,
@@ -253,7 +255,11 @@ export function createTelegramDispatchHttpFixture() {
       }
     });
     holdNextCall = undefined;
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // SQLite workers share native hrtime deadlines with the dispatching thread.
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     calls.length = 0;
     visibleMessages.clear();
     visibleMarkup.clear();

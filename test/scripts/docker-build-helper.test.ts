@@ -907,7 +907,7 @@ fi
       'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_CLEANUP_SMOKE_DOCKER_TIMEOUT:-600s}}"',
     );
     expect(cleanupSmoke).toContain(
-      'docker_e2e_docker_run_cmd run --rm --platform "$PLATFORM" -t "$IMAGE_NAME"',
+      'docker_e2e_docker_run_cmd run --rm --platform "$PLATFORM" -t "${limit_args[@]}" "$IMAGE_NAME"',
     );
     expect(cleanupSmoke).not.toContain('docker run --rm --platform "$PLATFORM" -t "$IMAGE_NAME"');
 
@@ -1334,11 +1334,50 @@ source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
 docker_build_run e2e-build -t demo-image .
 
-grep -q '^--kill-after=30s 17s|env DOCKER_BUILDKIT=1 docker build -t demo-image .$' "$TMPDIR/timeout-seen"
-grep -q '^build -t demo-image .$' "$TMPDIR/docker-seen"
+grep -q '^--kill-after=30s 17s|env DOCKER_BUILDKIT=1 docker build --progress=plain --build-arg GITHUB_ACTIONS -t demo-image .$' "$TMPDIR/timeout-seen"
+grep -q '^build --progress=plain --build-arg GITHUB_ACTIONS -t demo-image .$' "$TMPDIR/docker-seen"
 `;
 
     execDockerSnippet(script);
+  });
+
+  it.each([0, 23])("relays BuildKit limit warnings when the build exits %i", (buildExit) => {
+    const workDir = tempDirs.make("openclaw-build-limit-warning-");
+    const summary = join(workDir, "summary.md");
+    writeExecutables(join(workDir, "bin"), {
+      timeout: PASSTHROUGH_TIMEOUT_SCRIPT,
+      docker: `#!/bin/sh
+printf '#17 3.4 ::warning file=src/a%%2Cb.ts,line=7,col=0,title=Size%%3A budget::one%%0Atwo%%25\n'
+printf '#17 4.1 ::warning file=src/a%%2Cb.ts,line=7,col=0,title=Size%%3A budget::one%%0Atwo%%25\n'
+exit "$FIXTURE_BUILD_EXIT"
+`,
+    });
+    const result = spawnDockerSnippet(
+      repoShell(workDir)`
+export PATH="$TMPDIR/bin:$PATH"
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+docker_build_run limit-proof -t fixture .
+`,
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIXTURE_BUILD_EXIT: String(buildExit),
+          GITHUB_ACTIONS: "true",
+          GITHUB_STEP_SUMMARY: summary,
+          OPENCLAW_DOCKER_BUILD_RETRIES: "0",
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(buildExit === 0 ? 0 : 1);
+    expect(result.stderr.match(/^::warning /gmu)).toHaveLength(1);
+    expect(result.stderr).toContain(
+      "file=src/a%2Cb.ts,line=7,col=0,title=Size%3A budget::one%0Atwo%25",
+    );
+    const renderedSummary = readFileSync(summary, "utf8");
+    expect(renderedSummary).toContain("src/a,b.ts");
+    expect(renderedSummary).toContain("one two%");
+    expect(renderedSummary.match(/Warning: Size: budget/gu)).toHaveLength(1);
   });
 
   it("prints heartbeat progress for long successful centralized Docker builds", () => {
@@ -1651,7 +1690,7 @@ source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
 docker_build_exec -t setup-image .
 
-[[ "$(<"$TMPDIR/docker-seen")" = "build -t setup-image ." ]]
+[[ "$(<"$TMPDIR/docker-seen")" = "build --progress=plain --build-arg GITHUB_ACTIONS -t setup-image ." ]]
 `;
 
     execDockerSnippet(script);
@@ -2425,7 +2464,7 @@ export OPENCLAW_DOCKER_ALL_LANE_NAME=browser-cdp-snapshot
 bash "$ROOT_DIR/scripts/e2e/browser-cdp-snapshot-docker.sh"
 
 grep -q '^image inspect shared-functional$' "$TMPDIR/docker-seen"
-grep -Fq 'build -t openclaw-browser-cdp-snapshot-e2e:browser-cdp-snapshot' "$TMPDIR/docker-seen"
+grep -Fq 'build --progress=plain --build-arg GITHUB_ACTIONS -t openclaw-browser-cdp-snapshot-e2e:browser-cdp-snapshot' "$TMPDIR/docker-seen"
 grep -Fq ' openclaw-browser-cdp-snapshot-e2e:browser-cdp-snapshot ' "$TMPDIR/docker-seen"
 if grep -Fq ' shared-functional ' "$TMPDIR/docker-seen"; then
   echo "browser CDP lane reused the shared image without Chromium" >&2

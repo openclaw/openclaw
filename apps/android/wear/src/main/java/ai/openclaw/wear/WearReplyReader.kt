@@ -110,7 +110,7 @@ internal fun ReplyReader(
             item(key = "paragraph:$offset:$index") {
               Text(
                 text = paragraph,
-                color = OpenClawWearTheme.colors.text,
+                color = OpenClawWearTheme.canvasColors.text,
                 fontSize = 13.sp,
                 lineHeight = 17.sp,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
@@ -142,7 +142,7 @@ internal fun ReplyReader(
                     else -> R.string.reply_failed
                   },
                 ),
-              color = OpenClawWearTheme.colors.text,
+              color = OpenClawWearTheme.canvasColors.text,
               fontSize = 13.sp,
               modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
             )

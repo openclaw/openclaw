@@ -1,4 +1,7 @@
-import type { DetachedTaskTerminalState } from "./detached-task-runtime-contract.js";
+import type {
+  CreatedDetachedTaskRun,
+  DetachedTaskTerminalState,
+} from "./detached-task-runtime-contract.js";
 import type {
   InitialTaskFlowCreateInput,
   InitialTaskFlowCreateResult,
@@ -13,7 +16,10 @@ import type {
   TaskNotificationDeliveryUpdate,
 } from "./task-notification.operation.js";
 import type { TaskCreateInput, TaskCreateResult } from "./task-registry-create.kernel.js";
-import type { TaskRecordTransitionReceipt } from "./task-registry-transition.kernel.js";
+import type {
+  TaskRecordTransitionReceipt,
+  TaskWorkerTransitionInput,
+} from "./task-registry-transition.kernel.js";
 import type {
   TaskExecutionOwner,
   TaskPersistenceReceipt,
@@ -21,6 +27,10 @@ import type {
 } from "./task-registry.types.js";
 
 export type TaskInitialWorkerOperations = {
+  "tasks.transitionRunRow": {
+    input: Extract<TaskWorkerTransitionInput, { kind: "state" | "delivery" }>;
+    output: TaskRecordTransitionReceipt | null;
+  };
   "tasks.bindRunOwner": {
     input: {
       taskId: string;
@@ -43,10 +53,11 @@ export type TaskInitialWorkerOperations = {
     input: {
       taskId: string;
       expectedTask: TaskPersistenceReceipt;
-      params: { runId: string; runtime: TaskRuntime; sessionKey?: string } & Pick<
-        DetachedTaskTerminalState,
-        "status" | "endedAt" | "error" | "terminalSummary"
-      >;
+      params: {
+        runId: string;
+        runtime: TaskRuntime;
+        sessionKey?: string;
+      } & Parameters<CreatedDetachedTaskRun["finalizeActive"]>[0];
       now: number;
     };
     output: TaskRecordTransitionReceipt | null;

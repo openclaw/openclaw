@@ -830,6 +830,8 @@ describe("createTelegramBot typed command pipeline", () => {
   it("commits a first sticker description before model admission and never describes a supplemental image as that sticker", async () => {
     const describeStarted = createDeferred<void>();
     const description = createDeferred<{ text: string }>();
+    const lateDescription = createDeferred<{ text: string }>();
+    const lateStickerId = "sticker-after-webhook-expiry";
     const runtime = getTelegramRuntime();
     const describeImage = vi.fn(async () => {
       describeStarted.resolve();
@@ -843,12 +845,17 @@ describe("createTelegramBot typed command pipeline", () => {
       },
     });
     const cfg: OpenClawConfig = {
-      // Keep this controlled image-model fixture out of unrelated provider discovery.
-      plugins: { allow: ["telegram", "openai"] },
-      agents: { defaults: { model: "openai/text-model", imageModel: "openai/sticker-model" } },
+      // A synthetic provider keeps this controlled model out of runtime plugin activation.
+      plugins: { allow: ["telegram"] },
+      agents: {
+        defaults: {
+          model: "sticker-fixture/text-model",
+          imageModel: "sticker-fixture/sticker-model",
+        },
+      },
       models: {
         providers: {
-          openai: {
+          "sticker-fixture": {
             api: "openai-completions",
             baseUrl: "http://127.0.0.1:9/v1",
             apiKey: "synthetic-sticker-key",
@@ -900,9 +907,12 @@ describe("createTelegramBot typed command pipeline", () => {
     try {
       const bot = createBot(false, true, cfg);
       const webhook = webhookCallback(bot, "std/http");
-      const receive = async (update: Parameters<typeof bot.handleUpdate>[0]) => {
+      const receive = async (
+        update: Parameters<typeof bot.handleUpdate>[0],
+        receiveWebhook = webhook,
+      ) => {
         // grammY requires undefined at the reply leaf; Telegram JSON omits it.
-        const response = await webhook(
+        const response = await receiveWebhook(
           new Request("http://localhost/telegram", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -971,9 +981,29 @@ describe("createTelegramBot typed command pipeline", () => {
       );
       expect(describeImage).toHaveBeenCalledOnce();
       expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toHaveLength(3);
+      describeImage.mockImplementationOnce(() => lateDescription.promise);
+      await expect(
+        receive(
+          {
+            update_id: 2803,
+            message: {
+              ...message,
+              message_id: 2803,
+              sticker: { ...sticker, file_unique_id: lateStickerId },
+            },
+          },
+          webhookCallback(bot, "std/http", { timeoutMilliseconds: 0 }),
+        ),
+      ).rejects.toThrow("Request timed out after 0 ms");
     } finally {
       description.resolve({ text: "A curious sticker" });
+      lateDescription.resolve({ text: "A sticker after webhook expiry" });
+      await harness.settleUpdates();
       setTelegramRuntime(runtime);
     }
+    expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toHaveLength(4);
+    expect(await getCachedSticker(lateStickerId)).toMatchObject({
+      description: "A sticker after webhook expiry",
+    });
   });
 });

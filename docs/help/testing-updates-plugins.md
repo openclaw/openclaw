@@ -211,7 +211,7 @@ pnpm test:docker:published-upgrade-survivor
 Useful published-upgrade survivor variants:
 
 ```bash
-OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.4.23 \
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.6.1 \
 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=versioned-runtime-deps \
 pnpm test:docker:published-upgrade-survivor
 
@@ -413,15 +413,15 @@ when that tag exists, and the supported floor `2026.6.34`. Duplicate versions
 run once. It updates each baseline to the selected `package_ref` artifact
 (`main` by default), exercising plugin cleanup and legacy operator state.
 Leave `baselines` blank to use that default. For an explicit historical replay
-from every published stable release since 2026.4.23, pass
-`baselines=all-since-2026.4.23`:
+from every published stable release since 2026.6.1, pass
+`baselines=all-since-2026.6.1`:
 
 ```bash
 gh workflow run update-migration.yml \
   --ref main \
   -f workflow_ref=main \
   -f package_ref=main \
-  -f baselines=all-since-2026.4.23 \
+  -f baselines=all-since-2026.6.1 \
   -f scenarios=plugin-deps-cleanup
 ```
 
@@ -500,8 +500,13 @@ and also runs on every canonical `main` push that runs CI. Docs-only pushes
 matching `**/*.md` and `docs/**` skip CI; mixed docs and code pushes still run it.
 
 For manual historical coverage, `last-stable-4` selects four recent stable
-npm-published releases. Exact versions, `all-since-2026.4.23`, and
+npm-published releases. Exact versions, `all-since-2026.6.1`, and
 `release-history` remain available through `published_upgrade_survivor_baselines`.
+Current tooling executes baselines from `2026.6.1` onward. `release-history`
+selects the six most recent supported stable releases without adding older
+March or April anchors. To replay pre-June upgrades, select matching historical
+tooling; for an old installation, [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+before installing the latest release.
 Use those overrides when replaying migrations outside the bounded supported
 baseline set.
 

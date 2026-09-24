@@ -45,38 +45,25 @@ export async function waitForTerminalOpenDeadline<T>(
       Math.max(0, deadline.expiresAtMs - Date.now()),
     );
     deadline.controller.signal.addEventListener("abort", onAbort, { once: true });
-    let promise: Promise<T>;
-    try {
-      promise = run();
-    } catch (error) {
+    const settle = (complete: () => void) => {
       if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
         expireTerminalOpenDeadline(deadline);
         return;
       }
       clearTimeout(timer);
       deadline.controller.signal.removeEventListener("abort", onAbort);
-      reject(toErrorObject(error, "Terminal open failed"));
+      complete();
+    };
+    let promise: Promise<T>;
+    try {
+      promise = run();
+    } catch (error) {
+      settle(() => reject(toErrorObject(error, "Terminal open failed")));
       return;
     }
     void promise.then(
-      (value) => {
-        if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-          expireTerminalOpenDeadline(deadline);
-          return;
-        }
-        clearTimeout(timer);
-        deadline.controller.signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-          expireTerminalOpenDeadline(deadline);
-          return;
-        }
-        clearTimeout(timer);
-        deadline.controller.signal.removeEventListener("abort", onAbort);
-        reject(toErrorObject(error, "Terminal open failed"));
-      },
+      (value) => settle(() => resolve(value)),
+      (error: unknown) => settle(() => reject(toErrorObject(error, "Terminal open failed"))),
     );
   });
 }

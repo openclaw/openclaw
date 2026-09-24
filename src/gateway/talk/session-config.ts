@@ -104,10 +104,6 @@ export function broadcastTalkRoomEvents(
   }
 }
 
-function getRecord(value: unknown): Record<string, unknown> | undefined {
-  return asOptionalRecord(value) ?? undefined;
-}
-
 function singleRecordKey(record: Record<string, unknown> | undefined): string | undefined {
   const keys = record ? Object.keys(record) : [];
   return keys.length === 1 ? keys[0] : undefined;
@@ -130,16 +126,16 @@ function getVoiceCallProviderConfig<TConfig extends Record<string, unknown>>(
   provider?: string;
   providers?: Record<string, TConfig>;
 } {
-  const plugins = getRecord(config.plugins);
-  const entries = getRecord(plugins?.entries);
-  const voiceCall = getRecord(entries?.["voice-call"]);
-  const pluginConfig = getRecord(voiceCall?.config);
-  const section = getRecord(pluginConfig?.[sectionName]);
-  const providersRaw = getRecord(section?.providers);
+  const plugins = asOptionalRecord(config.plugins);
+  const entries = asOptionalRecord(plugins?.entries);
+  const voiceCall = asOptionalRecord(entries?.["voice-call"]);
+  const pluginConfig = asOptionalRecord(voiceCall?.config);
+  const section = asOptionalRecord(pluginConfig?.[sectionName]);
+  const providersRaw = asOptionalRecord(section?.providers);
   const providers: Record<string, TConfig> = {};
   if (providersRaw) {
     for (const [providerId, providerConfig] of Object.entries(providersRaw)) {
-      const record = getRecord(providerConfig);
+      const record = asOptionalRecord(providerConfig);
       if (record) {
         providers[providerId] = record as TConfig;
       }
@@ -149,20 +145,6 @@ function getVoiceCallProviderConfig<TConfig extends Record<string, unknown>>(
     provider: normalizeOptionalString(section?.provider),
     providers: Object.keys(providers).length > 0 ? providers : undefined,
   };
-}
-
-function getVoiceCallRealtimeConfig(config: OpenClawConfig): {
-  provider?: string;
-  providers?: Record<string, RealtimeVoiceProviderConfig>;
-} {
-  return getVoiceCallProviderConfig(config, "realtime");
-}
-
-function getVoiceCallStreamingConfig(config: OpenClawConfig): {
-  provider?: string;
-  providers?: Record<string, RealtimeTranscriptionProviderConfig>;
-} {
-  return getVoiceCallProviderConfig(config, "streaming");
 }
 
 export function listTalkTranscriptionProviders(
@@ -238,8 +220,11 @@ export function buildTalkRealtimeConfig(
   requestedProvider?: string,
   requestedModel?: string,
 ) {
-  const voiceCallRealtime = getVoiceCallRealtimeConfig(config);
-  const talkRealtime = getRecord(config.talk?.realtime);
+  const voiceCallRealtime = getVoiceCallProviderConfig<RealtimeVoiceProviderConfig>(
+    config,
+    "realtime",
+  );
+  const talkRealtime = asOptionalRecord(config.talk?.realtime);
   const talkRealtimeProviderConfigs = talkRealtime?.providers as
     | Record<string, RealtimeVoiceProviderConfig>
     | undefined;
@@ -304,7 +289,10 @@ export function buildTalkTranscriptionConfig(
   requestedProvider?: string,
   requestedModel?: string,
 ) {
-  const streamingConfig = getVoiceCallStreamingConfig(config);
+  const streamingConfig = getVoiceCallProviderConfig<RealtimeTranscriptionProviderConfig>(
+    config,
+    "streaming",
+  );
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
   const providerConfigs = streamingConfig.providers ?? {};
   const configuredProviderIds = [provider, ...Object.keys(providerConfigs)];
@@ -400,14 +388,7 @@ type RealtimeVoiceLaunchOptions = {
   reasoningEffort?: string;
 };
 
-type RealtimeVoiceLaunchOptionInput = {
-  model?: unknown;
-  voice?: unknown;
-  vadThreshold?: unknown;
-  silenceDurationMs?: unknown;
-  prefixPaddingMs?: unknown;
-  reasoningEffort?: unknown;
-};
+type RealtimeVoiceLaunchOptionInput = Partial<Record<keyof RealtimeVoiceLaunchOptions, unknown>>;
 
 export function buildRealtimeVoiceLaunchOptions(params: {
   requested: RealtimeVoiceLaunchOptionInput;

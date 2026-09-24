@@ -116,6 +116,7 @@ export function createCodexAppServerAgentHarness(
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
+    nativeModelPolicySupport: "exact",
     conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
     conversationToolPolicyNativeTools: CODEX_NATIVE_TOOL_REQUIREMENTS,
     deliveryDefaults: {
@@ -200,7 +201,19 @@ export function createCodexAppServerAgentHarness(
       validate: async (binding) => {
         const { validateCodexAppServerRuntimeArtifact } =
           await import("./src/app-server/runtime-artifact.js");
-        return validateCodexAppServerRuntimeArtifact(binding);
+        const { isCodexConfiguredConnectionArtifact } =
+          await import("./src/app-server/runtime-artifact-connection.js");
+        if (!isCodexConfiguredConnectionArtifact(binding.id)) {
+          return validateCodexAppServerRuntimeArtifact(binding);
+        }
+        const { resolveCodexAppServerRuntimeOptions } = await import("./src/app-server/config.js");
+        return validateCodexAppServerRuntimeArtifact(
+          binding,
+          undefined,
+          resolveCodexAppServerRuntimeOptions({
+            pluginConfig: resolveAttemptPluginConfig(options.resolveConfig?.()),
+          }).start,
+        );
       },
     },
     fetchUsageSnapshot: async (ctx) => {

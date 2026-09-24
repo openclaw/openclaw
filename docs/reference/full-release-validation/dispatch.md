@@ -21,13 +21,12 @@ runs strict `control-ui-i18n` and `native-i18n` jobs; their failures remain visi
 in the run summary and fail validation. PR-side locale checks, release preparation,
 and publication requirements are unchanged.
 
-Linux (`ubuntu`) cross-OS fresh-install and upgrade lanes gate publication in
-the beta, stable, and full profiles. Windows and macOS cross-OS lanes run in
-parallel as **advisory** coverage: their pass/fail conclusions remain in the
-manifest and summary, but failures do not block Release Decision, npm publish,
-or `pnpm release:candidate`. Selected lanes still need terminal evidence.
-Normal CI, npm qualification, Docker, Package Acceptance, and the profile's
-performance and soak requirements keep their existing gates.
+Selected Linux, Windows, and macOS fresh-install and upgrade lanes gate
+validation in every release profile. Their actual conclusions remain in the
+manifest and summary. Test failures require a fix or an explicit operator waiver;
+release profiles do not automatically downgrade failed tests to advisory results.
+Normal CI, npm qualification, Docker, Package Acceptance, and selected performance
+and soak checks retain their gates.
 
 Prepare the complete history manifest and substantive version-matched release
 notes before freezing the product-complete commit and its target context as the
@@ -181,7 +180,7 @@ npm and Docker artifacts for `vYYYY.M.PATCH-N`. Tideclaw alpha validation uses
 its exact alpha tag and matching alpha branch. The helper maps beta releases and
 exact alpha tags to the `beta` profile and final versions to `stable`. Pass
 alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
-only for the broad advisory sweep.
+only for the broad provider sweep.
 `fail_fast` defaults to `false`, so dispatched child workflows finish and expose
 independent failures together. In that mode, the parent makes no child
 cancellation calls. Pass `-f fail_fast=true` only when the shorter
@@ -196,6 +195,11 @@ record and output receipt. Parent retries recover those exact producer IDs and
 attempts, recheck their source and Tooling SHAs, and reuse the successful builds.
 Historical parents that produced their own candidate or publication artifacts
 cannot continue: keep both SHAs frozen and start a fresh all-group validation.
+
+Automatic test retries are disabled. Dispatch rejects `known_flaky_jobs_json`;
+remove that retired input and investigate the original job failure. Explicit
+operator recovery remains available after diagnosis through
+[continuation commands](/reference/full-release-validation/continuation).
 
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in

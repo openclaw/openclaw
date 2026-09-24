@@ -176,6 +176,23 @@ describe("check-deadcode-exports", () => {
     );
   });
 
+  it("models upgrade survivor inline imports from the shell source", () => {
+    const runner = "scripts/e2e/lib/upgrade-survivor/run.sh";
+    const source = fs.readFileSync(runner, "utf8");
+    const compile = knipConfig.compilers.sh;
+    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
+      expect(workspace.entry).toContain(`${runner}!`);
+    }
+    expect(compile(source, runner)).toContain(
+      'import { readPostCoreSnapshot } from "./diagnostics.mjs";',
+    );
+    const withoutSnapshot = source.replace(/^import \{ readPostCoreSnapshot \}[^\n]+\n/mu, "");
+    const remaining = compile(withoutSnapshot, runner);
+    expect(remaining).not.toContain("readPostCoreSnapshot");
+    expect(remaining).toContain('from "../../../lib/release-version.mjs";');
+    expect(compile(source, "scripts/e2e/lib/upgrade-survivor/other.sh")).toBe("");
+  });
+
   it("audits executable code outside the main source trees", () => {
     expect(knipConfig.workspaces["."].project).toEqual(
       expect.arrayContaining([

@@ -118,13 +118,13 @@ export function installTranscriptDomMocks(): void {
   transcriptDomState.measuredRowHeight = 100;
   transcriptDomState.detachedRowHeight = 100;
   vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
-  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
-    function (this: HTMLElement) {
-      return this.isConnected
-        ? transcriptDomState.measuredRowHeight
-        : transcriptDomState.detachedRowHeight;
-    },
-  );
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.isConnected
+      ? transcriptDomState.measuredRowHeight
+      : transcriptDomState.detachedRowHeight;
+  });
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
     x: 0,
     y: 0,

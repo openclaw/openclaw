@@ -13,6 +13,7 @@ import {
   type WorkerInferenceTerminalOutcome,
   validateWorkerInferenceEventFrame,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -61,6 +62,7 @@ export type WorkerInferenceExecutor = (params: {
   signal: AbortSignal;
   emit: (event: WorkerInferenceEventParams["event"]) => void;
   isCurrent(): boolean;
+  sessionTarget: BoundAgentRunSessionTarget;
   config?: OpenClawConfig;
 }) => Promise<WorkerInferenceTerminalOutcome>;
 
@@ -90,6 +92,7 @@ type ActiveInference = {
   claimKey: string;
   identity: WorkerConnectionIdentity;
   request: WorkerInferenceStartParams;
+  sessionTarget: BoundAgentRunSessionTarget;
   requestHash: string;
   storeInput: WorkerInferenceTurnInput;
   sink: WorkerInferenceSink;
@@ -253,6 +256,7 @@ export function createWorkerInferenceManager(options: {
       outcome = await options.execute({
         identity: entry.identity,
         request: entry.request,
+        sessionTarget: entry.sessionTarget,
         signal: entry.controller.signal,
         emit: (event) => {
           const fence = durableFence(entry);
@@ -327,6 +331,7 @@ export function createWorkerInferenceManager(options: {
     identity: WorkerConnectionIdentity;
     request: WorkerInferenceStartParams;
     sink: WorkerInferenceSink;
+    sessionTarget: BoundAgentRunSessionTarget;
     revalidate?: RevalidateInference;
   }): WorkerInferenceStartApplicationResult => {
     if (stopping || drainingSessionIds.has(params.request.sessionId)) {
@@ -417,19 +422,13 @@ export function createWorkerInferenceManager(options: {
           }
           launched = true;
           const fence = safeRevalidate(params.revalidate);
-          const frame: WorkerInferenceTerminalFrame = {
-            type: "event",
-            event: "worker.inference.terminal",
-            payload: {
-              runEpoch: params.request.runEpoch,
-              sessionId: params.request.sessionId,
-              runId: params.request.runId,
-              turnId: params.request.turnId,
-              seq: 1,
-              outcome: fence ? terminalError(fence) : cachedOutcome,
-            },
-          };
-          trySend(params.sink, frame);
+          trySend(
+            params.sink,
+            terminalFrame(
+              { request: params.request, seq: 0 },
+              fence ? terminalError(fence) : cachedOutcome,
+            ),
+          );
         },
       };
     };
@@ -465,6 +464,7 @@ export function createWorkerInferenceManager(options: {
       claimKey,
       identity: params.identity,
       request: params.request,
+      sessionTarget: params.sessionTarget,
       requestHash: hash,
       storeInput,
       sink: params.sink,
@@ -653,14 +653,26 @@ export function createWorkerInferenceManager(options: {
     };
   };
 
-  const resolveSessionIdForRunId = (runId: string): string | undefined => {
-    const sessionIds = new Set<string>();
+  const resolveSessionTargetForRunId = (runId: string): BoundAgentRunSessionTarget | undefined => {
+    let target: BoundAgentRunSessionTarget | undefined;
     for (const entry of active.values()) {
       if (entry.request.runId === runId) {
-        sessionIds.add(entry.request.sessionId);
+        const source = entry.sessionTarget;
+        if (
+          target &&
+          (source.agentId !== target.agentId ||
+            source.sessionId !== target.sessionId ||
+            source.sessionKey !== target.sessionKey ||
+            source.storePath !== target.storePath ||
+            source.expectedLifecycleRevision !== target.expectedLifecycleRevision ||
+            source.expectedWriterRunId !== target.expectedWriterRunId)
+        ) {
+          return undefined;
+        }
+        target = source;
       }
     }
-    return sessionIds.size === 1 ? sessionIds.values().next().value : undefined;
+    return target;
   };
 
   const stop = async (): Promise<void> => {
@@ -682,7 +694,7 @@ export function createWorkerInferenceManager(options: {
     captureSessionCancellation,
     beginSessionDrain,
     hasSession,
-    resolveSessionIdForRunId,
+    resolveSessionTargetForRunId,
     stop,
   };
 }

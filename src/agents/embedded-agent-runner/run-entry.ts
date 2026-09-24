@@ -8,7 +8,10 @@ import {
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
-import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
+import {
+  readPreparedRunOperatorAuthority,
+  type PreparedAgentRunAdmission,
+} from "../admitted-run-context.js";
 import {
   createAssistantErrorTranscript,
   type AssistantErrorTranscript,
@@ -172,6 +175,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
 async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   params: EmbeddedAgentRunEntryParams<T>,
 ): Promise<EmbeddedAgentRunEntryResult<T>> {
+  const operatorAuthority = readPreparedRunOperatorAuthority(params.preparedRunAdmission);
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.identity.runId);
   const runContext = getAgentRunContext(params.identity.runId);
   const placementRuntime = resolveSessionPlacementRuntimeOverride(params.identity);
@@ -277,6 +281,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       runWithModelFallback<RunEntryCandidate<T>>({
         ...selection,
         ...params.identity,
+        operatorAuthority,
         abortSignal: params.abortSignal,
         resolveAgentHarnessRuntimeOverride: resolveRuntimeOverride,
         prepareCandidateChain: async (candidates) => {
@@ -475,6 +480,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     if (
       capturedCyberRefusal &&
       target &&
+      (!operatorAuthority?.modelPolicy || operatorAuthority.modelPolicy.allows(target)) &&
       !isEmbeddedModelSelectionStrict(params.selection) &&
       !isSameEmbeddedCyberFailoverTarget(capturedCyberRefusal, target) &&
       !isEmbeddedCyberFailoverTargetSkipped({

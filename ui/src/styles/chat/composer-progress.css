@@ -61,6 +61,10 @@
   max-width: none;
 }
 
+.agent-chat__progress-float[hidden] {
+  display: none;
+}
+
 /* Reserve the collapsed card slot without delaying the real composer or transcript. */
 .agent-chat__progress-float--loading {
   min-height: 44px;

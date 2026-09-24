@@ -1,4 +1,5 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
+cli-root-options.mjs
 node-sqlite.mjs
 node-version.mjs
 package.json
@@ -115,6 +116,7 @@ scripts/lib/error-format.mts
 scripts/lib/extension-test-plan.mts
 scripts/lib/failed-trailer.mts
 scripts/lib/gateway-server-test-plan.mts
+scripts/lib/list-test-files.mts
 scripts/lib/local-check-runtime.mts
 scripts/lib/managed-child-process.mts
 scripts/lib/managed-windows-job-entrypoint.mts
@@ -133,6 +135,7 @@ scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-selector-source-facts.mts
 scripts/lib/tsdown-declaration-boundary.mts
+scripts/lib/tsgo-core-test-shards.mts
 scripts/lib/tsx-cli-shim.mjs
 scripts/lib/vitest-build-prerequisites.mts
 scripts/lib/vitest-cache-slots.mts
@@ -270,7 +273,11 @@ src/channels/plugins/meta-normalization.ts
 src/channels/plugins/module-loader.ts
 src/channels/plugins/package-state-probes.ts
 src/channels/plugins/persisted-auth-state.ts
+src/channels/plugins/registry-loaded.ts
 src/channels/plugins/setup-contract.ts
+src/channels/registry-lookup.ts
+src/channels/registry-normalize.ts
+src/channels/registry.ts
 src/cli/command-format.ts
 src/cli/daemon-cli/restart-health.types.ts
 src/cli/parse-bytes.ts
@@ -334,6 +341,7 @@ src/config/agent-dirs.ts
 src/config/agent-limits.ts
 src/config/agent-list-projection.ts
 src/config/agent-roster-provenance.ts
+src/config/agent-store-source.ts
 src/config/allowed-values.ts
 src/config/backup-rotation.ts
 src/config/bundled-channel-config-metadata.generated.ts
@@ -381,6 +389,7 @@ src/config/io.owner-display-secret.ts
 src/config/io.plugin-metadata.ts
 src/config/io.read-helpers.ts
 src/config/io.recovery.ts
+src/config/io.runtime-env.ts
 src/config/io.runtime-write-finalization.ts
 src/config/io.runtime.ts
 src/config/io.snapshot-preparation-scope.ts
@@ -454,8 +463,10 @@ src/config/sessions/artifacts.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
+src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-store-config.ts
 src/config/sessions/session-store-owner.ts
+src/config/sessions/targets-configured-agents.ts
 src/config/shell-env-expected-keys.ts
 src/config/source-value-projection.ts
 src/config/state-dir.ts
@@ -551,6 +562,15 @@ src/global-state.ts
 src/globals.ts
 src/infra/abort-signal.ts
 src/infra/acquire-with-wait.ts
+src/infra/agent-event-execution-context.ts
+src/infra/agent-event-lifecycle.ts
+src/infra/agent-events.ts
+src/infra/agent-lifecycle-error.ts
+src/infra/agent-run-approval-leases.ts
+src/infra/agent-run-projection.ts
+src/infra/agent-run-registry-state.ts
+src/infra/agent-run-registry.ts
+src/infra/agent-run-usage.ts
 src/infra/approval-resolution-ref.ts
 src/infra/backoff.ts
 src/infra/backup-scratch.ts
@@ -559,6 +579,7 @@ src/infra/boundary-path.ts
 src/infra/bun-sqlite-library.ts
 src/infra/clawhub-integrity.ts
 src/infra/clawhub-spec.ts
+src/infra/cli-root-options.ts
 src/infra/command-carriers.ts
 src/infra/config-dir.ts
 src/infra/container-env-file.ts
@@ -619,6 +640,7 @@ src/infra/fs-safe-advanced.ts
 src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe-defaults.ts
 src/infra/fs-safe.ts
+src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-process-argv.ts
 src/infra/gateway-supervision.ts
@@ -671,6 +693,7 @@ src/infra/net/undici-runtime.ts
 src/infra/node-compile-cache-env.ts
 src/infra/node-options.ts
 src/infra/node-runner-inventory.ts
+src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
 src/infra/non-fatal-cleanup.ts
 src/infra/npm-registry-spec.ts
@@ -718,6 +741,7 @@ src/infra/sqlite-integrity.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-number.ts
+src/infra/sqlite-pinned-read-snapshot.ts
 src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
 src/infra/sqlite-read-cache.ts
@@ -733,6 +757,7 @@ src/infra/sqlite-readonly-worker.ts
 src/infra/sqlite-runtime-version.ts
 src/infra/sqlite-schema-contract-assembly.ts
 src/infra/sqlite-schema-contract.ts
+src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
 src/infra/sqlite-schema-sql.ts
@@ -773,7 +798,9 @@ src/infra/startup-maintenance-required.ts
 src/infra/startup-migration-checkpoint.ts
 src/infra/state-database-coordinator-delegate.ts
 src/infra/state-database-coordinator-errors.ts
+src/infra/state-database-coordinator-owner.ts
 src/infra/state-database-coordinator-paths.ts
+src/infra/state-database-coordinator-acquisition.ts
 src/infra/state-database-coordinator.ts
 src/infra/state-lease-process-owner.ts
 src/infra/state-migrations.cron-run-logs.ts
@@ -802,6 +829,7 @@ src/infra/update-preflight-details.ts
 src/infra/update-recovery-receipt-schema.ts
 src/infra/update-recovery.ts
 src/infra/update-run-limits.ts
+src/infra/update-run-driver-schema.ts
 src/infra/update-run-schema.ts
 src/infra/update-run-timeouts.ts
 src/infra/update-snapshot-capacity-schema.ts
@@ -862,6 +890,7 @@ src/memory/root-memory-files.ts
 src/model-catalog/bundled-catalog-stamp.ts
 src/model-catalog/index.ts
 src/model-catalog/manifest-planner.ts
+src/model-catalog/remote-bundle.ts
 src/model-catalog/remote-config.ts
 src/model-catalog/remote-overlay.ts
 src/model-catalog/remote-store.ts
@@ -872,6 +901,7 @@ src/plugin-sdk/file-lock.ts
 src/plugin-sdk/keyed-async-queue.ts
 src/plugin-sdk/message-tool-delivery-hints.ts
 src/plugin-state/plugin-blob-store.types.ts
+src/plugin-state/plugin-state-worker-contract.ts
 src/plugins/activation-planner.ts
 src/plugins/activation-source-config.ts
 src/plugins/bundle-manifest.ts
@@ -888,6 +918,7 @@ src/plugins/channel-catalog-registry.ts
 src/plugins/channel-presence-policy.ts
 src/plugins/channel-startup-policy.ts
 src/plugins/clawhub-error-codes.ts
+src/plugins/command-execution-lock.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
@@ -916,7 +947,10 @@ src/plugins/doctor-session-route-state-owner-types.ts
 src/plugins/enable.ts
 src/plugins/hardlink-policy.ts
 src/plugins/host-hook-cleanup-result.ts
+src/plugins/host-hook-cleanup-timeout.ts
 src/plugins/host-hook-json.ts
+src/plugins/host-hook-runtime.ts
+src/plugins/host-hooks.ts
 src/plugins/install-channel-specs.ts
 src/plugins/install-paths.ts
 src/plugins/install-root-context.ts
@@ -943,6 +977,7 @@ src/plugins/installed-plugin-package-ownership.ts
 src/plugins/installed-plugin-record-match.ts
 src/plugins/jiti-factory.ts
 src/plugins/legacy-npm-declaration.ts
+src/plugins/loader-cache-state.ts
 src/plugins/managed-npm-retention-contract.ts
 src/plugins/managed-npm-retention.ts
 src/plugins/management-lifecycle-error.ts
@@ -1025,16 +1060,20 @@ src/plugins/plugin-registry-id-normalizer.ts
 src/plugins/plugin-registry-snapshot.ts
 src/plugins/plugin-registry.ts
 src/plugins/plugin-return-value.ts
+src/plugins/plugin-runtime-artifact-identity.ts
+src/plugins/plugin-runtime-artifact-resolution.ts
 src/plugins/plugin-runtime-artifact-selection.ts
 src/plugins/plugin-scope.ts
 src/plugins/plugin-sdk-native-resolver.ts
 src/plugins/plugin-setup-module.ts
+src/plugins/plugin-shared-module-loader.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
 src/plugins/plugin-source-capture-path.ts
 src/plugins/plugin-source-references.ts
 src/plugins/portable-icon-paths.ts
+src/plugins/prepared-message-tool-catalog.ts
 src/plugins/provider-config-owner.ts
 src/plugins/provider-model-routes.ts
 src/plugins/provider-owner-index.ts
@@ -1048,14 +1087,17 @@ src/plugins/provider-thinking-catalog.ts
 src/plugins/public-surface-loader.ts
 src/plugins/public-surface-runtime.ts
 src/plugins/registry-empty.ts
+src/plugins/registry-lifecycle.ts
 src/plugins/root-artifact-path.ts
 src/plugins/roots.ts
+src/plugins/runtime-channel-state.ts
 src/plugins/runtime-close-error.ts
 src/plugins/runtime-context.ts
 src/plugins/runtime-degraded-state.ts
 src/plugins/runtime-state-key.ts
 src/plugins/runtime-state.ts
 src/plugins/runtime-workspace-state.ts
+src/plugins/runtime.ts
 src/plugins/runtime/execution-frame.ts
 src/plugins/runtime/gateway-context-binding-owner.ts
 src/plugins/runtime/gateway-context-binding.ts
@@ -1098,6 +1140,7 @@ src/process/spawn-broker/protocol.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
+src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-windows-job-native.ts
 src/process/windows-command.ts
 src/proxy-capture/env.ts
@@ -1207,14 +1250,17 @@ src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
 src/state/openclaw-state-db-existing-schema.ts
 src/state/openclaw-state-db-existing-write.ts
+src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
+src/state/openclaw-state-db-initialization.ts
 src/state/openclaw-state-db-legacy-backfills.ts
 src/state/openclaw-state-db-maintenance.ts
 src/state/openclaw-state-db-open.ts
 src/state/openclaw-state-db-operator-approval-migration.ts
 src/state/openclaw-state-db-permissions.ts
 src/state/openclaw-state-db-read-connection.ts
+src/state/openclaw-state-db-readonly-reuse.ts
 src/state/openclaw-state-db-readonly.ts
 src/state/openclaw-state-db-repair.ts
 src/state/openclaw-state-db-runtime-failure.ts

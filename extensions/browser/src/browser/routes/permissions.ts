@@ -1,3 +1,5 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 /**
  * Browser permission routes.
  *
@@ -5,8 +7,6 @@
  * Playwright context APIs when available and falling back to raw CDP.
  */
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatErrorMessage } from "../../infra/errors.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketEndpoint, type ChromeWebSocketEndpoint } from "../chrome.js";

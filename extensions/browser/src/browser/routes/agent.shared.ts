@@ -4,7 +4,10 @@
  * Centralizes body/query parsing, profile resolution, error mapping, Playwright
  * availability checks, and tab-context guards for route modules.
  */
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { redactCdpErrorText } from "../cdp.helpers.js";
 import { toBrowserErrorResponse } from "../errors.js";
@@ -37,23 +40,17 @@ export const SELECTOR_UNSUPPORTED_MESSAGE = [
 
 /** Return a safe object body for routes that accept JSON payloads. */
 export function readBody(req: BrowserRequest): Record<string, unknown> {
-  const body = req.body as Record<string, unknown> | undefined;
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return {};
-  }
-  return body;
+  return asNonArrayRecord(req.body);
 }
 
 /** Read an optional targetId from a request body. */
 export function resolveTargetIdFromBody(body: Record<string, unknown>): string | undefined {
-  const targetId = normalizeOptionalString(body.targetId) ?? "";
-  return targetId || undefined;
+  return normalizeOptionalString(body.targetId);
 }
 
 /** Read an optional targetId from a query object. */
 export function resolveTargetIdFromQuery(query: Record<string, unknown>): string | undefined {
-  const targetId = normalizeOptionalString(query.targetId) ?? "";
-  return targetId || undefined;
+  return normalizeOptionalString(query.targetId);
 }
 
 /** Map route-level browser errors to HTTP JSON responses. */
@@ -205,9 +202,6 @@ export async function withRouteTabContext<T>(
       },
     });
   } catch (err) {
-    if (isProfileRestartRequiredError(err)) {
-      throw err;
-    }
     handleRouteError(params.ctx, params.res, err);
     return undefined;
   }
@@ -250,18 +244,8 @@ export async function resolveSafeRouteTabUrl(params: {
   }
 }
 
-type RouteWithPwParams<T> = {
-  req: BrowserRequest;
-  res: BrowserResponse;
-  ctx: BrowserRouteContext;
-  profileCtx?: ProfileContext;
-  targetId?: string;
+type RouteWithPwParams<T> = Omit<RouteWithTabParams<T>, "run"> & {
   feature: string;
-  /**
-   * Set for routes that read from or return data scoped to the selected tab.
-   * Leave false only for routes that navigate, activate, close, or otherwise manage the tab.
-   */
-  enforceCurrentUrlAllowed?: boolean;
   run: (ctx: RouteTabPwContext) => Promise<T>;
 };
 
@@ -269,19 +253,15 @@ type RouteWithPwParams<T> = {
 export async function withPlaywrightRouteContext<T>(
   params: RouteWithPwParams<T>,
 ): Promise<T | undefined> {
+  const { run, feature, ...tabParams } = params;
   return await withRouteTabContext({
-    req: params.req,
-    res: params.res,
-    ctx: params.ctx,
-    ...(params.profileCtx ? { profileCtx: params.profileCtx } : {}),
-    targetId: params.targetId,
-    enforceCurrentUrlAllowed: params.enforceCurrentUrlAllowed,
+    ...tabParams,
     run: async (routeCtx) => {
-      const pw = await requirePwAi(params.res, params.feature);
+      const pw = await requirePwAi(params.res, feature);
       if (!pw) {
-        return undefined as T | undefined;
+        return undefined;
       }
-      return await params.run({ ...routeCtx, pw });
+      return await run({ ...routeCtx, pw });
     },
   });
 }

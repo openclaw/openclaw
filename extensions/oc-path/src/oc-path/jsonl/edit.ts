@@ -17,6 +17,7 @@ import {
 } from "../oc-path.js";
 import type { JsonlAst, JsonlLine } from "./ast.js";
 import { emitJsonl } from "./emit.js";
+import { pickJsonlLineIndex } from "./line.js";
 
 type JsonlEditResult =
   | { readonly ok: true; readonly ast: JsonlAst }
@@ -28,7 +29,7 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
     return { ok: false, reason: "unresolved" };
   }
 
-  const lineIdx = pickLineIndex(ast, head);
+  const lineIdx = pickJsonlLineIndex(ast, head);
   if (lineIdx === -1) {
     return { ok: false, reason: "unresolved" };
   }
@@ -163,26 +164,6 @@ function replaceAt(
   }
 
   return null;
-}
-
-function pickLineIndex(ast: JsonlAst, addr: string): number {
-  if (addr === "$first") {
-    return ast.lines.findIndex((line) => line.kind === "value");
-  }
-  if (addr === "$last") {
-    for (let i = ast.lines.length - 1; i >= 0; i--) {
-      if (ast.lines[i]?.kind === "value") {
-        return i;
-      }
-    }
-    return -1;
-  }
-  const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) {
-    return -1;
-  }
-  const target = Number(m[1]);
-  return ast.lines.findIndex((l) => l.line === target);
 }
 
 function finalize(
