@@ -1,7 +1,6 @@
 {
   "scenarios": [
     "base",
-    "msteams-polls",
     "abandoned-update",
     "legacy-operator-state",
     "workshop-doctor-recovery",

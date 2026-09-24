@@ -211,7 +211,7 @@ function pluginDiagnosticToHealthFinding(
 ): HealthFinding {
   return {
     checkId: WORKSPACE_STATUS_CHECK_ID,
-    severity: diagnostic.level === "error" ? "error" : "warning",
+    severity: diagnostic.level === "warn" ? "warning" : diagnostic.level,
     message,
     ...(diagnostic.pluginId
       ? { path: `plugins.entries.${diagnostic.pluginId}`, target: diagnostic.pluginId }

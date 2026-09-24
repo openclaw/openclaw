@@ -551,7 +551,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
       { id: "roboclaw", workspace },
     ],
   };
-  const { storePath } = await createSessionStoreDir();
+  const { dir, storePath } = await createSessionStoreDir();
   const worktree = await managedWorktrees.create({
     repoRoot: workspace,
     ownerKind: "manual",
@@ -684,6 +684,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
       allowSnapshotLoss: true,
     });
     await disposeSessionReadContexts();
+    await releaseGatewaySessionStoreFixture(dir);
     testState.agentsConfig = undefined;
     await openClawState.cleanup();
   }

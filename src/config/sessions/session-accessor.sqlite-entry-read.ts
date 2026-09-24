@@ -29,7 +29,12 @@ import {
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   canonicalSessionKeyMigrationRequiredError,
+  canonicalSessionValidationQuery,
 } from "./session-canonical-key.js";
+import {
+  validateCanonicalSessionRow,
+  type CanonicalSessionValidationRow,
+} from "./session-canonical-row.js";
 import {
   collectSessionEntryLookupKeys,
   resolveDeliveryProvenCanonicalSessionKey,
@@ -44,6 +49,10 @@ function prepareExactSessionEntryQueries(database: DatabaseSync) {
   const metadataQueries = new Map<
     boolean,
     (key: string) => ResolvedSessionEntryRow["row"] | undefined
+  >();
+  const canonicalQueries = new Map<
+    string,
+    (key: string) => (CanonicalSessionValidationRow & ResolvedSessionEntryRow["row"]) | undefined
   >();
   return {
     row: prepareSqliteQueryTakeFirstSync<string, SessionEntryRow>(database, (parameter) =>
@@ -85,6 +94,27 @@ function prepareExactSessionEntryQueries(database: DatabaseSync) {
               ),
         );
         metadataQueries.set(ownerColumns, query);
+      }
+      return query(key);
+    },
+    canonical: (key: string, projection: "full" | "list") => {
+      const shape = `${projection}:${hasSqliteSessionOwnerColumns(database)}`;
+      let query = canonicalQueries.get(shape);
+      if (!query) {
+        query = prepareSqliteQueryTakeFirstSync<
+          string,
+          CanonicalSessionValidationRow & ResolvedSessionEntryRow["row"]
+        >(database, (parameter) =>
+          canonicalSessionValidationQuery(
+            { db: database },
+            { fullEntries: projection === "full", metadata: true },
+          ).where(
+            "session_nodes.session_key",
+            "=",
+            parameter((value) => value),
+          ),
+        );
+        canonicalQueries.set(shape, query);
       }
       return query(key);
     },
@@ -288,16 +318,26 @@ export function readExactSessionEntryRow(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,
   projection: "full" | "list" = "full",
+  validation?: "canonical",
 ): ResolvedSessionEntryRow | undefined {
   return runSqliteReadOperationSync(database.db, () => {
+    const queries = getExactSessionEntryQueries(database.db);
+    const canonicalRow =
+      validation === "canonical" ? queries.canonical(sessionKey, projection) : undefined;
     const row =
-      projection === "list"
-        ? getExactSessionEntryQueries(database.db).metadata(sessionKey)
-        : getExactSessionEntryQueries(database.db).row(sessionKey);
+      validation === "canonical"
+        ? canonicalRow
+        : projection === "list"
+          ? queries.metadata(sessionKey)
+          : queries.row(sessionKey);
     if (!row) {
       return undefined;
     }
     const entry = parseReadableSqliteSessionEntryRow(database, row, projection);
+    if (canonicalRow) {
+      // The guard and decoded entry share one statement snapshot, including cold handles.
+      validateCanonicalSessionRow(canonicalRow, "read");
+    }
     return entry ? { entry, row } : undefined;
   });
 }

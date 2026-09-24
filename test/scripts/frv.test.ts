@@ -81,6 +81,13 @@ function preflightMethods(
   };
 }
 
+// Advisory children fail only ordinary lanes; blocking children fail a required proof.
+function blockingChildJobName(childKey: string | undefined) {
+  return childKey === "npmTelegram" || childKey === "productPerformance"
+    ? "test"
+    : "Run install smoke";
+}
+
 function controllerClient(
   children: ReturnType<typeof child>[],
   childRuns: Map<string, { attempt: number; conclusion: string | null }>,
@@ -91,7 +98,7 @@ function controllerClient(
     ...preflightMethods(children, (entry) => runFor(entry, 1, "failure")),
     getAttemptJobs: async (runId: string, attempt: number) => [
       job(
-        "test",
+        blockingChildJobName(byRunId.get(runId)?.key),
         attempt === childRuns.get(runId)?.attempt
           ? (childRuns.get(runId)?.conclusion ?? "")
           : "failure",
@@ -880,21 +887,24 @@ describe("FRV same-parent recovery", () => {
         _deadline?: number,
         attempts?: Record<string, number>,
       ) => {
-        expect(attempts?.["505"]).toBe(2);
+        // The advisory Telegram child is not rerun; only blocking children get a second attempt.
+        expect(attempts?.["505"]).toBe(1);
         events.push("verify");
         return "{}";
       },
     };
     const result = await continueFailed(selectedPlan, "77", client);
     expect(result).toMatchObject({ action: "reran-parent", finalRunId: "77" });
-    expect(events.slice(0, 3).toSorted()).toEqual(["child:101", "child:202", "child:505"]);
+    expect(events.slice(0, 2).toSorted()).toEqual(["child:101", "child:202"]);
+    expect(events).not.toContain("child:505");
     expect(events).not.toContain("child:303");
+    // The advisory Telegram child passes on its first attempt without a rerun.
     expect(result.status.children).toContainEqual(
       expect.objectContaining({
         key: "npmTelegram",
-        conclusion: "success",
+        conclusion: "failure",
         passed: true,
-        effectiveRunAttempt: 2,
+        effectiveRunAttempt: 1,
       }),
     );
     expect(events.indexOf("parent")).toBeGreaterThan(events.indexOf("child:202"));

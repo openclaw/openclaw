@@ -613,6 +613,83 @@ describe("verify-stable-main-closeout", () => {
     expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
   });
 
+  it("records operator waivers at closeout and preserves a waiver-less recorded manifest on replay", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-waiver-closeout-"));
+    tempDirs.push(dir);
+    const version = "2026.9.6";
+    const tag = `v${version}`;
+    for (const name of ["main", "tag"]) {
+      const root = path.join(dir, name);
+      mkdirSync(root);
+      execFileSync("git", ["init", "--quiet", root]);
+      writeFileSync(path.join(root, ".git/HEAD"), `${"a".repeat(40)}\n`);
+      writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
+      writeFileSync(
+        path.join(root, "CHANGELOG.md"),
+        `# Changelog\n\n## ${version}\n\n- Released.\n`,
+      );
+      writeFileSync(path.join(root, "appcast.xml"), "<rss>older app release</rss>");
+    }
+    const releasePath = path.join(dir, "release.json");
+    const outputPath = path.join(dir, "closeout.json");
+    const originalPath = path.join(dir, "original.json");
+    writeFileSync(
+      releasePath,
+      JSON.stringify({ tagName: tag, isDraft: false, isPrerelease: false, assets: [] }),
+    );
+    const args = [
+      "--tag",
+      tag,
+      "--main-dir",
+      path.join(dir, "main"),
+      "--tag-dir",
+      path.join(dir, "tag"),
+      "--release-json",
+      releasePath,
+      "--full-release-validation-run-id",
+      "11",
+      "--full-release-validation-run-attempt",
+      "2",
+      "--release-publish-run-id",
+      "12",
+      "--rollback-drill-id",
+      "synthetic-drill",
+      "--rollback-drill-date",
+      new Date().toISOString().slice(0, 10),
+      "--output",
+      outputPath,
+      "--allow-failed-publish-recovery",
+      "true",
+    ];
+    const waiverArgs = [
+      "--stable-soak-waiver",
+      "2026.9.6 operator approved",
+      "--lane-waiver",
+      "2026.9.6 known flake",
+    ];
+
+    // A closeout recorded before waiver fields existed carries none of them.
+    const initial = runCli(...args);
+    expect(initial.status, initial.stderr).toBe(0);
+    const recorded = JSON.parse(readFileSync(outputPath, "utf8"));
+    expect(recorded).not.toHaveProperty("stableSoakWaiver");
+    expect(recorded).not.toHaveProperty("laneWaiver");
+    writeFileSync(originalPath, readFileSync(outputPath));
+
+    // Replay with waivers resolved from publish evidence keeps the recorded bytes.
+    const replay = runCli(...args, ...waiverArgs, "--existing-manifest", originalPath);
+    expect(replay.status, replay.stderr).toBe(0);
+    expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
+
+    // A fresh closeout records the waivers that authorized the stable.
+    const waived = runCli(...args, ...waiverArgs);
+    expect(waived.status, waived.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
+      stableSoakWaiver: "2026.9.6 operator approved",
+      laneWaiver: "2026.9.6 known flake",
+    });
+  });
+
   it("records a withdrawn 2026.9.6 macOS appcast from the main commit lookup", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "openclaw-withdrawn-closeout-"));
     tempDirs.push(dir);

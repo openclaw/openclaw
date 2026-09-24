@@ -477,15 +477,8 @@ export class CodexNativeToolLifecycleProjector {
   }
 
   private recordSnapshotItem(item: CodexThreadItem): void {
-    if (
-      !auditNativeToolName(item) ||
-      this.completedItemIds.has(item.id) ||
-      itemStatus(item) === "running"
-    ) {
-      return;
-    }
     const toolName = auditNativeToolName(item);
-    if (!toolName) {
+    if (!toolName || this.completedItemIds.has(item.id) || itemStatus(item) === "running") {
       return;
     }
     this.recordStarted(item.id, toolName, auditNativeToolUnfinishedStatus(item));

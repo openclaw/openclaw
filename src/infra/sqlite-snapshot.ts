@@ -27,6 +27,8 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
+import { prepareSqliteReadOnlyLocationInProcess } from "./sqlite-readonly-location.js";
 import { withSqliteSnapshotSource } from "./sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
@@ -35,6 +37,8 @@ export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: st
 type CreateVerifiedSqliteSnapshotOptions = {
   sourcePath: string;
   targetPath: string;
+  /** Only in an isolated child: acquire and consume a fresh private image, including crash recovery. */
+  sourceAcquisition?: { mode: "isolated-process"; stagingRoot: string };
   /** Final caller checks around publication; failures remove only this helper's target. */
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
   beforePublish?: () => void | Promise<void>;
@@ -532,41 +536,66 @@ async function removePublicationStagingDirectory(
 export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
 ): Promise<VerifiedSqliteSnapshot> {
-  await assertRegularSourceFile(options.sourcePath, options.requireNonEmptySource === true);
+  const sourcePath = options.sourceAcquisition
+    ? await fs.realpath(options.sourcePath)
+    : options.sourcePath;
+  await assertRegularSourceFile(sourcePath, options.requireNonEmptySource === true);
   await assertTargetAbsent(options.targetPath);
 
-  const stagingDir = await createPrivateSqliteTempDirectory(
-    path.dirname(options.targetPath),
-    ".sqlite-snapshot-",
-  );
+  if (options.sourceAcquisition) {
+    const prepared = await prepareSqliteReadOnlyLocationInProcess(
+      sourcePath,
+      options.sourceAcquisition.stagingRoot,
+    );
+    return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
+      verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+    );
+  }
+  return verifyAndPublishSqliteSnapshot(options);
+}
+
+async function verifyAndPublishSqliteSnapshot(
+  options: CreateVerifiedSqliteSnapshotOptions,
+  privateSourcePath?: string,
+): Promise<VerifiedSqliteSnapshot> {
+  const stagingDir = privateSourcePath
+    ? path.dirname(privateSourcePath)
+    : await createPrivateSqliteTempDirectory(path.dirname(options.targetPath), ".sqlite-snapshot-");
   await fs.chmod(stagingDir, 0o700);
-  const stagedPath = path.join(stagingDir, "database.sqlite");
+  const stagedPath = privateSourcePath ?? path.join(stagingDir, "database.sqlite");
   let stagedIdentity: Stats | undefined;
   try {
-    await withSqliteSnapshotSource(options.sourcePath, async (snapshotSourcePath) => {
-      await fs.rm(stagedPath, { force: true });
-      const source = openNodeSqliteDatabase(snapshotSourcePath, {
-        allowExtension: true,
-        readOnly: true,
-      });
-      try {
-        source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
+    await withSqliteSnapshotSource(
+      privateSourcePath ?? options.sourcePath,
+      async (snapshotSourcePath) => {
+        if (!privateSourcePath) {
+          await fs.rm(stagedPath, { force: true });
+        }
+        const source = openNodeSqliteDatabase(snapshotSourcePath, {
+          allowExtension: true,
+          readOnly: true,
+        });
         try {
-          // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
-          source.prepare("PRAGMA schema_version;").get();
-          await loadSqliteVecExtension({ db: source });
-          assertSqliteIntegrity(source, options.sourcePath);
-          options.validate?.(source, options.sourcePath);
-          await backupNodeSqliteDatabase(source, stagedPath);
+          source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
+          try {
+            // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
+            source.prepare("PRAGMA schema_version;").get();
+            await loadSqliteVecExtension({ db: source });
+            assertSqliteIntegrity(source, options.sourcePath);
+            options.validate?.(source, options.sourcePath);
+            if (!privateSourcePath) {
+              await backupNodeSqliteDatabase(source, stagedPath);
+            }
+          } finally {
+            source.exec("ROLLBACK;");
+          }
         } finally {
-          source.exec("ROLLBACK;");
+          if (source.isOpen) {
+            source.close();
+          }
         }
-      } finally {
-        if (source.isOpen) {
-          source.close();
-        }
-      }
-    });
+      },
+    );
 
     await fs.chmod(stagedPath, 0o600);
     const snapshot = openNodeSqliteDatabase(stagedPath, {
@@ -634,6 +663,8 @@ export async function createVerifiedSqliteSnapshot(
       { cause: error },
     );
   } finally {
-    await fs.rm(stagingDir, { force: true, recursive: true }).catch(() => undefined);
+    if (!privateSourcePath) {
+      await fs.rm(stagingDir, { force: true, recursive: true }).catch(() => undefined);
+    }
   }
 }

@@ -29,6 +29,11 @@ on:
         type: boolean
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       qa_evidence_run_id:
         description: Optional workflow run id containing qa-evidence.json
         required: false
@@ -85,7 +90,7 @@ env:
 jobs:
   validate_selected_ref:
     name: Validate selected ref
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       publication_base: ${{ steps.validate.outputs.publication_base }}
       publication_head: ${{ steps.validate.outputs.publication_head }}
@@ -335,7 +340,7 @@ jobs:
     name: Verify generated PR App permissions
     needs: validate_selected_ref
     if: ${{ inputs.publish_pull_request }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     steps:
       - name: Checkout trusted workflow source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -370,6 +375,7 @@ jobs:
         inputs.qa_evidence_run_id == '' }}
     uses: ./.github/workflows/qa-profile-evidence.yml
     with:
+      runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       trusted_ref: ${{ inputs.ref }}
       expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -391,7 +397,7 @@ jobs:
         needs.validate_selected_ref.result == 'success' &&
         (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') &&
         (inputs.qa_evidence_run_id != '' || needs.generate_qa_evidence.result == 'success') }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 30
     permissions:
       actions: read
@@ -738,7 +744,7 @@ jobs:
         needs.validate_selected_ref.outputs.workflow_file_path == '.github/workflows/maturity-scorecard.yml' &&
         needs.validate_selected_ref.outputs.workflow_ref == 'openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main' &&
         needs.validate_selected_ref.outputs.workflow_repository == 'openclaw/openclaw' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     permissions:
       actions: read
       contents: read
@@ -884,7 +890,7 @@ jobs:
         needs.publish.result == 'success' &&
         (needs.publish_generated_pr.result == 'success' ||
           needs.publish_generated_pr.result == 'skipped') }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     steps:
       - name: Fail incomplete maturity evidence
         env:

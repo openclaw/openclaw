@@ -14,6 +14,7 @@ import {
   resolveAnthropicImageMediaType,
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
+import { isImageWithMediaPayload } from "../media-payload.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
   bindsClaudeThinkingPrefix,
@@ -37,7 +38,6 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
-  isImageWithMediaPayload,
 } from "../providers/tool-result-text.js";
 import type { AnthropicCompactionBlock } from "./anthropic-compaction-replay.js";
 import {

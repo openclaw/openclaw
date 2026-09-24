@@ -2,7 +2,6 @@
 import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
 import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
@@ -33,6 +32,7 @@ import {
 } from "./deliver-types.js";
 import { runOutboundDeliveryCommitHooks } from "./delivery-commit-hooks.js";
 import { settleDurableDelivery } from "./delivery-completion.js";
+import { prepareOutboundDeliveryGeneration } from "./delivery-generation.js";
 import type { DeliveryProducerLease } from "./delivery-queue-lease.js";
 import {
   failDelivery,
@@ -40,7 +40,7 @@ import {
   failDeliveryBeforePlatformSend,
   markDeliveryPlatformSendDispatched,
 } from "./delivery-queue-storage.js";
-import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
+import { createOutboundMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditLifecycle,
@@ -104,18 +104,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   // Deliberately process-local: message_sent is best-effort after queue
   // settlement, not a durable plugin outbox or a reason to retry delivery.
   const messageSentEvents: MessageSentEvent[] = [];
-  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
-  const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
-    hookRunner: getGlobalHookRunner(),
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
-    sessionKeyForInternalHooks,
-    isGroup: params.mirror?.isGroup,
-    groupId: params.mirror?.groupId,
-    runId: params.preparedBatch?.runId,
-    logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
-  });
+  const { emitMessageSent, hasMessageSentHooks, sessionKeyForInternalHooks } =
+    createOutboundMessageSentEmitter(params, OUTBOUND_DELIVERY_LOG_SCOPE);
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       `${OUTBOUND_DELIVERY_LOG_SCOPE}: session.agentId present without session key; internal message:sent hook will be skipped`,
@@ -198,7 +188,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     cancelledPreparationRetirement = (async () => {
       await producerLease?.stop();
       try {
-        releaseCancelledPreparation = queueOwner.retireUnsent();
+        releaseCancelledPreparation = await queueOwner.retireUnsent();
         if (releaseCancelledPreparation) {
           // Preparation stays attached until its late token and resources settle.
           queuedPostSendState = "acked";
@@ -217,6 +207,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       log.warn(`failed to stop cancelled delivery ${queueId}: ${formatErrorMessage(error)}`);
     });
   };
+  let generation: Awaited<ReturnType<typeof prepareOutboundDeliveryGeneration>> | undefined;
   const wrappedParams: InternalDeliverOutboundPayloadsParams = {
     ...params,
     // A provider marker can represent the whole durable intent only when one payload owns it.
@@ -277,8 +268,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       );
       await params.onPlatformSendDispatch?.();
       throwIfAborted(params.abortSignal);
+      generation?.assertCurrent();
     },
     assertDirectAdapterHandoff: () => {
+      generation?.assertCurrent();
       params.assertDirectAdapterHandoff?.();
       throwIfAborted(params.abortSignal);
       assertSessionWriterDeliveryAuthorized(
@@ -321,6 +314,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       );
       await params.onPlatformSendDispatch?.();
       throwIfAborted(params.abortSignal);
+      generation?.assertCurrent();
       if (platformSendSourceIndex !== undefined) {
         platformDispatchedPayloads.add(platformSendSourceIndex);
       }
@@ -360,6 +354,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       cancelBeforeSend();
     }
     throwIfProducerLeaseLost();
+    if (params.sessionGeneration !== undefined) {
+      generation = await prepareOutboundDeliveryGeneration(params.sessionGeneration);
+      throwIfProducerLeaseLost();
+    }
     const conversationAttemptAuthority =
       params.deliveryCompletion?.kind === "conversation"
         ? params.deliveryCompletion
@@ -719,6 +717,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         : error;
     }
   } finally {
+    generation?.release();
     params.abortSignal?.removeEventListener("abort", cancelBeforeSend);
     // Both result and error exits already joined cancellation, including a failed stop.
     if (!cancelledPreparationRetirement) {
