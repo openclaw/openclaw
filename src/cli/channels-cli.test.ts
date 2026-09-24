@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+import { channelRegistersEnvBackedSetupOption } from "../channels/plugins/cli-add-options.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
@@ -457,6 +458,45 @@ describe("registerChannelsCli", () => {
 
     expect(getChannelAddOptionFlags(program)).toContain("--signal-transport <kind>");
     expect(getChannelAddOptionFlags(program)).toContain("--no-auto-discover");
+  });
+
+  it("offers the env-backed add hint only where --use-env is registered", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValue([
+      channelWithSetupField("telegram", {
+        key: "useEnv",
+        kind: "boolean",
+        cli: { flags: "--use-env", description: "Use Telegram environment credentials" },
+      }),
+      channelWithSetupField("signal", {
+        key: "httpUrl",
+        kind: "string",
+        cli: { flags: "--http-url <url>", description: "Signal HTTP service URL" },
+      }),
+      { id: "irc", cliAddOptions: [{ flags: "--token <token>", description: "IRC token" }] },
+    ]);
+    const registeredFlags = async (channelId: string) => {
+      const program = new Command().name("openclaw");
+      await registerChannelsCli(program, [
+        "node",
+        "openclaw",
+        "channels",
+        "add",
+        "--channel",
+        channelId,
+        "--help",
+      ]);
+      return getChannelAddOptionFlags(program);
+    };
+
+    expect(await registeredFlags("telegram")).toContain("--use-env");
+    expect(await registeredFlags("signal")).not.toContain("--use-env");
+    expect(await registeredFlags("irc")).toContain("--use-env");
+    expect(channelRegistersEnvBackedSetupOption("telegram")).toBe(true);
+    expect(channelRegistersEnvBackedSetupOption("signal")).toBe(false);
+    expect(channelRegistersEnvBackedSetupOption("irc")).toBe(true);
+    expect(channelRegistersEnvBackedSetupOption("unlisted")).toBe(false);
+
+    listBundledPackageChannelMetadataMock.mockReturnValue([]);
   });
 
   it("registers only the positional channel setup options", async () => {
