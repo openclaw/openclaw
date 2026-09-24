@@ -12,6 +12,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
@@ -701,16 +702,25 @@ export function prepareNpmPackageBundle({
   npmDistTag,
   producer,
   sanitizeRootDeclarations = (distRoot) => {
-    execFileSync(
-      process.execPath,
-      [
-        "--import",
-        join(sourceDir, "scripts/tsx.mjs"),
-        fileURLToPath(new URL("./lib/sanitize-bundler-helper-dts-exports.mts", import.meta.url)),
-        distRoot,
-      ],
-      { cwd: sourceDir, stdio: "inherit" },
+    const stagedSanitizer = join(
+      sourceDir,
+      ".release-harness/sanitize-bundler-helper-dts-exports.mts",
     );
+    mkdirSync(join(sourceDir, ".release-harness"), { recursive: true });
+    // The frozen candidate owns the installed compiler used to parse its declarations.
+    copyFileSync(
+      fileURLToPath(new URL("./lib/sanitize-bundler-helper-dts-exports.mts", import.meta.url)),
+      stagedSanitizer,
+    );
+    try {
+      execFileSync(
+        process.execPath,
+        ["--import", join(sourceDir, "scripts/tsx.mjs"), stagedSanitizer, distRoot],
+        { cwd: sourceDir, stdio: "inherit" },
+      );
+    } finally {
+      rmSync(stagedSanitizer, { force: true });
+    }
   },
   refreshRootDistInventory = (directory) => {
     execFileSync(
