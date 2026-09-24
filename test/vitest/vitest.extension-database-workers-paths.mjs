@@ -28,6 +28,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/acpx/doctor-contract-api.test.ts",
   "extensions/acpx/src/process-lease.test.ts",
   "extensions/acpx/src/runtime-argv.process.test.ts",
+  "extensions/acpx/src/runtime-preactive-cancellation.process.test.ts",
   "extensions/acpx/src/runtime-process-cleanup.process.test.ts",
   "extensions/acpx/src/service.test.ts",
   "extensions/acpx/src/session-owner-migration.test.ts",

@@ -2,6 +2,8 @@
 export const databaseWorkerCoreTestFiles = [
   "src/infra/outbound/bound-delivery-router.test.ts",
   "src/infra/outbound/current-conversation-bindings.worker.test.ts",
+  "src/auto-reply/reply/dispatch-acp.owner.test.ts",
+  "test/subagent-announce-origin.integration.test.ts",
   "src/agents/tools/pdf-tool.auth-routing.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-tool-search-prompt.test.ts",
