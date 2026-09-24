@@ -601,9 +601,11 @@ describe("agent category projection", () => {
       sessionRow("main-" + index, { category: "Planning" }),
     );
     const other = [sessionRow("other", { category: "Planning" })];
-    const rows = [...main, ...other, sessionRow("pin", { pinned: true }), sessionRow("recent")];
+    const pin = sessionRow("pin", { pinned: true });
+    const recent = sessionRow("recent");
+    const rows = [...main, ...other, pin, recent];
     const sections = [
-      ...groupSidebarAgentSessionRows("main", [...main, rows[46], rows[47]]),
+      ...groupSidebarAgentSessionRows("main", [...main, pin, recent]),
       ...groupSidebarAgentSessionRows("other", other),
     ];
     const input = projectionInput(rows, {

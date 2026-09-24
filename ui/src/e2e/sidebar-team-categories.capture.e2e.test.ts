@@ -82,7 +82,14 @@ suite.define(() => {
             sessionId: "main",
             messages: [],
           },
-          "sessions.groups.list": { groups: ["Planning", "Development", "Empty category"] },
+          "sessions.groups.list": {
+            groups: [
+              { name: "Planning", position: 0 },
+              { name: "Development", position: 1 },
+              { name: "Empty category", position: 2 },
+            ],
+            sectionOrder: ["category:Planning", "category:Development"],
+          },
         },
       });
       await page.goto(suite.server.baseUrl + "chat");
@@ -99,6 +106,14 @@ suite.define(() => {
             sidebar.locator('[data-session-section="agent:scout:category:Planning"]').count(),
           )
           .toBe(1);
+        await expect
+          .poll(() =>
+            sidebar
+              .locator('[data-agent-group="main"] [data-zone="category"]')
+              .first()
+              .getAttribute("data-session-section"),
+          )
+          .toBe("agent:main:category:Planning");
         expect(await sidebar.locator(".sidebar-session-group-actions").count()).toBe(0);
       }
       await captureUiProof(
@@ -108,6 +123,14 @@ suite.define(() => {
           ? "team-categories-before.png"
           : "team-categories-after.png",
       );
+      if (process.env.OPENCLAW_TEAM_CATEGORIES_BEFORE !== "1") {
+        await sidebar
+          .locator(
+            '[data-session-section="agent:main:category:Planning"] .sidebar-session-group-toggle',
+          )
+          .click({ button: "right" });
+        expect(await sidebar.locator(".sidebar-session-group-menu").count()).toBe(0);
+      }
     } finally {
       await context.close();
     }

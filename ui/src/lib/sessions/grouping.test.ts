@@ -706,7 +706,8 @@ describe("groupSessionRows", () => {
 });
 
 describe("groupSidebarAgentSessionRows", () => {
-  const agentRow = (key: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+  type AgentRow = GatewaySessionRow & { workSession?: boolean };
+  const agentRow = (key: string, extra: Partial<AgentRow> = {}): AgentRow => ({
     key,
     kind: "direct",
     updatedAt: 1,

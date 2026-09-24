@@ -265,17 +265,18 @@ export function renderSessionSection(params: {
                 onMove: (target, position) =>
                   host.sessionOrganizer.reorderSidebarSection(section.id, target, position),
               },
-              onContextMenu: group
-                ? (event: MouseEvent) => {
-                    event.preventDefault();
-                    host.sidebarMenus.openSessionGroupMenu(
-                      group,
-                      event.clientX,
-                      event.clientY,
-                      null,
-                    );
-                  }
-                : undefined,
+              onContextMenu:
+                group && !agentSection
+                  ? (event: MouseEvent) => {
+                      event.preventDefault();
+                      host.sidebarMenus.openSessionGroupMenu(
+                        group,
+                        event.clientX,
+                        event.clientY,
+                        null,
+                      );
+                    }
+                  : undefined,
               content: html`
                 ${
                   personCard
