@@ -6,7 +6,7 @@ import Testing
 
 @MainActor
 extension QuickChatCatalogPresentationTests {
-    @Test func `rendered chat recovers a missing reply from selected message invalidation`() async throws {
+    @Test func `rendered transcript recovers a missing reply from selected message invalidation`() async throws {
         try await TestIsolation.withIsolatedState {
             try await AppKitTestSupport.startApplication()
             let suite = "ai.openclaw.history-recovery-test.\(UUID().uuidString)"
@@ -20,18 +20,28 @@ extension QuickChatCatalogPresentationTests {
                 transport.finish()
                 model.detachTransport()
             }
+            let hosting = NSHostingView(rootView: OpenClawChatView(
+                viewModel: model,
+                drawsBackground: false,
+                showsAssistantAvatars: false,
+                composerChrome: .clean)
+                .environment(\.openClawChatDesktopLayout, true)
+                // Foreground transitions must not refresh history independently of the invalidation.
+                .environment(\.scenePhase, .active)
+                .environment(\.colorScheme, .light)
+                .defaultAppStorage(defaults)
+                .background(OpenClawChatTheme.desktopCanvas(in: .light))
+                .frame(width: 900, height: 560))
+            hosting.frame = NSRect(x: 0, y: 0, width: 900, height: 560)
             let window = NSWindow(
-                contentRect: NSRect(x: 60, y: 60, width: 1100, height: 740),
-                styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+                contentRect: NSRect(x: 60, y: 60, width: 900, height: 560),
+                styleMask: [], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.title = "OpenClaw — History recovery fixture"
             window.appearance = NSAppearance(named: .aqua)
-            // Foreground transitions must not refresh history independently of the invalidation.
-            window.contentView = NSHostingView(rootView: OpenClawChatWindowShell(viewModel: model)
-                .environment(\.scenePhase, .active)
-                .defaultAppStorage(defaults))
+            window.contentView = hosting
             defer { window.close() }
-            window.makeKeyAndOrderFront(nil)
+            window.orderFront(nil)
 
             // The production view's onAppear owns the initial history load.
             try #require(await Self.waitForHistoryPresentation {
