@@ -598,7 +598,10 @@ describe("registerSlackReactionEvents", () => {
       });
     });
 
-    it("keeps a self-threaded message on the parent channel session", async () => {
+    // Slack stamps a replied channel root with thread_ts === ts, and inbound routing
+    // seeds such roots (mentions, implicit threading) into :thread:<root> alongside
+    // their replies, so the reaction belongs to the root's own thread session.
+    it("routes a reaction on a seeded channel root to the root's thread session", async () => {
       const history = vi.fn().mockResolvedValue({
         messages: [{ ts: "123.456", thread_ts: "123.456" }],
       });
@@ -609,15 +612,22 @@ describe("registerSlackReactionEvents", () => {
         body: { event_id: "Ev-self-thread" },
       });
 
+      const threadSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId: "C1",
+        channelType: "channel",
+        senderId: "U1",
+        threadTs: "123.456",
+      }).sessionKey;
       const parentSessionKey = harness.ctx.resolveSlackSystemEventRoute({
         channelId: "C1",
         channelType: "channel",
         senderId: "U1",
       }).sessionKey;
+      expect(threadSessionKey).not.toBe(parentSessionKey);
       expect(history).toHaveBeenCalledTimes(1);
       expect(replies).not.toHaveBeenCalled();
       expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
-        sessionKey: parentSessionKey,
+        sessionKey: threadSessionKey,
         contextKey: "slack:reaction:added:C1:123.456:U1:thumbsup:Ev-self-thread",
       });
     });

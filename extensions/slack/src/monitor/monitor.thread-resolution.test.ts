@@ -121,6 +121,28 @@ describe("createSlackThreadTsResolver", () => {
     });
   });
 
+  // Slack stamps a replied channel root with thread_ts === ts; such a root owns the
+  // thread session its replies already route to, so the resolver must not discard it.
+  it("resolves a self-threaded channel root to its own thread", async () => {
+    const historyMock = vi.fn().mockResolvedValue({
+      messages: [{ ts: "1", thread_ts: "1" }],
+    });
+    const repliesMock = vi.fn();
+    const resolver = createSlackThreadTsResolver({
+      client: createThreadClient(historyMock, repliesMock),
+      cacheTtlMs: 60_000,
+      maxSize: 5,
+    });
+
+    const first = await resolver.resolveThreadTs({ channelId: "C1", messageTs: "1" });
+    const second = await resolver.resolveThreadTs({ channelId: "C1", messageTs: "1" });
+
+    expect(first).toBe("1");
+    expect(second).toBe("1");
+    expect(historyMock).toHaveBeenCalledTimes(1);
+    expect(repliesMock).not.toHaveBeenCalled();
+  });
+
   it("caches a definitive thread_not_found from the replies fallback", async () => {
     const historyMock = vi.fn().mockResolvedValue({ messages: [] });
     const repliesMock = vi

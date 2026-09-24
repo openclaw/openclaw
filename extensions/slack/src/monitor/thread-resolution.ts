@@ -20,7 +20,6 @@ import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-run
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString as normalizeThreadTs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "../errors.js";
-import { resolveSlackThreadContext } from "../threading.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 
@@ -202,21 +201,14 @@ export function createSlackThreadTsResolver(params: {
           `slack: failed to resolve thread_ts for system event channel=${request.channelId} ts=${request.messageTs}: ${formatSlackError(error)}`,
         );
       }
-      if (!threadTs) {
-        return undefined;
-      }
-      // Slack reports thread_ts on messages that are not replies (an assistant DM root
-      // carries thread_ts === ts). The inbound path decides reply identity through the
-      // threading owner, so a system event must not key a lane no inbound turn writes.
-      return resolveSlackThreadContext({
-        message: {
-          type: "message",
-          channel: request.channelId,
-          ts: request.messageTs,
-          thread_ts: threadTs,
-        },
-        replyToMode: "off",
-      }).replyToId;
+      // Trust the provider's thread identity here instead of re-deriving reply
+      // identity through the threading owner: Slack stamps a replied channel root
+      // with thread_ts === ts, and the inbound route owner places every non-DM
+      // thread reply in :thread:<root> regardless of replyToMode, so that thread
+      // session owns the conversation around the root. Direct messages never reach
+      // this lookup — the system-event context skips it for im channels, keeping
+      // flat DM sessions (and assistant DM roots) untouched.
+      return threadTs;
     },
     resolve: async (request: {
       message: SlackMessageEvent;
