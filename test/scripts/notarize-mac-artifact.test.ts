@@ -170,6 +170,7 @@ if (args[0] === "notarytool") {
     process.exit(1);
   }
   if (args[1] === "history") {
+    if (count < (control.historyFailures || 0)) { console.error("history transport failure"); process.exit(1); }
     console.log(JSON.stringify({history: control.history || []}));
     process.exit(0);
   }
@@ -296,6 +297,7 @@ describe("notarization submission recovery", () => {
       JSON.stringify({
         submitFailures: 1,
         submitElapsed: 600,
+        historyFailures: 1,
         history: [
           {
             id: submissionId,
@@ -312,7 +314,12 @@ describe("notarization submission recovery", () => {
     );
     const completed = fixture.run();
     expect(completed.status, completed.stderr).toBe(0);
-    expect(fixture.calls().map((call) => call[1])).toEqual(["submit", "history", "wait"]);
+    expect(fixture.calls().map((call) => call[1])).toEqual([
+      "submit",
+      "history",
+      "history",
+      "wait",
+    ]);
     expect(JSON.parse(readFileSync(fixture.submission, "utf8"))).toMatchObject({ submissionId });
     const uploaded = fixture.calls()[0]?.[2] ?? "";
     expect(path.basename(uploaded)).toBe(fixture.uploadName);
