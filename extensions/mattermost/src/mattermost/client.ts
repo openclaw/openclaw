@@ -89,6 +89,7 @@ export const MattermostPostSchema = z
     type: z.string().nullable().optional(),
     root_id: z.string().nullable().optional(),
     create_at: z.number().nullable().optional(),
+    delete_at: z.number().nullable().optional(),
     props: z.record(z.string(), z.unknown()).nullable().optional(),
   })
   .passthrough();

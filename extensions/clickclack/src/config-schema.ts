@@ -37,6 +37,7 @@ const ClickClackAccountConfigSchema = z
     nativeProgress: z.boolean().optional(),
     commandMenu: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     mentionPatterns: z.array(z.string()).optional(),
     groups: z
       .record(
@@ -44,6 +45,7 @@ const ClickClackAccountConfigSchema = z
         z
           .object({
             requireMention: z.boolean().optional(),
+            requireMentionInBotThreads: z.boolean().optional(),
             mentionPatterns: z.array(z.string()).optional(),
             allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
             botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
@@ -76,4 +78,23 @@ export type ClickClackConfigInput = z.input<typeof ClickClackConfigSchema>;
  * Config schema exported to core so `openclaw doctor` and config validation
  * understand both default and named ClickClack accounts.
  */
-export const clickClackConfigSchema = buildChannelConfigSchema(ClickClackConfigSchema);
+export const clickClackConfigSchema = buildChannelConfigSchema(ClickClackConfigSchema, {
+  uiHints: {
+    requireMentionInBotThreads: {
+      label: "Require Mention in Bot Threads",
+      help: "Override mention requirements in threads rooted in this bot's messages. Unset keeps the normal mention policy.",
+    },
+    "groups.*.requireMentionInBotThreads": {
+      label: "Require Mention in Bot Threads",
+      help: "Override the account policy for threads rooted in this bot's messages in this channel.",
+    },
+    "accounts.*.requireMentionInBotThreads": {
+      label: "Require Mention in Bot Threads",
+      help: "Override mention requirements in threads rooted in this bot's messages. Unset inherits the channel configuration.",
+    },
+    "accounts.*.groups.*.requireMentionInBotThreads": {
+      label: "Require Mention in Bot Threads",
+      help: "Override the account policy for threads rooted in this bot's messages in this channel.",
+    },
+  },
+});

@@ -34,6 +34,26 @@ Explicit conversation bindings always win over `sessionScope`; bound rooms and t
 
 Selecting a reply target inside a thread preserves both the thread and the selected message. Ordinary threaded messages can carry reply metadata for older clients; OpenClaw does not treat that compatibility fallback as a quoted message in the agent's context.
 
+### Mentions in bot-created threads
+
+Set `channels.matrix.requireMentionInBotThreads: false` to accept unmentioned
+follow-ups in native Matrix threads rooted in an event sent by the receiving
+bot. Set it to `true` to require mentions in those threads even when the room
+uses `requireMention: false` or `autoReply: true`. Omitting it preserves the
+room's existing mention behavior.
+
+The setting is also available under `accounts.<id>` and each `groups` or `rooms`
+entry. Room entries override the account value. As with other Matrix room
+settings, an exact room entry replaces the wildcard entry; omitted fields in
+an exact entry fall back to the account, not the wildcard.
+
+Only a native `m.thread` relationship qualifies. An ordinary reply to a bot
+message does not. OpenClaw resolves the thread root using the receiving
+account and caches its verified author. Matrix content redaction does not change
+that author, so a redacted bot-authored root still qualifies. If the root's
+identity cannot be read or verified, the existing mention behavior applies.
+Room access, sender restrictions, and `allowBots: "mentions"` still apply.
+
 ### Thread inheritance and slash commands
 
 - Inbound threaded messages include the thread root message as extra agent context.

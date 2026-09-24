@@ -9,6 +9,7 @@ const DEFAULT_TOPIC_NAME_CACHE_SCOPE = "default";
 
 type TopicEntry = {
   name: string;
+  creatorUserId?: number;
   iconColor?: number;
   iconCustomEmojiId?: string;
   closed?: boolean;
@@ -154,12 +155,14 @@ export async function updateTopicName(
   const iconColor = patch.iconColor ?? existing?.iconColor;
   const iconCustomEmojiId = patch.iconCustomEmojiId ?? existing?.iconCustomEmojiId;
   const closed = patch.closed ?? existing?.closed;
+  const creatorUserId = patch.creatorUserId ?? existing?.creatorUserId;
   const merged: TopicEntry = {
     name: patch.name ?? existing?.name ?? "",
     updatedAt: nextUpdatedAt(scope),
     ...(iconColor !== undefined ? { iconColor } : {}),
     ...(iconCustomEmojiId !== undefined ? { iconCustomEmojiId } : {}),
     ...(closed !== undefined ? { closed } : {}),
+    ...(creatorUserId !== undefined ? { creatorUserId } : {}),
   };
   if (!merged.name) {
     return;
@@ -186,4 +189,29 @@ export async function getTopicName(
     await state.persistentStore.register(key, entry);
   }
   return entry?.name;
+}
+
+export async function recordTopicCreation(
+  chatId: number | string,
+  threadId: number | string,
+  creation: Pick<TopicEntry, "name" | "creatorUserId" | "iconColor" | "iconCustomEmojiId">,
+  scope?: string,
+): Promise<void> {
+  const state = getTopicStoreState(scope);
+  await hydrateTopicStoreState(state);
+  // A late creation service message must not undo a subsequent rename or close.
+  const patch = state.store.has(cacheKey(chatId, threadId))
+    ? { creatorUserId: creation.creatorUserId }
+    : { ...creation, closed: false };
+  await updateTopicName(chatId, threadId, patch, scope);
+}
+
+export async function getTopicCreatorUserId(
+  chatId: number | string,
+  threadId: number | string,
+  scope?: string,
+): Promise<number | undefined> {
+  const state = getTopicStoreState(scope);
+  await hydrateTopicStoreState(state);
+  return state.store.get(cacheKey(chatId, threadId))?.creatorUserId;
 }

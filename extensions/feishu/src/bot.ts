@@ -5,6 +5,7 @@ import {
   resolveEnvelopeFormatOptions,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
   bindIngressLifecycleToReplyOptions,
   resolveAgentOutboundIdentity,
@@ -54,6 +55,7 @@ import {
 import { resolveGroupName } from "./bot-group-name.js";
 import { resolveFeishuBotName } from "./bot-name.js";
 import { resolveFeishuSenderName, type FeishuPermissionError } from "./bot-sender-name.js";
+import { prepareFeishuThreadRoot } from "./bot-thread-mentions.js";
 import { createFeishuClient } from "./client.js";
 import { resolveConfiguredFeishuGroupSessionScope } from "./conversation-id.js";
 import {
@@ -283,9 +285,9 @@ export async function handleFeishuMessage(params: {
 
   // Resolve each turn from live config; DMs reauthorize after awaited work below.
   // SAFETY: config.current() returns the canonical host-validated ClawdbotConfig.
-  const cfg = getFeishuRuntime().config.current() as ClawdbotConfig;
-  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  const feishuCfg = account.config;
+  let cfg = getFeishuRuntime().config.current() as ClawdbotConfig;
+  let account = resolveFeishuRuntimeAccount({ cfg, accountId });
+  let feishuCfg = account.config;
 
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -465,6 +467,14 @@ export async function handleFeishuMessage(params: {
     log(`feishu[${account.accountId}]: detected @ forward request, targets: [${names}]`);
   }
 
+  const threadRoot = await prepareFeishuThreadRoot({ cfg, account, ctx, botOpenId, log });
+  if (!threadRoot) {
+    return;
+  }
+  ({ cfg, account } = threadRoot);
+  feishuCfg = account.config;
+  const { isBotOwnedThread, getRootMessageInfo } = threadRoot;
+
   const historyLimit = resolvePromptHistoryLimit(
     feishuCfg?.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
   );
@@ -589,6 +599,12 @@ export async function handleFeishuMessage(params: {
       accountId: account.accountId,
       groupId: ctx.chatId,
       groupPolicy,
+    }));
+    ({ requireMention } = resolveBotThreadMentionPolicy({
+      isBotOwnedThread,
+      requireMentionInBotThreads:
+        groupConfig?.requireMentionInBotThreads ?? feishuCfg.requireMentionInBotThreads,
+      requireMention,
     }));
 
     const groupSenderActivationIngress = await resolveFeishuGroupSenderActivationIngressAccess({
@@ -941,15 +957,17 @@ export async function handleFeishuMessage(params: {
     // Fetch quoted/replied message content before the empty-message guard
     // so a reply with only @bot (no text, no media) is not dropped when
     // the quoted message carries meaningful content.
-    let quotedMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> = null;
     let quotedContent: string | undefined;
     if (ctx.parentId) {
       try {
-        quotedMessageInfo = await getMessageFeishu({
-          cfg,
-          messageId: ctx.parentId,
-          accountId: account.accountId,
-        });
+        const quotedMessageInfo =
+          ctx.parentId === ctx.rootId
+            ? await getRootMessageInfo()
+            : await getMessageFeishu({
+                cfg,
+                messageId: ctx.parentId,
+                accountId: account.accountId,
+              });
         if (
           quotedMessageInfo &&
           (await shouldIncludeFetchedGroupContextMessage({
@@ -1126,52 +1144,6 @@ export async function handleFeishuMessage(params: {
         threadLabel?: string;
       }
     >();
-    let rootMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> | undefined;
-    let rootMessageThreadId: string | undefined;
-    let rootMessageFetched = false;
-    const getRootMessageInfo = async () => {
-      if (!ctx.rootId) {
-        return null;
-      }
-      if (!rootMessageFetched) {
-        rootMessageFetched = true;
-        if (ctx.rootId === ctx.parentId && quotedMessageInfo) {
-          rootMessageInfo = quotedMessageInfo;
-        } else {
-          try {
-            rootMessageInfo = await getMessageFeishu({
-              cfg,
-              messageId: ctx.rootId,
-              accountId: account.accountId,
-            });
-          } catch (err) {
-            log(`feishu[${account.accountId}]: failed to fetch root message: ${String(err)}`);
-            rootMessageInfo = null;
-          }
-        }
-        rootMessageThreadId = rootMessageInfo?.threadId;
-        if (
-          rootMessageInfo &&
-          !(await shouldIncludeFetchedGroupContextMessage({
-            cfg,
-            accountId: account.accountId,
-            chatId: ctx.chatId,
-            isGroup,
-            allowFrom: effectiveGroupSenderAllowFrom,
-            mode: contextVisibilityMode,
-            kind: "thread",
-            senderId: rootMessageInfo.senderId,
-            senderType: rootMessageInfo.senderType,
-          }))
-        ) {
-          log(
-            `feishu[${account.accountId}]: skipped thread starter from sender ${rootMessageInfo.senderId ?? "unknown"} (mode=${contextVisibilityMode})`,
-          );
-          rootMessageInfo = null;
-        }
-      }
-      return rootMessageInfo ?? null;
-    };
     let groupNamePromise: Promise<string | undefined> | undefined;
     const resolveGroupNameForLabel = (): Promise<string | undefined> => {
       if (!isGroup) {
@@ -1220,8 +1192,27 @@ export async function handleFeishuMessage(params: {
         return threadContext;
       }
 
-      const rootMsg = await getRootMessageInfo();
-      const feishuThreadId = ctx.threadId ?? rootMessageThreadId ?? rootMsg?.threadId;
+      let rootMsg = await getRootMessageInfo();
+      const feishuThreadId = ctx.threadId ?? rootMsg?.threadId;
+      if (
+        rootMsg &&
+        !(await shouldIncludeFetchedGroupContextMessage({
+          cfg,
+          accountId: account.accountId,
+          chatId: ctx.chatId,
+          isGroup,
+          allowFrom: effectiveGroupSenderAllowFrom,
+          mode: contextVisibilityMode,
+          kind: "thread",
+          senderId: rootMsg.senderId,
+          senderType: rootMsg.senderType,
+        }))
+      ) {
+        log(
+          `feishu[${account.accountId}]: skipped thread starter from sender ${rootMsg.senderId ?? "unknown"} (mode=${contextVisibilityMode})`,
+        );
+        rootMsg = null;
+      }
       if (feishuThreadId) {
         log(`feishu[${account.accountId}]: resolved thread ID: ${feishuThreadId}`);
       }

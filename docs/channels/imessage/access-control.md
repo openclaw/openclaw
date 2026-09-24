@@ -98,6 +98,12 @@ Who is admitted, how messages route to sessions, and which chats can write confi
 
     Replace `123` with the numeric chat ID from `imsg chats --limit 20 --json`. Edit the map already supplying that account's group policy: `channels.imessage.groups`, or `channels.imessage.accounts.<account-id>.groups` when it overrides the root map. This also applies to `accounts.default.groups`; merely having an account entry does not mean its own `groups` map is needed. An empty account map inherits the root map only when at most one account is configured.
 
+    To allow unmentioned follow-ups only in native reply threads started by OpenClaw, set `requireMentionInBotThreads: false` alongside `requireMention: true` in that group entry. The exact group setting overrides `groups["*"].requireMentionInBotThreads`. Set it to `true` to require mentions in those threads, or omit it to preserve normal mention behavior. Sender and group restrictions still apply.
+
+    An explicit `requireMentionInBotThreads: true` remains enforced when mention patterns are disabled. Configure usable mention patterns to address the bot in those threads; otherwise they stay quiet except for authorized control commands.
+
+    Thread ownership comes from the native thread root GUID and OpenClaw's account- and conversation-scoped sent-message cache. The cache retains up to 2,000 messages for six hours and survives restarts within that window. Unknown or evicted roots keep the normal mention requirement. Replying to a bot message inside someone else's thread does not make that thread bot-owned.
+
     Preserve the existing wildcard and every per-group setting, changing only the target chat's `requireMention`. Account maps replace the whole inherited map, so if you intentionally create an account-specific override, first copy the complete inherited map, including all wildcard and per-group policies. When no map previously applied, `"*": {}` preserves admission to other groups while keeping their default mention requirement. Keep a restricted map restricted. `groupAllowFrom` still controls sender access.
 
     A skipped message with no mention produces a warning at the default log level with the chat ID and the `requireMention: false` fix. Repeated warnings for the same chat are suppressed by a bounded in-memory cache; restarting the channel or evicting a cache entry allows the warning again.

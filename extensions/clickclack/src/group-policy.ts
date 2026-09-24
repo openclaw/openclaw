@@ -4,6 +4,7 @@ import type { ClickClackGroupConfig } from "./types.js";
 
 type ClickClackGroupPolicy = {
   requireMention: boolean;
+  requireMentionInBotThreads?: boolean;
   mentionPatterns: string[];
   allowBots: boolean | "mentions";
   botLoopProtection?: ChannelBotLoopProtectionConfig;
@@ -24,6 +25,10 @@ export function resolveClickClackGroupPolicy(params: {
   return {
     requireMention:
       exact?.requireMention ?? wildcard?.requireMention ?? account.requireMention === true,
+    requireMentionInBotThreads:
+      exact?.requireMentionInBotThreads ??
+      wildcard?.requireMentionInBotThreads ??
+      account.requireMentionInBotThreads,
     mentionPatterns:
       exact?.mentionPatterns ?? wildcard?.mentionPatterns ?? account.mentionPatterns ?? [],
     allowBots: exact?.allowBots ?? wildcard?.allowBots ?? account.allowBots ?? false,

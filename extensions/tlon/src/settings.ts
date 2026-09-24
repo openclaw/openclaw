@@ -36,6 +36,7 @@ export type TlonSettingsStore = {
     {
       mode?: "restricted" | "open";
       allowedShips?: string[];
+      requireMentionInBotThreads?: boolean;
     }
   >;
   defaultAuthorizedShips?: string[];
@@ -57,9 +58,7 @@ const SETTINGS_BUCKET = "tlon";
  * Parse channelRules - handles both JSON string and object formats.
  * Settings-store doesn't support nested objects, so we store as JSON string.
  */
-function parseChannelRules(
-  value: unknown,
-): Record<string, { mode?: "restricted" | "open"; allowedShips?: string[] }> | undefined {
+function parseChannelRules(value: unknown): TlonSettingsStore["channelRules"] {
   if (!value) {
     return undefined;
   }
@@ -129,9 +128,7 @@ function parseSettingsResponse(raw: unknown): TlonSettingsStore {
   };
 }
 
-function isChannelRulesObject(
-  val: unknown,
-): val is Record<string, { mode?: "restricted" | "open"; allowedShips?: string[] }> {
+function isChannelRulesObject(val: unknown): val is NonNullable<TlonSettingsStore["channelRules"]> {
   if (!val || typeof val !== "object" || Array.isArray(val)) {
     return false;
   }

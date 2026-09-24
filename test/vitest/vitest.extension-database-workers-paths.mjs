@@ -331,6 +331,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/action-runtime.test.ts",
   "extensions/telegram/src/bot-handlers.message-context.runtime.test.ts",
   "extensions/telegram/src/bot-message-context.body.test.ts",
+  "extensions/telegram/src/bot-message-context.bot-threads.test.ts",
   "extensions/telegram/src/bot-message-context.dm-session.test.ts",
   "extensions/telegram/src/bot-message-context.prompt-context.test.ts",
   "extensions/telegram/src/bot-message-dispatch.delivery-transcript.test.ts",

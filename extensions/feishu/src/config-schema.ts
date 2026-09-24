@@ -226,9 +226,16 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  * causing the reply to appear as a topic (话题) under the original message.
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
+const RequireMentionInBotThreadsSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    "Require mentions in threads started by this bot. False permits unmentioned messages; true requires a mention. Omit to preserve existing mention behavior.",
+  );
 
 const FeishuGroupSchema = buildGroupEntrySchema({
   tools: ToolPolicySchema,
+  requireMentionInBotThreads: RequireMentionInBotThreadsSchema,
   groupSessionScope: GroupSessionScopeSchema,
   topicSessionMode: TopicSessionModeSchema,
   replyInThread: ReplyInThreadSchema,
@@ -252,6 +259,7 @@ const FeishuSharedConfigShape = {
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupSenderAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   requireMention: z.boolean().optional(),
+  requireMentionInBotThreads: RequireMentionInBotThreadsSchema,
   groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),

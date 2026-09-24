@@ -181,6 +181,27 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
+    To keep mentions required in the group but allow ordinary messages in forum topics created by this bot, set `requireMentionInBotThreads: false`:
+
+```json5
+{
+  channels: {
+    telegram: {
+      groups: {
+        "-1001234567890": {
+          requireMention: true,
+          requireMentionInBotThreads: false,
+        },
+      },
+    },
+  },
+}
+```
+
+    This option applies only when OpenClaw knows that the receiving bot created the forum topic. A topic's `requireMentionInBotThreads` overrides the selected group setting. Set it to `true` to require a mention in those topics, even when ordinary `requireMention` is `false` or the message replies to the bot. Native and authorized control commands keep their existing behavior. Omit the option to preserve the existing mention policy.
+
+    Telegram must deliver ordinary group messages for `false` to work: disable privacy mode or make the bot a group admin. See [Privacy mode and group visibility](/channels/telegram/setup#privacy-mode-and-group-visibility). Group and sender authorization, group silence policy, and visible-reply policy still apply. See [Bot-created forum topics](/channels/telegram/threads-and-sessions#bot-created-forum-topics) for ownership tracking and its limits.
+
     Group history context is bounded by `historyLimit` (default 50). Set `channels.telegram.historyLimit: 0` to disable the automatic window without deleting retained group messages or disabling explicit history reads. Permitted unmentioned messages are recorded without starting agent turns when mentions are required. See [Retained group history](/channels/telegram/messaging#retained-group-history). `openclaw doctor --fix` removes the retired `includeGroupHistoryContext` key.
 
     Getting the group chat ID: forward a group message to `@userinfobot` / `@getidsbot`, read `chat.id` from `openclaw logs --follow`, inspect Bot API `getUpdates`, or (once the group is allowed) run `/whoami@<bot_username>`.

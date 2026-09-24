@@ -171,6 +171,19 @@ Notes:
 - After the bot sends a visible reply in a channel thread, later messages in that same thread are answered without a new @mention or `onchar` prefix, so multi-turn thread conversations keep flowing. Participation is remembered for 7 days after the bot last replied in that thread and persists across gateway restarts. Threads the bot has only observed are unaffected; start a new top-level message to require an explicit mention again.
 - Set `channels.mattermost.implicitMentions.threadParticipation: false` to stop participated-thread follow-ups from bypassing mention gating. Account overrides use `channels.mattermost.accounts.<id>.implicitMentions`. Mattermost does not produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
 
+Set `channels.mattermost.requireMentionInBotThreads: false` to accept follow-ups
+without an @mention or `onchar` prefix in threads whose root post was sent by the
+receiving bot. Set it to `true` to require explicit activation there even after
+the bot has participated. Omitting it preserves the behavior above.
+
+Account settings override the channel-wide value. For an individual channel,
+`groups.<channelId>.requireMentionInBotThreads` overrides
+`groups["*"].requireMentionInBotThreads`, then the account value. OpenClaw verifies
+the root post's author and channel through Mattermost; unavailable or deleted
+roots keep the existing mention behavior. Sender and channel restrictions still
+apply, and top-level messages and threads rooted in someone else's post are
+unchanged.
+
 ## Threading and sessions
 
 Use `channels.mattermost.replyToMode` to control whether channel and group replies stay in the main channel or start a thread under the triggering post.

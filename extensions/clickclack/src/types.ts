@@ -71,6 +71,7 @@ export type ResolvedClickClackAccount = {
   };
   config: ClickClackAccountConfig;
   requireMention: boolean;
+  requireMentionInBotThreads?: boolean;
   mentionPatterns: string[];
   groups: Record<string, ClickClackGroupConfig>;
 };

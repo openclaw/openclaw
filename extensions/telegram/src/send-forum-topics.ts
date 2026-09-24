@@ -1,5 +1,6 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   createTelegramNonIdempotentRequestWithDiag,
   resolveAndPersistChatId,
@@ -9,6 +10,8 @@ import {
 import type { TelegramApiCallOpts, TelegramMessageActionOpts } from "./send-message-types.js";
 import { prepareTelegramOutbound } from "./send-outbound.js";
 import { parseTelegramTarget } from "./targets.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
+import { recordTopicCreation } from "./topic-name-cache.js";
 
 type TelegramCreateForumTopicParams = NonNullable<
   Parameters<TelegramApiContext["api"]["createForumTopic"]>[2]
@@ -148,7 +151,7 @@ export async function createForumTopicTelegram(
   return withTelegramApiContext(
     { ...opts, assertPlatformSendAuthorized },
     async (context): Promise<TelegramCreateForumTopicResult> => {
-      const { cfg, account, api } = context;
+      const { cfg, account, api, ownerAgentId } = context;
       // Accept topic-qualified targets (e.g. telegram:group:<id>:topic:<thread>)
       // but createForumTopic must always target the base supergroup chat id.
       const target = parseTelegramTarget(chatId);
@@ -182,6 +185,20 @@ export async function createForumTopicTelegram(
       }, "createForumTopic");
 
       const topicId = result.message_thread_id;
+
+      await recordTopicCreation(
+        normalizedChatId,
+        topicId,
+        {
+          name: result.name ?? trimmedName,
+          creatorUserId: resolveTelegramBotUserIdFromToken(opts.token || account.token),
+          iconColor: result.icon_color ?? opts.iconColor,
+          iconCustomEmojiId: result.icon_custom_emoji_id ?? opts.iconCustomEmojiId,
+        },
+        resolveStorePath(cfg.session?.store, { agentId: ownerAgentId }),
+      ).catch((err: unknown) => {
+        logVerbose(`telegram: topic metadata persistence failed after creation: ${String(err)}`);
+      });
 
       recordChannelActivity({
         channel: "telegram",

@@ -24,6 +24,7 @@ How Slack conversations map to OpenClaw sessions, and where replies land.
 - `channels.slack.implicitMentions.replyToBot` controls whether a reply to the bot's own message bypasses mention gating (default `true`).
 - `channels.slack.implicitMentions.threadParticipation` controls whether follow-ups in a thread where the bot has replied bypass mention gating (default `true`). Set it to `false` to require a new explicit mention in those follow-ups. `openclaw doctor --fix` migrates the former `channels.slack.thread.requireExplicitMention` key to this positive canonical flag.
 - Account overrides live at `channels.slack.accounts.<id>.implicitMentions`; shared defaults live at `channels.defaults.implicitMentions`.
+- `requireMentionInBotThreads` overrides mention gating in threads started by this bot: `false` allows unmentioned replies; `true` requires a mention regardless of implicit reply or participation signals. Configure it at the Slack root, account, or channel scope. Omit it to retain the implicit-mention behavior above. Threads started by other people keep their normal policy. See [bot-created thread setup](/channels/slack/access-control#bot-created-threads).
 
 Reply threading controls:
 

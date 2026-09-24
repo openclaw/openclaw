@@ -33,7 +33,11 @@ export function createGuildTextClient(channelId: string): DiscordClient {
   } as unknown as DiscordClient;
 }
 
-export function createThreadClient(params: { threadId: string; parentId: string }): DiscordClient {
+export function createThreadClient(params: {
+  threadId: string;
+  parentId: string;
+  ownerId?: string;
+}): DiscordClient {
   return {
     fetchChannel: async (channelId: string) => {
       if (channelId === params.threadId) {
@@ -42,7 +46,7 @@ export function createThreadClient(params: { threadId: string; parentId: string 
           type: ChannelType.PublicThread,
           name: "focus",
           parentId: params.parentId,
-          ownerId: "owner-1",
+          ownerId: params.ownerId ?? "owner-1",
         };
       }
       if (channelId === params.parentId) {

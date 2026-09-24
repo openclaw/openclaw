@@ -138,4 +138,21 @@ describe("BuzzConfigSchema", () => {
     expect(parseBuzzConfig(config).success).toBe(true);
     expectJsonSchemaValidity("buzz.config-schema.room-sender-policy", config, true);
   });
+
+  it.each([true, false, "false"])(
+    "validates requireMentionInBotThreads %j for root and named account rooms",
+    (requireMentionInBotThreads) => {
+      const groups = {
+        "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": { requireMentionInBotThreads },
+      };
+      const config = { groupPolicy: "open", groups, accounts: { ada: { groups } } };
+      const valid = typeof requireMentionInBotThreads === "boolean";
+      expect(parseBuzzConfig(config).success).toBe(valid);
+      expectJsonSchemaValidity(
+        `buzz.bot-thread-mention.${requireMentionInBotThreads}`,
+        config,
+        valid,
+      );
+    },
+  );
 });

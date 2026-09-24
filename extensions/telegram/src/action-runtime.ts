@@ -908,18 +908,6 @@ export async function handleTelegramAction(
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
       gatewayClientScopes: options?.gatewayClientScopes,
     });
-    if (result.topicId != null && result.chatId) {
-      await updateTopicName(
-        result.chatId,
-        result.topicId,
-        {
-          name,
-          ...(iconColor != null ? { iconColor } : {}),
-          ...(iconCustomEmojiId ? { iconCustomEmojiId } : {}),
-        },
-        resolveActionTopicNameCacheScope(cfg, accountId),
-      ).catch(() => {});
-    }
     return jsonResult({
       ok: true,
       topicId: result.topicId,

@@ -6,6 +6,14 @@ export const mattermostChannelConfigUiHints = {
     label: "Mattermost",
     help: "Mattermost channel provider configuration for bot auth, access policy, slash commands, and preview streaming.",
   },
+  requireMentionInBotThreads: {
+    label: "Mention in Bot Threads",
+    help: "Require an explicit mention or configured trigger in threads rooted in this bot's own posts. Set false to accept unmentioned follow-ups; omit to preserve existing mention and participation behavior.",
+  },
+  "groups.*.requireMentionInBotThreads": {
+    label: "Mention in Bot Threads",
+    help: "Override bot-created thread mention policy for this Mattermost channel. Exact channel settings override the wildcard, then the account setting.",
+  },
   ...createChannelConfigUiHints({
     channelLabel: "Mattermost",
     dmPolicy: { channelKey: "mattermost" },

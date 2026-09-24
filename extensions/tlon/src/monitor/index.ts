@@ -40,12 +40,12 @@ import {
   isApprovalResponse,
   type PendingApproval,
 } from "./approval.js";
-import { resolveChannelAuthorization } from "./authorization.js";
 import { createTlonCitationResolver } from "./cites.js";
 import { fetchAllChannels, fetchInitData } from "./discovery.js";
 import { createChannelHistoryCache, fetchThreadHistory } from "./history.js";
 import { createTlonIngressMonitor, type TlonIngressLifecycle } from "./ingress.js";
 import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
+import { prepareTlonGroupAdmission } from "./mentions.js";
 import {
   applyTlonSettingsOverrides,
   buildTlonSettingsMigrations,
@@ -57,14 +57,12 @@ import {
   extractMessageText,
   formatModelName,
   formatSummarizationHistoryText,
-  isBotMentioned,
   isDmAllowedWithIngress,
   isGroupInviteAllowed,
   isSummarizationRequest,
   resolveAuthorizedMessageText,
   resolveTlonCommandAuthorizationWithIngress,
   resolveTlonMessageIngress,
-  resolveTlonGroupMentionDecision,
   stripBotMention,
 } from "./utils.js";
 
@@ -808,32 +806,25 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         id: messageId,
       });
 
-      // Get thread info early for participation check
-      const seal = isThreadReply ? asRecord(replySet?.seal) : asRecord(set?.seal);
-      const parentId = readString(seal, "parent-id") ?? readString(seal, "parent") ?? null;
-
-      // Check if we should respond:
-      // 1. Direct mention always triggers response
-      // 2. Thread replies where we've participated - respond if relevant (let agent decide)
-      const mentioned = isBotMentioned(rawText, botShipName, botNickname ?? undefined);
-      const inParticipatedThread = isThreadReply && parentId && participatedThreads.has(parentId);
-      const mentionDecision = resolveTlonGroupMentionDecision({
+      const { mode, allowedShips, mentionDecision, parentId } = await prepareTlonGroupAdmission({
         cfg,
-        accountId: account.accountId,
-        wasMentioned: mentioned,
-        botParticipatedInThread: Boolean(inParticipatedThread),
+        account,
+        api,
+        channelNest: nest,
+        botShipName,
+        botNickname,
+        rawText,
+        messageSeal: isThreadReply ? asRecord(replySet?.seal) : asRecord(set?.seal),
+        isThreadReply,
+        hasParticipatedInThread: participatedThreads.has,
+        getSettings: () => currentSettings,
+        runtime,
       });
 
       if (mentionDecision.shouldSkip) {
         return;
       }
 
-      // Log why we're responding
-      if (mentionDecision.implicitMention && !mentioned) {
-        runtime.log?.(`[tlon] Responding to thread we participated in (no mention): ${parentId}`);
-      }
-
-      const { mode, allowedShips } = resolveChannelAuthorization(cfg, nest, currentSettings);
       // Owner is always allowed
       if (isOwner(senderShip)) {
         runtime.log?.(`[tlon] Owner ${senderShip} is always allowed in channels`);

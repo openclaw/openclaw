@@ -31,24 +31,32 @@ const sentMessages = createPersistentDedupeCache<MSTeamsSentMessageRecord>({
   },
 });
 
-function makeKey(conversationId: string, messageId: string): string {
-  return `${conversationId}:${messageId}`;
+function makeKey(conversationId: string, messageId: string, botId?: string): string {
+  // Bot-scoped records establish root ownership; legacy records retain reply-to-bot activation.
+  return botId
+    ? JSON.stringify([botId, conversationId, messageId])
+    : `${conversationId}:${messageId}`;
 }
 
-export function recordMSTeamsSentMessage(conversationId: string, messageId: string): void {
-  if (!conversationId || !messageId) {
+export function recordMSTeamsSentMessage(
+  conversationId: string,
+  messageId: string,
+  botId?: string,
+): void {
+  if (!conversationId || !messageId || messageId === "unknown") {
     return;
   }
   const sentAt = Date.now();
-  void sentMessages.register(makeKey(conversationId, messageId), { sentAt }, { at: sentAt });
+  void sentMessages.register(makeKey(conversationId, messageId, botId), { sentAt }, { at: sentAt });
 }
 
 export async function wasMSTeamsMessageSentWithPersistence(params: {
   conversationId: string;
   messageId: string;
+  botId?: string;
 }): Promise<boolean> {
   if (!params.conversationId || !params.messageId) {
     return false;
   }
-  return await sentMessages.lookup(makeKey(params.conversationId, params.messageId));
+  return await sentMessages.lookup(makeKey(params.conversationId, params.messageId, params.botId));
 }

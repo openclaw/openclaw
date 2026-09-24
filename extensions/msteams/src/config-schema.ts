@@ -21,6 +21,7 @@ const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional
 const MSTeamsChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     replyStyle: MSTeamsReplyStyleSchema.optional(),
@@ -108,6 +109,7 @@ export const MSTeamsConfigSchema = z
     mediaAuthAllowHosts: z.array(z.string()).optional(),
     graphMediaFallback: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
     /** Max inbound and outbound media size in MB (default: 100MB). */
