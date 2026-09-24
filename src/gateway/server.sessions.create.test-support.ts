@@ -133,7 +133,7 @@ export function setupPersistentSessionCreateTestHarness() {
     await settleGatewaySessionStoreFixture(dir);
   });
   return {
-    async createSessionStoreDir() {
+    createSessionStoreDir: async () => {
       if (!dir) {
         throw new Error("Persistent session fixture was not created");
       }
