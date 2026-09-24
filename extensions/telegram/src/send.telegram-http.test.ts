@@ -730,7 +730,10 @@ describe("Telegram physical send acceptance over HTTP", () => {
     async (description) => {
       rejections.push(`Bad Request: ${description}`);
       const deleting = deleteMessageTelegram("123", 321, { cfg, api: bot.api });
-      if (description === "CHAT_WRITE_FORBIDDEN") {
+      if (description === "message to delete not found") {
+        // Provider-confirmed absence means the desired deleted state already holds.
+        await expect(deleting).resolves.toEqual({ ok: true });
+      } else if (description === "CHAT_WRITE_FORBIDDEN") {
         await expect(deleting).rejects.toThrow(description);
       } else {
         await expect(deleting).resolves.toMatchObject({
