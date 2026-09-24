@@ -155,7 +155,7 @@ describe("canary teardown evidence", () => {
     async (outcome) => {
       vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       const removalStarted = createDeferredCore<string>();
-      const removal = createDeferredCore<void>();
+      const removal = createDeferredCore();
       const remove = fs.rm.bind(fs);
       const heldRemoval = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
         if (
