@@ -1,5 +1,8 @@
 import type { Turn as SDKTurn } from "openai/resources/beta/agents/sessions/turns";
-import { createAgentHarnessAssistantMessage } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import {
+  createAgentHarnessAssistantMessage,
+  makeZeroUsageSnapshot,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -691,14 +694,9 @@ export function createAgentsApiMessageProjection(
 
 function emptyUsage(): AssistantMessage["usage"] {
   return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
+    ...makeZeroUsageSnapshot(),
     // Turn billing sums hosted model calls; it is not a latest-call context snapshot.
     contextUsage: { state: "unavailable" },
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }
 
