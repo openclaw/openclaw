@@ -3,7 +3,6 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import {
   assertNoSymlinkParents,
-  canonicalPathFromExistingAncestor,
   isPathInside,
   root as fsRoot,
 } from "openclaw/plugin-sdk/file-access-runtime";
@@ -63,10 +62,6 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     try {
-      await assertLocalPathSafety({
-        target,
-        allowFinalSymlinkForUnlink: false,
-      });
       const root = await fsRoot(target.mountHostRoot);
       return (
         await root.read(path.relative(target.mountHostRoot, hostPath), {
@@ -87,12 +82,10 @@ class OpenShellFsBridge implements SandboxFsBridge {
   ): Promise<DirectoryEntry[]> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
-    await assertLocalPathSafety({
-      target,
-      allowFinalSymlinkForUnlink: false,
-    });
     const root = await fsRoot(target.mountHostRoot);
-    const entries = await root.list(relativeToRoot(target, hostPath), { withFileTypes: true });
+    const entries = await Array.fromAsync(
+      root.entries(relativeToRoot(target, hostPath), { order: "sorted" }),
+    );
     return entries.map(({ name, isDirectory }) => ({ name, isDirectory }));
   }
 
@@ -100,16 +93,13 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "write files");
-    await assertLocalPathSafety({
-      target,
-      allowFinalSymlinkForUnlink: false,
-    });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
     const root = await fsRoot(target.mountHostRoot);
     await root.write(path.relative(target.mountHostRoot, hostPath), buffer, {
       mkdir: params.mkdir,
+      mutationSymlinks: "reject",
     });
     await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
   }
@@ -120,10 +110,6 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "create files");
-    await assertLocalPathSafety({
-      target,
-      allowFinalSymlinkForUnlink: false,
-    });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
@@ -131,6 +117,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     try {
       await root.create(path.relative(target.mountHostRoot, hostPath), buffer, {
         mkdir: params.mkdir !== false,
+        mutationSymlinks: "reject",
       });
     } catch (error) {
       if (error instanceof FsSafeError && error.code === "already-exists") {
@@ -562,12 +549,6 @@ async function assertLocalPathSafety(params: {
   if (!hostPath) {
     throw new Error(`Missing local host path for ${params.target.containerPath}`);
   }
-  const canonicalRoot = await fsPromises.realpath(mountHostRoot).catch((error: unknown) => {
-    if (isNotFoundError(error)) {
-      return path.resolve(mountHostRoot);
-    }
-    throw error;
-  });
   const unlinkSymlink =
     params.allowFinalSymlinkForUnlink &&
     hostPath !== mountHostRoot &&
@@ -579,15 +560,6 @@ async function assertLocalPathSafety(params: {
         throw error;
       })
     )?.isSymbolicLink();
-  const candidate = unlinkSymlink
-    ? path.resolve(canonicalRoot, path.relative(mountHostRoot, hostPath))
-    : await canonicalPathFromExistingAncestor(hostPath);
-  if (!isPathInside(canonicalRoot, candidate)) {
-    throw new Error(
-      `Sandbox path escapes allowed mounts; cannot access: ${params.target.containerPath}`,
-    );
-  }
-
   await assertNoSymlinkParents({
     rootDir: mountHostRoot,
     targetPath: unlinkSymlink ? path.dirname(hostPath) : hostPath,

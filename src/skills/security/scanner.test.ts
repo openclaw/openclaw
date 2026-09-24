@@ -950,15 +950,36 @@ describe("scanDirectoryWithSummary", () => {
     readSpy.mockRestore();
   });
 
-  it("reuses cached directory listings for unchanged trees", async () => {
+  it("discovers added files when directory timestamps are restored", async () => {
     const root = makeTmpDir();
     fsSync.writeFileSync(path.join(root, "cached.js"), `export const ok = true;`);
+    const modifiedAt = new Date("2026-01-01T00:00:00Z");
+    await fs.utimes(root, modifiedAt, modifiedAt);
 
-    const readdirSpy = vi.spyOn(fs, "readdir");
-    await scanDirectoryWithSummary(root);
-    await scanDirectoryWithSummary(root);
+    expect((await scanDirectoryWithSummary(root)).critical).toBe(0);
+    fsSync.writeFileSync(path.join(root, "added.js"), `eval("untrusted");`);
+    await fs.utimes(root, modifiedAt, modifiedAt);
 
-    expect(readdirSpy).toHaveBeenCalledTimes(1);
-    readdirSpy.mockRestore();
+    const summary = await scanDirectoryWithSummary(root);
+    expect(summary.scannedFiles).toBe(2);
+    expectRulePresence(summary.findings, "dynamic-code-execution", true);
+  });
+
+  it("bounds traversal of trees without scannable files and marks the result incomplete", async () => {
+    const root = makeTmpDir();
+    const fixture = path.join(root, "asset.png");
+    await fs.writeFile(fixture, "image");
+    const [entry] = await fs.readdir(root, { withFileTypes: true });
+    const readdir = vi
+      .spyOn(fs, "readdir")
+      .mockResolvedValue(Array.from({ length: 100_001 }, () => entry!));
+    try {
+      const summary = await scanDirectoryWithSummary(root);
+      expect(summary.scannedFiles).toBe(0);
+      expect(summary.truncated).toBe(true);
+      expect(summary.findings).toEqual([]);
+    } finally {
+      readdir.mockRestore();
+    }
   });
 });

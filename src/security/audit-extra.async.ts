@@ -868,6 +868,16 @@ export async function collectPluginsCodeSafetyFindings(params: {
     if (!summary) {
       continue;
     }
+    if (summary.truncated) {
+      findings.push({
+        checkId: "plugins.code_safety.scan_truncated",
+        severity: "warn",
+        title: `Plugin "${pluginName}" code scan is incomplete`,
+        detail: `Static code scan reached its file or directory-entry budget under ${pluginPath}. Some files were not checked.`,
+        remediation:
+          "Review the remaining files manually; this bounded scan is not a full code audit.",
+      });
+    }
 
     if (summary.critical > 0) {
       const criticalFindings = summary.findings.filter((f) => f.severity === "critical");
@@ -985,6 +995,16 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
     });
     if (!summary) {
       continue;
+    }
+    if (summary.truncated) {
+      findings.push({
+        checkId: "skills.code_safety.scan_truncated",
+        severity: "warn",
+        title: `Skill "${skillName}" code scan is incomplete`,
+        detail: `Static code scan reached its file or directory-entry budget under ${skillDir}. Some files were not checked.`,
+        remediation:
+          "Review the remaining files manually; this bounded scan is not a full code audit.",
+      });
     }
 
     if (summary.critical > 0) {

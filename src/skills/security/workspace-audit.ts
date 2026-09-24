@@ -1,6 +1,9 @@
 // Workspace audit helpers inspect local skill folders for security and trust issues.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
+import { isNotFoundPathError } from "@openclaw/fs-safe/path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import {
   listAgentWorkspaceDirs,
   listExplicitAgentWorkspaceDirs,
@@ -15,43 +18,11 @@ type WorkspaceSkillScanLimits = {
 };
 
 const MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE = 2_000;
+const MAX_WORKSPACE_SKILL_SCAN_ENTRIES_PER_WORKSPACE = 100_000;
 const MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS = 12;
 
-async function safeStat(targetPath: string): Promise<{
-  ok: boolean;
-  isDir: boolean;
-}> {
-  try {
-    const lst = await fs.lstat(targetPath);
-    return {
-      ok: true,
-      isDir: lst.isDirectory(),
-    };
-  } catch {
-    return {
-      ok: false,
-      isDir: false,
-    };
-  }
-}
-
 function realpathWithTimeout(p: string, timeoutMs = 2000): Promise<string | null> {
-  let timerHandle: ReturnType<typeof setTimeout> | undefined;
-
-  const realpathPromise = fs
-    .realpath(p)
-    .catch(() => null)
-    .then((result) => {
-      clearTimeout(timerHandle);
-      return result;
-    });
-
-  const timeoutPromise = new Promise<null>((resolve) => {
-    timerHandle = setTimeout(() => resolve(null), timeoutMs);
-    timerHandle.unref?.();
-  });
-
-  return Promise.race([realpathPromise, timeoutPromise]);
+  return withTimeout(fs.realpath(p), timeoutMs).catch(() => null);
 }
 
 async function listWorkspaceSkillMarkdownFiles(
@@ -59,59 +30,55 @@ async function listWorkspaceSkillMarkdownFiles(
   limits: WorkspaceSkillScanLimits = {},
 ): Promise<{ skillFilePaths: string[]; truncated: boolean }> {
   const skillsRoot = path.join(workspaceDir, "skills");
-  const rootStat = await safeStat(skillsRoot);
-  if (!rootStat.ok || !rootStat.isDir) {
+  let rootStat: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    rootStat = await fs.lstat(skillsRoot);
+  } catch (error) {
+    return { skillFilePaths: [], truncated: !isNotFoundPathError(error) };
+  }
+  if (!rootStat.isDirectory()) {
     return { skillFilePaths: [], truncated: false };
   }
 
   const maxFiles = limits.maxFiles ?? MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE;
   const maxTotalDirVisits = limits.maxDirVisits ?? maxFiles * 20;
-  const skillFiles: string[] = [];
-  const queue: string[] = [skillsRoot];
-  const visitedDirs = new Set<string>();
-
-  for (const _ of Array.from({ length: maxTotalDirVisits })) {
-    if (queue.length === 0 || skillFiles.length >= maxFiles) {
-      break;
-    }
-    const dir = queue.shift()!;
-    const dirRealPath = (await realpathWithTimeout(dir)) ?? path.resolve(dir);
-    if (visitedDirs.has(dirRealPath)) {
-      continue;
-    }
-    visitedDirs.add(dirRealPath);
-
-    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (entry.name.startsWith(".") || entry.name === "node_modules") {
-        continue;
-      }
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        queue.push(fullPath);
-        continue;
-      }
-      if (entry.isSymbolicLink()) {
-        const stat = await fs.stat(fullPath).catch(() => null);
-        if (!stat) {
-          continue;
-        }
-        if (stat.isDirectory()) {
-          queue.push(fullPath);
-          continue;
-        }
-        if (stat.isFile() && entry.name === "SKILL.md") {
-          skillFiles.push(fullPath);
-        }
-        continue;
-      }
-      if (entry.isFile() && entry.name === "SKILL.md") {
-        skillFiles.push(fullPath);
-      }
-    }
+  if (maxFiles <= 0 || maxTotalDirVisits <= 0) {
+    return { skillFilePaths: [], truncated: true };
   }
-
-  return { skillFilePaths: skillFiles, truncated: queue.length > 0 };
+  let fileCount = 0;
+  let directoryVisits = 1;
+  let truncated = false;
+  const visible = (name: string) => !name.startsWith(".") && name !== "node_modules";
+  const scan = await walkDirectory(skillsRoot, {
+    maxEntries: MAX_WORKSPACE_SKILL_SCAN_ENTRIES_PER_WORKSPACE,
+    symlinks: "follow",
+    include: (entry) => {
+      if (entry.kind !== "file" || entry.name !== "SKILL.md") {
+        return false;
+      }
+      if (fileCount >= maxFiles) {
+        truncated = true;
+        return false;
+      }
+      fileCount += 1;
+      return true;
+    },
+    descend: (entry) => {
+      if (!visible(entry.name)) {
+        return false;
+      }
+      if (fileCount >= maxFiles || directoryVisits >= maxTotalDirVisits) {
+        truncated = true;
+        return false;
+      }
+      directoryVisits += 1;
+      return true;
+    },
+  });
+  return {
+    skillFilePaths: scan.entries.map((entry) => entry.path).toSorted(),
+    truncated: truncated || scan.truncated || scan.failedDirs.length > 0,
+  };
 }
 
 export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
@@ -155,14 +122,14 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
       findings.push({
         checkId: "skills.workspace.scan_truncated",
         severity: "warn",
-        title: "Workspace skill scan reached the directory visit limit",
+        title: "Workspace skill scan was incomplete",
         detail:
-          `The skills/ directory scan in ${workspacePath} stopped early after reaching the ` +
-          `BFS visit cap. Skill files in the unscanned portion of the tree were not checked ` +
-          "for symlink escapes.",
+          `The skills/ directory scan in ${workspacePath} reached a file, directory, or entry ` +
+          "limit, or could not read part of the tree. Skill files in the unscanned portion " +
+          "were not checked for symlink escapes.",
         remediation:
-          "Flatten or simplify the skills/ directory hierarchy to stay within the scan budget, " +
-          "or move deeply-nested skill collections to a managed skill location.",
+          "Check directory access, flatten or simplify the skills/ tree, or move large " +
+          "skill collections to a managed skill location.",
       });
     }
 

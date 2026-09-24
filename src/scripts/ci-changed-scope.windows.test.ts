@@ -325,7 +325,7 @@ describe("detectChangedScope Windows routing", () => {
         "src/gateway/resolve-configured-secret-input-string.ts",
         "src/infra/fs-safe.ts",
         "src/infra/fs-safe-defaults.ts",
-        "src/infra/permissions.ts",
+        "src/infra/boundary-file-read.ts",
         "src/secrets/resolve-errors.ts",
         "src/secrets/resolve.ts",
         "src/security/audit-fs.ts",

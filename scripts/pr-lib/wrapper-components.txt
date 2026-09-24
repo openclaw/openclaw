@@ -638,9 +638,7 @@ src/infra/file-descriptor.ts
 src/infra/file-lock-manager.ts
 src/infra/file-lock-sync.ts
 src/infra/file-lock.ts
-src/infra/file-read.ts
 src/infra/fixed-window-rate-limit.ts
-src/infra/fs-safe-advanced.ts
 src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe-defaults.ts
 src/infra/fs-safe.ts
@@ -707,16 +705,12 @@ src/infra/openclaw-root.ts
 src/infra/path-case.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
-src/infra/path-safety.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
 src/infra/private-mode.ts
-src/infra/private-temp-workspace.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
-src/infra/regular-file.ts
-src/infra/replace-file.ts
 src/infra/restart-stale-pids.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts

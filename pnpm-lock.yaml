@@ -1523,6 +1523,9 @@ importers:
       '@matrix-org/matrix-sdk-crypto-wasm':
         specifier: 18.8.0
         version: 18.8.0
+      '@openclaw/fs-safe':
+        specifier: 0.18.2
+        version: 0.18.2
       fake-indexeddb:
         specifier: 6.2.5
         version: 6.2.5
@@ -1564,6 +1567,9 @@ importers:
 
   extensions/memory-core:
     dependencies:
+      '@openclaw/fs-safe':
+        specifier: 0.18.2
+        version: 0.18.2
       chokidar:
         specifier: 5.0.0
         version: 5.0.0

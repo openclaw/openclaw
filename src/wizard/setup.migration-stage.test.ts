@@ -7,7 +7,10 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
-import type { SetupMigrationPromotionContinuation } from "./setup.migration-promotion.js";
+import {
+  assertDisjointPromotionTargets,
+  type SetupMigrationPromotionContinuation,
+} from "./setup.migration-promotion.js";
 import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 import {
   createSetupMigrationStage,
@@ -59,6 +62,31 @@ afterEach(async () => {
 });
 
 describe("setup migration stage", () => {
+  it("compares missing promotion targets using the destination filesystem's case rules", async () => {
+    const root = tempRoots.make("openclaw-migration-case-");
+    await fs.mkdir(path.join(root, "CaseProbe"));
+    const caseInsensitive = await fs.stat(path.join(root, "cASEpROBE")).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+        return false;
+      },
+    );
+    const validation = assertDisjointPromotionTargets([
+      { finalPath: path.join(root, "FutureWorkspace") },
+      { finalPath: path.join(root, "futureworkspace", "agent") },
+    ]);
+
+    if (caseInsensitive) {
+      await expect(validation).rejects.toThrow("Migration promotion targets overlap");
+    } else {
+      await expect(validation).resolves.toBeUndefined();
+    }
+    expect(await fs.readdir(root)).toEqual(["CaseProbe"]);
+  });
+
   it("executes provider config mutations once and projects staged paths", async () => {
     const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");

@@ -1,12 +1,52 @@
-import { open, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { open, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { readWorkspaceFilePrefix } from "./workspace-fs.js";
+import * as fsSafe from "../../infra/fs-safe.js";
+import { readWorkspaceFilePrefix, updateWorkspaceFile } from "./workspace-fs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+it("preserves the workspace file when editor authority expires during write preparation", async () => {
+  const tempDir = tempDirs.make("openclaw-workspace-fs-authority-");
+  const filePath = path.join(tempDir, "notes.txt");
+  const original = "authored notes";
+  await writeFile(filePath, original);
+  const revoked = new Error("workspace editor authority expired");
+  let authorized = true;
+  const createRoot = fsSafe.root;
+  vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+    const opened = await createRoot(...args);
+    const write = opened.write.bind(opened);
+    opened.write = async (...args) => {
+      await Promise.resolve();
+      authorized = false;
+      return await write(...args);
+    };
+    return opened;
+  });
+
+  const error = await updateWorkspaceFile(
+    tempDir,
+    "notes.txt",
+    "unapproved replacement",
+    createHash("sha256").update(original).digest("hex"),
+    () => {
+      if (!authorized) {
+        throw revoked;
+      }
+    },
+  ).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  expect(authorized).toBe(false);
+  expect(error).toBe(revoked);
+  expect(await readFile(filePath, "utf8")).toBe(original);
 });
 
 type FileHandleRead = (

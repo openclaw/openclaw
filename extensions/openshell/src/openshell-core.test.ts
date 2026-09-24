@@ -1412,7 +1412,7 @@ describe("openshell fs bridges", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "rejects remote-only symlink parents in pinned mirror mutations",
+    "preserves remote mirror mutation boundaries through the guest filesystem",
     async () => {
       await using stateWorkspace = await createOpenShellTestWorkspace("remote-pin");
       const stateDir = stateWorkspace.dir;
@@ -1456,14 +1456,12 @@ describe("openshell fs bridges", () => {
       await expect(bridge.mkdirp({ filePath: "/sandbox/..cache/file" })).resolves.toBeUndefined();
       await expect(fs.stat(path.join(remoteRoot, "..cache", "file"))).resolves.toBeDefined();
 
-      await expect(bridge.mkdirp({ filePath: "/sandbox/alias/escaped" })).rejects.toThrow(
-        "unsafe remote directory symlink",
-      );
+      await expect(bridge.mkdirp({ filePath: "/sandbox/alias/escaped" })).rejects.toThrow();
       await expectPathMissing(path.join(outsideDir, "escaped"));
 
       await expect(
         bridge.rename({ from: "/sandbox/source.txt", to: "/sandbox/alias/escaped.txt" }),
-      ).rejects.toThrow("unsafe remote directory symlink");
+      ).rejects.toThrow();
       await expect(fs.readFile(path.join(remoteRoot, "source.txt"), "utf8")).resolves.toBe(
         "payload",
       );
@@ -1472,21 +1470,70 @@ describe("openshell fs bridges", () => {
       await fs.writeFile(path.join(remoteRoot, "victim.txt"), "delete me", "utf8");
       await expect(
         bridge.remove({ filePath: "/sandbox/alias/victim.txt", recursive: false }),
-      ).rejects.toThrow("unsafe remote directory symlink");
-      await expect(
-        bridge.remove({
-          filePath: "/sandbox/missing-parent/victim.txt",
-          recursive: false,
-          force: true,
-        }),
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow();
+      for (const recursive of [false, true]) {
+        await expect(
+          bridge.remove({ filePath: "/sandbox/missing-parent/victim.txt", recursive, force: true }),
+        ).resolves.toBeUndefined();
+        await expect(
+          bridge.remove({
+            filePath: "/sandbox/missing-parent/victim.txt",
+            recursive,
+            force: false,
+          }),
+        ).rejects.toThrow();
+      }
       await expect(
         bridge.remove({ filePath: "/sandbox/alias/victim.txt", recursive: false, force: true }),
-      ).rejects.toThrow("unsafe remote directory symlink");
+      ).rejects.toThrow();
       await expect(fs.readFile(path.join(remoteRoot, "victim.txt"), "utf8")).resolves.toBe(
         "delete me",
       );
       await expectPathMissing(path.join(outsideDir, "victim.txt"));
+
+      await fs.symlink(outsideDir, path.join(remoteRoot, "rename-link"));
+      await fs.mkdir(path.join(remoteRoot, "rename-directory"));
+      for (const target of ["rename-link", "rename-directory"]) {
+        await expect(bridge.rename({ from: "source.txt", to: target })).rejects.toThrow(
+          "unsafe remote rename target",
+        );
+      }
+      await expect(fs.readlink(path.join(remoteRoot, "rename-link"))).resolves.toBe(outsideDir);
+      await expect(fs.readdir(path.join(remoteRoot, "rename-directory"))).resolves.toEqual([]);
+      await expect(fs.readFile(path.join(hostRoot, "source.txt"), "utf8")).resolves.toBe("payload");
+      const renamed = "nested/renamed 'file'.txt";
+      await bridge.rename({ from: "source.txt", to: renamed });
+      for (const rootDir of [hostRoot, remoteRoot]) {
+        await expectPathMissing(path.join(rootDir, "source.txt"));
+        await expect(fs.readFile(path.join(rootDir, renamed), "utf8")).resolves.toBe("payload");
+      }
+
+      const outsideTarget = path.join(outsideDir, "target.txt");
+      await fs.writeFile(outsideTarget, "outside");
+      for (const recursive of [false, true]) {
+        for (const rootDir of [hostRoot, remoteRoot]) {
+          await fs.symlink(outsideTarget, path.join(rootDir, "link.txt"));
+        }
+        await bridge.remove({ filePath: "link.txt", recursive, force: false });
+        await expect(fs.lstat(path.join(remoteRoot, "link.txt"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
+      await fs.writeFile(path.join(hostRoot, "missing-remotely.txt"), "local");
+      await bridge.remove({ filePath: "missing-remotely.txt", force: false });
+      await expectPathMissing(path.join(hostRoot, "missing-remotely.txt"));
+
+      await fs.rm(remoteRoot, { recursive: true });
+      await bridge.remove({ filePath: "missing-root/file.txt", force: true });
+      await expectPathMissing(remoteRoot);
+      await bridge.mkdirp({ filePath: "recreated" });
+      await expect(fs.readdir(remoteRoot)).resolves.toEqual(["recreated"]);
+      await fs.rm(remoteRoot, { recursive: true });
+      await fs.symlink(outsideDir, remoteRoot);
+      sandboxMocks.remoteRoot = `${remoteRoot}/`;
+      await expect(bridge.mkdirp({ filePath: "escaped" })).rejects.toThrow("unsafe remote root");
+      await expect(fs.readdir(outsideDir)).resolves.toEqual(["target.txt"]);
     },
   );
 
@@ -1897,13 +1944,13 @@ describe("openshell fs bridges", () => {
         data: "owned",
         mkdir: true,
       }),
-    ).rejects.toThrow("Sandbox path escapes allowed mounts");
+    ).rejects.toThrow();
     await expectPathMissing(path.join(outsideDir, "escape.txt"));
     await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
     expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
   });
 
-  it("rejects writes whose final target is a symlink inside the local mount root", async () => {
+  it("rejects writes and creates whose final target is a symlink inside the local mount root", async () => {
     await using workspace = await createOpenShellTestWorkspace("fs");
     const workspaceDir = workspace.dir;
     const linkedTarget = path.join(workspaceDir, "existing.txt");
@@ -1917,7 +1964,10 @@ describe("openshell fs bridges", () => {
         data: "owned",
         mkdir: true,
       }),
-    ).rejects.toThrow("Sandbox boundary checks failed");
+    ).rejects.toThrow();
+    await expect(
+      bridge.createFileExclusive!({ filePath: "link.txt", data: "owned" }),
+    ).rejects.toThrow();
     await expect(fs.readlink(path.join(workspaceDir, "link.txt"))).resolves.toBe("existing.txt");
     await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe("keep");
     expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
@@ -1935,9 +1985,7 @@ describe("openshell fs bridges", () => {
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
       "Sandbox boundary checks failed",
     );
-    await expect(bridge.readDirectory({ filePath: "subdir" })).rejects.toThrow(
-      "Sandbox path escapes allowed mounts",
-    );
+    await expect(bridge.readDirectory({ filePath: "subdir" })).rejects.toThrow();
   });
 
   it("reads regular files and directories through the shared safe fs root", async () => {
@@ -1964,6 +2012,12 @@ describe("openshell fs bridges", () => {
     await expect(bridge.readFile({ filePath: "subdir/secret.txt", maxBytes: 5 })).rejects.toThrow(
       "Sandbox boundary checks failed",
     );
+    await fs.symlink(
+      path.join(workspaceDir, "subdir"),
+      path.join(workspaceDir, "alias"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await expect(bridge.readDirectory({ filePath: "alias" })).rejects.toThrow();
   });
 
   it.each(["external", "nested"] as const)(

@@ -8,14 +8,15 @@ import os from "node:os";
 import path from "node:path";
 import { URL } from "node:url";
 import { promisify } from "node:util";
-import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
-import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
+  assertNoPathAliasEscape,
   assertNoWindowsNetworkPath,
   hasEncodedFileUrlSeparator,
   safeFileURLToPath,
-} from "../infra/local-file-access.js";
-import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-alias-guards.js";
+  type PathAliasPolicy,
+} from "@openclaw/fs-safe/advanced";
+import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
+import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";

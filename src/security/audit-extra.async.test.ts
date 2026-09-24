@@ -190,6 +190,36 @@ description: test skill
     );
   });
 
+  it("reports incomplete plugin and skill scans without alleging unsafe code", async () => {
+    vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockResolvedValue({
+      scannedFiles: 1,
+      critical: 0,
+      warn: 0,
+      info: 0,
+      truncated: true,
+      findings: [],
+    });
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: sharedCodeSafetyWorkspaceDir } },
+    };
+    const [plugins, skills] = await Promise.all([
+      collectPluginsCodeSafetyFindings({ stateDir: sharedCodeSafetyStateDir }),
+      collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir: sharedCodeSafetyStateDir }),
+    ]);
+    for (const [kind, findings] of [
+      ["plugins", plugins],
+      ["skills", skills],
+    ] as const) {
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          checkId: `${kind}.code_safety.scan_truncated`,
+          severity: "warn",
+        }),
+      );
+      expect(findings.some((finding) => finding.checkId === `${kind}.code_safety`)).toBe(false);
+    }
+  });
+
   it("scans SKILL.md text for dangerous skill instructions", async () => {
     const stateDir = await makeTmpDir("audit-skill-markdown");
     const workspaceDir = path.join(stateDir, "workspace");

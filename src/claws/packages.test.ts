@@ -1,11 +1,17 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import { installClawPackages, preflightClawPackage } from "./packages.js";
 import { packageInstallPlan as plan } from "./packages.test-support.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
+
+vi.mock("@openclaw/fs-safe/temp", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/temp")>();
+  return { ...actual, tempWorkspace: vi.fn(actual.tempWorkspace) };
+});
 
 const integrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const pluginPackage = {
@@ -239,7 +245,6 @@ describe("preflightClawPackage isolated plugin inspection", () => {
   });
 
   it("preserves live extension-directory conflict checks for a new plugin install", async () => {
-    const createProbeExtensionsDir = vi.fn();
     const liveProbe = vi.fn(async () => ({
       ok: false as const,
       code: "plugin_target_exists" as never,
@@ -255,7 +260,6 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             request: {} as never,
           })),
           probePlugin: liveProbe,
-          createProbeExtensionsDir,
         },
       }),
     ).resolves.toMatchObject({
@@ -265,7 +269,6 @@ describe("preflightClawPackage isolated plugin inspection", () => {
     expect(liveProbe).toHaveBeenCalledWith(
       expect.not.objectContaining({ extensionsDir: expect.anything() }),
     );
-    expect(createProbeExtensionsDir).not.toHaveBeenCalled();
   });
 
   it("preserves canonical inspection when an installed plugin version conflicts", async () => {
@@ -301,8 +304,6 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             request: {} as never,
           })),
           probePlugin: probePluginConflict,
-          createProbeExtensionsDir: vi.fn(async () => "/tmp/claw-plugin-probe"),
-          removeProbeExtensionsDir: vi.fn(async () => undefined),
         },
       }),
     ).resolves.toMatchObject({
@@ -318,29 +319,44 @@ describe("preflightClawPackage isolated plugin inspection", () => {
     });
   });
 
-  it("inspects an exact installed plugin outside its live extension directory", async () => {
-    const removeProbeExtensionsDir = vi.fn(async () => {
-      throw new Error("temporary directory is still busy");
+  it("keeps canonical inspection when isolated probe cleanup reports failure", async () => {
+    let cleanupFailureInjected = false;
+    vi.mocked(tempWorkspace).mockImplementationOnce(async (options) => {
+      const actual =
+        await vi.importActual<typeof import("@openclaw/fs-safe/temp")>("@openclaw/fs-safe/temp");
+      const workspace = await actual.tempWorkspace(options);
+      const cleanup = workspace.cleanup;
+      workspace.cleanup = async () => {
+        await cleanup();
+        cleanupFailureInjected = true;
+        throw new Error("temporary directory cleanup failed");
+      };
+      return workspace;
     });
-    const isolatedProbe = vi.fn(async () => ({
-      ok: true as const,
-      pluginId: "audit",
-      packageName: "@owner/audit",
-      targetDir: "/tmp/claw-plugin-probe/audit",
-      extensions: [],
-      artifactInspection: {
-        format: "openclaw" as const,
-        mapped: ["plugin"],
-        unavailable: [],
-      },
-      clawhub: {
-        source: "clawhub" as const,
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "@owner/audit",
-        clawhubFamily: "code-plugin" as const,
-        integrity,
-      },
-    }));
+    let probeDirectory: string | undefined;
+    const isolatedProbe = vi.fn(async (params: { extensionsDir?: string }) => {
+      probeDirectory = params.extensionsDir;
+      expect((await lstat(probeDirectory!)).isDirectory()).toBe(true);
+      return {
+        ok: true as const,
+        pluginId: "audit",
+        packageName: "@owner/audit",
+        targetDir: join(probeDirectory!, "audit"),
+        extensions: [],
+        artifactInspection: {
+          format: "openclaw" as const,
+          mapped: ["plugin"],
+          unavailable: [],
+        },
+        clawhub: {
+          source: "clawhub" as const,
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "@owner/audit",
+          clawhubFamily: "code-plugin" as const,
+          integrity,
+        },
+      };
+    });
 
     await expect(
       preflightClawPackage(pluginPackage, "/tmp/workspace", {
@@ -355,8 +371,6 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             installedAt: "2026-08-06T00:00:00.000Z",
           })),
           probePlugin: isolatedProbe,
-          createProbeExtensionsDir: vi.fn(async () => "/tmp/claw-plugin-probe"),
-          removeProbeExtensionsDir,
         },
       }),
     ).resolves.toMatchObject({
@@ -369,10 +383,8 @@ describe("preflightClawPackage isolated plugin inspection", () => {
       mapped: ["plugin"],
       unavailable: [],
     });
-    expect(isolatedProbe).toHaveBeenCalledWith(
-      expect.objectContaining({ extensionsDir: "/tmp/claw-plugin-probe", dryRun: true }),
-    );
-    expect(removeProbeExtensionsDir).toHaveBeenCalledWith("/tmp/claw-plugin-probe");
+    expect(cleanupFailureInjected).toBe(true);
+    await expect(lstat(probeDirectory!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
