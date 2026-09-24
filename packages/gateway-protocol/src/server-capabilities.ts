@@ -21,4 +21,5 @@ export const GATEWAY_SERVER_CAPS = {
   SYSTEM_AGENT_WIZARD_CANCEL: "openclaw-chat-wizard-cancel",
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
   TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
+  TTS_CONVERT_INLINE_AUDIO: "tts-convert-inline-audio-v1",
 } as const;

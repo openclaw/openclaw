@@ -163,6 +163,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/claws/packages.runtime.test.ts",
   "src/claws/update-apply.requirements.test.ts",
   "src/claws/update-apply.test.ts",
+  "src/cli/capability-tts-remote.test.ts",
   "src/cli/mcp-cli.json-failure.test.ts",
   "src/cli/mcp-cli.login-loopback.test.ts",
   "src/cli/mcp-cli.oauth.test.ts",

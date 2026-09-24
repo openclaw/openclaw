@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { MAX_AUDIO_BYTES } from "@openclaw/media-core/constants";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { resolveApiKeyForProviderCore } from "../../agents/model-auth.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -45,6 +48,35 @@ async function copyTtsOutputAtomically(sourcePath: string, targetPath: string): 
   });
 }
 
+function decodeInlineTtsAudio(value: unknown): Buffer {
+  if (typeof value !== "string") {
+    throw new Error(
+      "Remote Gateway did not return inline TTS audio; update the Gateway and retry.",
+    );
+  }
+  if (estimateBase64DecodedBytes(value) > MAX_AUDIO_BYTES) {
+    throw new Error(`Remote Gateway TTS audio exceeds the ${MAX_AUDIO_BYTES} byte transfer limit.`);
+  }
+  const canonical = canonicalizeBase64(value);
+  if (!canonical) {
+    throw new Error("Remote Gateway returned invalid inline TTS audio.");
+  }
+  const audio = Buffer.from(canonical, "base64");
+  if (audio.length === 0 || audio.length > MAX_AUDIO_BYTES) {
+    throw new Error("Remote Gateway returned invalid inline TTS audio.");
+  }
+  return audio;
+}
+
+async function writeInlineTtsOutputAtomically(audio: Buffer, targetPath: string): Promise<void> {
+  await publishOutputFileAtomically({
+    filePath: targetPath,
+    writeTemp: async (tempPath) => {
+      await fs.writeFile(tempPath, audio, { flag: "wx" });
+    },
+  });
+}
+
 export async function runTtsConvert(params: {
   text: string;
   channel?: string;
@@ -58,13 +90,11 @@ export async function runTtsConvert(params: {
     const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
       config: getRuntimeConfig(),
     });
-    if (params.output && !isLoopbackHost(new URL(gatewayConnection.url).hostname)) {
-      throw new Error(
-        `--output is not supported for remote gateway TTS yet (gateway target: ${gatewayConnection.url}).`,
-      );
-    }
+    const gatewayHost = new URL(gatewayConnection.url).hostname;
+    const remoteOutputRequested = Boolean(params.output && !isLoopbackHost(gatewayHost));
     const result: {
       audioPath?: string;
+      audioBase64?: string;
       provider?: string;
       outputFormat?: string;
       voiceCompatible?: boolean;
@@ -76,13 +106,25 @@ export async function runTtsConvert(params: {
         provider: normalizeOptionalString(params.provider),
         modelId: params.modelId,
         voiceId: params.voiceId,
+        ...(remoteOutputRequested ? { includeAudio: true } : {}),
       },
+      // Negotiate on the same connection before synthesis; an older Gateway must
+      // not consume a provider call for output that this CLI cannot retrieve.
+      ...(remoteOutputRequested
+        ? { requiredCapabilities: [GATEWAY_SERVER_CAPS.TTS_CONVERT_INLINE_AUDIO] }
+        : {}),
       timeoutMs: 120_000,
     });
     let outputPath = result.audioPath;
-    if (params.output && result.audioPath) {
+    if (params.output) {
       const target = path.resolve(params.output);
-      await copyTtsOutputAtomically(result.audioPath, target);
+      if (remoteOutputRequested) {
+        await writeInlineTtsOutputAtomically(decodeInlineTtsAudio(result.audioBase64), target);
+      } else if (result.audioPath) {
+        await copyTtsOutputAtomically(result.audioPath, target);
+      } else {
+        throw new Error("Gateway TTS response did not include an audio path.");
+      }
       outputPath = target;
     }
     return {
