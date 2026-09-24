@@ -32,7 +32,14 @@ internal data class CloudflareAccessOrigin private constructor(
       }
       // OkHttp canonicalizes literal IPv6 hosts before transport; every grant and pin lookup must use that identity.
       val canonicalHost =
-        runCatching { HttpUrl.Builder().scheme("https").host(host).build().host }.getOrNull()
+        runCatching {
+          HttpUrl
+            .Builder()
+            .scheme("https")
+            .host(host)
+            .build()
+            .host
+        }.getOrNull()
           ?: throw CloudflareAccessException(CloudflareAccessException.Kind.InvalidGateway)
       return CloudflareAccessOrigin(URI("https", null, canonicalHost, if (parsed.port == 443) -1 else parsed.port, null, null, null))
     }
