@@ -19,6 +19,7 @@ import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -107,7 +108,14 @@ test("sessions.delete protects the sole explicit agent's global session before c
   embeddedRunMock.activeIds.add("sole-global");
   embeddedRunMock.waitResults.set("sole-global", true);
 
-  const result = await directSessionReq("sessions.delete", { key: "global", agentId: "ops" });
+  // The suite Gateway retains its own runtime snapshot; this direct request
+  // must use the sole-agent configuration declared by this fixture.
+  const cfg = loadGatewayTestConfig();
+  const result = await directSessionReq(
+    "sessions.delete",
+    { key: "global", agentId: "ops" },
+    { context: { getRuntimeConfig: () => cfg } },
+  );
 
   expect(result.ok).toBe(false);
   expect(result.error?.message).toBe("Cannot delete the main session (global).");

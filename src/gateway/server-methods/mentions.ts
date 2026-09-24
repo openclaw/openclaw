@@ -8,7 +8,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const mentionHandlers: GatewayRequestHandlers = {
-  "mentions.list": ({ client, context, params, respond }) => {
+  "mentions.list": async ({ client, context, params, respond }) => {
     if (!assertValidParams(params, validateMentionsListParams, "mentions.list", respond)) {
       return;
     }
@@ -20,10 +20,15 @@ export const mentionHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = context.mentionInbox.list(client);
-    respond(result.ok, result.ok ? result.value : undefined, result.ok ? undefined : result.error);
+    await context.mentionInbox.list(client, (result) => {
+      respond(
+        result.ok,
+        result.ok ? result.value : undefined,
+        result.ok ? undefined : result.error,
+      );
+    });
   },
-  "mentions.dismiss": ({ client, context, params, respond }) => {
+  "mentions.dismiss": async ({ client, context, params, respond }) => {
     if (!assertValidParams(params, validateMentionsDismissParams, "mentions.dismiss", respond)) {
       return;
     }
@@ -35,7 +40,12 @@ export const mentionHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = context.mentionInbox.dismiss(client, params.ids);
-    respond(result.ok, result.ok ? result.value : undefined, result.ok ? undefined : result.error);
+    await context.mentionInbox.dismiss(client, params.ids, (result) => {
+      respond(
+        result.ok,
+        result.ok ? result.value : undefined,
+        result.ok ? undefined : result.error,
+      );
+    });
   },
 };

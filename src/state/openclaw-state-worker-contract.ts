@@ -27,6 +27,7 @@ import type {
   ManagedImageRecord,
   ManagedImageRecordEntry,
 } from "../gateway/managed-image-record-store.types.js";
+import type { MentionInboxWorkerOperations } from "../gateway/mention-inbox.worker-contract.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type {
   SessionGroupCatalogMutation,
@@ -95,6 +96,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = WorktreeRegistryReadOperations &
   SessionStateWorkerOperations &
+  MentionInboxWorkerOperations &
   McpOAuthReadOperations &
   CurrentConversationBindingWorkerOperations &
   McpOAuthWriteOperations &

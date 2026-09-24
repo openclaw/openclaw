@@ -1,6 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type {
   ErrorShape,
+  HumanMention,
   MentionsListResult,
   UsersMentionableParams,
   UsersMentionableResult,
@@ -16,7 +17,9 @@ export type MentionCommittedInput = {
   messageId: string;
   senderProfileId: string;
   recipientProfileIds: readonly string[];
+  /** Committed source text; the Inbox redacts before retaining any excerpt. */
   excerpt?: string;
+  mentions?: readonly HumanMention[];
 };
 
 /** Keep the Gateway context independent of its context-consuming Inbox implementation. */
@@ -30,13 +33,17 @@ export type MentionInbox = {
     client: GatewayClient | null,
     input: UsersMentionableParams,
     profileIds: readonly string[],
-  ) => Result<readonly string[], ErrorShape>;
-  list: (client: GatewayClient | null) => Result<MentionsListResult, ErrorShape>;
+  ) => Promise<Result<readonly string[], ErrorShape>>;
+  list: (
+    client: GatewayClient | null,
+    publish: (result: Result<MentionsListResult, ErrorShape>) => void,
+  ) => Promise<void>;
   dismiss: (
     client: GatewayClient | null,
     ids: readonly string[],
-  ) => Result<MentionsListResult, ErrorShape>;
-  recordCommittedInput: (input: MentionCommittedInput) => void;
-  invalidate: (sessionKey?: string) => void;
-  dispose: () => void;
+    publish: (result: Result<MentionsListResult, ErrorShape>) => void,
+  ) => Promise<void>;
+  recordCommittedInput: (input: MentionCommittedInput) => Promise<void>;
+  invalidate: (sessionKey?: string) => Promise<void>;
+  dispose: () => Promise<void>;
 };

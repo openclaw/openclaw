@@ -31,6 +31,7 @@ import {
   readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.js";
+import { executeMentionInboxRead } from "../gateway/mention-inbox-read.worker.js";
 import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
@@ -402,6 +403,9 @@ serveOwnedWorkerTasks(
                       ? selectSkillLibraryRevisionManifestsBatch(db, command.input)
                       : undefined,
                   };
+                }
+                if (command.type === "mentions.policy" || command.type === "mentions.snapshot") {
+                  return executeMentionInboxRead(db, command);
                 }
                 if (command.type === "operatorApprovals.history") {
                   return {

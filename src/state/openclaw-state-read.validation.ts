@@ -53,6 +53,13 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
               (entry.entry.sessionStartedAt === undefined ||
                 typeof entry.entry.sessionStartedAt === "number"))),
       )) ||
+      (input.command.type === "mentions.policy" &&
+        isRecord(input.command.input) &&
+        Array.isArray(input.command.input.profileIds) &&
+        input.command.input.profileIds.length <= 10000 &&
+        input.command.input.profileIds.every((id: unknown) => typeof id === "string") &&
+        typeof input.command.input.directory === "boolean") ||
+      (input.command.type === "mentions.snapshot" && typeof input.command.revision === "number") ||
       (input.command.type === "mcpOAuth.statuses" &&
         Array.isArray(input.command.input) &&
         input.command.input.every((key) => typeof key === "string")) ||

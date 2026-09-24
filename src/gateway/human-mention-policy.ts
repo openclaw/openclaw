@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -13,31 +14,47 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
-import { readUserProfileDirectory } from "../state/user-profile-reads.js";
+import type { CurrentUserProfileDisplay } from "./current-user-profile-display.types.js";
 import {
-  resolveCurrentUserProfileDisplay,
-  type CurrentUserProfileDisplay,
-} from "./current-user-profile-display.js";
+  MAX_MENTION_POLICY_PROFILES_PER_READ,
+  MAX_MENTION_POLICY_TARGETS,
+  type HumanMentionProfileFacts,
+  type HumanMentionPolicyReadResult,
+} from "./human-mention-policy-read.types.js";
 import {
-  authorizeGatewaySessionCreation,
-  resolveOperatorRolePolicyForProfile,
+  prepareHumanMentionTargets,
+  type HumanMentionTargetInput,
+  type HumanMentionTargetAuthority,
+  type PreparedHumanMentionTarget,
+} from "./human-mention-policy-targets.js";
+import {
+  readOperatorRolePolicyRevision,
+  resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import { resolveOperatorSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   createProfileSessionEntryFilter,
   isSessionVisibilityAllowed,
-  prepareSessionSharing,
-  resolveSessionSharingTarget,
+  createSessionListEntryFilter,
   resolveSessionVisibility,
 } from "./session-sharing.js";
 
-const MAX_DIRECTORY_PROFILES = 10_000;
+export type HumanMentionPreparation = {
+  profileIds?: readonly string[];
+  targets?: readonly HumanMentionTargetInput[];
+  directory?: boolean;
+};
 
 type MentionProfile = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
 type MentionTarget = {
@@ -64,58 +81,300 @@ export function humanMentionDisplayLabel(label: string | undefined, profileId: s
   return truncateUtf16Safe(text || `Person ${profileId.slice(0, 8)}`, 256);
 }
 
+/** One caller owns preparation through selection/commit; the Inbox uses its FIFO. */
 export function createHumanMentionPolicy(params: {
   getRuntimeConfig: () => OpenClawConfig;
   getClients: () => Iterable<GatewayClient>;
+  getRetainedPreparation?: () => HumanMentionPreparation;
+  onInvalidated?: () => void;
 }) {
   let active = true;
   let profileVersion = -1;
-  const displays = new Map<string, CurrentUserProfileDisplay>();
-  let directory: { profiles: { id: string; logins: string[] }[]; truncated: boolean } | undefined;
+  let roleVersion = -1;
+  let targetConfig: OpenClawConfig | undefined;
+  let targetRevision = 0;
+  const stateContext = captureOpenClawStateWorkerContext();
+  // Cached close custody belongs to this policy, not a requesting maintenance scope.
+  const inOwnerContext = AsyncLocalStorage.snapshot();
+  const profiles = new Map<string, HumanMentionProfileFacts>();
+  const targets = new Map<string, PreparedHumanMentionTarget | null>();
+  const targetAuthorities = new Map<HumanMentionTargetAuthority, Set<string>>();
+  let directory: HumanMentionPolicyReadResult["directory"];
   let eligibleDirectory:
     | { key: string; users: (MentionableUser & { logins: string[] })[]; truncated: boolean }
     | undefined;
+  const targetKey = (target: HumanMentionTargetInput) =>
+    JSON.stringify([target.agentId, target.sessionKey]);
+  function releaseUncachedTargetAuthorities() {
+    for (const [authority, keys] of targetAuthorities) {
+      for (const key of keys) {
+        if (!targets.has(key)) {
+          keys.delete(key);
+        }
+      }
+      if (!keys.size) {
+        authority.dispose();
+        targetAuthorities.delete(authority);
+      }
+    }
+  }
+  const invalidateTargets = (sessionKey?: string) => {
+    targetRevision++;
+    for (const [key, target] of targets) {
+      if (!sessionKey || !target || target.storeKeys.includes(sessionKey)) {
+        targets.delete(key);
+      }
+    }
+    releaseUncachedTargetAuthorities();
+    eligibleDirectory = undefined;
+    params.onInvalidated?.();
+  };
+  const stopRows = sessionChanges.subscribe(() => invalidateTargets());
+  const stopSessions = onSessionIdentityMutation(() => invalidateTargets());
 
   function synchronizeProfileVersion(): void {
+    if (active) {
+      stateContext.admission.assertCurrent();
+    }
     const version = readUserProfileVersion();
-    if (profileVersion !== version) {
+    const roles = readOperatorRolePolicyRevision();
+    if (profileVersion !== version || roleVersion !== roles) {
       profileVersion = version;
-      displays.clear();
+      roleVersion = roles;
+      profiles.clear();
       directory = undefined;
       eligibleDirectory = undefined;
+      params.onInvalidated?.();
+    }
+    const cfg = params.getRuntimeConfig();
+    if (targetConfig !== cfg) {
+      targetConfig = cfg;
+      invalidateTargets();
     }
   }
 
-  function needsDirectoryPreparation(): boolean {
+  function preparationCohort(input: HumanMentionPreparation) {
     synchronizeProfileVersion();
-    return active && !directory;
+    synchronizeTargetAuthority();
+    const retained = params.getRetainedPreparation?.();
+    const profileIds = new Set([
+      ...(retained?.profileIds ?? []),
+      ...(input.profileIds ?? []),
+      ...(directory?.profiles.map(({ id }) => id) ?? []),
+    ]);
+    for (const client of params.getClients()) {
+      const id = client.authenticatedUserProfile?.profileId;
+      if (id) {
+        profileIds.add(id);
+      }
+    }
+    const requiredTargets = new Map(
+      [...(retained?.targets ?? []), ...(input.targets ?? [])].map((target) => [
+        targetKey(target),
+        target,
+      ]),
+    );
+    // Keep only live ownership: retained source recipients (including tombstones),
+    // active senders/targets, the bounded directory, current clients and this operation.
+    // Canonical facts share the same object as their requested alias; creator alias
+    // lists stay complete. FIFO ownership prevents pruning another operation's facts.
+    const keepProfiles = new Set(profileIds);
+    for (const id of profileIds) {
+      const display = profiles.get(id)?.display;
+      if (display?.kind === "resolved") {
+        keepProfiles.add(display.profileId);
+      }
+    }
+    for (const id of profiles.keys()) {
+      if (!keepProfiles.has(id)) {
+        profiles.delete(id);
+      }
+    }
+    for (const key of targets.keys()) {
+      if (!requiredTargets.has(key)) {
+        targets.delete(key);
+      }
+    }
+    releaseUncachedTargetAuthorities();
+    return { profileIds: [...profileIds], targets: [...requiredTargets.values()] };
   }
 
-  async function prepareDirectory(): Promise<void> {
-    if (!needsDirectoryPreparation()) {
+  function needsPreparation(input: HumanMentionPreparation = {}): boolean {
+    if (!active) {
+      return false;
+    }
+    const cohort = preparationCohort(input);
+    return (
+      Boolean(input.directory && !directory) ||
+      cohort.profileIds.some((id) => !profiles.has(id)) ||
+      cohort.targets.some((target) => !targets.has(targetKey(target)))
+    );
+  }
+
+  function synchronizeTargetAuthority(): void {
+    for (const authority of targetAuthorities.keys()) {
+      try {
+        authority.assertCurrent();
+      } catch {
+        invalidateTargets();
+        break;
+      }
+    }
+  }
+
+  async function prepare(input: HumanMentionPreparation = {}): Promise<void> {
+    if (!active) {
       return;
     }
+    const cohort = preparationCohort(input);
     const version = profileVersion;
-    const prepared = await readUserProfileDirectory(MAX_DIRECTORY_PROFILES);
-    if (active && version === readUserProfileVersion()) {
-      directory = prepared;
+    const roles = roleVersion;
+    const revision = targetRevision;
+    const cfg = params.getRuntimeConfig();
+    const profileIds = cohort.profileIds.filter((id) => !profiles.has(id));
+    const targetInputs = cohort.targets.filter((target) => !targets.has(targetKey(target)));
+    const includeDirectory = Boolean(input.directory && !directory);
+    const acquired = new Set<HumanMentionTargetAuthority>();
+    const readProfiles = async (): Promise<HumanMentionPolicyReadResult> => {
+      const facts: HumanMentionPolicyReadResult = { profiles: [] };
+      const readCount = Math.max(profileIds.length, includeDirectory ? 1 : 0);
+      for (let offset = 0; offset < readCount; offset += MAX_MENTION_POLICY_PROFILES_PER_READ) {
+        const batch = profileIds.slice(offset, offset + MAX_MENTION_POLICY_PROFILES_PER_READ);
+        const readDirectory = offset === 0 && includeDirectory;
+        const result = await executeExistingOpenClawStateRead(
+          { path: stateContext.admission.databasePath, env: stateContext.environment },
+          { type: "mentions.policy", input: { profileIds: batch, directory: readDirectory } },
+          { context: stateContext, current: true },
+        );
+        stateContext.admission.assertCurrent();
+        if (result && (!result.ok || result.type !== "mentions.policy")) {
+          throw new Error("Mention profile policy is unavailable");
+        }
+        const prepared: HumanMentionPolicyReadResult =
+          result?.ok && result.type === "mentions.policy"
+            ? result.result
+            : {
+                profiles: batch.map((requestedId) => ({
+                  requestedId,
+                  display: { kind: "unresolved" },
+                  role: null,
+                  aliases: [],
+                })),
+                ...(readDirectory ? { directory: { profiles: [], truncated: false } } : {}),
+              };
+        facts.profiles.push(...prepared.profiles);
+        if (prepared.directory) {
+          facts.directory = prepared.directory;
+        }
+      }
+      return facts;
+    };
+    const readTargets = async () => {
+      const prepared: Array<{
+        input: HumanMentionTargetInput;
+        target: PreparedHumanMentionTarget | null;
+        authority?: HumanMentionTargetAuthority;
+      }> = [];
+      for (let offset = 0; offset < targetInputs.length; offset += MAX_MENTION_POLICY_TARGETS) {
+        const batch = targetInputs.slice(offset, offset + MAX_MENTION_POLICY_TARGETS);
+        let authority: HumanMentionTargetAuthority | undefined;
+        const values = await inOwnerContext(() =>
+          prepareHumanMentionTargets(cfg, batch, (retained) => {
+            authority = retained;
+            acquired.add(retained);
+          }),
+        );
+        stateContext.admission.assertCurrent();
+        authority?.assertCurrent();
+        for (const [index, target] of batch.entries()) {
+          prepared.push({ input: target, target: values[index] ?? null, authority });
+        }
+      }
+      return prepared;
+    };
+    try {
+      // A failed sibling must settle before unadopted target custody can be released.
+      const [profileRead, targetRead] = await Promise.allSettled([readProfiles(), readTargets()]);
+      if (profileRead.status === "rejected") {
+        throw profileRead.reason;
+      }
+      if (targetRead.status === "rejected") {
+        throw targetRead.reason;
+      }
+      const facts = profileRead.value;
+      const preparedTargets = targetRead.value;
+      stateContext.admission.assertCurrent();
+      synchronizeProfileVersion();
+      if (!active) {
+        return;
+      }
+      if (version === profileVersion && roles === roleVersion) {
+        for (const fact of facts.profiles) {
+          const canonicalId = fact.display.kind === "resolved" ? fact.display.profileId : undefined;
+          const canonical = (canonicalId && profiles.get(canonicalId)) || fact;
+          profiles.set(fact.requestedId, canonical);
+          if (canonicalId) {
+            profiles.set(canonicalId, canonical);
+          }
+        }
+        if (facts.directory) {
+          directory = facts.directory;
+        }
+      }
+      if (revision === targetRevision && cfg === params.getRuntimeConfig()) {
+        for (const authority of acquired) {
+          authority.assertCurrent();
+        }
+        for (const prepared of preparedTargets) {
+          const key = targetKey(prepared.input);
+          targets.set(key, prepared.target);
+          if (prepared.authority) {
+            const keys = targetAuthorities.get(prepared.authority) ?? new Set<string>();
+            keys.add(key);
+            targetAuthorities.set(prepared.authority, keys);
+          }
+        }
+      }
+    } finally {
+      for (const authority of acquired) {
+        if (!targetAuthorities.has(authority)) {
+          authority.dispose();
+        }
+      }
     }
   }
 
   function readProfile(profileId: string): MentionProfile | undefined {
     synchronizeProfileVersion();
-    let profile = displays.get(profileId);
-    if (!profile) {
-      profile = resolveCurrentUserProfileDisplay(profileId);
-      if (displays.size >= MAX_DIRECTORY_PROFILES) {
-        const oldest = displays.keys().next().value;
-        if (oldest !== undefined) {
-          displays.delete(oldest);
-        }
-      }
-      displays.set(profileId, profile);
+    const profile = active ? profiles.get(profileId)?.display : undefined;
+    return profile?.kind === "resolved" ? profile : undefined;
+  }
+
+  function rolePolicy(profileId: string, cfg: OpenClawConfig) {
+    return resolveOperatorRolePolicyForAssignment(
+      profileId,
+      profiles.get(profileId)?.role ?? null,
+      cfg,
+    );
+  }
+
+  function creatorFilter(profileId: string) {
+    return prepareSessionCreatorProfile(profileId, new Set(profiles.get(profileId)?.aliases ?? []));
+  }
+
+  function resolveTarget(
+    input: HumanMentionTargetInput & { cfg?: OpenClawConfig },
+  ): PreparedHumanMentionTarget | null {
+    synchronizeProfileVersion();
+    synchronizeTargetAuthority();
+    if (
+      !active ||
+      (input.cfg && input.cfg !== params.getRuntimeConfig()) ||
+      !targets.has(targetKey(input))
+    ) {
+      throw new Error("Mention session policy has not been prepared");
     }
-    return profile.kind === "resolved" ? profile : undefined;
+    return targets.get(targetKey(input)) ?? null;
   }
 
   function identify(
@@ -146,7 +405,7 @@ export function createHumanMentionPolicy(params: {
     if (!profile) {
       return err(authenticatedProfileUnavailableError());
     }
-    const policy = resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
+    const policy = rolePolicy(profile.profileId, cfg);
     if (policy && !scopesAllowRead(policy.scopes)) {
       return err(errorShape(ErrorCodes.FORBIDDEN, "Your operator role cannot read mentions."));
     }
@@ -154,13 +413,17 @@ export function createHumanMentionPolicy(params: {
       client.connect.scopes?.includes(ADMIN_SCOPE) &&
       (!policy || policy.scopes.includes(ADMIN_SCOPE));
     // The reader lives for one synchronous projection, never across an await.
-    const { entryFilter } = prepareSessionSharing({
-      cfg,
-      client: {
-        connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [READ_SCOPE] },
-        internal: { operatorRoleActor: { kind: "operator", profileId: profile.profileId } },
+    const entryFilter = createSessionListEntryFilter(
+      {
+        cfg,
+        client: {
+          connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [READ_SCOPE] },
+          internal: { operatorRoleActor: { kind: "operator", profileId: profile.profileId } },
+        },
       },
-    });
+      creatorFilter(profile.profileId),
+      { sessionCap: policy?.sessions.others },
+    );
     return ok({
       profile,
       canRead: (target) => entryFilter?.(target.sessionKey, target.entry) ?? true,
@@ -177,7 +440,7 @@ export function createHumanMentionPolicy(params: {
     if (!profile || target.entry.incognito === true || isIncognitoSessionKey(target.sessionKey)) {
       return undefined;
     }
-    const policy = resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
+    const policy = rolePolicy(profile.profileId, cfg);
     const scopes = policy?.scopes ?? [READ_SCOPE];
     if (!scopesAllowRead(scopes)) {
       return undefined;
@@ -185,10 +448,13 @@ export function createHumanMentionPolicy(params: {
     if (scopes.includes(ADMIN_SCOPE)) {
       return profile;
     }
-    const entryFilter = createProfileSessionEntryFilter({
-      profileId: profile.profileId,
-      sessionCap: policy?.sessions.others,
-    });
+    const entryFilter = createProfileSessionEntryFilter(
+      {
+        profileId: profile.profileId,
+        sessionCap: policy?.sessions.others,
+      },
+      creatorFilter(profile.profileId),
+    );
     return entryFilter(target.sessionKey, target.entry) ? profile : undefined;
   }
 
@@ -207,11 +473,7 @@ export function createHumanMentionPolicy(params: {
       if (!agent.ok) {
         return err(agent.error);
       }
-      const resolved = resolveSessionSharingTarget({
-        cfg,
-        sessionKey: input.sessionKey,
-        agentId: agent.agentId,
-      });
+      const resolved = resolveTarget({ sessionKey: input.sessionKey, agentId: input.agentId });
       const target = resolved && {
         agentId: resolved.agentId,
         sessionKey: resolved.canonicalKey,
@@ -230,13 +492,16 @@ export function createHumanMentionPolicy(params: {
     if (!agent.ok) {
       return err(agent.error);
     }
-    const creationError = authorizeGatewaySessionCreation({
-      cfg,
-      profileId: requester.profile.profileId,
-      agentId: agent.agentId,
-    });
-    if (creationError) {
-      return err(creationError);
+    const role = rolePolicy(requester.profile.profileId, cfg);
+    if (role && role.agents !== "*" && !role.agents.includes(agent.agentId)) {
+      return err(
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          'Your operator role cannot create sessions for agent "' +
+            agent.agentId +
+            '"; choose an allowed agent or ask a gateway administrator to update your role.',
+        ),
+      );
     }
     const visibility = resolveSessionVisibility({ visibility: input.visibility });
     if (!isSessionVisibilityAllowed(cfg, visibility)) {
@@ -258,16 +523,18 @@ export function createHumanMentionPolicy(params: {
 
   return {
     identify,
-    prepareDirectory,
-    needsDirectoryPreparation,
+    prepare,
+    needsPreparation,
+    resolveTarget,
     readProfile,
     recipientProfile,
-    invalidateDirectory(): void {
-      eligibleDirectory = undefined;
-    },
+    invalidateTargets,
     dispose(): void {
       active = false;
-      displays.clear();
+      profiles.clear();
+      invalidateTargets();
+      stopRows();
+      stopSessions();
       directory = undefined;
       eligibleDirectory = undefined;
     },
@@ -276,6 +543,12 @@ export function createHumanMentionPolicy(params: {
       input: UsersMentionableParams,
     ): Result<UsersMentionableResult, ErrorShape> {
       const cfg = params.getRuntimeConfig();
+      // Incognito never has recipients. This non-disclosing answer does not open
+      // the process-held database or attest that an arbitrary key exists.
+      if ("sessionKey" in input && isIncognitoSessionKey(input.sessionKey)) {
+        const requester = identify(client, cfg);
+        return requester.ok ? ok({ users: [], truncated: false }) : requester;
+      }
       const context = resolveContext(client, input, cfg);
       if (!context.ok) {
         return context;
@@ -285,7 +558,7 @@ export function createHumanMentionPolicy(params: {
         throw new Error("The mention directory has not been prepared.");
       }
       // Keystrokes reuse one bounded eligible roster; identity/session/role changes replace it.
-      const key = JSON.stringify([profileVersion, target, cfg.gateway?.roles]);
+      const key = JSON.stringify([profileVersion, roleVersion, target, cfg.gateway?.roles]);
       if (eligibleDirectory?.key !== key) {
         const users = directory.profiles.flatMap(({ id, logins }) => {
           const candidate = recipientProfile(id, target, cfg);

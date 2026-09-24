@@ -205,7 +205,7 @@ it.skipIf(process.env.OPENCLAW_ALLOCATION_BENCH !== "1")(
       } finally {
         inspector.disconnect();
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
       }
     });
   },

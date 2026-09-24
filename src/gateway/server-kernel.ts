@@ -260,7 +260,7 @@ async function createGatewayKernelWithSdkHost(
       await lifecycleRuntime.closeOnStartupFailure();
     } else {
       closeStartupTrace?.();
-      kernelState?.mentionInbox.dispose();
+      await kernelState?.mentionInbox.dispose();
       await sdkResourceHost.drainWork();
       const cleanupErrors: unknown[] = [];
       const releaseMetadata = async (

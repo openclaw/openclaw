@@ -41,6 +41,7 @@ import {
   listManagedImageRecordEntriesInDatabase,
   listManagedImageOriginalMediaIdsInDatabase,
 } from "../gateway/managed-image-record-store.kernel.js";
+import { mutateMentionInboxInWorker } from "../gateway/mention-inbox.worker.js";
 import {
   executeOperatorApprovalCommand,
   isOperatorApprovalCommand,
@@ -163,19 +164,23 @@ export function executeSharedStateCommand(
   open: () => OpenClawStateDatabase,
   hasNativeDatabase: boolean,
 ): Operations[keyof Operations]["output"] {
+  const openOptions = () => ({
+    database: open(),
+    path: context.databasePath,
+    env: getSqliteWorkerStateContext().environment,
+  });
   // Dispatch preparation has loaded this module; do not open or observe token state.
   if (command.type === "deviceAuth.prepare") {
     return undefined;
+  }
+  if (command.type === "mentions.mutate") {
+    return mutateMentionInboxInWorker(command.input, openOptions());
   }
   if (isMcpOAuthWorkerCommand(command)) {
     return executeMcpOAuthWorkerCommand(open(), command);
   }
   if (command.type === "execApprovals.commitAuthorizations" || isOperatorApprovalCommand(command)) {
-    const databaseOptions = {
-      database: open(),
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    };
+    const databaseOptions = openOptions();
     return command.type === "execApprovals.commitAuthorizations"
       ? commitExecAuthorizationsInWorker(command.input, databaseOptions)
       : executeOperatorApprovalCommand(command, databaseOptions);
@@ -371,25 +376,13 @@ export function executeSharedStateCommand(
     );
   }
   if (isOnboardingRecommendationWriteCommand(command)) {
-    return executeOnboardingRecommendationCommand(command, {
-      database: open(),
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    });
+    return executeOnboardingRecommendationCommand(command, openOptions());
   }
   if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
-    return executeUserPreferenceCommand(command, {
-      database: open(),
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    });
+    return executeUserPreferenceCommand(command, openOptions());
   }
   if (isUserProfileCommand(command)) {
-    return executeUserProfileCommand(command, {
-      database: open(),
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    });
+    return executeUserProfileCommand(command, openOptions());
   }
   if (isPluginBlobWorkerCommand(command)) {
     return executePluginBlobCommand(command, context.databasePath, open);

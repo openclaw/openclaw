@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
@@ -9,7 +8,6 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
-import { listUserProfileGitHubLogins } from "./user-profile-github-identity.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
 import {
   executeUserProfileWrite,
@@ -22,47 +20,11 @@ import {
   toUserProfile,
   userProfilesDb,
 } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import type {
   ProfileDisplayRow,
   UserProfileAvatarMime,
   UserChannelIdentityWorkerOperations,
 } from "./user-profiles.types.js";
-
-type UserProfileReadWorkerOperations = {
-  "userProfiles.list": { input: undefined; output: ReturnType<typeof listUserProfilesSync> };
-  "userProfiles.directory": {
-    input: { limit: number };
-    output: { profiles: Array<{ id: string; logins: string[] }>; truncated: boolean };
-  };
-};
-
-function executeUserProfileReadCommand(
-  command: SqliteWorkerCommand<UserProfileReadWorkerOperations>,
-  options: OpenClawStateDatabaseOptions,
-): UserProfileReadWorkerOperations[keyof UserProfileReadWorkerOperations]["output"] {
-  if (command.type === "userProfiles.list") {
-    return listUserProfilesSync(options);
-  }
-  const database = openOpenClawStateDatabase(options);
-  ensureUserProfilesSchema(options, database);
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      const profiles = listUserProfilesSync(options).filter(
-        (profile) => profile.mergedInto === null,
-      );
-      const logins = listUserProfileGitHubLogins(options);
-      return {
-        profiles: profiles
-          .slice(0, command.input.limit)
-          .map(({ id }) => ({ id, logins: logins.get(id) ?? [] })),
-        truncated: profiles.length > command.input.limit,
-      };
-    },
-    { databaseLabel: database.path, operationLabel: "user-profiles.directory" },
-  );
-}
 
 type UserProfileAvatarWorkerOperations = {
   "userProfiles.avatar.inspect": {
@@ -131,8 +93,9 @@ function executeUserProfileAvatarCommand(
   );
 }
 
-export type UserProfileWorkerOperations = UserProfileReadWorkerOperations &
-  UserProfileAvatarWorkerOperations &
+export type UserProfileWorkerOperations = {
+  "userProfiles.list": { input: undefined; output: ReturnType<typeof listUserProfilesSync> };
+} & UserProfileAvatarWorkerOperations &
   UserProfileWriteOperations &
   UserChannelIdentityWorkerOperations;
 
@@ -142,7 +105,6 @@ export function isUserProfileCommand(command: {
   return (
     isUserProfileWriteCommand(command) ||
     command.type === "userProfiles.list" ||
-    command.type === "userProfiles.directory" ||
     command.type === "userProfiles.channelIdentity.change" ||
     command.type === "userProfiles.avatar.inspect" ||
     command.type === "userProfiles.avatar.adopt"
@@ -159,8 +121,8 @@ export function executeUserProfileCommand(
   if (command.type === "userProfiles.channelIdentity.change") {
     return executeUserChannelIdentityChange(command.input, options);
   }
-  if (command.type === "userProfiles.list" || command.type === "userProfiles.directory") {
-    return executeUserProfileReadCommand(command, options);
+  if (command.type === "userProfiles.list") {
+    return listUserProfilesSync(options);
   }
   return executeUserProfileAvatarCommand(command, options);
 }

@@ -14,7 +14,7 @@ import {
   isHeartbeatHistoryTurnBoundaryMessage,
   createPreSessionStartAnnouncePairFilter,
 } from "./chat-display-projection.history.js";
-import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
+import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.types.js";
 import type {
   SessionTranscriptReader,
   ReadRecentSessionMessagesResult,

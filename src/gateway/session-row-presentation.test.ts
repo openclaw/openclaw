@@ -194,7 +194,7 @@ it.each(["running", "queued", "capacity-wait"] as const)(
         releaseWait?.();
         releaseAgentRunContext(runId, claim);
         projection.dispose();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         for (const key of [child, grandchild]) {
           subagentRuns.delete(`original:${key}`);
         }
@@ -400,7 +400,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
       expect(socket.send.mock.calls).toHaveLength(0);
     } finally {
       detach();
-      connection.mentionInbox.dispose();
+      await connection.mentionInbox.dispose();
       projection.dispose();
     }
   });

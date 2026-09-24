@@ -430,7 +430,9 @@ describe("user turn transcript persistence", () => {
       });
       const recorder = createUserTurnTranscriptRecorder({
         input: admittedInput,
-        onOriginalInputCommitted: ({ anchor }) => committedEntries.push(anchor.entryId),
+        onOriginalInputCommitted: ({ anchor }) => {
+          committedEntries.push(anchor.entryId);
+        },
         resolveInput: async () => {
           markResolverStarted();
           return await mediaInput;
@@ -615,7 +617,9 @@ describe("user turn transcript persistence", () => {
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "admit after rebuild", idempotencyKey: "projection:user" },
         target,
-        onOriginalInputCommitted: ({ anchor }) => committedEntries.push(anchor.entryId),
+        onOriginalInputCommitted: ({ anchor }) => {
+          committedEntries.push(anchor.entryId);
+        },
       });
 
       const persisted = await recorder.persistApproved({ expectedSessionId: target.sessionId });

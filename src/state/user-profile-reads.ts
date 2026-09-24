@@ -31,13 +31,3 @@ export async function listProfiles(options: ProfileReadOptions = {}) {
     input: undefined,
   });
 }
-
-/** Candidate IDs and search labels; current recipient policy remains caller-owned. */
-export async function readUserProfileDirectory(limit: number, options: ProfileReadOptions = {}) {
-  const context = captureOpenClawStateWorkerContext(options);
-  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "userProfiles.directory",
-    input: { limit },
-  });
-}

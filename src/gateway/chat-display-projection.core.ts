@@ -50,7 +50,7 @@ import { isSuppressedControlReplyText } from "./control-reply-text.js";
 import type {
   CurrentUserProfileDisplay,
   CurrentUserProfileDisplayResolver,
-} from "./current-user-profile-display.js";
+} from "./current-user-profile-display.types.js";
 import { projectTranscriptImageArtifacts } from "./transcript-image-artifacts.js";
 
 export type ChatDisplayProjectionOptions = {

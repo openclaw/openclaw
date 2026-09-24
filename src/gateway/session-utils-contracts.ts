@@ -22,7 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
-import type { CurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import type { CurrentUserProfileDisplay } from "./current-user-profile-display.types.js";
 
 export type GatewayModelThinkingProfile = {
   thinkingLevels: ReturnType<typeof listThinkingLevelOptions>;

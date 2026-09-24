@@ -352,7 +352,7 @@ export function startManagedGatewayConfigReloader(
       committedRuntimeConfig = nextCommittedRuntimeConfig;
       publishOperatorRoleConfigChange(params.resolveGatewayContext?.());
       publishSystemEventStoreConfig(nextCommittedRuntimeConfig);
-      params.resolveGatewayContext?.()?.mentionInbox?.invalidate();
+      void params.resolveGatewayContext?.()?.mentionInbox?.invalidate();
       if (canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
         advancePreparedModelRuntimeConfig(nextCommittedRuntimeConfig);
       }

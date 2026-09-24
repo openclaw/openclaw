@@ -82,6 +82,7 @@ import {
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createMentionInbox } from "./mention-inbox.js";
+import { readMentionInbox } from "./mention-inbox.test-support.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionLog } from "./server-methods/sessions-shared.js";
 import { identifiedClient, soloClient } from "./server-methods/sessions-sharing.test-support.js";
@@ -7253,18 +7254,13 @@ test.each(mentionCreationOwners)(
         expect(created.payload?.runStarted).toBe(true);
         key = created.payload?.key;
         expect(key).toMatch(new RegExp(`^agent:${agentId}:dashboard:`));
-        expect(inbox.list(recipient)).toMatchObject({
-          ok: true,
-          value: {
-            items: [
-              { senderProfileId: alice.id, sessionKey: key, agentId, excerpt: "@Bob review this" },
-            ],
-          },
-        });
-        expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
+        expect((await readMentionInbox(inbox, recipient)).items).toMatchObject([
+          { senderProfileId: alice.id, sessionKey: key, agentId, excerpt: "@Bob review this" },
+        ]);
+        expect((await readMentionInbox(inbox, sender)).items).toEqual([]);
       } finally {
         await waitForCreatedSessionRun(context, storePath, key);
-        inbox.dispose();
+        await inbox.dispose();
       }
     }),
 );

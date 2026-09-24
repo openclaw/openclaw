@@ -281,7 +281,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     } finally {
       await flushPendingSessionsChangedEvents(context);
       detach();
-      connection.mentionInbox.dispose();
+      await connection.mentionInbox.dispose();
       projection.dispose();
       release();
     }

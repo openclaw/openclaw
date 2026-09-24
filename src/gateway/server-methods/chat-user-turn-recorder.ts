@@ -4,7 +4,6 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { normalizeMessageClientSources } from "../../chat/message-client-source.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
@@ -195,7 +194,7 @@ export function createGatewayChatUserTurnController(params: {
       params.warn(`gateway user transcript persistence failed: ${formatForLog(error)}`),
     ...(selectedMentions && senderProfileId && mentionInbox
       ? {
-          onOriginalInputCommitted: ({ message, anchor }: UserTurnOriginalInputCommit) => {
+          onOriginalInputCommitted: async ({ message, anchor }: UserTurnOriginalInputCommit) => {
             const stored = message["__openclaw"]?.humanMentions;
             const text =
               extractTextFromChatContent(message.content, {
@@ -222,7 +221,7 @@ export function createGatewayChatUserTurnController(params: {
               );
               return;
             }
-            mentionInbox.recordCommittedInput({
+            await mentionInbox.recordCommittedInput({
               sourceId,
               committedSource: {
                 generation: anchor.generation,
@@ -235,7 +234,8 @@ export function createGatewayChatUserTurnController(params: {
               messageId: anchor.entryId,
               senderProfileId,
               recipientProfileIds: retained.map((mention) => mention.profileId),
-              excerpt: redactSensitiveText(text),
+              excerpt: text,
+              mentions: retained,
             });
           },
         }

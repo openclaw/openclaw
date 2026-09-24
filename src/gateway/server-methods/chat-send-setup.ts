@@ -81,13 +81,14 @@ export async function prepareAndAdmitChatSend(
     return undefined;
   }
   if (normalizedRequest.value.mentions) {
-    const mentions = context.mentionInbox?.validateRecipients(
+    const mentions = await context.mentionInbox?.validateRecipients(
       client,
       preparedSession.value.entry
         ? { sessionKey: preparedSession.value.sessionKey, agentId: preparedSession.value.agentId }
         : { agentId: preparedSession.value.agentId },
       normalizedRequest.value.mentions.map((mention) => mention.profileId),
     );
+    assertCurrent?.();
     if (!mentions?.ok) {
       respond(
         false,

@@ -19,7 +19,7 @@ import {
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
-import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { createHumanMentionPolicy } from "../human-mention-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
@@ -233,99 +233,138 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
     const profileId = client?.authenticatedUserProfile?.profileId;
-    const profile = profileId && resolveCurrentUserProfileDisplay(profileId);
-    if (
-      !client ||
-      client.invalidated ||
-      client.connectionSignal?.aborted ||
-      isSyntheticGatewayCaller(client) ||
-      !profile ||
-      profile.kind !== "resolved"
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "Personal session visibility requires a signed-in profile.",
-        ),
-      );
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedSessionAgentId(cfg, params.key, params.agentId);
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const target = resolveSessionSharingTarget({
-      cfg,
-      sessionKey: params.key,
-      agentId: requestedAgent.agentId,
+    const policy = createHumanMentionPolicy({
+      getRuntimeConfig: context.getRuntimeConfig,
+      getClients: () => (client ? [client] : []),
     });
-    if (
-      !target ||
-      target.entry.sessionId !== params.expectedSessionId ||
-      target.entry.incognito ||
-      authorizeIncognitoSessionTarget({ client, sessionKey: params.key, target }) ||
-      createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Session is unavailable or changed. Refresh the session list.",
-        ),
-      );
-      return;
-    }
-    const updated = updateSessionProfileInvolvement(
-      { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
-      {
-        expectedSessionId: params.expectedSessionId,
-        profileIds: [profile.profileId],
-        change: { kind: "visibility", hidden: params.hidden },
-        assertCurrent: () => {
-          const currentCfg = context.getRuntimeConfig();
-          const current = resolveSessionSharingTarget({
-            cfg: currentCfg,
-            sessionKey: target.canonicalKey,
-            agentId: target.agentId,
-          });
-          const currentProfile = client.authenticatedUserProfile?.profileId;
-          if (
-            client.invalidated ||
-            client.connectionSignal?.aborted ||
-            currentProfile !== profileId ||
-            !current ||
-            current.entry.sessionId !== params.expectedSessionId ||
-            current.entry.incognito ||
-            createSessionListEntryFilter({ client, cfg: currentCfg })?.(
-              current.storeKey,
-              current.entry,
-            ) === false
-          ) {
-            throw new SessionMutationAuthorizationChangedError(
-              errorShape(ErrorCodes.FORBIDDEN, "Session access changed. Refresh the session list."),
-            );
-          }
+    try {
+      const preparation = {
+        profileIds: profileId ? [profileId] : [],
+        targets: [{ sessionKey: params.key, agentId: params.agentId }],
+      };
+      while (policy.needsPreparation(preparation)) {
+        await policy.prepare(preparation);
+      }
+      const profile = profileId && policy.readProfile(profileId);
+      if (
+        !client ||
+        client.invalidated ||
+        client.connectionSignal?.aborted ||
+        isSyntheticGatewayCaller(client) ||
+        !profile
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.FORBIDDEN,
+            "Personal session visibility requires a signed-in profile.",
+          ),
+        );
+        return;
+      }
+      const cfg = context.getRuntimeConfig();
+      const requestedAgent = resolveRequestedSessionAgentId(cfg, params.key, params.agentId);
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      const target = policy.resolveTarget({ sessionKey: params.key, agentId: params.agentId });
+      const reader = policy.identify(client, cfg);
+      if (
+        !target ||
+        target.entry.sessionId !== params.expectedSessionId ||
+        target.entry.incognito ||
+        authorizeIncognitoSessionTarget({ client, sessionKey: params.key, target }) ||
+        !reader.ok ||
+        !reader.value.canRead({
+          agentId: target.agentId,
+          sessionKey: target.storeKey,
+          entry: target.entry,
+        })
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "Session is unavailable or changed. Refresh the session list.",
+          ),
+        );
+        return;
+      }
+      const accessChanged = () =>
+        new SessionMutationAuthorizationChangedError(
+          errorShape(ErrorCodes.FORBIDDEN, "Session access changed. Refresh the session list."),
+        );
+      const assertRequester = () => {
+        const currentReader = policy.identify(client, context.getRuntimeConfig());
+        if (
+          client.invalidated ||
+          client.connectionSignal?.aborted ||
+          client.authenticatedUserProfile?.profileId !== profileId ||
+          !currentReader.ok
+        ) {
+          throw accessChanged();
+        }
+        return currentReader.value;
+      };
+      const updated = await updateSessionProfileInvolvement(
+        {
+          agentId: target.agentId,
+          sessionKey: target.storeKey,
+          storePath: target.storePath,
+          database: target.database,
         },
-      },
-    );
-    if (!updated) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Session changed. Refresh the session list."),
+        {
+          expectedSessionId: params.expectedSessionId,
+          profileIds: [profile.profileId],
+          change: { kind: "visibility", hidden: params.hidden },
+          assertCurrent: assertRequester,
+          prepareMutation: async () => {
+            while (policy.needsPreparation(preparation)) {
+              await policy.prepare(preparation);
+            }
+            return () => {
+              const currentReader = assertRequester();
+              const current = policy.resolveTarget({
+                sessionKey: params.key,
+                agentId: params.agentId,
+              });
+              if (
+                !current ||
+                current.entry.sessionId !== params.expectedSessionId ||
+                current.entry.incognito ||
+                current.storePath !== target.storePath ||
+                current.storeKey !== target.storeKey ||
+                !currentReader.canRead({
+                  agentId: current.agentId,
+                  sessionKey: current.storeKey,
+                  entry: current.entry,
+                })
+              ) {
+                throw accessChanged();
+              }
+            };
+          },
+        },
       );
-      return;
+      if (!updated) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Session changed. Refresh the session list."),
+        );
+        return;
+      }
+      respond(
+        true,
+        { ok: true, key: target.canonicalKey, hiddenFromInvolvingMe: params.hidden },
+        undefined,
+      );
+    } finally {
+      policy.dispose();
     }
-    respond(
-      true,
-      { ok: true, key: target.canonicalKey, hiddenFromInvolvingMe: params.hidden },
-      undefined,
-    );
   },
   "sessions.assignOwner": async ({
     params,

@@ -188,7 +188,7 @@ describe("gateway connection state", () => {
           projection.dispose();
         }
       } finally {
-        state.mentionInbox.dispose();
+        await state.mentionInbox.dispose();
       }
     });
   });
@@ -380,7 +380,7 @@ describe("gateway connection state", () => {
       } finally {
         stopPublication();
         projection.dispose();
-        state.mentionInbox.dispose();
+        await state.mentionInbox.dispose();
       }
     });
   });

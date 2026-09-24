@@ -1,18 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getUserProfileDisplay } from "../state/user-profile-list.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
-
-export type CurrentUserProfileDisplay =
-  | {
-      kind: "resolved";
-      profileId: string;
-      label?: string;
-      avatarUrl: string;
-      hasUploadedAvatar: boolean;
-    }
-  | { kind: "unresolved" };
-
-export type CurrentUserProfileDisplayResolver = (senderId: string) => CurrentUserProfileDisplay;
+import type { CurrentUserProfileDisplay } from "./current-user-profile-display.types.js";
 
 export function resolveCurrentUserProfileDisplay(senderId: string): CurrentUserProfileDisplay {
   try {

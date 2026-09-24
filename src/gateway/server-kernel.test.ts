@@ -29,6 +29,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { listMentionInbox } from "./mention-inbox.test-support.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { createGatewayKernel } from "./server-kernel.js";
@@ -269,7 +270,8 @@ describe("createGatewayKernel", () => {
             updatedAt: 1,
           },
         } satisfies GatewayClient;
-        expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
+        const inbox = kernel.gatewayRequestContext.mentionInbox!;
+        expect(await listMentionInbox(inbox, reader)).toMatchObject({
           ok: true,
           value: { gatewayInstanceId: bootId, items: [] },
         });
@@ -310,7 +312,7 @@ describe("createGatewayKernel", () => {
 
         expect(getStartup()).toMatchObject({ ok: false, status: "draining" });
         expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
-        expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
+        expect(await listMentionInbox(inbox, reader)).toMatchObject({
           ok: false,
           error: { code: "UNAVAILABLE" },
         });

@@ -33,6 +33,11 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
 import { createMentionInbox } from "../mention-inbox.js";
+import {
+  dismissMentionInbox,
+  readMentionInbox,
+  listMentionInbox,
+} from "../mention-inbox.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
@@ -59,30 +64,27 @@ describe("ordinary chat input admission", () => {
     fixture.client.authenticatedUserProfile = alice;
     const bobClient = { ...fixture.client, connId: "bob-one", authenticatedUserProfile: bob };
     const carolClient = { ...fixture.client, connId: "carol", authenticatedUserProfile: carol };
+    const broadcast = vi.fn<Parameters<typeof createMentionInbox>[0]["broadcastToConnIds"]>();
     const inbox = createMentionInbox({
       gatewayInstanceId: "chat-mention-commit-test",
       getRuntimeConfig,
       getClients: () => [fixture.client, bobClient, carolClient],
-      broadcastToConnIds: vi.fn(),
+      broadcastToConnIds: broadcast,
     });
     fixture.context.mentionInbox = inbox;
     fixture.params.message = "@Bob could you review this?";
     fixture.params.mentions = [{ profileId: bob.profileId, start: 0, end: 4 }];
-    const read = (client: GatewayClient = bobClient) => {
-      const result = inbox.list(client);
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-      return result.value.items;
-    };
+    const read = async (client: GatewayClient = bobClient) =>
+      (await readMentionInbox(inbox, client)).items;
     return {
       ...fixture,
       bobClient,
       carolClient,
       inbox,
+      broadcast,
       read,
       cleanup: async () => {
-        inbox.dispose();
+        await inbox.dispose();
         await fixture.cleanup();
       },
     };
@@ -98,25 +100,86 @@ describe("ordinary chat input admission", () => {
         undefined,
         expect.anything(),
       );
-      expect(fixture.read()).toEqual([]);
+      expect(await fixture.read()).toEqual([]);
       const recorder = await fixture.dispatchedRecorder;
       const committed = await recorder.persistApproved();
       expect(committed?.appended).toBe(true);
-      expect(fixture.read()).toMatchObject([
+      expect(await fixture.read()).toMatchObject([
         {
           messageId: committed?.messageId,
           senderProfileId: fixture.client.authenticatedUserProfile?.profileId,
           excerpt: fixture.params.message,
         },
       ]);
-      expect(fixture.read(fixture.client)).toEqual([]);
-      expect(fixture.read(fixture.carolClient)).toEqual([]);
-      const id = fixture.read()[0]?.id;
+      expect(await fixture.read(fixture.client)).toEqual([]);
+      expect(await fixture.read(fixture.carolClient)).toEqual([]);
+      const id = (await fixture.read())[0]?.id;
       expect(id).toBeDefined();
-      fixture.inbox.dismiss(fixture.bobClient, id ? [id] : []);
+      await dismissMentionInbox(fixture.inbox, fixture.bobClient, id ? [id] : []);
       await recorder.persistApproved();
       await fixture.send();
-      expect(fixture.read()).toEqual([]);
+      expect(await fixture.read()).toEqual([]);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("retains mention-centered excerpts and highlight spans from the original committed message", async () => {
+    const fixture = await createMentionFixture();
+    try {
+      const text = `An unselected @Bob example. ${"Background details. ".repeat(200)}Before release, @Bob please check the API. ${"Other background. ".repeat(200)}Before shipping, @Carol please check the spacing.`;
+      fixture.params.message = text;
+      fixture.params.mentions = [
+        {
+          profileId: fixture.bobClient.authenticatedUserProfile.profileId,
+          start: text.lastIndexOf("@Bob"),
+          end: text.lastIndexOf("@Bob") + 4,
+        },
+        {
+          profileId: fixture.carolClient.authenticatedUserProfile.profileId,
+          start: text.indexOf("@Carol"),
+          end: text.indexOf("@Carol") + 6,
+        },
+      ];
+      await fixture.send();
+      expect(await fixture.read()).toEqual([]);
+      const recorder = await fixture.dispatchedRecorder;
+      await recorder.persistApproved();
+      const bob = (await fixture.read())[0]!;
+      const carol = (await fixture.read(fixture.carolClient))[0]!;
+      expect(bob.excerpt).toContain("Before release, @Bob please check the API.");
+      expect(bob.excerpt).not.toContain("unselected");
+      expect(carol.excerpt).toContain("Before shipping, @Carol please check the spacing.");
+      for (const [item, label] of [
+        [bob, "@Bob"],
+        [carol, "@Carol"],
+      ] as const) {
+        expect(item.excerpt!.length).toBeLessThanOrEqual(280);
+        expect(item.excerptMention).toBeDefined();
+        expect(item.excerpt!.slice(item.excerptMention!.start, item.excerptMention!.end)).toBe(
+          label,
+        );
+        expect(item).not.toHaveProperty("recipientExcerpts");
+      }
+      await fixture.inbox.dispose();
+      const restarted = createMentionInbox({
+        gatewayInstanceId: "mention-excerpt-restart",
+        getRuntimeConfig,
+        getClients: () => [fixture.client, fixture.bobClient, fixture.carolClient],
+        broadcastToConnIds: vi.fn(),
+      });
+      try {
+        expect(await listMentionInbox(restarted, fixture.bobClient)).toMatchObject({
+          ok: true,
+          value: { items: [bob] },
+        });
+        expect(await listMentionInbox(restarted, fixture.carolClient)).toMatchObject({
+          ok: true,
+          value: { items: [carol] },
+        });
+      } finally {
+        await restarted.dispose();
+      }
     } finally {
       await fixture.cleanup();
     }
@@ -129,7 +192,12 @@ describe("ordinary chat input admission", () => {
       const ack = await fixture.send(
         vi.fn((ok) => {
           if (ok) {
-            atAck = fixture.read().length;
+            // Delivery publication follows the acknowledged store write. Capture
+            // that receipt inside ACK, not an async read that could settle later.
+            atAck = fixture.broadcast.mock.calls.filter(
+              ([event, , recipients]) =>
+                event === "mentions.changed" && recipients.has(fixture.bobClient.connId),
+            ).length;
           }
         }),
       );
@@ -141,7 +209,7 @@ describe("ordinary chat input admission", () => {
       );
       expect(atAck).toBe(1);
       await fixture.finishDispatch();
-      expect(fixture.read()).toHaveLength(1);
+      expect(await fixture.read()).toHaveLength(1);
     } finally {
       await fixture.cleanup();
     }
@@ -155,7 +223,7 @@ describe("ordinary chat input admission", () => {
       const committed = await recorder.persistApproved();
       expect(committed?.message.content).toBe(fixture.approvedContent);
       expect(committed?.message["__openclaw"]?.humanMentions).toBeUndefined();
-      expect(fixture.read()).toEqual([]);
+      expect(await fixture.read()).toEqual([]);
     } finally {
       await fixture.cleanup();
     }
@@ -176,8 +244,8 @@ describe("ordinary chat input admission", () => {
       );
       const recorder = await fixture.dispatchedRecorder;
       await recorder.persistApproved();
-      expect(fixture.read()).toHaveLength(1);
-      expect(fixture.read(fixture.carolClient)).toEqual([]);
+      expect(await fixture.read()).toHaveLength(1);
+      expect(await fixture.read(fixture.carolClient)).toEqual([]);
     } finally {
       await fixture.cleanup();
     }

@@ -408,7 +408,7 @@ test("captured sentinel rows never substitute a later same-owner session after d
         expect(send).not.toHaveBeenCalled();
       } finally {
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
       }
       // A new selection may use the remaining physical row; the captured identity may not.
       const current = await directSessionReq<SessionsListResult>(

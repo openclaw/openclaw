@@ -179,6 +179,7 @@ export type PersistUserTurnTranscriptParams = {
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+  /** Synchronous commit-edge capture; the recorder owns asynchronous callback settlement. */
   onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;
 };
 
@@ -204,8 +205,12 @@ export type CreateUserTurnTranscriptRecorderParams = {
   assertOriginalInputCommit?: () => void;
   onPersistenceError?: (error: unknown) => void;
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
-  /** Fresh original input only, after durable append and before transcript publication. */
-  onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;
+  /**
+   * Starts at fresh original-input commit, before transcript publication.
+   * Persistence and runtime lifecycle waits join returned work; callback errors
+   * are reported without undoing the committed input or retrying its callback.
+   */
+  onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void | Promise<void>;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
 };
@@ -246,6 +251,7 @@ export type UserTurnTranscriptRecorder = {
   hasPersisted: () => boolean;
   isBlocked: () => boolean;
   hasRuntimePersistencePending: () => boolean;
+  /** Joins runtime/self persistence and accepted original-input commit callbacks. */
   waitForRuntimePersistence: () => Promise<void>;
   persistApproved: (params?: {
     target?: UserTurnTranscriptTargetResolver;

@@ -1,5 +1,14 @@
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  readExactSessionEntryRow,
+  writeSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { SESSION_KEY, withMentionInbox, readMentionInbox } from "./mention-inbox.test-support.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 
@@ -16,9 +25,9 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
           connId: `viewer-${index}`,
         })),
       );
-      f.post();
+      await f.post();
       for (const client of f.clients) {
-        expect(readMentionInbox(f.inbox, client).items).toHaveLength(1);
+        expect((await readMentionInbox(f.inbox, client)).items).toHaveLength(1);
       }
       f.broadcast.mockClear();
       let exactRowReads = 0;
@@ -44,6 +53,7 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
         emitSessionsChanged(context, { sessionKey, agentId: "main", reason: "patch" });
       const start = performance.now();
       emit();
+      await readMentionInbox(f.inbox, f.bobClient);
       const elapsed = performance.now() - start;
       const reads = exactRowReads;
       console.log(
@@ -56,17 +66,19 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
       await f.setSession({ visibility: "draft" });
       exactRowReads = 0;
       emit();
-      expect(exactRowReads).toBe(1);
+      await readMentionInbox(f.inbox, f.bobClient);
+      expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(50);
-      expect(readMentionInbox(f.inbox, f.bobClient).items).toEqual([]);
+      expect((await readMentionInbox(f.inbox, f.bobClient)).items).toEqual([]);
 
       await f.setSession({ displayName: "Renamed conversation" });
       exactRowReads = 0;
       f.broadcast.mockClear();
       emit(SESSION_KEY);
-      expect(exactRowReads).toBe(1);
+      await readMentionInbox(f.inbox, f.bobClient);
+      expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(50);
-      expect(readMentionInbox(f.inbox, f.bobClient).items[0]?.sessionTitle).toBe(
+      expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
         "Renamed conversation",
       );
 
@@ -75,16 +87,43 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
       exactRowReads = 0;
       f.broadcast.mockClear();
       emit();
+      await readMentionInbox(f.inbox, f.bobClient);
       expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(1);
       expect([...f.broadcast.mock.calls[0]![2]]).toEqual(["viewer-0"]);
 
       // Keyless invalidation also covers in-place runtime configuration updates.
       exactRowReads = 0;
-      f.inbox.invalidate();
-      expect(exactRowReads).toBe(1);
+      await f.inbox.invalidate();
+      expect(exactRowReads).toBe(0);
     },
     {},
     { notifications: false },
   );
+});
+
+it("refreshes explicit external session invalidations without an in-process row publication", async () => {
+  await withMentionInbox(async (f) => {
+    openOpenClawAgentDatabase({ agentId: "main" });
+    await f.post();
+    expect((await readMentionInbox(f.inbox, f.bobClient)).items).toHaveLength(1);
+    // Keep real canonical writes and read admission. Only the foreign process's
+    // absent local notification bus is modeled; explicit invalidation stays real.
+    const setVisibility = (visibility: "draft" | "shared") => {
+      using _ = vi.spyOn(sessionChanges, "emit").mockImplementation(() => {});
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          const current = readExactSessionEntryRow(database, SESSION_KEY)!.entry;
+          writeSessionEntry(database, SESSION_KEY, { ...current, visibility });
+        },
+        { agentId: "main" },
+      );
+    };
+    setVisibility("draft");
+    await f.inbox.invalidate(SESSION_KEY);
+    expect((await readMentionInbox(f.inbox, f.bobClient)).items).toEqual([]);
+    setVisibility("shared");
+    await f.inbox.invalidate(SESSION_KEY);
+    expect((await readMentionInbox(f.inbox, f.bobClient)).items).toHaveLength(1);
+  });
 });

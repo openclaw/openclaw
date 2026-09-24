@@ -95,6 +95,9 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   if (command.type === "acpSessions.metadata") {
     return structuredClone(command);
   }
+  if (command.type === "mentions.policy") {
+    return { ...command, input: { ...command.input, profileIds: [...command.input.profileIds] } };
+  }
   if (command.type === "userProfiles.channelIdentity.resolve") {
     return { type: command.type, identity: { ...command.identity } };
   }
@@ -228,6 +231,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
         Buffer.byteLength(owner.sessionKey, "utf8"),
       bytes,
     );
+  }
+  if (command.type === "mentions.policy") {
+    return bytes + command.input.profileIds.reduce((sum, id) => sum + Buffer.byteLength(id), 1);
+  }
+  if (command.type === "mentions.snapshot") {
+    return bytes + 8;
   }
   if (command.type === "subagents.runs") {
     return (

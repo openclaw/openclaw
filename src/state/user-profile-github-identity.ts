@@ -136,20 +136,6 @@ export function resolveCachedGitHubIdentityInDatabase(
     : undefined;
 }
 
-/** All verified handles are searchable; the primary controls only public credit/projection. */
-export function listUserProfileGitHubLogins(
-  options: OpenClawStateDatabaseOptions = {},
-): Map<string, string[]> {
-  const database = openOpenClawStateDatabase(options);
-  ensureUserProfilesSchema(options, database);
-  return new Map(
-    [...selectStoredGitHubIdentities(database.db)].map(([id, profile]) => [
-      id,
-      profile.accounts.map((account) => account.login),
-    ]),
-  );
-}
-
 export function githubAuthenticationSubject(login: string): string {
   const normalized = login.trim().toLowerCase();
   if (!normalized) {

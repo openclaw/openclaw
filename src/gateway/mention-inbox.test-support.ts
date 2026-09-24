@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { expect, vi } from "vitest";
 import {
   validateMentionsListResult,
@@ -6,8 +7,14 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, setDisplayName } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { MentionStoreSource } from "./mention-inbox-store.codec.js";
+import {
+  readMentionStoreSnapshotInDatabase,
+  writeMentionStoreChanges,
+} from "./mention-inbox-store.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import type { MentionCommittedInput, MentionInbox } from "./mention-inbox.types.js";
 import { mentionHandlers } from "./server-methods/mentions.js";
@@ -21,6 +28,49 @@ import { usersMentionableHandlers } from "./server-methods/users-mentionable.js"
 
 export const SESSION_KEY = "agent:main:dashboard:mention-test";
 export const SESSION_ID = "mention-test-session";
+
+// Retained inventory is setup, not delivery proof. Clone a real stored source so
+// overflow, merge, expiry, dismissal, and replay still run through the Inbox owner.
+export function seedRetainedMentionSources(
+  entries: { sourceId: string; recipientProfileIds: string[]; messageId?: string }[],
+) {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const stored = readMentionStoreSnapshotInDatabase(-1, db)!;
+    const template = stored.sources.find((source) => source.message);
+    if (!template?.message) {
+      throw new Error("Seed a real mention before extending retained inventory");
+    }
+    const { message } = template;
+    const sources = new Map<string, MentionStoreSource>();
+    let nextSequence = stored.head.nextSequence;
+    for (const { sourceId, recipientProfileIds, messageId } of entries) {
+      // The persisted replay identity must match recordCommittedInput, not just
+      // pass the codec's hex-string validation. Replays below exercise that link.
+      const key = createHash("sha256")
+        .update(
+          JSON.stringify([
+            message.content.agentId,
+            message.content.sessionKey,
+            message.sessionId,
+            sourceId,
+          ]),
+        )
+        .digest("hex");
+      sources.set(key, {
+        key,
+        sequence: nextSequence++,
+        expiresAt: template.expiresAt,
+        recipients: recipientProfileIds.map((id, offset) => [id, `seed-${sourceId}-${offset}`]),
+        message: {
+          sessionId: message.sessionId,
+          content: { ...message.content, messageId: messageId ?? `message-${sourceId}` },
+        },
+      });
+    }
+    writeMentionStoreChanges(db, { ...stored.head, nextSequence }, sources);
+  });
+}
+
 const handlers = { ...mentionHandlers, ...usersMentionableHandlers };
 type InboxFixtureOptions = { notifications?: boolean; beforeInbox?: () => void };
 
@@ -34,7 +84,7 @@ export async function withMentionInbox(
     try {
       await run(fixture);
     } finally {
-      fixture.dispose();
+      await fixture.dispose();
       vi.useRealTimers();
     }
   });
@@ -129,10 +179,8 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     push,
     setSession,
     openInbox,
-    dispose() {
-      for (const instance of inboxes) {
-        instance.dispose();
-      }
+    async dispose() {
+      await Promise.all([...inboxes].map((instance) => instance.dispose()));
     },
     post(sourceId = "source-one", overrides: Partial<MentionCommittedInput> = {}, target = inbox) {
       let committedSource = committedSources.get(sourceId);
@@ -144,7 +192,7 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
         };
         committedSources.set(sourceId, committedSource);
       }
-      target.recordCommittedInput({
+      return target.recordCommittedInput({
         sourceId,
         committedSource,
         sessionKey: SESSION_KEY,
@@ -160,11 +208,58 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
   };
 }
 
-export function readMentionInbox(inbox: MentionInbox, client: GatewayClient) {
-  const result = inbox.list(client);
+export async function readMentionInbox(inbox: MentionInbox, client: GatewayClient) {
+  let result:
+    | import("@openclaw/normalization-core/result").Result<
+        import("../../packages/gateway-protocol/src/index.js").MentionsListResult,
+        ErrorShape
+      >
+    | undefined;
+  await inbox.list(client, (value) => {
+    result = value;
+  });
+  if (!result) {
+    throw new Error("Inbox did not publish");
+  }
   if (!result.ok) {
     throw new Error(result.error.message);
   }
   expect(validateMentionsListResult(result.value)).toBe(true);
   return result.value;
+}
+
+export async function dismissMentionInbox(
+  inbox: MentionInbox,
+  client: GatewayClient,
+  ids: readonly string[],
+) {
+  let result:
+    | import("@openclaw/normalization-core/result").Result<
+        import("../../packages/gateway-protocol/src/index.js").MentionsListResult,
+        ErrorShape
+      >
+    | undefined;
+  await inbox.dismiss(client, ids, (value) => {
+    result = value;
+  });
+  if (!result) {
+    throw new Error("Inbox did not publish");
+  }
+  return result;
+}
+
+export async function listMentionInbox(inbox: MentionInbox, client: GatewayClient) {
+  let result:
+    | import("@openclaw/normalization-core/result").Result<
+        import("../../packages/gateway-protocol/src/index.js").MentionsListResult,
+        ErrorShape
+      >
+    | undefined;
+  await inbox.list(client, (value) => {
+    result = value;
+  });
+  if (!result) {
+    throw new Error("Inbox did not publish");
+  }
+  return result;
 }

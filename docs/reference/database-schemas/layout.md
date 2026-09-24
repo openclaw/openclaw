@@ -97,7 +97,12 @@ The [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) uses existin
 recipients, mention identifiers, expiry times, and dismissal bookkeeping;
 `notifications.mentions.head` records the revision and sequence. Writes use the
 existing table and primary key, with no new tables, columns, indexes, or schema
-version change.
+version change. Optional per-recipient excerpts and selected-name positions share
+the existing source record; each excerpt is bounded to 280 UTF-16 units and is
+removed with its recipient entry. Older records remain readable as plain-text
+previews without reconstructing selection positions. Older writers may discard
+this additive display metadata without changing entry identifiers or consumption.
+See the [accepted excerpt design](https://github.com/openclaw/openclaw/pull/153812#issuecomment-5766660909).
 
 Retention remains seven days from creation, capped at 100 entries per profile,
 10,000 entries globally, and 10,000 source identities for duplicate suppression.

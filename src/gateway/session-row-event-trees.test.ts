@@ -218,7 +218,7 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
     } finally {
       await flushPendingSessionsChangedEvents(context);
       detach();
-      connection.mentionInbox.dispose();
+      await connection.mentionInbox.dispose();
       projection.dispose();
       subagentRuns.delete("tree-child");
     }

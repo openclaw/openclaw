@@ -89,6 +89,9 @@ test("expires task cursors when a profile merge changes the same caller's sessio
     });
   }
   try {
+    resetTaskRegistryForTests({ persist: false });
+    const fixtureStore = createInMemoryTaskRegistryStore({ tasks, deliveryStates: new Map() });
+    configureTaskRegistryRuntime({ store: fixtureStore });
     await withGatewayServer(async ({ port }) => {
       for (const [sessionKey, profileId] of [
         [ownedKey, viewerProfile.id],
@@ -105,9 +108,6 @@ test("expires task cursors when a profile merge changes the same caller's sessio
           },
         );
       }
-      resetTaskRegistryForTests({ persist: false });
-      const fixtureStore = createInMemoryTaskRegistryStore({ tasks, deliveryStates: new Map() });
-      configureTaskRegistryRuntime({ store: fixtureStore });
       const stateDir = process.env.OPENCLAW_STATE_DIR;
       if (!stateDir) {
         throw new Error("OPENCLAW_STATE_DIR is required for the Gateway proof");

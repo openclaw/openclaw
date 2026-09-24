@@ -178,7 +178,7 @@ it.each(["capture", "preparation", "canonical deferral"] as const)(
         sessions.dispose();
         lease.revoke();
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         projection.dispose();
         vi.useRealTimers();
       }
