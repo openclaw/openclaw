@@ -229,7 +229,9 @@ openclaw fleet restore acme --from ./acme.tgz
 
 These are host-operator-privileged commands. Archives contain tenant state and auth secrets, are created with mode `0600`, and must be stored like credentials. Backup refuses a running cell so SQLite state is captured consistently. Restore refuses a running cell unless `--force` is supplied, replaces only that tenant's state, rotates the Gateway token, and prints the new token once. Fleet backs up one tenant at a time; all-tenant backup is a separate operator action.
 
-Restore needs an existing stopped container because its inspected runtime profile supplies the replacement limits, user mapping, environment provenance, and image. If the registered container was removed out of band, first run `openclaw fleet rm <tenant> --force` without `--purge-data`, then, under the same original OS user and group identity and the same Docker or Podman rootless/rootful context, recreate a stopped cell with the complete original provisioning profile before retrying restore:
+Restore needs an existing stopped container because its inspected runtime profile supplies the replacement limits, user mapping, environment provenance, and image. If the original container ID is missing but another container still uses the registered name, Fleet leaves that occupant untouched. Do not use the missing-container removal or create sequence while the name is occupied or cannot be verified; inspect and preserve the occupant, then resolve the name conflict without deleting it before continuing.
+
+When both the original container and the registered name are missing, first run `openclaw fleet rm <tenant> --force` without `--purge-data`, then, under the same original OS user and group identity and the same Docker or Podman rootless/rootful context, recreate a stopped cell with the complete original provisioning profile before retrying restore:
 
 ```bash
 openclaw fleet create <tenant> \

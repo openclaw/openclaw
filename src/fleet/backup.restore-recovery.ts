@@ -40,14 +40,14 @@ export async function recoverStoppedFleetCellAfterRestoreFailure(params: {
           error: "container name inspection failed",
         };
       }
-      const nameLookupNote =
+      const nameLookupGuidance =
         namedInspection.kind === "missing"
-          ? " The registered cell name is also missing."
+          ? ` The registered cell name is also missing; ${missingContainerRecoveryHint(params.record)}.`
           : namedInspection.kind === "ok"
-            ? " A container still uses the registered cell name and was left untouched."
-            : " The registered cell name could not be checked, so no container was started.";
+            ? " A container still uses the registered cell name and was left untouched. Do not run the missing-container removal or create sequence while that name is occupied. Identify and preserve the container, resolve the name conflict without deleting it, then retry fleet restore."
+            : " The registered cell name could not be checked, so no container was started. Do not run the missing-container removal or create sequence until you verify that the registered name is free.";
       missingContainerError = new Error(
-        `${errorMessage(params.originalError)}. The previous cell container is missing; ${missingContainerRecoveryHint(params.record)}.${nameLookupNote}`,
+        `${errorMessage(params.originalError)}. The previous cell container is missing.${nameLookupGuidance}`,
         { cause: params.originalError },
       );
     } else {

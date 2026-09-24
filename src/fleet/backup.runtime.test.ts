@@ -751,9 +751,9 @@ describe("fleet restore runtime", () => {
     const archive = await createArchive();
     const running = inspection(true);
     const replacement = {
-      ...inspection(),
+      ...inspection(true),
       containerId: "replacement-id",
-      labels: { ...inspection().labels },
+      labels: { ...inspection(true).labels },
     };
     const containers = containerMock(running);
     containers.stop.mockImplementation(async () => {
@@ -783,9 +783,17 @@ describe("fleet restore runtime", () => {
     expect(message).toMatch(/transient removal failure/iu);
     expect(message).toMatch(/previous cell container is missing/iu);
     expect(message).toMatch(/registered cell name and was left untouched/iu);
-    expect(message).toMatch(/original full provisioning profile/iu);
+    expect(message).toMatch(
+      /do not run the missing-container removal or create sequence while that name is occupied/iu,
+    );
+    expect(message).toMatch(/resolve the name conflict without deleting it/iu);
+    expect(message).not.toMatch(/openclaw fleet rm acme --force/iu);
+    expect(message).not.toMatch(/openclaw fleet create acme/iu);
     expect(containers.inspect).toHaveBeenCalledWith("docker", record.containerName);
     expect(containers.start).not.toHaveBeenCalled();
+    expect(containers.stop).not.toHaveBeenCalledWith("docker", "replacement-id");
+    expect(containers.remove).not.toHaveBeenCalledWith("docker", "replacement-id", false);
+    expect(replacement).toMatchObject({ containerId: "replacement-id", running: true });
   });
 
   it("requires the original profile when a force-stopped Podman cell disappears", async () => {
