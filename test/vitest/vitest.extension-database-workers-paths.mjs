@@ -94,6 +94,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt-thread-cleanup.test.ts",
   "extensions/codex/src/app-server/run-attempt.channel-tool-progress.test.ts",
   "extensions/codex/src/app-server/run-attempt.checkpoint.test.ts",
+  "extensions/codex/src/app-server/run-attempt.compaction-closeout.test.ts",
   "extensions/codex/src/app-server/run-attempt.computer-use.test.ts",
   "extensions/codex/src/app-server/run-attempt.configured-mcp.test.ts",
   "extensions/codex/src/app-server/run-attempt.configured-mcp-authority.test.ts",

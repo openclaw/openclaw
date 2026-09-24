@@ -106,7 +106,13 @@ export type ReadSessionMessageByIdResult = {
   serializedBytes?: number;
 };
 
+export type SessionHistoryTranscriptBinding = { sessionKey: string; sessionId: string };
+
 export type SessionHistoryWorkerRequest =
+  | {
+      kind: "transcript-binding";
+      params: { target: SessionTranscriptReadScope; run?: { id: string; maxBytes: number } };
+    }
   | { kind: "rpc"; params: ChatHistoryPageParams & { sessionId: string; storePath: string } }
   | { kind: "message-lookup"; params: { target: SessionTranscriptReadScope; messageId: string } }
   | {
@@ -134,6 +140,7 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "transcript-binding"; binding: SessionHistoryTranscriptBinding | undefined }
   | { kind: "rpc"; page: ChatHistoryPage }
   | { kind: "message-lookup"; messages: unknown[] }
   | { kind: "message-by-id"; result: ReadSessionMessageByIdResult }

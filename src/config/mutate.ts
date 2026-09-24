@@ -72,16 +72,13 @@ import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import { resolveConfigPath } from "./paths.js";
 import {
-  createRuntimeConfigWriteNotification,
   finalizeRuntimeSnapshotWrite,
   hasManagedRuntimeConfigWriteOwner,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotRefreshHandler,
   getRuntimeConfigSourceSnapshot,
-  notifyRuntimeConfigWriteListeners,
   preflightManagedRuntimeConfigWrite,
   preflightRuntimeSnapshotWrite,
-  projectRuntimeConfigWritePreparedCandidates,
   resolveConfigWriteAfterWrite,
   resolveConfigWriteFollowUp,
   type ConfigWriteAfterWrite,
@@ -90,9 +87,8 @@ import {
 } from "./runtime-snapshot.js";
 import { projectLegacyRuntimeConfigWrite } from "./runtime-source-projection.js";
 import {
-  attachRuntimeConfigWriteApplication,
   copyRuntimeConfigWriteApplication,
-  getRuntimeConfigWriteApplication,
+  publishRuntimeConfigWrite,
 } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -772,34 +768,17 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
         }
 
         const notifyCommittedWrite = () => {
-          const currentRuntimeConfig = getRuntimeConfigSnapshot();
-          const notificationRuntimeConfig = deferRuntimeActivation
-            ? refreshedSnapshot.runtimeConfig
-            : currentRuntimeConfig;
-          if (!notificationRuntimeConfig) {
-            return;
-          }
-          const notificationPreparedCandidates = projectRuntimeConfigWritePreparedCandidates(
-            managedPreparedCandidates,
-            refreshedSnapshot.runtimeConfig,
-            refreshedSnapshot.sourceConfig,
-          );
-          notifyRuntimeConfigWriteListeners(
-            attachRuntimeConfigWriteApplication(
-              createRuntimeConfigWriteNotification({
-                configPath: params.snapshot.path,
-                sourceConfig: refreshedSnapshot.sourceConfig,
-                runtimeConfig: notificationRuntimeConfig,
-                persistedHash,
-                afterWrite: params.afterWrite ?? params.writeOptions?.afterWrite,
-                runtimeRefresh: params.writeOptions?.runtimeRefresh,
-                ...(notificationPreparedCandidates.size > 0
-                  ? { preparedCandidatesByOwner: notificationPreparedCandidates }
-                  : {}),
-              }),
-              getRuntimeConfigWriteApplication(params.writeOptions ?? {}),
-            ),
-          );
+          publishRuntimeConfigWrite({
+            configPath: params.snapshot.path,
+            snapshot: refreshedSnapshot,
+            sourceConfig: refreshedSnapshot.sourceConfig,
+            runtimeConfig: refreshedSnapshot.runtimeConfig,
+            persistedHash,
+            deferRuntimeActivation,
+            preparedCandidates: managedPreparedCandidates,
+            writeOptions: params.writeOptions,
+            afterWrite: params.afterWrite,
+          });
         };
         // A managed listener may accept this write and advance its own environment
         // generation. Check the prepared generation before that owned transition.

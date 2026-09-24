@@ -2847,6 +2847,34 @@ describe("CI changed Node test plan", () => {
     });
   });
 
+  it.each([1, 13])("prepares generic E2E targets across %s files", (fileCount) => {
+    const cwd = argvTempDirs.make("changed-e2e-preparation-");
+    const targets = Array.from(
+      { length: fileCount },
+      (_, index) => `src/example/case-${String(index).padStart(2, "0")}.e2e.test.ts`,
+    );
+    for (const target of targets) {
+      mkdirSync(path.dirname(path.join(cwd, target)), { recursive: true });
+      writeFileSync(path.join(cwd, target), "export {};\n");
+    }
+    const gitOptions = { cwd, env: createNestedGitEnv() };
+    execFileSync("git", ["init", "-q"], gitOptions);
+    execFileSync("git", ["add", "--", ...targets], gitOptions);
+    const shards = createChangedNodeTestShards(targets, { cwd })?.filter((shard) => shard.targets);
+    expect(shards).toHaveLength(Math.ceil(fileCount / 12));
+    expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual(targets);
+    for (const shard of shards ?? []) {
+      expect(shard).toMatchObject({
+        configs: [],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        pretestBuildMode: "private-qa",
+      });
+      expect(shard.targets!.length).toBeLessThanOrEqual(12);
+      expect(shard.planConcurrency).toBeUndefined();
+    }
+  });
+
   it("retains delivery-cache coverage and private QA preparation", () => {
     const target = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
     expect(resolveChangedTestTargetPlan([target]).targets).toEqual([

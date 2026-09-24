@@ -491,6 +491,18 @@ the underlying database error.
 
 The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
 
+For shared-state or per-agent index-only corruption, `openclaw doctor --fix` is
+the supported repair. Doctor requires every `integrity_check` finding to name missing,
+non-unique, or incorrectly counted index entries, verifies the table data without
+using the damaged indexes, and preserves the damaged database in an
+`openclaw-index-recovery-*` directory beside it before running `REINDEX`.
+It prints the backup path and a warning naming every rebuilt index, then requires
+clean integrity and foreign-key checks before clearing quarantine. Table rows
+are preserved. Page or b-tree damage, unreadable table data, and other integrity
+failures remain a refusal: preserve the database and its WAL, then restore a
+verified backup or use SQLite recovery. Runtime and startup never perform this
+repair automatically.
+
 <a id="downgrades-are-unsupported" />
 
 <a id="example-state-schema-13-to-12" />

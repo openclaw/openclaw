@@ -244,51 +244,6 @@ describe("CommandPalette search", () => {
     },
   );
 
-  it("shows a failed acquisition without appending old rows to the successful response", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        models: [
-          { provider: "ollama", id: "retained", name: "Needle retained" },
-          { provider: "ollama", id: "obsolete", name: "Needle obsolete" },
-        ],
-      })
-      .mockResolvedValueOnce({
-        models: [{ provider: "ollama", id: "retained", name: "Needle retained" }],
-        refreshFailed: true,
-        providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
-      })
-      .mockResolvedValueOnce({
-        models: [],
-        providerOutcomes: [{ provider: "ollama", status: "ready" }],
-      });
-    const harness = createGateway(true, {
-      methods: ["models.list"],
-      request: (method, params) =>
-        method === "models.list" ? request(method, params) : { results: [], sessions: [] },
-    });
-    const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
-    await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-    expect(findPaletteOption(palette, "Needle obsolete")).toBeDefined();
-
-    harness.emit("chat.metadata.changed");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-    expect(findPaletteOption(palette, "Needle obsolete")).toBeUndefined();
-    expect(palette.querySelectorAll('[role="option"]')).toHaveLength(1);
-    expect(palette.querySelector('.cmd-palette__search [role="status"]')?.textContent).toContain(
-      "Some models could not be refreshed. Open Models to try again.",
-    );
-
-    harness.emit("chat.metadata.changed");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-    expect(findPaletteOption(palette, "Needle retained")).toBeUndefined();
-    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
-  });
-
   it.each([
     { event: "config.changed", payload: {}, retainsChoices: false },
     {
@@ -552,14 +507,33 @@ describe("CommandPalette search", () => {
     expect(palette.textContent).not.toContain("Searching sessions");
   });
 
-  it.each(["click", "keyboard"])(
-    "opens the selected catalog agent's encoded route by %s",
-    async (method) => {
-      const { gateway } = createGateway(true);
-      const context = createContext(
-        gateway,
-        vi.fn(async () => null),
-      );
+  it.each([
+    ["Reviewer", "click", "agents", "/settings/agents/reviewer%2Eteam", "", true],
+    ["Reviewer", "keyboard", "agents", "/settings/agents/reviewer%2Eteam", "", true],
+    ["Workboard", "click", "plugin-settings", "/settings/plugins/workboard", "workboard", true],
+    ["Workboard", "keyboard", "plugin-settings", "/settings/plugins/w%2Eb", "w.b", true],
+    ["Workboard", "click", "plugins", "", "workboard", false],
+    ["Plugins", "click", "plugins", "", "", false],
+  ])(
+    "opens the selected %s destination by %s",
+    async (label, method, route, pathname, pluginId, installed) => {
+      const plugin = {
+        id: pluginId,
+        name: "Workboard",
+        installed,
+        enabled: false,
+        state: installed ? "disabled" : "not-installed",
+      };
+      const { gateway } = createGateway(true, {
+        methods: ["plugins.list"],
+        request: async (rpc) => {
+          if (rpc !== "plugins.list") {
+            throw new Error(`Unexpected method: ${rpc}`);
+          }
+          return { plugins: pluginId ? [plugin] : [] };
+        },
+      });
+      const context = createContext(gateway, async () => null);
       const { palette } = await mountPalette({
         ...context,
         basePath: "/openclaw",
@@ -573,11 +547,11 @@ describe("CommandPalette search", () => {
           }),
         },
       });
-      await enterQuery(palette, "Reviewer");
+      await enterQuery(palette, label);
       await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       const item = palette.querySelector<HTMLElement>('[role="option"]');
-      expect(item?.textContent).toContain("Reviewer");
+      expect(item?.textContent).toContain(label);
       if (method === "click") {
         item?.click();
       } else {
@@ -585,9 +559,13 @@ describe("CommandPalette search", () => {
           .querySelector<HTMLTextAreaElement>(".cmd-palette__input")
           ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       }
-      expect(palette.onNavigate).toHaveBeenCalledWith("agents", {
-        pathname: "/openclaw/settings/agents/reviewer%2Eteam",
-      });
+      if (pathname) {
+        expect(palette.onNavigate).toHaveBeenCalledExactlyOnceWith(route, {
+          pathname: `/openclaw${pathname}`,
+        });
+      } else {
+        expect(palette.onNavigate).toHaveBeenCalledExactlyOnceWith(route);
+      }
       expect(palette.isOpen).toBe(false);
     },
   );

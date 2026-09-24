@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { resolveGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -15,18 +16,21 @@ import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   assignSessionOwner,
+  listSessionParticipantsReadOnly,
   listSessionPendingInputs,
   loadSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntryCore,
+  recordSessionParticipant,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { retainUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { ensureProfileForEmail, linkEmail, syncGitHubIdentity } from "../../state/user-profiles.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -59,6 +63,7 @@ async function createHostedChildFixture(
   testState.sessionStorePath = storePath;
   const parentKey = "agent:main:parent";
   const childKey = "agent:main:dashboard:accepted-child";
+  const childKeys = [childKey];
   const existingOwnerId = "existing-child-owner";
   const releaseProfileCatalog = mergedParentCreator ? retainUserProfileCatalog() : undefined;
   const profile = ensureProfileForEmail(
@@ -213,25 +218,26 @@ async function createHostedChildFixture(
     }),
     "admitted parent caller",
   );
-  const dispatch = () =>
+  const dispatch = (requesterSessionKey = parentKey, targetKey = childKey, spawnDepth = 1) =>
     callInProcessGatewayToolWithCreation<{
       key: string;
       sessionId: string;
       runId: string;
       runStarted: boolean;
+      entry: SessionEntry;
     }>(
       "sessions.create",
       {
         agentId: "main",
-        key: childKey,
-        parentSessionKey: parentKey,
-        spawnDepth: 1,
+        key: targetKey,
+        parentSessionKey: requesterSessionKey,
+        spawnDepth,
         task: "Continue independently.",
       },
       {
         via: "spawn",
         actor: { type: "agent", id: "main" },
-        requesterSessionKey: parentKey,
+        requesterSessionKey,
         inheritedToolPolicy: { version: 1, allow: [], deny: [] },
       },
       {
@@ -264,25 +270,54 @@ async function createHostedChildFixture(
           )
         : dispatch(),
     );
-  const scope = () => ({
+  const sendNested = async () => {
+    const nested = prepareSystemAgentRunAdmission(
+      getRuntimeConfig(),
+      "nested-parent-run",
+      "main",
+      "hosted-child-custody-test",
+      undefined,
+      caller.operatorAuthority,
+    );
+    try {
+      const nestedAdmission = await nested.admit("embedded");
+      bindGatewayContextResolver(nestedAdmission, () => (gatewayCurrent ? context : undefined));
+      const nestedCaller = createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: nestedAdmission,
+        agentId: "main",
+        sessionKey: childKey,
+      });
+      const nestedKey = "agent:main:dashboard:accepted-grandchild";
+      childKeys.push(nestedKey);
+      return await withGatewayToolCallerIdentity(nestedCaller, () =>
+        dispatch(childKey, nestedKey, 2),
+      );
+    } finally {
+      nested.close();
+    }
+  };
+  const scope = (sessionKey = childKey) => ({
     agentId: "main",
-    sessionKey: childKey,
-    sessionId: expectDefined(loadSessionEntry({ sessionKey: childKey, storePath }), "child row")
-      .sessionId,
+    sessionKey,
+    sessionId: expectDefined(loadSessionEntry({ sessionKey, storePath }), "child row").sessionId,
     storePath,
   });
   const finish = async () => {
-    const row = loadSessionEntry({ sessionKey: childKey, storePath });
-    const drain = row
-      ? getSessionWorkAdmissionRelease({ scope: storePath, identities: [childKey, row.sessionId] })
-      : undefined;
+    const drains = childKeys.map((key) => {
+      const row = loadSessionEntry({ sessionKey: key, storePath });
+      return row
+        ? getSessionWorkAdmissionRelease({ scope: storePath, identities: [key, row.sessionId] })
+        : undefined;
+    });
     releaseDispatch.resolve();
-    await drain;
+    await Promise.all(drains.filter((drain) => drain !== undefined));
   };
   return {
     send,
+    sendNested,
     scope,
     context,
+    parentScope: { agentId: "main", sessionKey: parentKey, storePath },
     profileId: profile.id,
     existingOwnerId,
     beforeInputCommit,
@@ -334,6 +369,66 @@ function userMessages(
 }
 
 describe("hosted creation transfers accepted child input", () => {
+  it("retains delegated human Git credit without inventing child participation", async () => {
+    const fixture = await createHostedChildFixture();
+    try {
+      syncGitHubIdentity({
+        identity: { accountId: 20, login: "ada" },
+        authenticationAlias: { kind: "email", email: "child-owner@example.test" },
+      });
+      await recordSessionParticipant(fixture.parentScope, {
+        identity: { type: "profile", id: fixture.profileId },
+        promptedAt: 1,
+      });
+
+      const accepted = await fixture.send();
+      expect(accepted.runStarted).toBe(true);
+      expect(accepted.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
+      expect(fixture.provider).not.toHaveBeenCalled();
+      const scope = fixture.scope();
+      const readCredit = () =>
+        resolveGitCoauthorAttribution({ ...scope, config: getRuntimeConfig() });
+      const expectedCredit = {
+        logins: ["ada"],
+        trailers: ["Co-authored-by: ada <20+ada@users.noreply.github.com>"],
+      };
+      await expect(readCredit()).resolves.toEqual(expectedCredit);
+
+      const later = ensureProfileForEmail("later-contributor@example.test");
+      syncGitHubIdentity({
+        identity: { accountId: 21, login: "grace" },
+        authenticationAlias: { kind: "email", email: "later-contributor@example.test" },
+      });
+      await recordSessionParticipant(fixture.parentScope, {
+        identity: { type: "profile", id: later.id },
+        promptedAt: 2,
+      });
+      await expect(readCredit()).resolves.toEqual(expectedCredit);
+      await fixture.finish();
+      expect(fixture.provider).toHaveBeenCalledOnce();
+      const nested = await fixture.sendNested();
+      expect(nested.runStarted).toBe(true);
+      expect(nested.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
+      await expect(
+        resolveGitCoauthorAttribution({
+          ...fixture.scope(nested.key),
+          config: getRuntimeConfig(),
+        }),
+      ).resolves.toEqual(expectedCredit);
+      await fixture.finish();
+      expect(fixture.provider).toHaveBeenCalledTimes(2);
+      for (const childScope of [scope, fixture.scope(nested.key)]) {
+        expect(
+          (listSessionParticipantsReadOnly(childScope).get(childScope.sessionKey) ?? []).filter(
+            ({ identity }) => identity.type === "profile",
+          ),
+        ).toEqual([]);
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it("assigns the verified requester as the visible child owner", async () => {
     const fixture = await createHostedChildFixture();
     try {

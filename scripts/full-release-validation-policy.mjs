@@ -131,7 +131,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
         },
         controls: {
           stableSoakRequired: ["stable", "full"].includes(context.releaseProfile),
-          performanceBlocking: false,
+          performanceBlocking: context.releaseProfile !== "beta",
           performanceReportPublication: "artifact-only",
         },
         childRuns: {
@@ -144,7 +144,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
           productPerformance: {
             runId: runs.productPerformance ?? "",
             conclusion: drain?.children?.productPerformance?.conclusion ?? "",
-            blocking: false,
+            blocking: context.releaseProfile !== "beta",
           },
         },
       };

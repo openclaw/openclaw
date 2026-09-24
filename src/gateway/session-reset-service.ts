@@ -60,6 +60,7 @@ import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-l
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
+  preserveCreationStamp,
   type SessionCreatedActor,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
@@ -1307,11 +1308,8 @@ export async function performGatewaySessionReset(params: {
               : currentEntry?.execNode;
           const creationStamp = currentEntry
             ? {
-                createdVia: currentEntry.createdVia,
-                createdActor: currentEntry.createdActor,
-                createdAt: currentEntry.createdAt,
+                ...preserveCreationStamp({}, currentEntry),
                 projectId: currentEntry.projectId,
-                ...(currentEntry.sandbox === "required" ? { sandbox: "required" as const } : {}),
               }
             : params.creation
               ? {

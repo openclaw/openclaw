@@ -14,6 +14,16 @@ without applying lint defaults to declaration preparation. Explicit Go settings
 remain inherited. Frozen revisions retain the workflow limits because their
 wrappers can predate this policy.
 
+The runtime topology CI job also supplies `GOGC=30` and `GOMEMLIMIT=3GiB`
+defaults to `pnpm check:architecture`, preserving caller overrides. Both import
+cycle checks and the remaining architecture checks inherit these settings.
+The memory target is soft: a four-CPU, 15.42-GiB Testbox comparison on Node
+24.21.0 measured peak checker/compiler process-group RSS of 14.24 GiB without
+the defaults and 11.31 GiB with them; peak swap use fell from 4.74 GiB to zero.
+Two hosted runners shut down during the native Madge check, but their logs did
+not establish a kernel OOM. These measurements support reducing memory pressure,
+not a hard 3-GiB RSS cap or a confirmed cause for those shutdowns.
+
 On serial hosts with less than 24 GiB of memory, full lint runs core targets in
 five disjoint batches and plugins in smaller chunks. These runs retain the same
 type-aware rules and TypeScript configuration while bounding checker caches.

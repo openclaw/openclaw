@@ -6965,34 +6965,47 @@ public struct EnvironmentsListParams: Codable, Sendable {
     public let runtimeid: String?
     public let projection: String?
     public let includedesktopsetup: Bool?
+    public let includeprepareddetails: Bool?
 
     public init(
         runtimeid: String? = nil,
         projection: String? = nil,
-        includedesktopsetup: Bool? = nil)
+        includedesktopsetup: Bool? = nil,
+        includeprepareddetails: Bool? = nil)
     {
         self.runtimeid = runtimeid
         self.projection = projection
         self.includedesktopsetup = includedesktopsetup
+        self.includeprepareddetails = includeprepareddetails
     }
 
     private enum CodingKeys: String, CodingKey {
         case runtimeid = "runtimeId"
         case projection
         case includedesktopsetup = "includeDesktopSetup"
+        case includeprepareddetails = "includePreparedDetails"
     }
 }
 
 public struct EnvironmentsListResult: Codable, Sendable {
     public let environments: [EnvironmentSummary]
     public let profiles: [[String: AnyCodable]]?
+    public let preparedpool: [String: AnyCodable]?
 
     public init(
         environments: [EnvironmentSummary],
-        profiles: [[String: AnyCodable]]? = nil)
+        profiles: [[String: AnyCodable]]? = nil,
+        preparedpool: [String: AnyCodable]? = nil)
     {
         self.environments = environments
         self.profiles = profiles
+        self.preparedpool = preparedpool
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environments
+        case profiles
+        case preparedpool = "preparedPool"
     }
 }
 
@@ -7162,15 +7175,19 @@ public struct EnvironmentsSessionStatusParams: Codable, Sendable {
 
 public struct EnvironmentsStatusParams: Codable, Sendable {
     public let environmentid: String
+    public let includeprepareddetails: Bool?
 
     public init(
-        environmentid: String)
+        environmentid: String,
+        includeprepareddetails: Bool? = nil)
     {
         self.environmentid = environmentid
+        self.includeprepareddetails = includeprepareddetails
     }
 
     private enum CodingKeys: String, CodingKey {
         case environmentid = "environmentId"
+        case includeprepareddetails = "includePreparedDetails"
     }
 }
 
@@ -25316,6 +25333,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let state: WorkerEnvironmentState
     public let agems: Int
     public let idlems: Int?
+    public let destroyrequestedatms: Int?
     public let attachedsessionids: [String]
     public let tunnelstatus: WorkerTunnelStatus
     public let error: String?
@@ -25329,6 +25347,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         state: WorkerEnvironmentState,
         agems: Int,
         idlems: Int? = nil,
+        destroyrequestedatms: Int? = nil,
         attachedsessionids: [String],
         tunnelstatus: WorkerTunnelStatus,
         error: String? = nil,
@@ -25341,6 +25360,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         self.state = state
         self.agems = agems
         self.idlems = idlems
+        self.destroyrequestedatms = destroyrequestedatms
         self.attachedsessionids = attachedsessionids
         self.tunnelstatus = tunnelstatus
         self.error = error
@@ -25355,6 +25375,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         case state
         case agems = "ageMs"
         case idlems = "idleMs"
+        case destroyrequestedatms = "destroyRequestedAtMs"
         case attachedsessionids = "attachedSessionIds"
         case tunnelstatus = "tunnelStatus"
         case error
@@ -27875,6 +27896,49 @@ public enum DesktopSource: Codable, Sendable {
     }
 }
 
+public struct GatewayErrorDetailsTaskHistoryPreviewCapacity: Codable, Sendable {
+    public let code: String
+
+    public init()
+    {
+        self.code = "TASK_HISTORY_PREVIEW_CAPACITY"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["code"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for GatewayErrorDetailsTaskHistoryPreviewCapacity: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedCode = try container.decode(String.self, forKey: .code)
+        guard decodedCode == "TASK_HISTORY_PREVIEW_CAPACITY" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .code,
+                in: container,
+                debugDescription: "Expected code to equal TASK_HISTORY_PREVIEW_CAPACITY"
+            )
+        }
+        self.code = "TASK_HISTORY_PREVIEW_CAPACITY"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("TASK_HISTORY_PREVIEW_CAPACITY", forKey: .code)
+    }
+}
+
 public enum GatewayErrorDetails: Codable, Sendable {
     case cronJobNotFound(CronJobNotFoundErrorDetails)
     case missingScope(MissingScopeErrorDetails)
@@ -27889,6 +27953,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
     case githubPublicationSelectionRejected(GitHubPublicationSelectionRejectedErrorDetails)
     case sessionWorkspaceRecoveryRequired(SessionWorkspaceRecoveryRequiredErrorDetails)
     case taskWorktreeSourceRequired(TaskWorktreeSourceRequiredErrorDetails)
+    case taskHistoryPreviewCapacity(GatewayErrorDetailsTaskHistoryPreviewCapacity)
 
     public init(code: String, missingscope: String, requiredscopes: [String]) {
         self = .missingScope(
@@ -27915,6 +27980,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .githubPublicationSelectionRejected(let value): value.code
         case .sessionWorkspaceRecoveryRequired(let value): value.code
         case .taskWorktreeSourceRequired(let value): value.code
+        case .taskHistoryPreviewCapacity(let value): value.code
         }
     }
 
@@ -27949,6 +28015,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case "GITHUB_PUBLICATION_SELECTION_REJECTED": self = try .githubPublicationSelectionRejected(GitHubPublicationSelectionRejectedErrorDetails(from: decoder))
         case "SESSION_WORKSPACE_RECOVERY_REQUIRED": self = try .sessionWorkspaceRecoveryRequired(SessionWorkspaceRecoveryRequiredErrorDetails(from: decoder))
         case "TASK_WORKTREE_SOURCE_REQUIRED": self = try .taskWorktreeSourceRequired(TaskWorktreeSourceRequiredErrorDetails(from: decoder))
+        case "TASK_HISTORY_PREVIEW_CAPACITY": self = try .taskHistoryPreviewCapacity(GatewayErrorDetailsTaskHistoryPreviewCapacity(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .discriminator,
@@ -27973,6 +28040,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .githubPublicationSelectionRejected(let value): try value.encode(to: encoder)
         case .sessionWorkspaceRecoveryRequired(let value): try value.encode(to: encoder)
         case .taskWorktreeSourceRequired(let value): try value.encode(to: encoder)
+        case .taskHistoryPreviewCapacity(let value): try value.encode(to: encoder)
         }
     }
 }
