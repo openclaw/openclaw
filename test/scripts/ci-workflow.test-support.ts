@@ -83,6 +83,7 @@ export function evaluateWorkflowExpression(
     runnerGroup?: string;
     releasePriorityRun?: string;
     releaseScope?: string;
+    validationTier?: "full" | "main";
     repository: string;
     runCheck?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
@@ -186,6 +187,7 @@ export function evaluateWorkflowExpression(
       include_android: context.includeAndroid ?? false,
       release_gate: context.releaseGate ?? false,
       release_scope: context.releaseScope ?? "full",
+      validation_tier: context.validationTier ?? "full",
       target_context_ref: context.targetContextRef ?? "",
       target_ref: context.targetRef ?? "",
       use_github_hosted_runners: context.useGithubHostedRunners ?? false,
