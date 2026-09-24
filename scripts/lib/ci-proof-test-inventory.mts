@@ -59,6 +59,7 @@ export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
   "src/gateway/server.sessions.create.projects.test.ts",
   "src/gateway/server.sessions.delete-worktree-lifecycle.test.ts",
+  "src/gateway/session-row-projection.keyed-marks.benchmark.test.ts",
   "src/gateway/worker-environments/live-chat.test.ts",
   "src/gateway/worker-environments/node-workspace-transfer-retention.test.ts",
   "src/gateway/worker-environments/placement-abandon-lifecycle.test.ts",
