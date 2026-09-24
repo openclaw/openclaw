@@ -128,7 +128,7 @@ pnpm ios:screenshots
 
 The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it chooses one available large iPhone simulator and one available 13-inch iPad simulator from the installed Xcode runtime; override devices with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
 
-The lane builds the UI-test products once, boots each selected simulator once, and runs each screenshot in an independent `xcodebuild test-without-building` session against those products. This avoids repeated Fastlane build-settings discovery and simulator reboots between captures. Xcode command logs and result bundles stay in `apps/ios/build/SnapshotTestResults`.
+The lane builds the UI-test products once, boots each selected simulator once, and runs each screenshot in an independent `xcodebuild test-without-building` session against those products. This avoids repeated Fastlane build-settings discovery and simulator reboots between captures. Xcode command logs stay in `apps/ios/build/SnapshotLogs`; result bundles and the capture-attempt ledger stay in `apps/ios/build/SnapshotTestResults`.
 
 Each screenshot gets one capture attempt. A failed capture or Xcode test result stops the lane, retaining its attempt record and any result bundle for diagnosis. CI rejects replacement captures as passing release evidence.
 

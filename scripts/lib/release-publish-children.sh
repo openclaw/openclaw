@@ -1205,7 +1205,7 @@ upload_release_evidence_assets() {
 verify_published_release() {
   local release_version evidence_path canonical_evidence_path clawhub_runtime_state_path bootstrap_run_arg_present
   local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
-  local validation_file workflow_ref telegram_waiver verifier
+  local validation_file workflow_ref telegram_waiver lane_waiver waived_jobs verifier
   local -a verify_args
 
   release_version="${RELEASE_TAG#v}"
@@ -1297,12 +1297,20 @@ verify_published_release() {
     exit 1
   fi
   telegram_waiver=""
+  lane_waiver=""
+  waived_jobs="[]"
   if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" ]]; then
     telegram_waiver="$(jq -r '.validationInputs.telegramWaiver // ""' "${validation_file}")"
+    lane_waiver="$(jq -r '.validationInputs.laneWaiver // ""' "${validation_file}")"
+    waived_jobs="$(jq -c '[(.advisoryJobs // [])[] | select(.reason == "lane_waiver") | {child, job, conclusion}]' "${validation_file}")"
   fi
   run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
   jq \
     --arg telegram_waiver "${telegram_waiver}" \
+    --arg stable_soak_waiver "${STABLE_SOAK_WAIVER:-}" \
+    --arg lane_waiver "${lane_waiver}" \
+    --arg lane_waiver_acknowledgement "${LANE_WAIVER_ACKNOWLEDGEMENT:-}" \
+    --argjson waived_jobs "${waived_jobs}" \
     --arg release_publish_run_id "$GITHUB_RUN_ID" \
     --arg validation_label "${run_label}" \
     --arg validation_run_id "${run_id}" \
@@ -1311,6 +1319,8 @@ verify_published_release() {
     --arg validation_url "${run_url}" \
     --arg validation_workflow_ref "${workflow_ref}" '
       (if $telegram_waiver == "" then . else .telegramWaiver = $telegram_waiver end) |
+      (if $stable_soak_waiver == "" then . else .stableSoakWaiver = $stable_soak_waiver end) |
+      (if $lane_waiver == "" then . else .laneWaiver = $lane_waiver | .laneWaiverAcknowledgement = $lane_waiver_acknowledgement | .waivedJobs = $waived_jobs end) |
       .releasePublishRunId = $release_publish_run_id |
       .workflowRuns += [{
         id: $validation_run_id,
@@ -1383,6 +1393,9 @@ append_release_proof_to_github_release() {
     CLAWHUB_LINE="${clawhub_line}" \
     CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
     TELEGRAM_LINE="${telegram_line}" \
+    STABLE_SOAK_WAIVER="$(jq -r '.stableSoakWaiver // ""' "${evidence_path}")" \
+    LANE_WAIVER="$(jq -r '.laneWaiver // ""' "${evidence_path}")" \
+    WAIVED_JOBS_LINE="$(jq -r '(.waivedJobs // []) | map("\(.child) \(.job) (\(.conclusion))") | join("; ")' "${evidence_path}")" \
     ANDROID_LINE="${android_line}" \
     node --input-type=module <<'NODE'
 import { writeFileSync } from "node:fs";
@@ -1410,6 +1423,14 @@ const section = [
   ...(process.env.OPENCLAW_NPM_RUN_ID
     ? [
         `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}${process.env.OPENCLAW_NPM_RUN_ATTEMPT ? `/attempts/${process.env.OPENCLAW_NPM_RUN_ATTEMPT}` : ""}`,
+      ]
+    : []),
+  ...(process.env.STABLE_SOAK_WAIVER
+    ? [`- Stable soak waived by operator: ${JSON.stringify(process.env.STABLE_SOAK_WAIVER)}`]
+    : []),
+  ...(process.env.LANE_WAIVER
+    ? [
+        `- Operator lane waiver: ${JSON.stringify(process.env.LANE_WAIVER)}; waived lanes: ${process.env.WAIVED_JOBS_LINE || "none"}`,
       ]
     : []),
   process.env.TELEGRAM_LINE,

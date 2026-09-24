@@ -4,6 +4,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { hasErrnoCode } from "./errno.js";
+import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
@@ -527,6 +528,7 @@ export async function runGitCandidatePreflight(params: {
   refreshedRemotes: readonly string[];
   targetRevision?: string;
   beforeSha?: string | null;
+  beforeBuiltCommit: string | null;
   beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
@@ -599,8 +601,12 @@ export async function runGitCandidatePreflight(params: {
     localDevBranchExists = upstream.localDevBranchExists;
   }
 
-  // A resolved no-op must not enter validation, stop the service, or rewrite its runtime.
-  if (!params.prepareGitExposure && preflightBaseSha === params.beforeSha) {
+  // A matching source revision cannot prove an unrecorded runtime is current.
+  const canSkipActivation =
+    !params.prepareGitExposure &&
+    params.beforeBuiltCommit !== null &&
+    gitCommitPrefixesMatch(params.beforeBuiltCommit, params.beforeSha ?? "");
+  if (canSkipActivation && preflightBaseSha === params.beforeSha) {
     return { status: "skipped", reason: "already-current" };
   }
   if (params.beforeGitStaging) {
@@ -651,7 +657,7 @@ export async function runGitCandidatePreflight(params: {
       };
     }
     for (const sha of candidates) {
-      if (!params.prepareGitExposure && sha === params.beforeSha) {
+      if (canSkipActivation && sha === params.beforeSha) {
         return { status: "skipped", reason: "already-current" };
       }
       if (sha !== preflightBaseSha) {

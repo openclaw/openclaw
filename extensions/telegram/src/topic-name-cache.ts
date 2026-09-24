@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { getTelegramRuntime } from "./runtime.js";
 
-export const TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES = 2_048;
+const TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES = 2_048;
 const STORE_NAMESPACE_PREFIX = "telegram.topic-name-cache";
 const TOPIC_NAME_CACHE_STATE_KEY = Symbol.for("openclaw.telegramTopicNameCacheState");
 const DEFAULT_TOPIC_NAME_CACHE_SCOPE = "default";
@@ -54,13 +53,9 @@ function cacheKey(chatId: number | string, threadId: number | string): string {
   return `${chatId}:${threadId}`;
 }
 
-export function resolveTopicNameCacheNamespace(scope: string): string {
+function resolveTopicNameCacheNamespace(scope: string): string {
   const hash = createHash("sha256").update(scope).digest("hex").slice(0, 16);
   return `${STORE_NAMESPACE_PREFIX}.${hash}`;
-}
-
-export function resolveTopicNameCachePath(storePath: string): string {
-  return `${storePath}.telegram-topic-names.json`;
 }
 
 export function resolveTopicNameCacheScope(storePath: string): string {
@@ -195,19 +190,4 @@ export async function getTopicName(
     await state.persistentStore.register(key, entry);
   }
   return entry?.name;
-}
-
-export async function listTelegramLegacyTopicNameCacheEntries(params: {
-  persistedPath: string;
-  maxEntries?: number;
-}): Promise<Array<{ key: string; value: TopicEntry }>> {
-  const { value } = await readJsonFileWithFallback<Record<string, unknown>>(
-    params.persistedPath,
-    {},
-  );
-  return Object.entries(value)
-    .filter((entry): entry is [string, TopicEntry] => isTopicEntry(entry[1]))
-    .toSorted(([, left], [, right]) => right.updatedAt - left.updatedAt)
-    .slice(0, params.maxEntries ?? TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES)
-    .map(([key, entry]) => ({ key, value: entry }));
 }

@@ -24,6 +24,7 @@ import {
   StateDatabaseCoordinatorContentionError,
   StateSchemaMutationConflictError,
 } from "./state-database-coordinator-errors.js";
+import { readStateDatabaseCoordinatorOwner } from "./state-database-coordinator-owner.js";
 import {
   resolveLifecycleCoordinatorBase,
   buildLifecycleCoordinatorPath,
@@ -154,7 +155,10 @@ function acquireLifecycleCoordinator(
       keepAlive,
     });
     if (!coordinator) {
-      throw new StateDatabaseCoordinatorContentionError(family);
+      throw new StateDatabaseCoordinatorContentionError(
+        family,
+        readStateDatabaseCoordinatorOwner(coordinatorPath, family),
+      );
     }
     held = {
       coordinator,
@@ -522,7 +526,10 @@ export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
       keepAlive: shouldKeepStateCoordinatorAlive(params),
     });
     if (!coordinator) {
-      throw new StateDatabaseCoordinatorContentionError("state-handles");
+      throw new StateDatabaseCoordinatorContentionError(
+        "state-handles",
+        readStateDatabaseCoordinatorOwner(pathname, "state-handles"),
+      );
     }
     return coordinator;
   });

@@ -798,6 +798,7 @@ src/infra/startup-maintenance-required.ts
 src/infra/startup-migration-checkpoint.ts
 src/infra/state-database-coordinator-delegate.ts
 src/infra/state-database-coordinator-errors.ts
+src/infra/state-database-coordinator-owner.ts
 src/infra/state-database-coordinator-paths.ts
 src/infra/state-database-coordinator-acquisition.ts
 src/infra/state-database-coordinator.ts

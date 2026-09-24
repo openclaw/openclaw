@@ -458,12 +458,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     context: Record<string, unknown> = {},
   ) {
     return (message: string, data?: Record<string, unknown>) =>
-      log.debug(
-        message,
-        data
-          ? { ...data, source, chunks: chunks.length, ...context }
-          : { source, chunks: chunks.length, ...context },
-      );
+      log.debug(message, { ...data, source, chunks: chunks.length, ...context });
   }
 
   private async embedChunksWithBatch(
@@ -1279,24 +1274,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
     let embeddings: number[][];
     try {
+      const candidates = prepared.chunks.map((chunk) => ({
+        chunk,
+        entry: prepared.entry,
+        source: prepared.source,
+      }));
       embeddings = this.batch.enabled
-        ? await this.embedChunksWithBatch(
-            prepared.chunks.map((chunk) => ({
-              chunk,
-              entry: prepared.entry,
-              source: prepared.source,
-            })),
-            options.source,
-            generation,
-          )
-        : await this.embedChunksInBatches(
-            prepared.chunks.map((chunk) => ({
-              chunk,
-              entry: prepared.entry,
-              source: prepared.source,
-            })),
-            generation,
-          );
+        ? await this.embedChunksWithBatch(candidates, options.source, generation)
+        : await this.embedChunksInBatches(candidates, generation);
     } catch (err) {
       const message = formatErrorMessage(err);
       if (

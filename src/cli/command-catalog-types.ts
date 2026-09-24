@@ -1,4 +1,4 @@
-// Shared type-only contract for CLI command metadata and startup policy.
+// Shared CLI catalog contracts are independent of catalog entries and policy values.
 export type CliCommandPluginLoadPolicy =
   | "never"
   | "always"

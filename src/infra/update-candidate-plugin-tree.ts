@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
@@ -520,14 +521,12 @@ export async function copyUpdateCandidatePluginTrees(
   params: {
     targetStateDir: string;
     candidateRoot: string;
-    onProgress?: () => void | Promise<void>;
     onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
   },
 ): Promise<void> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
   const { privateRoot, candidateRoot, copies, hostLinks, relocations, destinationFor } = targets;
   const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
-    await params.onProgress?.();
     assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
     if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
@@ -544,28 +543,37 @@ export async function copyUpdateCandidatePluginTrees(
       await fs.mkdir(destinationFor(entry.path), { recursive: true, mode: entry.mode | 0o700 });
     }
   }
-  for (const entry of plan.entries) {
-    if (entry.kind === "file") {
-      await assertEntry(entry);
-      const destination = destinationFor(entry.path);
-      await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-      // copyIn owns portable create-only publication; no-replace move needs a
-      // native binding. Recheck the inventory before its private stage is published.
-      await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
-        overwrite: false,
-        // Rehearsal payloads are disposable and never serve as recovery backups.
-        durable: false,
-        maxBytes: entry.size,
-        mode: entry.mode | 0o600,
-        sourceHardlinks: "allow",
-        assertBeforeMutation: () =>
-          assertUpdateCandidatePluginEntryStat(
-            entry,
-            fsSync.lstatSync(entry.path, { bigint: true }),
-          ),
-      });
-      await assertEntry(entry);
-    }
+  const copied = await runTasksWithConcurrency({
+    limit: 4,
+    errorMode: "stop",
+    tasks: plan.entries
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => async () => {
+        await assertEntry(entry);
+        const destination = destinationFor(entry.path);
+        await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+        // copyIn owns portable create-only publication; no-replace move needs a
+        // native binding. Recheck the inventory before its private stage is published.
+        await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
+          overwrite: false,
+          // Rehearsal payloads are disposable and never serve as recovery backups.
+          durable: false,
+          maxBytes: entry.size,
+          mode: entry.mode | 0o600,
+          sourceHardlinks: "allow",
+          assertBeforeMutation: () =>
+            assertUpdateCandidatePluginEntryStat(
+              entry,
+              fsSync.lstatSync(entry.path, { bigint: true }),
+            ),
+        });
+        await assertEntry(entry);
+      }),
+  });
+  // A failed copy can already have published bytes. Drain every admitted copy
+  // before the caller can clean up, or before any link publication begins.
+  if (copied.hasError) {
+    throw copied.firstError;
   }
   for (const entry of plan.entries) {
     if (entry.kind === "symlink") {

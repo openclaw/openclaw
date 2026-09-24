@@ -24,7 +24,7 @@ jobs:
       actions: write
       contents: read
     steps:
-      # Reuse the full manual CI path rather than treating the last main commit
+      # Select the complete main tier rather than treating the last main commit
       # as an hourly diff: that would miss changes coalesced between hourly runs.
       # Leave target_ref unset: GitHub pins the child workflow and its checkout
       # to the same main SHA at dispatch, even if main moved since this event.
@@ -39,6 +39,7 @@ jobs:
               ref: "main",
               inputs: {
                 include_android: "true",
+                validation_tier: "main",
                 release_gate: "false",
                 release_scope: "full",
                 dispatch_id: dispatchId,

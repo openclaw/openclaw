@@ -18,7 +18,7 @@ import {
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
 
-const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
+const { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot } =
   createSkillsWatcherMock();
 
 const pluginSkillsMocks = vi.hoisted(() => ({
@@ -35,7 +35,10 @@ vi.mock("chokidar", () => ({
   default: { watch: watchMock },
 }));
 vi.mock("./refresh-ancestor-native.js", () => ({
-  createNativeSkillsAncestorWatcher: nativeWatchMock,
+  createNativeSkillsAncestorWatcher: vi.fn(nativeWatchMock),
+}));
+vi.mock("./refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: vi.fn(nativeContentWatchMock),
 }));
 
 vi.mock("../loading/plugin-skills.js", () => ({
@@ -154,6 +157,33 @@ describe("ensureSkillsWatcher", () => {
         process.env.CHOKIDAR_USEPOLLING = previousPolling;
       }
       await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Darwin content and ancestor generations on stock Chokidar", async () => {
+    const ancestor = vi.mocked(
+      (await import("./refresh-ancestor-native.js")).createNativeSkillsAncestorWatcher,
+    );
+    const content = vi.mocked(
+      (await import("./refresh-content-native.js")).createNativeSkillsContentWatcher,
+    );
+    ancestor.mockClear();
+    content.mockClear();
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+      refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir });
+      expect(ancestor).not.toHaveBeenCalled();
+      expect(content).not.toHaveBeenCalled();
+      expect(watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills")).options).toMatchObject({
+        depth: 7,
+        usePolling: false,
+      });
+      expect(
+        watchForSkillRoot(path.join(fixtureWorkspaceDir, ".agents", "skills")).options,
+      ).toMatchObject({ depth: 0, usePolling: false });
+    } finally {
+      Object.defineProperty(process, "platform", platform);
     }
   });
 

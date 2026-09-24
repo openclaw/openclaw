@@ -145,6 +145,11 @@ on:
         type: string
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       workflow_ref:
         description: "Assertion of the called workflow identity: dispatch/call at the desired ref and supply its matching SHA/ref; package_ref independently selects package source"
         required: false
@@ -427,7 +432,7 @@ env:
 jobs:
   resolve_package:
     name: Resolve package candidate
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 60
     outputs:
       tooling_sha: ${{ steps.tooling.outputs.sha }}
@@ -1170,7 +1175,7 @@ jobs:
   package_integrity:
     name: Package integrity
     needs: resolve_package
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
       - name: Checkout package workflow ref
@@ -1215,7 +1220,7 @@ jobs:
     name: npm 12 install.sh acceptance
     needs: [resolve_package, package_integrity]
     if: inputs.suite_profile != 'telegram'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     permissions:
       actions: read
@@ -1315,6 +1320,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with: &docker_acceptance_inputs
+      runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.resolve_package.outputs.package_source_sha }}
       include_repo_e2e: false
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
@@ -1419,6 +1425,7 @@ jobs:
     if: needs.resolve_package.outputs.telegram_enabled == 'true'
     uses: ./.github/workflows/npm-telegram-beta-e2e.yml
     with:
+      runner_group: ${{ inputs.runner_group }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions || false }}
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
@@ -1457,7 +1464,7 @@ jobs:
         package_telegram,
       ]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
       - name: Verify package acceptance results
