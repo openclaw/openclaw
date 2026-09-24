@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -668,10 +668,7 @@ describe("prepared npm bundle", () => {
     const distRoot = join(fixture.sourceDir, "dist");
     const candidateTypescriptRoot = join(fixture.sourceDir, "node_modules/typescript");
     const installedTypescriptRoot = dirname(require.resolve("typescript/package.json"));
-    const installedTypescriptEntry = relative(
-      installedTypescriptRoot,
-      require.resolve("typescript"),
-    );
+    const installedTypescriptEntry = require.resolve("typescript");
     mkdirSync(join(fixture.sourceDir, "scripts"));
     mkdirSync(join(fixture.sourceDir, "node_modules"), { recursive: true });
     cpSync(installedTypescriptRoot, candidateTypescriptRoot, { recursive: true });
@@ -680,26 +677,20 @@ describe("prepared npm bundle", () => {
       join(fixture.sourceDir, "scripts/tsx.mjs"),
       `await import(${JSON.stringify(pathToFileURL(require.resolve("tsx/esm")).href)});\n`,
     );
-    const candidateTypescriptManifestPath = join(candidateTypescriptRoot, "package.json");
-    const candidateTypescriptManifest = JSON.parse(
-      readFileSync(candidateTypescriptManifestPath, "utf8"),
-    ) as Record<string, unknown>;
-    const originalExports = candidateTypescriptManifest.exports;
-    if (originalExports && typeof originalExports === "object") {
-      candidateTypescriptManifest.exports = { ...originalExports, ".": "./candidate-entry.mjs" };
-    } else if (originalExports !== undefined) {
-      candidateTypescriptManifest.exports = "./candidate-entry.mjs";
-    } else {
-      candidateTypescriptManifest.main = "./candidate-entry.mjs";
-    }
-    writeFileSync(candidateTypescriptManifestPath, JSON.stringify(candidateTypescriptManifest));
+    const candidateTypescriptEntry = join(
+      candidateTypescriptRoot,
+      installedTypescriptEntry.slice(installedTypescriptRoot.length + 1),
+    );
+    const candidateTypescriptImplementation = join(
+      dirname(candidateTypescriptEntry),
+      "candidate-typescript-implementation.js",
+    );
+    copyFileSync(candidateTypescriptEntry, candidateTypescriptImplementation);
     writeFileSync(
-      join(candidateTypescriptRoot, "candidate-entry.mjs"),
+      candidateTypescriptEntry,
       [
-        `import fs from "node:fs";`,
-        `import ts from ${JSON.stringify(`./${installedTypescriptEntry}`)};`,
-        `fs.writeFileSync(${JSON.stringify(marker)}, "loaded");`,
-        `export default ts;`,
+        `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded");`,
+        `module.exports = require("./candidate-typescript-implementation.js");`,
       ].join("\n"),
     );
     writeFileSync(join(distRoot, "chunk.d.ts"), "export { __exportAll as helper };\n");
