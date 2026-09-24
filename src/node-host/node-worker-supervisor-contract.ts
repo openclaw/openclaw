@@ -1,9 +1,16 @@
 import {
   parseNodeWorkerSupervisorReceipt,
+  type NodeWorkerEnvironmentStopInput,
+  type NodeWorkerLaunchInput,
+  type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
 } from "../worker/node-supervisor-protocol.js";
+import type {
+  NodeWorkerWorkspaceRetainInput,
+  NodeWorkerWorkspaceRetainResult,
+} from "../worker/node-workspace-retain-protocol.js";
+import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
-import type { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 
 export {
   parseNodeWorkerCancelInput,
@@ -17,10 +24,20 @@ export type {
   NodeWorkerSupervisorReceipt,
 } from "../worker/node-supervisor-protocol.js";
 
-export type NodeWorkerSupervisorControl = Pick<
-  ReturnType<typeof createNodeWorkerSupervisor>,
-  "launch" | "status" | "retainWorkspaces" | "cancel" | "stopEnvironment"
->;
+export type NodeWorkerSupervisorControl = {
+  launch(
+    input: NodeWorkerLaunchInput,
+    connectionEndpoint: WorkerConnectionEndpoint,
+    signal?: AbortSignal,
+  ): Promise<NodeWorkerLaunchReceipt>;
+  status(launchId: string): Promise<NodeWorkerLaunchReceipt | undefined>;
+  retainWorkspaces(
+    input: NodeWorkerWorkspaceRetainInput,
+    signal?: AbortSignal,
+  ): Promise<NodeWorkerWorkspaceRetainResult>;
+  cancel(expected: NodeWorkerSupervisorIdentity): Promise<NodeWorkerLaunchReceipt | undefined>;
+  stopEnvironment(input: NodeWorkerEnvironmentStopInput): Promise<void>;
+};
 
 export function projectNodeWorkerSupervisorReceipt(
   receipt: NodeWorkerLaunchReceipt,
