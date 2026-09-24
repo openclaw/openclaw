@@ -139,6 +139,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     private var _state: URLSessionTask.State = .suspended
+    private var resumeCount = 0
     private var connectRequestId: String?
     private var connectAuth: [String: Any]?
     private var connectDevice: [String: Any]?
@@ -176,7 +177,14 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func resume() {
-        self.state = .running
+        self.lock.withLock {
+            self.resumeCount += 1
+            self._state = .running
+        }
+    }
+
+    func snapshotResumeCount() -> Int {
+        self.lock.withLock { self.resumeCount }
     }
 
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
@@ -521,6 +529,10 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         self.lock.withLock { self.makeCount }
     }
 
+    func snapshotResumeCount() -> Int {
+        self.lock.withLock { self.tasks.reduce(0) { $0 + $1.snapshotResumeCount() } }
+    }
+
     func latestTask() -> FakeGatewayWebSocketTask? {
         self.lock.withLock { self.tasks.last }
     }
@@ -775,6 +787,12 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 }
 
 #if DEBUG
+extension GatewayNodeSession {
+    fileprivate func holdChannelShutdown(_ gate: AsyncGate) {
+        self.testBeforeChannelShutdown = { await gate.wait() }
+    }
+}
+
 extension GatewayChannelActor {
     fileprivate func recordConnectRunCompletion(_ capture: StringCapture) {
         self.testConnectRunFinishedHandler = { Task { await capture.set("finished") } }
@@ -2225,6 +2243,110 @@ struct GatewayNodeSessionTests {
     }
 
     #if DEBUG
+    enum NativeRouteRetirement: CaseIterable, Sendable {
+        case disconnect, replacement
+    }
+
+    @Test(arguments: NativeRouteRetirement.allCases)
+    func `native route retirement fences authorization before queued shutdown`(
+        retirement: NativeRouteRetirement) async throws
+    {
+        let gateway = GatewayNodeSession()
+        let oldSession = FakeGatewayWebSocketSession()
+        let replacementSession = FakeGatewayWebSocketSession()
+        let authorizationGate = AsyncGate()
+        let shutdownGate = AsyncGate()
+        let url = try testURL("wss://gateway.example.invalid")
+        await gateway.holdChannelShutdown(shutdownGate)
+        let pending = Task {
+            try await gateway.connectForTest(
+                url, options: nodeConnectOptions(), session: oldSession,
+                extraHeadersProvider: {
+                    await authorizationGate.wait()
+                    return ["Cf-Access-Token": "test-only-old-grant"]
+                })
+        }
+        var retiring: Task<Void, Error>?
+        do {
+            try await waitUntil("native authorization suspended") { await authorizationGate.hasStarted() }
+            #expect(oldSession.snapshotMakeCount() == 0)
+            retiring = Task {
+                switch retirement {
+                case .disconnect:
+                    await gateway.disconnect()
+                case .replacement:
+                    try await gateway.connectForTest(
+                        url, options: nodeConnectOptions(), session: replacementSession,
+                        extraHeadersProvider: { ["Cf-Access-Token": "test-only-new-grant"] })
+                }
+            }
+            try await waitUntil("retired route shutdown queued") { await shutdownGate.hasStarted() }
+            // The owner has retired the route, but shutdown has not changed channel-local
+            // flags. Authorization must settle without creating or resuming a socket.
+            await authorizationGate.release()
+            let result = try await AsyncTimeout.withTimeout(
+                seconds: 5, onTimeout: { URLError(.timedOut) },
+                operation: { await pending.result })
+            if case .success = result {
+                Issue.record("retired route authorization unexpectedly connected")
+            }
+            #expect(oldSession.snapshotMakeCount() == 0)
+            #expect(oldSession.snapshotResumeCount() == 0)
+            await shutdownGate.release()
+            try await retiring?.value
+            if retirement == .replacement {
+                #expect(replacementSession.snapshotMakeCount() == 1)
+                #expect(replacementSession.snapshotResumeCount() == 1)
+                #expect(replacementSession.latestRequest()?
+                    .value(forHTTPHeaderField: "Cf-Access-Token") == "test-only-new-grant")
+            }
+            await gateway.disconnect()
+        } catch {
+            await authorizationGate.release()
+            await shutdownGate.release()
+            pending.cancel()
+            await gateway.disconnect()
+            _ = await pending.result
+            _ = await retiring?.result
+            throw error
+        }
+    }
+
+    @Test
+    func `active native route admits suspended authorization once`() async throws {
+        let gateway = GatewayNodeSession()
+        let session = FakeGatewayWebSocketSession()
+        let gate = AsyncGate()
+        let url = try testURL("wss://gateway.example.invalid")
+        let pending = Task {
+            try await gateway.connectForTest(
+                url, options: nodeConnectOptions(), session: session,
+                extraHeadersProvider: {
+                    await gate.wait()
+                    return ["Cf-Access-Token": "test-only-grant"]
+                })
+        }
+        do {
+            try await waitUntil("active native authorization suspended") { await gate.hasStarted() }
+            #expect(session.snapshotMakeCount() == 0)
+            await gate.release()
+            try await AsyncTimeout.withTimeout(
+                seconds: 5, onTimeout: { URLError(.timedOut) },
+                operation: { try await pending.value })
+            #expect(session.snapshotMakeCount() == 1)
+            #expect(session.snapshotResumeCount() == 1)
+            #expect(session.latestRequest()?
+                .value(forHTTPHeaderField: "Cf-Access-Token") == "test-only-grant")
+            await gateway.disconnect()
+        } catch {
+            await gate.release()
+            pending.cancel()
+            await gateway.disconnect()
+            _ = await pending.result
+            throw error
+        }
+    }
+
     @Test
     func `disconnect fences a suspended upgrade authorization before creating a socket`() async throws {
         let session = FakeGatewayWebSocketSession()

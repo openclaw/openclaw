@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import OpenClawProtocol
 import OSLog
+import Synchronization
 
 /// Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
@@ -67,6 +68,7 @@ public actor GatewayChannelActor {
     private var backoffMs: Double = 500
     var connectFailureBackoff = GatewayConnectFailureBackoff()
     private var shouldReconnect = true
+    private nonisolated let socketAdmission = Mutex(true)
     private var lastSeq: Int?
     private var lastTick: Date?
     private var tickIntervalMs: Double = 30000
@@ -155,7 +157,12 @@ public actor GatewayChannelActor {
         return self.acceptedHTTPBearer?.token
     }
 
+    nonisolated func retireSocketAdmission() {
+        self.socketAdmission.withLock { $0 = false }
+    }
+
     public func shutdown() async {
+        self.retireSocketAdmission()
         self.shouldReconnect = false
         self.connected = false
         self.acceptedHTTPBearer = nil
@@ -354,14 +361,19 @@ public actor GatewayChannelActor {
         try Task.checkCancellation()
         guard self.shouldReconnect else { throw CancellationError() }
         if let disconnectError { throw disconnectError }
-        self.connectionGeneration &+= 1
-        let connectionGeneration = self.connectionGeneration
         self.task?.cancel(with: .goingAway, reason: nil)
-        let attemptID = UUID()
-        let connectTask = self.session.makeWebSocketTask(request: request)
-        self.activeConnectAttemptID = attemptID
-        self.task = connectTask
-        connectTask.resume()
+        // Native route retirement cannot await this actor. Order it against the whole
+        // synchronous socket admission, including resume; keep transport cleanup outside.
+        let (connectTask, attemptID, connectionGeneration) = try self.socketAdmission.withLock { allowed in
+            guard allowed else { throw CancellationError() }
+            self.connectionGeneration &+= 1
+            let attemptID = UUID()
+            let connectTask = self.session.makeWebSocketTask(request: request)
+            self.activeConnectAttemptID = attemptID
+            self.task = connectTask
+            connectTask.resume()
+            return (connectTask, attemptID, self.connectionGeneration)
+        }
         let connectHello: HelloOk
         do {
             connectHello = try await AsyncTimeout.withTimeout(
