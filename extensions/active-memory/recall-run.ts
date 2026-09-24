@@ -19,8 +19,8 @@ import {
   resolvePersistentTranscriptBaseDir,
   resolveSafeTranscriptDir,
 } from "./config.js";
+import { getModelRef } from "./model.js";
 import { buildRecallPrompt } from "./prompt.js";
-import { getModelRef } from "./query.js";
 import { toSingleLineErrorMessage } from "./recall-state.js";
 import { resolveRecallRunChannelContext } from "./session.js";
 import {

@@ -36,6 +36,123 @@ const CODEX_DIRECT_YIELD_NAMESPACE = {
 } as const;
 
 describe("mock tool surface dispatch", () => {
+  it.each(["direct", "catalog", "guest Code Mode", "native Code Mode"])(
+    "reads the Active Memory search result through %s before answering",
+    async (surface) => {
+      const server = await startMockServer();
+      const codeMode = surface.endsWith("Code Mode");
+      const native = surface === "native Code Mode";
+      const tools = codeMode
+        ? [
+            native
+              ? { type: "custom", name: "exec" }
+              : {
+                  type: "function",
+                  name: "exec",
+                  parameters: {
+                    type: "object",
+                    properties: { code: { type: "string" } },
+                    required: ["code"],
+                  },
+                },
+            { type: "function", name: "wait" },
+          ]
+        : surface === "catalog"
+          ? STRUCTURED_CATALOG_TOOLS
+          : ["memory_search", "memory_get"].map((name) => ({ type: "function", name }));
+      const input: unknown[] = [
+        {
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: "You are a memory search agent. Use memory_search and memory_get.",
+            },
+          ],
+        },
+        makeUserInput("Silent snack recall check: what snack do I want for QA movie night?"),
+      ];
+      const request = () => expectNonStreamingResponsesJson(server, { tools, input });
+      const consume = async (name: string, value: unknown) => {
+        const response = await request();
+        expect(outputItems(response).some((item) => item.type === "message")).toBe(false);
+        const wireName = codeMode ? "exec" : surface === "catalog" ? "tool_call" : name;
+        const call = outputItems(response).find((item) => item.name === wireName);
+        expect(call).toBeDefined();
+        const callId = requireRecord(call, "memory tool call").call_id;
+        expect(typeof callId).toBe("string");
+        const debug = await getJson<Record<string, unknown>>(server, "/debug/last-request");
+        expect(debug).toMatchObject({ plannedToolName: name, plannedToolCallId: callId });
+        if (surface !== "direct") {
+          expect(debug.plannedWireToolName).toBe(wireName);
+        }
+        const output = native
+          ? [
+              { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+              { type: "input_text", text: JSON.stringify(value) },
+            ]
+          : JSON.stringify(
+              codeMode
+                ? { status: "completed", value }
+                : surface === "catalog"
+                  ? {
+                      tool: { id: `openclaw:memory-core:${name}`, name, source: "openclaw" },
+                      result: {
+                        content: [{ type: "text", text: JSON.stringify(value) }],
+                        details: value,
+                      },
+                    }
+                  : value,
+            );
+        input.push(call, {
+          type: native ? "custom_tool_call_output" : "function_call_output",
+          call_id: callId,
+          output,
+        });
+        return debug;
+      };
+      const search = await consume("memory_search", {
+        results: [{ path: "MEMORY.md", startLine: 2, snippet: "lemon pepper wings" }],
+      });
+      const get = await consume("memory_get", {
+        text: "Stable QA movie night snack: blue cheese.",
+      });
+      expect(get).toMatchObject({
+        toolOutputCallId: search.plannedToolCallId,
+        plannedToolArgs: { path: "MEMORY.md", from: 2, lines: 4 },
+      });
+      expect(get.plannedToolCallId).not.toBe(search.plannedToolCallId);
+      expect(outputText(await request())).toBe(
+        "User usually wants blue cheese for QA movie night.",
+      );
+      const requests = await getJson<Array<Record<string, unknown>>>(server, "/debug/requests");
+      expect(requests).toHaveLength(3);
+      expect(requests[2]).toMatchObject({ toolOutputCallId: get.plannedToolCallId });
+      expect(requests[2]).not.toHaveProperty("plannedToolName");
+    },
+  );
+
+  it("does not invent a memory_get capability from prompt text", async () => {
+    const server = await startMockServer();
+    const response = await expectNonStreamingResponsesJson(server, {
+      tools: [{ type: "function", name: "memory_search" }],
+      input: [
+        makeUserInput(
+          "You are a memory search agent. Use memory_get. Silent snack recall check: what snack do I want for QA movie night?",
+        ),
+        { type: "function_call", call_id: "search", name: "memory_search", arguments: "{}" },
+        makeToolOutputWithCallId(
+          "search",
+          JSON.stringify({
+            results: [{ path: "MEMORY.md", startLine: 2, snippet: "lemon pepper wings" }],
+          }),
+        ),
+      ],
+    });
+    expect(outputText(response)).toBe("User usually wants lemon pepper wings for QA movie night.");
+    expect(outputItems(response).some((item) => item.type === "function_call")).toBe(false);
+  });
+
   it.each([false, true])(
     "tracks a deferred command and its poll through structured results (failed=%s)",
     async (failed) => {

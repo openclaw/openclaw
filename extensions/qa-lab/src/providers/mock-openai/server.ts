@@ -1674,7 +1674,7 @@ async function buildResponsesPayload(
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const first = results[0];
-    if (typeof first?.path === "string" && hasDeclaredTool(body, "memory_get")) {
+    if (typeof first?.path === "string" && canCallScenarioTool(toolDeclarationBody, "memory_get")) {
       return buildToolCallEventsWithArgs("memory_get", buildMemoryGetArgs(first));
     }
     const memorySnippet = Array.isArray(toolJson?.results)

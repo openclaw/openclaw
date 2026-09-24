@@ -2,7 +2,7 @@ import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeActiveMemoryFastMode } from "./config.js";
-import { getModelRef } from "./query.js";
+import { getModelRef } from "./model.js";
 import { runRecallSubagent } from "./recall-run.js";
 import {
   buildCacheKey,

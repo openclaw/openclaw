@@ -1,5 +1,5 @@
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { getMemoryCapabilityRegistration } from "openclaw/plugin-sdk/memory-host-core";
 import {
   normalizePluginsConfig,
@@ -18,7 +18,7 @@ import {
 } from "./config.js";
 import { resolveRecallEscalationDecision } from "./escalation.js";
 import { buildPromptPrefix, buildRecallOutcomePrefix } from "./prompt.js";
-import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from "./query.js";
+import { buildQuery, buildSearchQuery, extractRecentTurns } from "./query.js";
 import {
   buildCacheKey,
   buildCircuitBreakerKey,
@@ -29,7 +29,6 @@ import {
   setCachedResult,
   toSingleLineErrorMessage,
 } from "./recall-state.js";
-import { maybeResolveActiveRecall } from "./recall.js";
 import {
   ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
   formatActiveMemoryCommandHelp,
@@ -75,6 +74,19 @@ import {
   TRIGGER_LOOKUP_SETTLE_RESERVE_MS,
   type ConversationRecallContext,
 } from "./types.js";
+
+const loadRecallRuntime = createLazyRuntimeModule(async () => {
+  const [
+    { resolveAgentDir, resolveAgentWorkspaceDir },
+    { getModelRef },
+    { maybeResolveActiveRecall },
+  ] = await Promise.all([
+    import("openclaw/plugin-sdk/agent-runtime"),
+    import("./model.js"),
+    import("./recall.js"),
+  ]);
+  return { resolveAgentDir, resolveAgentWorkspaceDir, getModelRef, maybeResolveActiveRecall };
+});
 
 export default definePluginEntry({
   id: "active-memory",
@@ -228,46 +240,6 @@ export default definePluginEntry({
           return undefined;
         }
         toolAuthority.assertActive();
-        refreshLiveConfigFromRuntime();
-        const liveConfig = readCurrentConfig();
-        // The hook deadline, watchdog, and embedded-run budget all flow from
-        // this config, so the CLI-runtime default raise must happen before
-        // any of them are armed. Budgeting shares the runner's own dispatch
-        // eligibility so API-key/missing-backend passthrough runs keep the
-        // plain default.
-        const timeoutAgentId = resolveStatusUpdateAgentId(ctx);
-        // getModelRef returns undefined when no recall model resolves; the
-        // eligibility check treats a missing provider as ineligible.
-        const timeoutModelRef =
-          (timeoutAgentId
-            ? getModelRef(liveConfig, timeoutAgentId, config, {
-                modelProviderId: ctx.modelProviderId,
-                modelId: ctx.modelId,
-              })
-            : { provider: ctx.modelProviderId, model: ctx.modelId }) ?? {};
-        const cliDispatchEligibility = api.runtime.agent.resolveCliBackendDispatchEligibility({
-          provider: timeoutModelRef.provider,
-          model: timeoutModelRef.model,
-          config: liveConfig,
-          ...(timeoutAgentId
-            ? {
-                agentId: timeoutAgentId,
-                agentDir: resolveAgentDir(liveConfig, timeoutAgentId),
-                workspaceDir: resolveAgentWorkspaceDir(liveConfig, timeoutAgentId),
-              }
-            : {}),
-        });
-        const invocationConfig = applyCliRuntimeRecallTimeoutDefault(
-          config,
-          cliDispatchEligibility !== undefined,
-        );
-        const authorityAllowedRecallTools = invocationConfig.toolsAllow.filter((toolName) =>
-          toolAuthority.allows(toolName),
-        );
-        const liveRecallTimeoutMs =
-          invocationConfig.timeoutMs +
-          invocationConfig.setupGraceTimeoutMs +
-          HOOK_TIMEOUT_RECOVERY_GRACE_MS;
         const deadlineController = new AbortController();
         const hookDeadline = createActiveMemoryHookDeadline();
         const armHookDeadline = (timeoutMs: number, phase: "preflight" | "recall") => {
@@ -283,6 +255,57 @@ export default definePluginEntry({
         armHookDeadline(HOOK_TIMEOUT_RECOVERY_GRACE_MS, "preflight");
         const handlerPromise = (async () => {
           try {
+            const {
+              resolveAgentDir,
+              resolveAgentWorkspaceDir,
+              getModelRef,
+              maybeResolveActiveRecall,
+            } = await loadRecallRuntime();
+            // Loading can outlive preflight or this handler while a sibling keeps
+            // turn authority active. Do not resume work after any deadline closes.
+            deadlineController.signal.throwIfAborted();
+            toolAuthority.assertActive();
+            ctx.hookInvocation?.assertActive();
+            refreshLiveConfigFromRuntime();
+            const liveConfig = readCurrentConfig();
+            // The recall deadline, watchdog, and embedded-run budget all flow from
+            // this config, so the CLI-runtime default raise must happen before
+            // recall timers are armed. Budgeting shares the runner's own dispatch
+            // eligibility so API-key/missing-backend passthrough runs keep the
+            // plain default.
+            const timeoutAgentId = resolveStatusUpdateAgentId(ctx);
+            // getModelRef returns undefined when no recall model resolves; the
+            // eligibility check treats a missing provider as ineligible.
+            const timeoutModelRef =
+              (timeoutAgentId
+                ? getModelRef(liveConfig, timeoutAgentId, config, {
+                    modelProviderId: ctx.modelProviderId,
+                    modelId: ctx.modelId,
+                  })
+                : { provider: ctx.modelProviderId, model: ctx.modelId }) ?? {};
+            const cliDispatchEligibility = api.runtime.agent.resolveCliBackendDispatchEligibility({
+              provider: timeoutModelRef.provider,
+              model: timeoutModelRef.model,
+              config: liveConfig,
+              ...(timeoutAgentId
+                ? {
+                    agentId: timeoutAgentId,
+                    agentDir: resolveAgentDir(liveConfig, timeoutAgentId),
+                    workspaceDir: resolveAgentWorkspaceDir(liveConfig, timeoutAgentId),
+                  }
+                : {}),
+            });
+            const invocationConfig = applyCliRuntimeRecallTimeoutDefault(
+              config,
+              cliDispatchEligibility !== undefined,
+            );
+            const authorityAllowedRecallTools = invocationConfig.toolsAllow.filter((toolName) =>
+              toolAuthority.allows(toolName),
+            );
+            const liveRecallTimeoutMs =
+              invocationConfig.timeoutMs +
+              invocationConfig.setupGraceTimeoutMs +
+              HOOK_TIMEOUT_RECOVERY_GRACE_MS;
             const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
             const resolvedSessionKey =
               ctx.sessionKey?.trim() ||
