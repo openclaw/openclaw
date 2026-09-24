@@ -4,6 +4,7 @@ import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import type { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+import { markOpenClawStateDatabaseFailure } from "./openclaw-state-db-failure.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 
 type FailureOwner = {
@@ -19,6 +20,7 @@ type FailureOwner = {
 export function createOpenClawStateDatabaseRuntimeFailureOwner(owner: FailureOwner) {
   return {
     closeTerminalFailure(pathname: string, error: Error): void {
+      markOpenClawStateDatabaseFailure(error, pathname);
       owner.invalidate(pathname);
       const cached = owner.cachedDatabases.get(pathname);
       const errors: unknown[] = [];

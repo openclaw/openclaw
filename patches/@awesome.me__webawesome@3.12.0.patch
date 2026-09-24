@@ -1,3 +1,26 @@
+diff --git a/dist/chunks/chunk.64OG2H45.js b/dist/chunks/chunk.64OG2H45.js
+index d73ee076101feff0950dd4abb2b3244ff5461992..16931b36519a72e082d903c837f394380bf30e2d 100644
+--- a/dist/chunks/chunk.64OG2H45.js
++++ b/dist/chunks/chunk.64OG2H45.js
+@@ -169,10 +169,17 @@ var WaPopup = class extends WebAwesomeElement {
+     if (!this.anchorEl || !this.active || !this.isConnected) {
+       return;
+     }
++    this.cleanup?.();
++    this.cleanup = void 0;
+     this.popup?.showPopover?.();
+-    this.cleanup = autoUpdate(this.anchorEl, this.popup, () => {
++    const cleanup = autoUpdate(this.anchorEl, this.popup, () => {
+       this.reposition();
+     });
++    if (!this.active || !this.isConnected) {
++      cleanup();
++      return;
++    }
++    this.cleanup = cleanup;
+   }
+   async stop() {
+     return new Promise((resolve) => {
 diff --git a/dist/chunks/chunk.BCXHEFKE.js b/dist/chunks/chunk.BCXHEFKE.js
 index 01d9b3366bda44776cc7db51481c9b81be72d228..bee944e7dcd41e0e658ce0e73f2bf4156ff4d920 100644
 --- a/dist/chunks/chunk.BCXHEFKE.js
@@ -2418,6 +2441,29 @@ index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc059
  }
  function parseDuration(duration) {
    duration = duration.toString().toLowerCase();
+diff --git a/dist-cdn/chunks/chunk.QERYKBRG.js b/dist-cdn/chunks/chunk.QERYKBRG.js
+index dce611cc655099d3adf42274a8dbeb4ba883b575..4d75dae5218a5cdaa4be57233bcb261ed268f8e2 100644
+--- a/dist-cdn/chunks/chunk.QERYKBRG.js
++++ b/dist-cdn/chunks/chunk.QERYKBRG.js
+@@ -1643,10 +1643,17 @@ var WaPopup = class extends WebAwesomeElement {
+     if (!this.anchorEl || !this.active || !this.isConnected) {
+       return;
+     }
++    this.cleanup?.();
++    this.cleanup = void 0;
+     this.popup?.showPopover?.();
+-    this.cleanup = autoUpdate(this.anchorEl, this.popup, () => {
++    const cleanup = autoUpdate(this.anchorEl, this.popup, () => {
+       this.reposition();
+     });
++    if (!this.active || !this.isConnected) {
++      cleanup();
++      return;
++    }
++    this.cleanup = cleanup;
+   }
+   async stop() {
+     return new Promise((resolve) => {
 diff --git a/dist-cdn/chunks/chunk.VVUBGO75.js b/dist-cdn/chunks/chunk.VVUBGO75.js
 index 79243983dd4273713e7d1cc5d7e9a7b103cb787c..b7007d1129565982cac88ea9878d78e47072e340 100644
 --- a/dist-cdn/chunks/chunk.VVUBGO75.js

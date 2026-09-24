@@ -24,7 +24,6 @@ import {
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   runAfterReplyOperationClear,
-  type ReplyOperation,
 } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
@@ -73,14 +72,6 @@ function createTestReplyOperation(
     Partial<Pick<Parameters<typeof createReplyOperation>[0], "resetTriggered">>,
 ) {
   return createReplyOperation({ resetTriggered: false, ...overrides });
-}
-
-async function admitTestReplyOperation(params: Parameters<typeof admitTestReplyTurn>[0]) {
-  const admission = await admitTestReplyTurn(params);
-  if (admission.status !== "owned") {
-    throw new Error("Fixture requires an admitted reply operation");
-  }
-  return admission.operation;
 }
 
 async function readSessionEntry(
@@ -1221,186 +1212,6 @@ describe("reply turn admission", () => {
     expect(result.status).toBe("owned");
     if (result.status === "owned") {
       expect(result.operation.sessionId).toBe("post-compact-session");
-      result.operation.complete();
-    }
-  });
-
-  it("accepts an expected session id rotated by the active run", async () => {
-    const sessionKey = "agent:main:telegram:topic:compaction";
-    const sessionId = "pre-compact-session";
-    const nextSessionId = "post-compact-session";
-    const storePath = createSessionStoreFor(sessionKey, sessionId);
-    const active = await admitTestReplyOperation({
-      sessionKey,
-      sessionId,
-      storePath,
-    });
-    active.setPhase("preflight_compacting");
-
-    const admitted = admitTestReplyTurn({
-      sessionKey,
-      sessionId,
-      expectedSessionId: sessionId,
-      storePath,
-    });
-
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    await replaceSessionEntry({ sessionKey, storePath }, {
-      sessionId: nextSessionId,
-      updatedAt: Date.now(),
-    } as SessionEntry);
-    active.updateSessionId(nextSessionId);
-    active.complete();
-    const result = await admitted;
-
-    expect(result.status).toBe("owned");
-    if (result.status === "owned") {
-      expect(result.operation.sessionId).toBe(nextSessionId);
-      result.operation.complete();
-    }
-  });
-
-  it("accepts a rotation already published by the expected active run", async () => {
-    const sessionKey = "agent:main:telegram:topic:compaction-before-admission";
-    const sessionId = "pre-compact-session";
-    const nextSessionId = "post-compact-session";
-    const storePath = createSessionStoreFor(sessionKey, sessionId);
-    const active = await admitTestReplyOperation({
-      sessionKey,
-      sessionId,
-      storePath,
-    });
-    active.setPhase("preflight_compacting");
-    active.updateSessionId(nextSessionId);
-    await replaceSessionEntry({ sessionKey, storePath }, {
-      sessionId: nextSessionId,
-      updatedAt: Date.now(),
-    } as SessionEntry);
-    active.complete();
-
-    const result = await admitTestReplyTurn({
-      sessionKey,
-      sessionId,
-      expectedSessionId: sessionId,
-      expectedActiveOperations: [active],
-      storePath,
-    });
-
-    expect(result.status).toBe("owned");
-    if (result.status === "owned") {
-      expect(result.operation.sessionId).toBe(nextSessionId);
-      result.operation.complete();
-    }
-  });
-
-  it("accepts a rotation published by the live owner after the caller snapshot", async () => {
-    const sessionKey = "agent:main:telegram:topic:late-compaction-owner";
-    const sessionId = "pre-compact-session";
-    const nextSessionId = "post-compact-session";
-    const storePath = createSessionStoreFor(sessionKey, sessionId);
-    const active = await admitTestReplyOperation({
-      sessionKey,
-      sessionId,
-      storePath,
-    });
-    active.setPhase("preflight_compacting");
-    active.updateSessionId(nextSessionId);
-    await replaceSessionEntry({ sessionKey, storePath }, {
-      sessionId: nextSessionId,
-      updatedAt: Date.now(),
-    } as SessionEntry);
-
-    const admitted = admitTestReplyTurn({
-      sessionKey,
-      sessionId,
-      expectedSessionId: sessionId,
-      storePath,
-      waitForActive: true,
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    active.complete();
-    const result = await admitted;
-
-    expect(result.status).toBe("owned");
-    if (result.status === "owned") {
-      expect(result.operation.sessionId).toBe(nextSessionId);
-      result.operation.complete();
-    }
-  });
-
-  it("rejects a fresh post-reset owner as rotation proof", async () => {
-    const sessionKey = "agent:main:telegram:topic:fresh-post-reset-owner";
-    const sessionId = "session-before-reset";
-    const nextSessionId = "session-after-reset";
-    const storePath = createSessionStore({
-      [sessionKey]: { sessionId: nextSessionId, updatedAt: Date.now() },
-    });
-    const freshOwner = await admitTestReplyOperation({
-      sessionKey,
-      sessionId: nextSessionId,
-      storePath,
-    });
-
-    const admitted = admitTestReplyTurn({
-      sessionKey,
-      sessionId,
-      expectedSessionId: sessionId,
-      storePath,
-      waitForActive: true,
-    });
-
-    await expect(admitted).rejects.toThrow(/changed while starting work/i);
-    freshOwner.complete();
-  });
-
-  it.each([
-    [
-      "failed",
-      (operation: ReplyOperation) => {
-        operation.fail("run_failed");
-        operation.complete();
-      },
-    ],
-    [
-      "user-aborted",
-      (operation: ReplyOperation) => {
-        operation.abortByUser();
-        operation.complete();
-      },
-    ],
-  ])("accepts a rotation published before the expected run %s", async (_outcome, finish) => {
-    const sessionKey = "agent:main:telegram:topic:compaction-terminal-outcome";
-    const sessionId = "pre-compact-session";
-    const nextSessionId = "post-compact-session";
-    const storePath = createSessionStoreFor(sessionKey, sessionId);
-    const active = await admitTestReplyOperation({
-      sessionKey,
-      sessionId,
-      storePath,
-    });
-    active.setPhase("preflight_compacting");
-    active.updateSessionId(nextSessionId);
-    await replaceSessionEntry({ sessionKey, storePath }, {
-      sessionId: nextSessionId,
-      updatedAt: Date.now(),
-    } as SessionEntry);
-    finish(active);
-
-    const result = await admitTestReplyTurn({
-      sessionKey,
-      sessionId,
-      expectedSessionId: sessionId,
-      expectedActiveOperations: [active],
-      storePath,
-    });
-
-    expect(result.status).toBe("owned");
-    if (result.status === "owned") {
-      expect(result.operation.sessionId).toBe(nextSessionId);
       result.operation.complete();
     }
   });

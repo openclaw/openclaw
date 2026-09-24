@@ -1777,6 +1777,8 @@ describe("ci workflow guards", () => {
       overrides: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
     ) {
       const context = {
+        // Count full-manifest rows after admission, not a default security-only push.
+        ciOnPush: "true",
         eventName: "push" as const,
         repository: "openclaw/openclaw",
         runAttempt: 1,
@@ -3174,11 +3176,12 @@ describe("ci workflow guards", () => {
       },
     );
 
-    it("pipelines canonical main across two non-canceling slots with coalesced pending work", () => {
+    it("pipelines opted-in canonical main across two non-canceling slots with coalesced pending work", () => {
       const workflow = readCiWorkflow();
       const scheduler = admissionDriver();
       const push = (runId: number) =>
         event(runId, {
+          ciOnPush: "true",
           eventName: "push",
           ref: "refs/heads/main",
           sha: runId.toString(16).padStart(40, "0"),
@@ -8492,9 +8495,6 @@ describe("ci workflow guards", () => {
         .filter((job) => job !== "ci-gate")
         .toSorted(),
     );
-    expect(gate.if).toBe(
-      "${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}",
-    );
     expect(gate.permissions).toEqual({ contents: "read" });
 
     const verifyStep = gate.steps.find(
@@ -8522,6 +8522,7 @@ describe("ci workflow guards", () => {
         for (const draft of [true, false]) {
           expect(
             evaluateWorkflowExpression(gate.if, {
+              ciOnPush: "true",
               cancelled,
               draft,
               eventName,

@@ -36,7 +36,7 @@ type WorkerCredentialBrokerOptions = {
   tunnelManager?: Pick<WorkerTunnelManager, "stop">;
   workerCredentialTtlMs?: number;
   generateWorkerCredential?: (bytes: number) => string;
-  liveEvents?: Pick<WorkerLiveEventReceiver, "bindSession" | "rotateCredential">;
+  liveEvents?: Pick<WorkerLiveEventReceiver, "rotateCredential">;
   placementStore?: WorkerSessionPlacementGate;
   now: () => number;
   isStopping: () => boolean;
@@ -270,9 +270,8 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
         throw new StaleWorkerBuildError();
       }
       const material = credentialMaterial();
-      let attached: WorkerEnvironmentRecord;
       try {
-        attached = await store.transition({
+        await store.transition({
           environmentId: request.environmentId,
           from: current.state,
           to: "attached",
@@ -293,24 +292,6 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
           throw serviceError("invalid_state", error.message);
         }
         throw error;
-      }
-      if (options.liveEvents) {
-        let liveSessionBound: boolean;
-        try {
-          liveSessionBound = options.liveEvents.bindSession({
-            environmentId: attached.environmentId,
-            runEpoch: attached.ownerEpoch,
-            sessionId: request.sessionId,
-          });
-        } catch {
-          liveSessionBound = false;
-        }
-        if (!liveSessionBound) {
-          await move(attached, "idle");
-          // Preserve the bounded attachment error after rollback fences the old worker.
-          await tunnels?.stop(request.environmentId, current.ownerEpoch).catch(() => undefined);
-          throw serviceError("invalid_state", "Attached session target is unavailable");
-        }
       }
       pendingCredentials.delete(request.environmentId);
       await tunnels?.stop(request.environmentId, current.ownerEpoch);

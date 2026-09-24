@@ -69,7 +69,11 @@ export async function enforceWorktreeCleanupLimits(
       }
     }
   };
-  const initialRefresh = await refreshTotals();
+  // Count-only inventory has not yielded since its registry read.
+  const initialRefresh =
+    limits.maxTotalSizeBytes === undefined
+      ? { liveIds: inventoriedIds, inventoryComplete }
+      : await refreshTotals();
   if (!overLimit()) {
     progress.recordLimitState(true, inventoryComplete);
     if (progress.result.limitsSatisfied !== true) {

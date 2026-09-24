@@ -412,48 +412,30 @@ export function createSlackBoltApp(params: {
   return { app, receiver, socketModeLogger };
 }
 
-function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSignal) {
-  const waiterAbortController = new AbortController();
-  const relayAbort = () => waiterAbortController.abort();
-  let latest: SlackSocketDisconnect | undefined;
-  abortSignal?.addEventListener("abort", relayAbort, { once: true });
-  const promise = waitForSlackSocketDisconnect(app, waiterAbortController.signal).then((value) => {
-    latest = value;
-    return value;
-  });
-  return {
-    promise,
-    getLatest: () => latest,
-    cancel: () => {
-      waiterAbortController.abort();
-      abortSignal?.removeEventListener("abort", relayAbort);
-    },
-    complete: () => {
-      abortSignal?.removeEventListener("abort", relayAbort);
-    },
-  };
-}
-
 export async function startSlackSocketAndWaitForDisconnect(params: {
   app: { start: () => unknown };
   abortSignal?: AbortSignal;
   onStarted?: () => void | Promise<void>;
 }) {
-  const disconnectWaiter = createSlackSocketDisconnectWaiter(params.app, params.abortSignal);
+  const waiterAbortController = new AbortController();
+  const relayAbort = () => waiterAbortController.abort();
+  let disconnect: SlackSocketDisconnect | undefined;
+  params.abortSignal?.addEventListener("abort", relayAbort, { once: true });
+  const disconnected = waitForSlackSocketDisconnect(params.app, waiterAbortController.signal).then(
+    (value) => {
+      disconnect = value;
+      return value;
+    },
+  );
   try {
     await Promise.resolve(params.app.start());
     if (params.abortSignal?.aborted) {
-      disconnectWaiter.cancel();
       return null;
     }
     await params.onStarted?.();
-    const disconnect = await disconnectWaiter.promise;
-    disconnectWaiter.complete();
-    return disconnect;
+    return await disconnected;
   } catch (err) {
     await Promise.resolve();
-    const disconnect = disconnectWaiter.getLatest();
-    disconnectWaiter.cancel();
     if (isMissingSocketStartErrorDetail(err) && disconnect?.error !== undefined) {
       throw toErrorObject(disconnect.error, "Non-Error thrown");
     }
@@ -464,6 +446,9 @@ export async function startSlackSocketAndWaitForDisconnect(params: {
       });
     }
     throw err;
+  } finally {
+    waiterAbortController.abort();
+    params.abortSignal?.removeEventListener("abort", relayAbort);
   }
 }
 

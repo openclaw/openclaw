@@ -20,7 +20,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
-import { describeUnavailableCronAgent } from "../agent-availability.js";
+import { describeUnavailableCronAgent, type CronAgentAvailability } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronJob } from "../types.js";
 import { cronStoreKey } from "./key.js";
@@ -546,21 +546,21 @@ export function activateCronRunReceiptInDatabase(params: {
 export function readCronRunReceiptCurrentJob(params: {
   handle: CronRunReceiptHandle;
   resolveAgentId: ResolveReceiptAgentId;
-  isAgentAvailable?: (agentId: string) => boolean;
+  isAgentAvailable?: CronAgentAvailability;
   allowMissingJob?: boolean;
   env?: NodeJS.ProcessEnv;
 }): CronJob | undefined {
-  if (params.isAgentAvailable && !params.isAgentAvailable(params.handle.agentId)) {
-    throw new CronRunReceiptRevisionError(
-      params.handle.receiptId,
-      describeUnavailableCronAgent(params.handle.agentId, params.env),
-      "owner-unavailable",
-    );
-  }
   return withReceiptWrite(
     "cron.run-receipt.assert-current",
     params.env ? { env: params.env } : {},
     (database) => {
+      if (params.isAgentAvailable?.(params.handle.agentId, database) === false) {
+        throw new CronRunReceiptRevisionError(
+          params.handle.receiptId,
+          describeUnavailableCronAgent(params.handle.agentId, params.env),
+          "owner-unavailable",
+        );
+      }
       assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle });
       return params.allowMissingJob ? undefined : validateCurrentJob({ database, ...params });
     },

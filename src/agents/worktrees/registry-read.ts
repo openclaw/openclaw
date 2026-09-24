@@ -1,3 +1,4 @@
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { ManagedWorktreeRecord, ProvisionedFileState } from "./types.js";
@@ -59,4 +60,19 @@ export async function getRegistryWorktreeProvisionedChunk(
     type: "worktrees.provisionedChunk",
     input,
   });
+}
+
+export async function readWorktreeCleanupState(env: NodeJS.ProcessEnv) {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "worktrees.cleanupState" },
+    { current: true },
+  );
+  if (!reply) {
+    return { records: [], leases: { liveScopes: [], staleScopes: [] } };
+  }
+  if (!reply.ok || reply.type !== "worktrees.cleanupState") {
+    throw new Error("Worktree cleanup state read failed");
+  }
+  return reply;
 }

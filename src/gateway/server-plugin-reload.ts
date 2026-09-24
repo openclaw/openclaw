@@ -14,7 +14,11 @@ import {
   PluginHostCleanupTimeoutError,
   withPluginHostCleanupTimeout,
 } from "../plugins/host-hook-cleanup-timeout.js";
-import { getPluginRuntimeGeneration, PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
+import {
+  createPluginRuntimeApplication,
+  getPluginRuntimeGeneration,
+  PluginRuntimeApplicationError,
+} from "../plugins/lifecycle.js";
 import { PluginLoadFailureError } from "../plugins/loader-shared.js";
 import { prepareMemoryRuntimeReload } from "../plugins/memory-runtime.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -466,19 +470,14 @@ export async function reloadGatewayPlugins(
       await waitForPluginRegistryRetirement(previousRegistry, { deferConsumers: true }),
     );
     recordCleanup(await kernel.pluginMetadata.waitForRetirement());
-    const sourceDigests = Object.fromEntries(
-      nextRegistry.plugins.flatMap((record) => {
-        const digest = getPluginInstance(record)?.sourceDigest;
-        return digest && changedPluginIds.has(record.id) ? [[record.id, digest]] : [];
-      }),
-    );
-    const receipt = {
+    const receipt = createPluginRuntimeApplication({
       operationId,
       generation: getPluginRuntimeGeneration(),
-      pluginIds: [...changedPluginIds].toSorted(),
-      sourceDigests,
-      ...(warnings.size ? { warnings: [...warnings] } : {}),
-    };
+      registry: nextRegistry,
+      pluginIds: changedPluginIds,
+      reloadPluginIds: params.pluginLifecycle?.reason === "reload" ? requestedIds : undefined,
+      warnings: [...warnings],
+    });
     return {
       activeChannels: new Set(nextRegistry.channels.map((entry) => entry.plugin.id)),
       runtime: receipt,

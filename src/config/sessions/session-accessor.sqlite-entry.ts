@@ -126,6 +126,8 @@ export function loadSessionEntryReadOnly(scope: SessionEntryReadScope): SessionE
   return resolveSessionEntry(scope, { readOnly: true, projection: scope.projection }).existing;
 }
 
+export { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-exact-read.js";
+
 /** Private prepared reads must reject a different physical owner at the captured path. */
 export function loadSessionEntryReadOnlyInScope(
   scope: SessionEntryReadScope & { databaseAgentId: string },

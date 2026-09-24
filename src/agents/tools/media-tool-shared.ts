@@ -565,6 +565,12 @@ export async function resolveMediaToolReferenceAccess(params: {
 
 type LoadedToolReferenceMedia = WebMediaResult | ReturnType<typeof decodeDataUrl>;
 
+export type LoadedMediaToolReference<T> = {
+  source: T;
+  resolvedInput: string;
+  rewrittenFrom?: string;
+};
+
 export type MediaToolSandbox = Pick<
   SandboxedBridgeMediaPathConfig,
   "root" | "bridge" | "stagedMediaPaths" | "readOnlyResourceMounts"
@@ -596,8 +602,8 @@ export async function loadMediaToolReferences<T>(params: {
   signal?: AbortSignal;
   mapMedia: (media: LoadedToolReferenceMedia) => T;
   mapRemote?: (url: string) => T;
-}): Promise<Array<{ source: T; resolvedInput: string; rewrittenFrom?: string }>> {
-  const loaded: Array<{ source: T; resolvedInput: string; rewrittenFrom?: string }> = [];
+}): Promise<LoadedMediaToolReference<T>[]> {
+  const loaded: LoadedMediaToolReference<T>[] = [];
   for (const rawInput of params.inputs) {
     params.signal?.throwIfAborted();
     const input = normalizeMediaReferenceSource(rawInput.trim().replace(/^@\s*/, ""));
