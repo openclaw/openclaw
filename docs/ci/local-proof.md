@@ -37,9 +37,12 @@ timestamp predates restored build information. Frozen targets keep their
 original stripe invocations. Per-graph elapsed times appear in the job log.
 
 The test-type jobs restore their own `.artifacts/tsgo-cache` state across runs.
-Cache keys separate compiler/dependency/configuration versions and CI rows;
-the compiler still validates every selected graph after a hit. Pull requests
-only restore state, while the existing trusted cache writer policy controls
+Exact cache keys separate compiler/dependency/configuration versions and CI rows.
+When those inputs change, each row can restore its previous incremental state;
+the compiler validates the current roots, options, source and dependency contents
+and discards incompatible compiler state. The central changed-graph queue also
+restores the five core stripe caches that full runs publish. Every selected graph
+still runs after a hit. Pull requests only restore state, while the existing trusted cache writer policy controls
 publication after successful checks. Cache-off and frozen-target runs retain
 their original behavior. Lint programs do not share these compiler caches.
 

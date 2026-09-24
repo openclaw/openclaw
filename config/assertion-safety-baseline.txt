@@ -2246,7 +2246,7 @@ src/commands/doctor-session-transcript-headers.ts	5
 src/commands/doctor-session-transcript-labels.ts	4
 src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skills.ts	1
-src/commands/doctor-sqlite-compact.ts	3
+src/commands/doctor-sqlite-compact.ts	1
 src/commands/doctor-sqlite-maintenance-lock.ts	2
 src/commands/doctor-state-integrity.ts	1
 src/commands/doctor-state-sqlite-compact.ts	1

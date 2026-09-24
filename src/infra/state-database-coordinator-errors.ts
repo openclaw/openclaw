@@ -1,13 +1,19 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { SqliteCoordinatorError } from "./sqlite-coordinator.js";
+import type { StateDatabaseCoordinatorOwner } from "./state-database-coordinator-owner.js";
 import type { CoordinatorFamily } from "./state-database-coordinator-paths.js";
 
 export const StateDatabaseCoordinatorContentionError = resolveGlobalSingleton(
   Symbol.for("openclaw.stateDatabaseCoordinatorContentionError"),
   () =>
     class CoordinatorContentionError extends SqliteCoordinatorError {
-      constructor(readonly family: CoordinatorFamily) {
-        super(`another OpenClaw process owns ${family}`);
+      constructor(
+        readonly family: CoordinatorFamily,
+        readonly blockingOwner?: StateDatabaseCoordinatorOwner,
+      ) {
+        super(
+          `another OpenClaw process owns ${family}${blockingOwner ? ` holder=${JSON.stringify(blockingOwner)}` : ""}`,
+        );
         this.name = "StateDatabaseCoordinatorContentionError";
       }
     },

@@ -39,6 +39,18 @@ host scheduling delays do not expire that authority. The host still checks curre
 authority before granting, and broker failure joins worker exit before releasing
 custody. Coordinator-lock and broker-capacity admission keep their own deadlines.
 
+Each SQLite broker worker admits up to 128 running and queued requests. A busy
+worker's admission queue does not consume another worker's request capacity;
+independent workers continue serving their databases. Requests on the same worker
+retain FIFO order, including callers waiting for capacity. All workers still share
+the 256 MiB retained-input budget, and a caller waiting for request capacity can
+time out after ten seconds. Individual commands up to 64 MiB retain their full
+serialized size while queued. Larger commands still require an idle worker and
+reserve a 32 MiB transport window; they never wait in the input queue. These are
+internal resource bounds, not configuration settings. These scheduling and budget
+changes preserve database ownership, transaction authority, schemas, and update
+behavior.
+
 ## Carry facts, publish after commit
 
 Before yielding, capture the physical store target, source/admission scope,
@@ -292,6 +304,14 @@ other native task mutation callers remain migration debt. Slow main-thread
 coordinator warnings include the caller stack as well as the operation label,
 captured only after a wait exceeds 100 ms. Schemas, retention, and update behavior
 are unchanged.
+
+Background exec registration and terminal writes use the existing task creation
+receipt and worker. A command that exits during registration joins its running
+and terminal publications in order. The process keeps its cleanup owner until
+task settlement and notification error recovery finish, so scope closure cannot
+restore or delete its environment while a write is pending. Registered synchronous
+V1 runtimes retain their captured adapter. Command redaction, task data, schemas,
+retention, and update behavior are unchanged.
 
 Worktree run-lease cleanup deletes the exact token and reads the Git unlock target
 through the shared-state worker. Failed deletions yield between bounded retries,
