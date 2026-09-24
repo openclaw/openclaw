@@ -22,7 +22,17 @@ import {
 } from "../plugins/services.js";
 import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generation.js";
 
-const PLUGIN_RELOAD_RECOVERY_DRAIN_TIMEOUT_MS = 60_000;
+const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
+
+export class PluginAdmittedWorkTimeoutError extends Error {
+  constructor(pluginIds: ReadonlySet<string>, cause: PluginHostCleanupTimeoutError) {
+    const ids = [...pluginIds].join(", ");
+    super(
+      `plugin ${ids} admitted work did not settle within 60s; the previous plugin generation stays active. Retry \`openclaw plugins reload ${[...pluginIds].join(" ")}\` after that work finishes.`,
+      { cause },
+    );
+  }
+}
 
 /** Owns resource handoff and rejected-registration cleanup for one reload transaction. */
 export function createPluginReloadCleanup({
@@ -31,15 +41,17 @@ export function createPluginReloadCleanup({
   port,
   pluginWorkspaceDir,
   getCron,
+  abortSignal,
   log,
   recordCleanup,
   retainRetirement,
 }: {
   previousRegistry: PluginRegistry;
-  changedPluginIds: ReadonlySet<string>;
+  changedPluginIds: Set<string>;
   port: number;
   pluginWorkspaceDir: string | undefined;
   getCron: () => PluginHookGatewayCronService;
+  abortSignal: AbortSignal;
   log: ReturnType<typeof createSubsystemLogger>;
   recordCleanup: (result: PluginHostCleanupResult) => void;
   retainRetirement: (retire: () => Promise<PluginHostCleanupResult>) => void;
@@ -56,16 +68,82 @@ export function createPluginReloadCleanup({
     registry: PluginRegistry,
     pluginIds: ReadonlySet<string>,
     includeConsumers = true,
+    isObservationCurrent?: () => boolean,
   ) => {
     for (const record of registry.plugins) {
       if (!pluginIds.has(record.id)) {
         continue;
+      }
+      if (isObservationCurrent?.() === false) {
+        return;
       }
       const result = await withPluginHostCleanupTimeout(`plugin ${record.id} admitted work`, () =>
         getPluginInstance(record)?.drain({ includeConsumers }),
       );
       if (result?.errors.length) {
         throw new AggregateError(result.errors, `Plugin ${record.id} work did not drain`);
+      }
+    }
+  };
+  const drainWithDeadline = async (
+    pluginIds: ReadonlySet<string>,
+    signal: AbortSignal,
+    reportStatus: (status: GatewayPluginReloadStatus) => void,
+    phase: "reloading" | "recovering",
+  ) => {
+    const deadlineAtMs = Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS;
+    reportStatus({
+      phase,
+      pluginIds: [...changedPluginIds],
+      deadlineAtMs,
+      reason:
+        phase === "recovering"
+          ? "Waiting for cleanup and admitted work before restoring the previous plugin runtime."
+          : `Waiting for admitted work of plugin ${[...pluginIds].join(", ")} before replacing it.`,
+    });
+    let backoffMs = 1_000;
+    for (;;) {
+      signal.throwIfAborted();
+      let observing = true;
+      try {
+        await withPluginHostCleanupTimeout(
+          phase === "recovering"
+            ? "previous plugin recovery drain"
+            : "previous plugin admitted work",
+          async () => {
+            if (phase === "recovering") {
+              await pendingServiceCleanup?.settled;
+            }
+            await drainInstances(
+              previousRegistry,
+              pluginIds,
+              phase === "recovering",
+              phase === "reloading" ? () => observing : undefined,
+            );
+          },
+          Math.max(0, Math.min(5_000, deadlineAtMs - Date.now())),
+        ).finally(() => {
+          // Late settlement must not quiesce another instance after rollback resumes it.
+          observing = false;
+        });
+        return;
+      } catch (error) {
+        if (!(error instanceof PluginHostCleanupTimeoutError)) {
+          throw error;
+        }
+        const remainingMs = deadlineAtMs - Date.now();
+        if (remainingMs <= 0) {
+          if (phase === "reloading") {
+            throw error;
+          }
+          throw new Error("Previous plugin work did not settle before the recovery deadline", {
+            cause: error,
+          });
+        }
+        // Retry only settlement observation; never repeat resource cleanup
+        // or acquire a replacement while the previous writer still owns it.
+        await sleepWithAbort(Math.min(backoffMs, remainingMs), signal);
+        backoffMs = Math.min(backoffMs * 2, 4_000);
       }
     }
   };
@@ -115,6 +193,7 @@ export function createPluginReloadCleanup({
       config,
       workspaceDir: pluginWorkspaceDir,
       getCron,
+      ...(start ? { abortSignal } : {}),
     };
     await withPluginHttpRouteRegistry(registry, () =>
       start
@@ -204,6 +283,35 @@ export function createPluginReloadCleanup({
         throw error;
       }
     },
+    selectResourceHandoff: (nextRegistry: PluginRegistry, requestedIds: ReadonlySet<string>) => {
+      const retainedRecords = new Set(nextRegistry.plugins);
+      changedPluginIds.clear();
+      for (const pluginId of [
+        ...requestedIds,
+        ...previousRegistry.plugins
+          .filter((record) => !retainedRecords.has(record))
+          .map((record) => record.id),
+        ...nextRegistry.plugins
+          .filter((record) => !previousRegistry.plugins.includes(record))
+          .map((record) => record.id),
+      ]) {
+        changedPluginIds.add(pluginId);
+      }
+      return new Set(
+        nextRegistry.plugins
+          .filter(
+            (record) =>
+              changedPluginIds.has(record.id) &&
+              record.enabled &&
+              record.status === "loaded" &&
+              record.format !== "bundle" &&
+              previousRegistry.plugins.some(
+                (previous) => previous.id === record.id && getPluginInstance(previous),
+              ),
+          )
+          .map((record) => record.id),
+      );
+    },
     isBlockingStopError: (error: unknown) =>
       !pendingServiceCleanup || error !== pendingServiceCleanup.error,
     rethrowServiceStopTimeout: () => {
@@ -234,47 +342,20 @@ export function createPluginReloadCleanup({
       return release;
     },
     drainInstances,
+    drainBeforeReplacement: async (
+      pluginIds: ReadonlySet<string>,
+      signal: AbortSignal,
+      reportStatus: (status: GatewayPluginReloadStatus) => void,
+    ) => {
+      if (pluginIds.size) {
+        await drainWithDeadline(pluginIds, signal, reportStatus, "reloading");
+      }
+    },
     drainForRecovery: async (
       signal: AbortSignal,
       reportStatus: (status: GatewayPluginReloadStatus) => void,
     ) => {
-      const deadlineAtMs = Date.now() + PLUGIN_RELOAD_RECOVERY_DRAIN_TIMEOUT_MS;
-      reportStatus({
-        phase: "recovering",
-        pluginIds: [...changedPluginIds],
-        deadlineAtMs,
-        reason:
-          "Waiting for cleanup and admitted work before restoring the previous plugin runtime.",
-      });
-      let backoffMs = 1_000;
-      for (;;) {
-        signal.throwIfAborted();
-        try {
-          await withPluginHostCleanupTimeout(
-            "previous plugin recovery drain",
-            async () => {
-              await pendingServiceCleanup?.settled;
-              await drainInstances(previousRegistry, changedPluginIds);
-            },
-            Math.max(0, Math.min(5_000, deadlineAtMs - Date.now())),
-          );
-          return;
-        } catch (error) {
-          if (!(error instanceof PluginHostCleanupTimeoutError)) {
-            throw error;
-          }
-          const remainingMs = deadlineAtMs - Date.now();
-          if (remainingMs <= 0) {
-            throw new Error("Previous plugin work did not settle before the recovery deadline", {
-              cause: error,
-            });
-          }
-          // Retry only settlement observation; never repeat resource cleanup
-          // or acquire a replacement while the previous writer still owns it.
-          await sleepWithAbort(Math.min(backoffMs, remainingMs), signal);
-          backoffMs = Math.min(backoffMs * 2, 4_000);
-        }
-      }
+      await drainWithDeadline(changedPluginIds, signal, reportStatus, "recovering");
     },
     disposeInstances,
     runLifecycleHooks,

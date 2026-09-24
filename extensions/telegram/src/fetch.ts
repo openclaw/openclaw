@@ -1,4 +1,3 @@
-// Telegram plugin module implements fetch behavior.
 import { randomUUID } from "node:crypto";
 import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -29,20 +28,23 @@ import {
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Agent, fetch as undiciFetch } from "undici";
-import { normalizeTelegramApiRoot } from "./api-root.js";
+// The installed package retains dispatcher composition under Bun.
+import { Agent, fetch as undiciFetch } from "undici/index.js";
+import { extractTelegramApiMethod } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
   TELEGRAM_DNS_RESULT_ORDER_ENV,
 } from "./network-config.js";
-import { TelegramRequestNotStartedError } from "./network-errors.js";
+import { isSafeToRetrySendError, TelegramRequestNotStartedError } from "./network-errors.js";
 import { getProxyUrlFromFetch, makeProxyFetch } from "./proxy.js";
 import {
   bindTelegramTransportAuthority,
   findTelegramRequestAuthorityError,
   getTelegramRequestAuthority,
 } from "./request-authority.js";
+
+export { normalizeTelegramApiRoot as resolveTelegramApiBase } from "./api-root.js";
 
 const log = createSubsystemLogger("telegram/network");
 
@@ -66,22 +68,14 @@ const TELEGRAM_TRANSPORT_ATTEMPT_FAILURE_THRESHOLD = 5;
 const TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS = 10_000;
 const TELEGRAM_TRANSPORT_ATTEMPT_MAX_COOLDOWN_MS = 60_000;
 
-type TelegramAgentPoolOptions = {
-  allowH2: false;
-  keepAliveTimeout: number;
-  keepAliveMaxTimeout: number;
-  connections: number;
-  pipelining: number;
-};
-
-function telegramAgentPoolOptions(): TelegramAgentPoolOptions {
+function telegramAgentPoolOptions(pipelining: 0 | 1) {
   return {
     allowH2: false,
     keepAliveTimeout: TELEGRAM_DISPATCHER_KEEP_ALIVE_TIMEOUT_MS,
     keepAliveMaxTimeout: TELEGRAM_DISPATCHER_KEEP_ALIVE_MAX_TIMEOUT_MS,
     connections: TELEGRAM_DISPATCHER_CONNECTIONS_PER_ORIGIN,
-    pipelining: TELEGRAM_DISPATCHER_PIPELINING,
-  };
+    pipelining,
+  } satisfies ConstructorParameters<typeof Agent>[0];
 }
 
 type RequestInitWithDispatcher = RequestInit & {
@@ -100,7 +94,7 @@ type TelegramDispatcherAttempt = {
 };
 
 type TelegramTransportAttempt = {
-  createDispatcher: () => TelegramDispatcher;
+  createDispatcher: (freshConnection?: boolean) => TelegramDispatcher;
   exportAttempt: TelegramDispatcherAttempt;
   logLevel?: "debug" | "warn";
   logMessage?: string;
@@ -219,10 +213,6 @@ function buildTelegramConnectOptions(params: {
   return connect;
 }
 
-function hasEnvHttpProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
-  return hasEnvHttpProxyAgentConfigured(env);
-}
-
 function resolveOpenClawProxyUrlForTelegram(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
@@ -287,7 +277,10 @@ function withPinnedLookup(
   return options ? { ...options, lookup } : { lookup };
 }
 
-function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
+function createTelegramDispatcher(
+  policy: PinnedDispatcherPolicy,
+  pipelining: 0 | 1 = TELEGRAM_DISPATCHER_PIPELINING,
+): {
   dispatcher: TelegramDispatcher;
   mode: TelegramDispatcherMode;
   effectivePolicy: PinnedDispatcherPolicy;
@@ -295,7 +288,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   // Telegram polling uses long-lived connections. Undici 8 enables HTTP/2 ALPN
   // by default, which can stall Telegram long-polling on Windows/IPv6 networks.
   // Force HTTP/1.1 for every dispatcher while keeping bounded pool defaults.
-  const poolOptions = telegramAgentPoolOptions();
+  const poolOptions = telegramAgentPoolOptions(pipelining);
 
   if (policy.mode === "explicit-proxy") {
     const requestTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
@@ -383,32 +376,14 @@ function logResolverNetworkDecisions(params: {
 
 function collectErrorCodes(err: unknown): Set<string> {
   const codes = new Set<string>();
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-
-  let queueIndex = 0;
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex++];
-    if (!current || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    if (typeof current === "object") {
+  for (const current of collectErrorGraphCandidates(err, (candidate) => [
+    candidate.cause,
+    ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+  ])) {
+    if (current && typeof current === "object") {
       const code = (current as { code?: unknown }).code;
       if (typeof code === "string" && code.trim()) {
         codes.add(code.trim().toUpperCase());
-      }
-      const cause = (current as { cause?: unknown }).cause;
-      if (cause && !seen.has(cause)) {
-        queue.push(cause);
-      }
-      const errors = (current as { errors?: unknown }).errors;
-      if (Array.isArray(errors)) {
-        for (const nested of errors) {
-          if (nested && !seen.has(nested)) {
-            queue.push(nested);
-          }
-        }
       }
     }
   }
@@ -421,7 +396,7 @@ function formatErrorCodes(err: unknown): string {
   return codes.length > 0 ? codes.join(",") : "none";
 }
 
-function shouldUseTelegramTransportFallback(err: unknown): boolean {
+export function shouldRetryTelegramTransportFallback(err: unknown): boolean {
   if (findTelegramRequestAuthorityError(err)) {
     return false;
   }
@@ -476,10 +451,6 @@ function describeProxyTunnelFailure(
   return undefined;
 }
 
-export function shouldRetryTelegramTransportFallback(err: unknown): boolean {
-  return shouldUseTelegramTransportFallback(err);
-}
-
 export type TelegramTransport = {
   fetch: typeof fetch;
   sourceFetch: typeof fetch;
@@ -511,61 +482,52 @@ function createTelegramTransportAttempts(params: {
   fallbackPolicy?: PinnedDispatcherPolicy;
   ownedDispatchers: Set<TelegramDispatcher>;
 }): TelegramTransportAttempt[] {
-  params.ownedDispatchers.add(params.defaultDispatcher.dispatcher);
-
-  const attempts: TelegramTransportAttempt[] = [
-    {
-      createDispatcher: () => params.defaultDispatcher.dispatcher,
-      exportAttempt: { dispatcherPolicy: params.defaultDispatcher.effectivePolicy },
-    },
+  const createAttempt = (
+    policy: PinnedDispatcherPolicy,
+    initial?: TelegramDispatcher,
+  ): TelegramTransportAttempt => {
+    const dispatchers = new Map<boolean, TelegramDispatcher>();
+    if (initial) {
+      dispatchers.set(false, initial);
+      params.ownedDispatchers.add(initial);
+    }
+    return {
+      exportAttempt: { dispatcherPolicy: policy },
+      createDispatcher: (freshConnection = false) => {
+        let dispatcher = dispatchers.get(freshConnection);
+        if (!dispatcher) {
+          // A separate bounded pool with pipelining=0 never borrows or retains
+          // idle sockets. Connection: close alone could still borrow a stale one.
+          dispatcher = createTelegramDispatcher(policy, freshConnection ? 0 : 1).dispatcher;
+          dispatchers.set(freshConnection, dispatcher);
+          params.ownedDispatchers.add(dispatcher);
+        }
+        return dispatcher;
+      },
+    };
+  };
+  const attempts = [
+    createAttempt(params.defaultDispatcher.effectivePolicy, params.defaultDispatcher.dispatcher),
   ];
-
   if (!params.allowFallback || !params.fallbackPolicy) {
     return attempts;
   }
-  const fallbackPolicy = params.fallbackPolicy;
-  const ownedDispatchers = params.ownedDispatchers;
-
-  let ipv4Dispatcher: TelegramDispatcher | null = null;
   attempts.push({
-    createDispatcher: () => {
-      if (!ipv4Dispatcher) {
-        ipv4Dispatcher = createTelegramDispatcher(fallbackPolicy).dispatcher;
-        ownedDispatchers.add(ipv4Dispatcher);
-      }
-      return ipv4Dispatcher;
-    },
-    exportAttempt: { dispatcherPolicy: fallbackPolicy },
+    ...createAttempt(params.fallbackPolicy),
     logLevel: "debug",
     logMessage: "fetch fallback: enabling sticky IPv4-only dispatcher",
   });
-
-  if (TELEGRAM_FALLBACK_IPS.length === 0) {
-    return attempts;
+  if (TELEGRAM_FALLBACK_IPS.length > 0) {
+    attempts.push({
+      ...createAttempt({
+        ...params.fallbackPolicy,
+        pinnedHostname: { hostname: TELEGRAM_API_HOSTNAME, addresses: [...TELEGRAM_FALLBACK_IPS] },
+      }),
+      logLevel: "warn",
+      logMessage:
+        "fetch fallback: primary connection path failed; trying alternative Telegram API IP",
+    });
   }
-
-  const fallbackIpPolicy: PinnedDispatcherPolicy = {
-    ...fallbackPolicy,
-    pinnedHostname: {
-      hostname: TELEGRAM_API_HOSTNAME,
-      addresses: [...TELEGRAM_FALLBACK_IPS],
-    },
-  };
-  let fallbackIpDispatcher: TelegramDispatcher | null = null;
-  attempts.push({
-    createDispatcher: () => {
-      if (!fallbackIpDispatcher) {
-        fallbackIpDispatcher = createTelegramDispatcher(fallbackIpPolicy).dispatcher;
-        ownedDispatchers.add(fallbackIpDispatcher);
-      }
-      return fallbackIpDispatcher;
-    },
-    exportAttempt: { dispatcherPolicy: fallbackIpPolicy },
-    logLevel: "warn",
-    logMessage:
-      "fetch fallback: primary connection path failed; trying alternative Telegram API IP",
-  });
-
   return attempts;
 }
 
@@ -610,7 +572,7 @@ export function resolveTelegramTransport(
   const explicitProxyUrl = effectiveProxyFetch
     ? getProxyUrlFromFetch(effectiveProxyFetch)
     : undefined;
-  const hasEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi();
+  const hasEnvProxy = !explicitProxyUrl && hasEnvHttpProxyAgentConfigured();
   const managedProxyUrl =
     !effectiveProxyFetch && !hasEnvProxy ? resolveOpenClawProxyUrlForTelegram() : undefined;
   const resolvedExplicitProxyUrl = explicitProxyUrl ?? managedProxyUrl;
@@ -687,7 +649,7 @@ export function resolveTelegramTransport(
   };
 
   const recordAttemptFailure = (attemptIndex: number, err: unknown): void => {
-    if (!shouldUseTelegramTransportFallback(err)) {
+    if (!shouldRetryTelegramTransportFallback(err)) {
       return;
     }
     const health = expectDefined(attemptHealth[attemptIndex], "transport attempt health index");
@@ -766,7 +728,16 @@ export function resolveTelegramTransport(
     }
   };
 
+  let closed = false;
   const resolvedFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (closed) {
+      throw new TelegramRequestNotStartedError("Telegram transport is closed");
+    }
+    const method = extractTelegramApiMethod(input);
+    const freshConnection = method === "sendmessage" || method === "sendrichmessage";
+    const shouldRetryRequest = (error: unknown) =>
+      shouldRetryTelegramTransportFallback(error) &&
+      (!freshConnection || isSafeToRetrySendError(error));
     const requestFetch = bindTelegramTransportAuthority(
       sourceFetch,
       getTelegramRequestAuthority(init),
@@ -810,7 +781,7 @@ export function resolveTelegramTransport(
         return response;
       } catch (caught) {
         signal?.throwIfAborted();
-        if (!shouldUseTelegramTransportFallback(caught)) {
+        if (!shouldRetryRequest(caught)) {
           throw caught;
         }
         const response = await requestFetch(input, init ?? {});
@@ -837,7 +808,7 @@ export function resolveTelegramTransport(
         continue;
       }
       try {
-        const response = await requestFetch(input, init, attempt.createDispatcher());
+        const response = await requestFetch(input, init, attempt.createDispatcher(freshConnection));
         signal?.throwIfAborted();
         captureHttpExchange({
           url: resolveRequestUrl(input),
@@ -868,17 +839,17 @@ export function resolveTelegramTransport(
           );
         }
         err = caught;
-        if (!shouldUseTelegramTransportFallback(err)) {
+        // A failed route affects later requests even when replaying this send is unsafe.
+        recordAttemptFailure(attemptIndex, err);
+        if (!shouldRetryRequest(err)) {
           throw err;
         }
-        recordAttemptFailure(attemptIndex, err);
       }
     }
 
     throw err;
   }) as typeof fetch;
 
-  let closed = false;
   const close = async (): Promise<void> => {
     if (closed) {
       return;
@@ -906,11 +877,4 @@ export function resolveTelegramFetch(
   return resolveTelegramTransport(proxyFetch, options).fetch;
 }
 
-/**
- * Resolve the Telegram Bot API base URL from an optional `apiRoot` config value.
- * Returns a trimmed URL without trailing slash, or the standard default.
- */
-export function resolveTelegramApiBase(apiRoot?: string): string {
-  return normalizeTelegramApiRoot(apiRoot);
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -12,7 +12,7 @@ import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/se
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   recordSessionHumanDirectMessage,
-  recordSessionStateEvent,
+  recordSessionStateEventAsync,
 } from "./session-state-events.js";
 import {
   deleteSessionUpstreamLink,
@@ -188,7 +188,10 @@ async function runSessionUpstreamMonitorTick(
     return;
   }
   const dbOptions = databaseOptions(options);
-  const linksByCatalog = listWatchedSessionUpstreamLinks(dbOptions);
+  const linksByCatalog = await listWatchedSessionUpstreamLinks(dbOptions);
+  if (options.signal?.aborted) {
+    return;
+  }
   const watchedLinkKeys = new Set(
     [...linksByCatalog.values()].flatMap((links) => links.map(upstreamMonitorLinkKey)),
   );
@@ -306,7 +309,12 @@ async function runSessionUpstreamMonitorTick(
             continue;
           }
           const sourceKey = upstreamSourceKey(probe);
-          const recorded = recordSessionStateEvent(
+          const assertCurrent = () => {
+            if (!loadIdleProbeSession(probe, options, expectedSessionId)) {
+              throw new Error("Upstream observation lost its idle session owner");
+            }
+          };
+          const recorded = await recordSessionStateEventAsync(
             {
               sessionKey: probe.sessionKey,
               agentId: probe.agentId,
@@ -316,13 +324,24 @@ async function runSessionUpstreamMonitorTick(
               summary: `upstream missing via ${catalogId}`,
               payload: { channel: catalogId },
             },
-            { ...dbOptions, now: (options.now ?? Date.now)() },
+            {
+              ...dbOptions,
+              now: (options.now ?? Date.now)(),
+              assertCurrent,
+              expectedUpstream: currentLink,
+            },
           );
           if (!recorded) {
             missingCounts.set(missingCountKey, {
               count: SESSION_UPSTREAM_MISSING_THRESHOLD - 1,
               linkUpdatedAt: expectedUpdatedAt,
             });
+            continue;
+          }
+          if (
+            !loadIdleProbeSession(probe, options, expectedSessionId) ||
+            !readMatchingProbeLink(probe, expectedUpdatedAt, dbOptions)
+          ) {
             continue;
           }
           deleteSessionUpstreamLink(probe.sessionKey, probe.agentId, dbOptions);
@@ -352,15 +371,13 @@ async function runSessionUpstreamMonitorTick(
           );
           continue;
         }
-        // CAS guard AFTER the last await: a Continue can refresh this link (new
-        // host/thread/source) while the scan or provenance check was in flight.
-        // From here to the record the path is synchronous, so a stale scan can
-        // neither record from the old source nor clobber the refreshed marker.
+        // Capture the source after provider I/O; its worker repeats this comparison under BEGIN.
         const expectedUpdatedAt = linkUpdatedAtBySessionKey.get(activity.sessionKey);
         // Compare source identity too: a same-millisecond Continue can refresh the
         // row without changing updated_at, so the timestamp alone is not a reliable
         // optimistic lock.
-        if (!readMatchingProbeLink(probe, expectedUpdatedAt, dbOptions)) {
+        const currentLink = readMatchingProbeLink(probe, expectedUpdatedAt, dbOptions);
+        if (!currentLink) {
           continue;
         }
         if (activity.humanTurns === 0) {
@@ -374,7 +391,8 @@ async function runSessionUpstreamMonitorTick(
         if (!Number.isFinite(activity.occurredAt) || !activity.dedupeId) {
           continue;
         }
-        const recorded = recordSessionHumanDirectMessage(
+        const expectedSessionId = sessionIdBySessionKey.get(probe.sessionKey);
+        const recorded = await recordSessionHumanDirectMessage(
           {
             sessionKey: probe.sessionKey,
             agentId: probe.agentId,
@@ -386,9 +404,22 @@ async function runSessionUpstreamMonitorTick(
           },
           // Local clock for bookkeeping: upstream occurredAt is event history only
           // and is clamped inside the recorder against this same clock.
-          { ...dbOptions, now: (options.now ?? Date.now)() },
+          {
+            ...dbOptions,
+            now: (options.now ?? Date.now)(),
+            expectedUpstream: currentLink,
+            assertCurrent: () => {
+              if (!loadIdleProbeSession(probe, options, expectedSessionId)) {
+                throw new Error("Upstream observation lost its idle session owner");
+              }
+            },
+          },
         );
-        if (!recorded) {
+        if (
+          !recorded ||
+          !loadIdleProbeSession(probe, options, expectedSessionId) ||
+          !readMatchingProbeLink(probe, expectedUpdatedAt, dbOptions)
+        ) {
           continue;
         }
         // Commit the scan marker only after the durable event insert/dedupe succeeds.

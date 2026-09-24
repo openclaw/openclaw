@@ -391,8 +391,7 @@ suite.define(() => {
               return (bottom - lineTop) / lineHeight;
             });
           // The visible summary owns the first preview line; prose supplies the next four.
-          await expect.poll(fraction).toBeGreaterThanOrEqual(0.66);
-          expect(await fraction()).toBeLessThanOrEqual(0.75);
+          await expect.poll(fraction).toSatisfy((value: number) => value >= 0.66 && value <= 0.75);
         };
         const outside = content.locator(".chat-text > p");
         const toggleDetails = () =>

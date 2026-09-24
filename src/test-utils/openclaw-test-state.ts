@@ -6,8 +6,12 @@ import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.j
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/runtime-snapshot.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
+import {
+  captureStateDatabaseCoordinatorRuntime,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { captureEnv } from "./env.js";
+import { captureEnv, withEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 type ConfigRuntimeResettable = typeof configRuntime & {
@@ -262,7 +266,8 @@ function createSpawnEnv(envVars: Record<string, string | undefined>): NodeJS.Pro
 }
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<string> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fs.chmod(path.dirname(filePath), 0o700);
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   return filePath;
 }
@@ -333,17 +338,28 @@ export async function createOpenClawTestState(
         writeJsonFile(path.join(paths.stateDir, relativePath), value),
       writeText: async (relativePath, value) => {
         const filePath = path.join(paths.stateDir, relativePath);
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+        await fs.chmod(path.dirname(filePath), 0o700);
         await fs.writeFile(filePath, value, "utf8");
         return filePath;
       },
       writeAuthProfiles: async (store, agentId = "main") => {
         const targetAgentDir = agentDir(agentId);
-        const { saveAuthProfileStore } = await import("../agents/auth-profiles/store-runtime.js");
-        saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
-          filterExternalAuthProfiles: false,
-          syncExternalCli: false,
-        });
+        // Fixture persistence does not need native plugin discovery.
+        const [{ createAuthProfileStoreRuntime }, { createExternalAuthRuntime }] =
+          await Promise.all([
+            import("../agents/auth-profiles/store.js"),
+            import("../agents/auth-profiles/external-auth.js"),
+          ]);
+        const { saveAuthProfileStore } = createAuthProfileStoreRuntime(
+          createExternalAuthRuntime(() => []),
+        );
+        withEnv(env, () =>
+          saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
+            filterExternalAuthProfiles: false,
+            syncExternalCli: false,
+          }),
+        );
         return resolveAuthProfileDatabasePath(targetAgentDir);
       },
       applyEnv: () => {
@@ -374,7 +390,7 @@ export async function createOpenClawTestState(
       // including failure, so no concurrent caller can restore selectors early.
       restoreEnv: () =>
         (releasePromise ??= Promise.resolve().then(async () => {
-          await cleanupSessionStateForTest({ stateDir: paths.stateDir });
+          await cleanupSessionStateForTest({ stateDir: paths.stateDir, rootPath: root });
           restoreAppliedEnv();
         })),
       cleanup: () =>
@@ -385,10 +401,13 @@ export async function createOpenClawTestState(
     };
     rollbackEnv = restoreAppliedEnv;
 
-    await fs.mkdir(paths.stateDir, { recursive: true });
-    await fs.mkdir(paths.workspaceDir, { recursive: true });
-    if (layout !== "state-only") {
-      await fs.mkdir(paths.home, { recursive: true });
+    for (const dir of [
+      paths.stateDir,
+      paths.workspaceDir,
+      ...(layout === "state-only" ? [] : [paths.home]),
+    ]) {
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      await fs.chmod(dir, 0o700);
     }
     if (config !== undefined) {
       await writeJsonFile(paths.configPath, config);
@@ -420,11 +439,18 @@ export async function withOpenClawTestState<T>(
   fn: (state: OpenClawTestState) => Promise<T>,
 ): Promise<T> {
   const state = await createOpenClawTestState(options);
-  const work = new AsyncWorkScope();
-  try {
-    return await work.track(() => fn(state));
-  } finally {
-    await work.drain();
-    await state.cleanup();
-  }
+  // On Windows the coordinator directory lives beneath this temporary home.
+  // Keep its location, but never lend fixture handles to the process idle pool.
+  return await withStateDatabaseCoordinatorRuntimeDirectory(
+    { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
+    async () => {
+      const work = new AsyncWorkScope();
+      try {
+        return await work.track(() => fn(state));
+      } finally {
+        await work.drain();
+        await state.cleanup();
+      }
+    },
+  );
 }

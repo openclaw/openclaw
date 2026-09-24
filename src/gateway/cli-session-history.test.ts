@@ -22,6 +22,7 @@ import {
   resolveChatHistoryWithCliSessionImports,
 } from "./cli-session-history.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
+import { createClaudeHistoryLines } from "./cli-session-history.test-support.js";
 import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
@@ -89,84 +90,6 @@ function buildLegacyReseedPrompt(current = "current"): string {
     "<next_user_message>",
     current,
     "</next_user_message>",
-  ].join("\n");
-}
-
-function createClaudeHistoryLines(sessionId: string) {
-  return [
-    JSON.stringify({
-      type: "queue-operation",
-      operation: "enqueue",
-      timestamp: "2026-03-26T16:29:54.722Z",
-      sessionId,
-      content: "[Thu 2026-03-26 16:29 GMT] Reply with exactly: AGENT CLI OK.",
-    }),
-    JSON.stringify({
-      type: "user",
-      uuid: "user-1",
-      timestamp: "2026-03-26T16:29:54.800Z",
-      message: {
-        role: "user",
-        content:
-          'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
-      },
-    }),
-    JSON.stringify({
-      type: "assistant",
-      uuid: "assistant-1",
-      timestamp: "2026-03-26T16:29:55.500Z",
-      message: {
-        role: "assistant",
-        model: "claude-sonnet-4-6",
-        content: [{ type: "text", text: "hello from Claude" }],
-        stop_reason: "end_turn",
-        usage: {
-          input_tokens: 11,
-          output_tokens: 7,
-          cache_read_input_tokens: 22,
-        },
-      },
-    }),
-    JSON.stringify({
-      type: "assistant",
-      uuid: "assistant-2",
-      timestamp: "2026-03-26T16:29:56.000Z",
-      message: {
-        role: "assistant",
-        model: "claude-sonnet-4-6",
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_123",
-            name: "Bash",
-            input: {
-              command: "pwd",
-            },
-          },
-        ],
-        stop_reason: "tool_use",
-      },
-    }),
-    JSON.stringify({
-      type: "user",
-      uuid: "user-2",
-      timestamp: "2026-03-26T16:29:56.400Z",
-      message: {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "toolu_123",
-            content: "/tmp/demo",
-          },
-        ],
-      },
-    }),
-    JSON.stringify({
-      type: "last-prompt",
-      sessionId,
-      lastPrompt: "ignored",
-    }),
   ].join("\n");
 }
 
@@ -395,53 +318,6 @@ describe("cli session history", () => {
         releaseFirst.resolve();
         await pending;
         accessSpy.mockRestore();
-      }
-    });
-  });
-
-  it("projects oversized Claude messages after off-thread parsing", async () => {
-    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
-      const oversizedRecord = JSON.stringify({
-        type: "user",
-        uuid: "oversized-user",
-        timestamp: "2026-03-26T16:29:54.700Z",
-        message: { role: "user", content: "q".repeat(2 * 1024 * 1024) },
-      });
-      await fs.writeFile(
-        filePath,
-        `${oversizedRecord}\n${createClaudeTextHistoryLines([
-          { role: "user", uuid: "visible-after-oversized", content: "visible" },
-        ])}`,
-        "utf8",
-      );
-      const parseSpy = vi.spyOn(JSON, "parse");
-      try {
-        const messages = await readChatHistoryCliSessionImportSnapshot({
-          entry: {
-            sessionId: "openclaw-session",
-            updatedAt: Date.now(),
-            cliSessionBindings: { "claude-cli": { sessionId } },
-          },
-          provider: "claude-cli",
-          localMessages: [],
-          homeDir,
-        });
-
-        expect(messages).toHaveLength(2);
-        expectFields(readRecord(messages[0])["__openclaw"], {
-          externalId: "oversized-user",
-        });
-        expect(readRecord(messages[0]).content).toContain("exceeded 1 MiB");
-        expectFields(readRecord(messages[1])["__openclaw"], {
-          externalId: "visible-after-oversized",
-        });
-        expect(
-          parseSpy.mock.calls.some(
-            ([source]) => typeof source === "string" && source.length === oversizedRecord.length,
-          ),
-        ).toBe(false);
-      } finally {
-        parseSpy.mockRestore();
       }
     });
   });
@@ -3073,7 +2949,11 @@ describe("cli session history", () => {
       await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
         const { maybeRepairCodexSessionRoutes } =
           await import("../commands/doctor/shared/codex-route-session-repair.js");
+        const { openOpenClawStateDatabase, closeOpenClawStateDatabaseForTest } =
+          await import("../state/openclaw-state-db.js");
         const stateDir = path.join(homeDir, "state");
+        openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        closeOpenClawStateDatabaseForTest();
         const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
         const key = "agent:main:cli-history";
         const entry: SessionEntry = {

@@ -7,10 +7,11 @@ const promiseLimit = 4_096;
 let promisesTruncated = false;
 const startedAt = Date.now();
 
-// An exit-time native wait cannot service the later SIGUSR2 diagnostic request.
+// An exit-time native wait cannot service the later SIGQUIT diagnostic request.
 if (process.execArgv.includes("--trace-exit") && require("node:worker_threads").isMainThread) {
   const { writeSync } = require("node:fs");
-  const emit = process.emit.bind(process);
+  // Keep the original method unbound: borrowed calls must retain their own receiver.
+  const emit = process.emit;
   const writeExitBoundary = (phase, exitCode) => {
     try {
       const listeners = phase === "exit-listeners-enter" ? process.listeners("exit") : undefined;
@@ -35,12 +36,12 @@ if (process.execArgv.includes("--trace-exit") && require("node:worker_threads").
     }
   };
   process.emit = function (event, ...args) {
-    if (event !== "exit") {
-      return emit(event, ...args);
+    if (this !== process || event !== "exit") {
+      return Reflect.apply(emit, this, [event, ...args]);
     }
     writeExitBoundary("exit-listeners-enter", args[0]);
     try {
-      const result = emit(event, ...args);
+      const result = Reflect.apply(emit, this, [event, ...args]);
       writeExitBoundary("exit-listeners-return", args[0]);
       return result;
     } catch (error) {
@@ -79,7 +80,7 @@ function countNames(names) {
   return Object.fromEntries(counts);
 }
 
-process.on("SIGUSR2", () => {
+process.on("SIGQUIT", () => {
   const diagnostic = {
     pid: process.pid,
     elapsedMs: Date.now() - startedAt,

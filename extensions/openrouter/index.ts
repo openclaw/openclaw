@@ -371,6 +371,7 @@ export default defineSingleProviderPluginEntry({
           baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
           request: ctx.config.models?.providers?.openrouter?.request,
           timeoutMs: ctx.timeoutMs,
+          signal: ctx.signal,
           fetchFn: ctx.fetchFn,
         }),
     };

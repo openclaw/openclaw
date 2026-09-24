@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { err } from "@openclaw/normalization-core/result";
 import { describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -174,6 +176,12 @@ describe("global session lookup ownership", () => {
 
   it("keeps a child-relative parent distinct from qualified parent owners", async () => {
     await withGlobalSessions("main", async (cfg) => {
+      for (const agentId of ["main", "research"]) {
+        await replaceSessionEntry(
+          { agentId, sessionKey: `agent:${agentId}:main` },
+          { sessionId: `${agentId}-literal-main`, updatedAt: 1 },
+        );
+      }
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "unknown" },
         { sessionId: "main-unknown", updatedAt: 1 },
@@ -192,9 +200,15 @@ describe("global session lookup ownership", () => {
       ).toEqual([
         "main-global",
         "main-unknown",
-        "research-global",
+        "research-literal-main",
         "research-agent:research:global",
       ]);
+      const readRetiredParent = createGatewaySessionEntryReader({
+        cfg: { ...cfg, agents: { ownership: "explicit", entries: { research: {} } } },
+        agentId: "research",
+        store: {},
+      });
+      expect(readRetiredParent("agent:main:main")?.sessionId).toBe("main-literal-main");
     });
   });
 
@@ -208,21 +222,60 @@ describe("global session lookup ownership", () => {
           skillsSnapshot: { prompt: "selected synthetic prompt", skills: [] },
         },
       );
-      const results = prepareGatewaySessionStoreTargetsReadOnly({
-        cfg,
-        projection: "full",
-        targets: [{ key: "agent:research:main" }, { key: "agent:main:main", agentId: "research" }],
-      });
-      expect(results).toMatchObject([
-        {
-          ok: true,
-          value: {
-            agentId: "research",
-            store: { global: { skillsSnapshot: { prompt: "selected synthetic prompt" } } },
+      const failure = new Error("metadata unavailable", { cause: new Error("SQLITE_IOERR") });
+      const readMetadata = sessionAccessor.loadExactSessionEntryCandidatesReadOnlyBatch;
+      const failingRead = vi
+        .spyOn(sessionAccessor, "loadExactSessionEntryCandidatesReadOnlyBatch")
+        .mockImplementation((scopes) =>
+          readMetadata(scopes).map((result, index) =>
+            scopes[index]?.agentId === "main" ? err(failure) : result,
+          ),
+        );
+      try {
+        const results = prepareGatewaySessionStoreTargetsReadOnly({
+          cfg,
+          projection: "full",
+          targets: [
+            { key: "agent:main:main" },
+            { key: "agent:research:main" },
+            { key: "agent:main:main", agentId: "research" },
+          ],
+        });
+        expect(results[0]).toEqual(err(failure));
+        expect(results.slice(1)).toMatchObject([
+          {
+            ok: true,
+            value: {
+              agentId: "research",
+              store: { global: { skillsSnapshot: { prompt: "selected synthetic prompt" } } },
+            },
           },
-        },
-        { ok: false, error: { message: expect.stringContaining('belongs to "main"') } },
-      ]);
+          { ok: false, error: { message: expect.stringContaining('belongs to "main"') } },
+        ]);
+        const failingSingleRead = vi
+          .spyOn(sessionAccessor, "loadExactSessionEntryCandidates")
+          .mockImplementation(() => {
+            throw failure;
+          });
+        try {
+          expect(() =>
+            resolveGatewaySessionStoreTargetWithStore({
+              cfg,
+              key: "agent:main:main",
+              exactRead: true,
+            }),
+          ).toThrow(failure);
+          failingSingleRead.mockClear();
+          const readParent = createGatewaySessionEntryReader({ cfg, agentId: "main", store: {} });
+          expect(() => readParent("agent:research:main")).toThrow(failure);
+          // A failed exact read must not become absence followed by an alias lookup.
+          expect(failingSingleRead).toHaveBeenCalledOnce();
+        } finally {
+          failingSingleRead.mockRestore();
+        }
+      } finally {
+        failingRead.mockRestore();
+      }
     });
   });
 
@@ -301,11 +354,13 @@ describe("global session lookup ownership", () => {
       await withGlobalSessions("work", async (cfg) => {
         // Revisit Research after Main so shared sentinels cannot adopt the previous owner.
         const requests = ["research", "main", "research"].flatMap((agentId) =>
-          ["main", "work", "global"].map((suffix) => ({
-            key: `agent:${agentId}:${suffix}`,
-            agentId,
-            canonicalKey: suffix === "global" ? `agent:${agentId}:global` : "global",
-          })),
+          ["main", "work", "global"].flatMap((suffix) =>
+            ["", " "].map((padding) => ({
+              key: `${padding}agent:${agentId}:${suffix}${padding}`,
+              agentId,
+              canonicalKey: suffix === "global" ? `agent:${agentId}:global` : "global",
+            })),
+          ),
         );
         const targets =
           mode === "batch"

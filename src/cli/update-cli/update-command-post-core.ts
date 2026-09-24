@@ -10,6 +10,7 @@ import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   createPluginInstallRecordMap,
+  parsePluginInstallRecordMap,
   serializePluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
 } from "../../config/plugin-install-record-map.js";
@@ -41,7 +42,11 @@ import {
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
 import { UpdateFailureFactSchema } from "../../infra/update-run-schema.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import {
+  createUpdateTimeoutHandoff,
+  isOmittedUpdateTimeout,
+} from "../../infra/update-timeout-provenance.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../plugins/installed-plugin-index-records.js";
 import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store-write.js";
@@ -49,10 +54,7 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { runExec } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
-import {
-  normalizePluginInstallRecordMap,
-  writePostCoreSourceConfigFile,
-} from "./update-command-config.js";
+import { writePostCoreSourceConfigFile } from "./update-command-config.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
@@ -83,6 +85,24 @@ export async function postCoreUpdateParentOwnsCompletion(
     path.join(path.dirname(resultPath), "handoff.json"),
   );
   return handoff?.completionOwner === "parent";
+}
+
+/** Restore operator intent only when the private handoff matches this child command. */
+export async function resolvePostCoreUpdateOperatorOptions(params: {
+  opts: UpdateCommandOptions;
+  resultPath: string | undefined;
+}): Promise<UpdateCommandOptions> {
+  if (!params.resultPath || params.opts.timeout === undefined) {
+    return params.opts;
+  }
+  const handoff = await readJsonIfExists<unknown>(
+    path.join(path.dirname(params.resultPath), "handoff.json"),
+  );
+  if (!isOmittedUpdateTimeout(params.opts.timeout, handoff)) {
+    // Shipped parents have no provenance. Their received deadline remains explicit-looking.
+    return params.opts;
+  }
+  return { ...params.opts, timeout: undefined };
 }
 
 export async function writePostCoreUpdateFailureFile(
@@ -159,7 +179,11 @@ export async function readPostCorePluginInstallRecordsFile(
     );
   }
   try {
-    return normalizePluginInstallRecordMap(parsed);
+    const records = parsePluginInstallRecordMap(parsed);
+    if (!records) {
+      throw new Error("Invalid plugin install record map");
+    }
+    return records;
   } catch (err) {
     throw new Error(
       `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
@@ -352,8 +376,11 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   if (params.opts.acceptCapabilities) {
     argv.push("--accept-capabilities");
   }
-  // This child only finalizes plugins; it must retain the owning step allowance.
-  argv.push("--timeout", params.opts.timeout ?? String(Math.ceil(params.timeoutMs / 1000)));
+  // Older targets need the existing allowance. New targets recover operator intent
+  // from the private handoff instead of treating this compatibility value as explicit.
+  const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.timeoutMs);
+  const serializedTimeout = handoff.timeout.serialized;
+  argv.push("--timeout", serializedTimeout);
   const resultDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-post-core-"));
   const resultPath = path.join(resultDir, "plugins.json");
   const installRecordsPath = path.join(resultDir, "plugin-install-records.json");
@@ -394,11 +421,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
-    await writeJson(
-      path.join(resultDir, "handoff.json"),
-      { completionOwner: "parent" },
-      { dirMode: 0o700 },
-    );
+    await writeJson(path.join(resultDir, "handoff.json"), handoff, { dirMode: 0o700 });
     const jsonMode = params.opts.json === true;
     const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
     const handoffEnv = buildPostCoreHandoffEnv({

@@ -64,7 +64,8 @@ describe("initial turn Retry after slow placement recovery", () => {
       expect(startup.get(sessionKey)).toMatchObject({
         phase: "failed",
         action: "retry",
-        error: "session placement reconciliation timed out",
+        error:
+          "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
         initialTurn: { text: input.recovery.message, sendRunId: messageId },
       });
       expect(readSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey)).toMatchObject({

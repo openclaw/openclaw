@@ -24,10 +24,18 @@ import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
-import { listAgentEntries, resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
-import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
+import {
+  listAgentEntriesWithSource,
+  resolveAgentConfig,
+  resolveSessionAgentIds,
+} from "./agent-scope.js";
+import {
+  resolveProviderToolPolicy,
+  resolveProviderToolPolicyEntry,
+} from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
@@ -40,6 +48,7 @@ import {
   type SubagentSessionRole,
 } from "./subagents/spawn/subagent-capabilities.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
+import type { ConfiguredToolPolicySources } from "./tool-policy-pipeline.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
@@ -363,9 +372,9 @@ export function resolveEffectiveToolPolicy(params: {
     typeof params.agentId === "string" && params.agentId.trim()
       ? normalizeAgentId(params.agentId)
       : undefined;
+  const agentEntries = params.config ? listAgentEntriesWithSource(params.config) : [];
   const canResolveConfiguredAgent =
-    params.config &&
-    (!hasAgentRosterProperty(params.config) || listAgentEntries(params.config).length > 0);
+    params.config && (!hasAgentRosterProperty(params.config) || agentEntries.length > 0);
   const agentId = canResolveConfiguredAgent
     ? resolveSessionAgentIds({
         config: params.config,
@@ -387,16 +396,92 @@ export function resolveEffectiveToolPolicy(params: {
 
   const profile = agentTools?.profile ?? globalTools?.profile;
   const profileSource = agentTools?.profile ? "agent" : globalTools?.profile ? "global" : undefined;
-  const providerPolicy = resolveProviderToolPolicy({
+  const providerEntry = resolveProviderToolPolicyEntry({
     byProvider: globalTools?.byProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
-  const agentProviderPolicy = resolveProviderToolPolicy({
+  const agentProviderEntry = resolveProviderToolPolicyEntry({
     byProvider: agentTools?.byProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+  const providerPolicy = providerEntry?.policy;
+  const agentProviderPolicy = agentProviderEntry?.policy;
+  const agentSource = agentEntries.find(
+    ({ entry }) => normalizeAgentId(entry.id) === agentId,
+  )?.source;
+  const agentToolsPath = agentSource
+    ? formatConcreteConfigPath([
+        "agents",
+        agentSource.kind,
+        agentSource.kind === "entries" ? agentSource.key : agentSource.index,
+        "tools",
+      ])
+    : params.config &&
+        !hasAgentRosterProperty(params.config) &&
+        !agentConfig?.tools &&
+        implicitDefaultTools
+      ? "agents.defaults.tools"
+      : `agents.entries.${agentId}.tools`;
+  const providerPath = providerEntry
+    ? `tools.byProvider[${JSON.stringify(providerEntry.key)}]`
+    : undefined;
+  const agentProviderPath = agentProviderEntry
+    ? `${agentToolsPath}.byProvider[${JSON.stringify(agentProviderEntry.key)}]`
+    : undefined;
+  const providerProfilePath = agentProviderPolicy?.profile ? agentProviderPath : providerPath;
+  // A new agent list shadows the inherited list. Omit the append recipe when
+  // it would silently discard inherited grants, or conflict with tools.allow.
+  const profileAlsoAllowPath =
+    !agentTools?.allow && (agentTools?.alsoAllow || !globalTools?.alsoAllow?.length)
+      ? `${agentToolsPath}.alsoAllow`
+      : undefined;
+  const sources: ConfiguredToolPolicySources = {
+    profile: {
+      kind: "profile",
+      path: profileSource === "agent" ? `${agentToolsPath}.profile` : "tools.profile",
+      profile,
+      alsoAllowPath: profileAlsoAllowPath,
+    },
+    providerProfile: {
+      kind: "profile",
+      path: providerProfilePath ? `${providerProfilePath}.profile` : undefined,
+      profile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
+      // Provider-specific repairs need to preserve both inherited provider
+      // settings and the base profile; leave those to the detailed sources.
+    },
+    global: { kind: "config", path: "tools" },
+    globalProvider: { kind: "config", path: providerPath },
+    agent: { kind: "config", path: agentToolsPath },
+    agentProvider: { kind: "config", path: agentProviderPath },
+  };
+  const profiles = [
+    ...(globalTools?.profile
+      ? [{ profile: globalTools.profile, source: "tools.profile", active: !agentTools?.profile }]
+      : []),
+    ...(agentTools?.profile
+      ? [{ profile: agentTools.profile, source: `${agentToolsPath}.profile`, active: true }]
+      : []),
+    ...(providerPolicy?.profile && providerPath
+      ? [
+          {
+            profile: providerPolicy.profile,
+            source: `${providerPath}.profile`,
+            active: !agentProviderPolicy?.profile,
+          },
+        ]
+      : []),
+    ...(agentProviderPolicy?.profile && agentProviderPath
+      ? [
+          {
+            profile: agentProviderPolicy.profile,
+            source: `${agentProviderPath}.profile`,
+            active: true,
+          },
+        ]
+      : []),
+  ];
   const explicitProfileAlsoAllow =
     resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
   const agentPolicy = pickSandboxToolPolicy(agentTools);
@@ -413,6 +498,8 @@ export function resolveEffectiveToolPolicy(params: {
 
   const effectivePolicy = {
     agentId,
+    sources,
+    profiles,
     globalPolicy: pickSandboxToolPolicy(globalTools),
     globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
     agentPolicy,

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { observeDeviceAuthHostSql } from "../infra/device-auth-store.sql.test-support.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -8,7 +8,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { ensureTaskFlowRegistryReadyAsync } from "./task-flow-registry.js";
+import { ensureTaskFlowRegistryReadyAsync, readResidentTaskFlow } from "./task-flow-registry.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
 import {
   loadTaskFlowRegistryStateFromSqliteReadOnly,
@@ -22,7 +22,6 @@ import { upsertTaskWithDeliveryStateToSqlite } from "./task-registry.store.sqlit
 import type { TaskRecord } from "./task-registry.types.js";
 import { resolveTaskCleanupAfter } from "./task-retention.js";
 import {
-  configureTaskFlowRegistryRuntime,
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
@@ -97,16 +96,6 @@ it("retries the live equal-time winner through the worker and canonical close", 
   await ensureTaskFlowRegistryReadyAsync(context);
   upsertTaskWithDeliveryStateToSqlite({ task });
   publishTaskRecordAfterAtomicStore(task);
-  const published = createDeferred<TaskFlowRecord>();
-  configureTaskFlowRegistryRuntime({
-    observers: {
-      onEvent(event) {
-        if (event.kind === "upserted" && event.flow.flowId === flow.flowId) {
-          published.resolve(event.flow);
-        }
-      },
-    },
-  });
   vi.spyOn(getTaskFlowRegistryStore(), "syncMirroredTask").mockImplementationOnce(() => {
     throw new Error("Controlled initial flow refusal");
   });
@@ -119,15 +108,21 @@ it("retries the live equal-time winner through the worker and canonical close", 
   for (const counter of counters) {
     counter.mockClear();
   }
+  const hostSql = observeDeviceAuthHostSql(state.statePath("state", "openclaw.sqlite"));
   const startedAt = performance.now();
   await vi.advanceTimersByTimeAsync(1_000);
-  expect(await published.promise).toMatchObject({
+  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  expect(readResidentTaskFlow(flow.flowId)).toMatchObject({
     goal: "Live insertion winner",
     revision: 5,
     status: "succeeded",
   });
-  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  const beforeCloseSql = hostSql.counts();
+  expect(Object.values(beforeCloseSql).flatMap((counts) => Object.values(counts))).toEqual(
+    Array(28).fill(0),
+  );
   await closeOpenClawStateDatabaseAsync();
+  console.info("Live flow host SQL", { beforeClose: beforeCloseSql, afterClose: hostSql.counts() });
   rememberPreparedSql();
   let unattributedStatements = 0;
   const sql = [
@@ -153,6 +148,7 @@ it("retries the live equal-time winner through the worker and canonical close", 
   });
   expect(unattributedStatements).toBe(0);
   expect(domainSql).toEqual([]);
+  hostSql.restore();
   vi.restoreAllMocks();
   expect(loadTaskFlowRegistryStateFromSqliteReadOnly().flows.get(flow.flowId)).toMatchObject({
     goal: "Live insertion winner",

@@ -3,10 +3,14 @@
 // Prevents local primitive-coercion helpers from regrowing after consolidation.
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { isCodeFile, listRepoFilesSync } from "./check-file-utils.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
+import {
+  createNativeTypeScriptParser,
+  type NativeTypeScriptParser,
+} from "./lib/native-typescript.mts";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { getPropertyNameText, toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
@@ -159,6 +163,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "collectErrorGraphCandidates",
       "collectNestedErrorCandidates",
       "extractErrorCodeOrErrno",
+      "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",
       "toStringifiedError",
@@ -411,7 +416,7 @@ function unwrapDirectAliasInitializer(expression: ts.Expression): ts.Expression 
       current = current.expression;
       continue;
     }
-    if (ts.isAsExpression(current) || ts.isTypeAssertionExpression(current)) {
+    if (ts.isAsExpression(current) || ts.isTypeAssertion(current)) {
       return undefined;
     }
     return current;
@@ -421,13 +426,12 @@ function unwrapDirectAliasInitializer(expression: ts.Expression): ts.Expression 
 /** Finds banned callable declarations in one source file. */
 export function findBannedCoercionHelperDeclarations(
   source: string,
-  file = "source.ts",
+  file: string,
+  sourceFile: ts.SourceFile,
 ): CoercionHelperDeclaration[] {
   if (!BANNED_HELPER_NAME_PATTERN.test(source)) {
     return [];
   }
-  const scriptKind = file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, scriptKind);
   const declarations: CoercionHelperDeclaration[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isFunctionDeclaration(node) && node.name && BANNED_HELPER_NAMES.has(node.name.text)) {
@@ -487,22 +491,22 @@ export function findBannedCoercionHelperDeclarations(
         });
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return declarations;
 }
 
-function hasExportModifier(node: ts.Node) {
-  return (ts.canHaveModifiers(node) ? (ts.getModifiers(node) ?? []) : []).some(
-    (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
-  );
+function hasExportModifier(node: ts.ModifiersBase) {
+  return node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
 }
 
 /** Finds directly declared callable exports in one selected canonical module. */
-export function findExportedCallableNames(source: string, file = "source.ts") {
-  const scriptKind = file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, scriptKind);
+export function findExportedCallableNames(
+  _source: string,
+  _file: string,
+  sourceFile: ts.SourceFile,
+) {
   const callableLocals = new Set<string>();
   const exportedNames = new Set<string>();
 
@@ -648,14 +652,21 @@ function writeLine(stream: ScriptIo["stdout"] | ScriptIo["stderr"], value: strin
   stream.write(`${value}\n`);
 }
 
-function auditDefaultCanonicalExports(repoRoot: string): CanonicalCoercionExportAudit {
+function auditDefaultCanonicalExports(
+  repoRoot: string,
+  parser: NativeTypeScriptParser,
+): CanonicalCoercionExportAudit {
   const canonicalModules = new Set<string>(CANONICAL_COERCION_MODULES);
   const mixedModules = new Set<string>(MIXED_CANONICAL_COERCION_MODULES);
   const auditedModules = [...CANONICAL_COERCION_MODULES, ...MIXED_CANONICAL_COERCION_MODULES];
   const exportsByFile = new Map(
     auditedModules.map((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      const exportedNames = findExportedCallableNames(source, file);
+      const exportedNames = findExportedCallableNames(
+        source,
+        file,
+        parser.parseSourceFile(file, source),
+      );
       if (!mixedModules.has(file)) {
         return [file, exportedNames] as const;
       }
@@ -692,6 +703,7 @@ export async function runCoercionHelperDeclarationGuard(
   } = {},
 ) {
   const repoRoot = options.repoRoot ?? resolveRepoRoot(import.meta.url);
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
   const io = options.io ?? { stderr: process.stderr, stdout: process.stdout };
   const carveOuts = options.carveOuts ?? COERCION_HELPER_CARVE_OUTS;
   const relativeFiles = listRepoFilesSync(repoRoot, {
@@ -718,8 +730,15 @@ export async function runCoercionHelperDeclarationGuard(
         throw result.reason;
       }
       if (result.value) {
+        if (!BANNED_HELPER_NAME_PATTERN.test(result.value.source)) {
+          continue;
+        }
         declarations.push(
-          ...findBannedCoercionHelperDeclarations(result.value.source, result.value.file),
+          ...findBannedCoercionHelperDeclarations(
+            result.value.source,
+            result.value.file,
+            parser.parseSourceFile(result.value.file, result.value.source),
+          ),
         );
       }
     }
@@ -727,7 +746,7 @@ export async function runCoercionHelperDeclarationGuard(
   const audit = auditCoercionHelperDeclarations(declarations, carveOuts);
   const exportAudit =
     options.carveOuts === undefined
-      ? auditDefaultCanonicalExports(repoRoot)
+      ? auditDefaultCanonicalExports(repoRoot, parser)
       : { invalidClassifications: [], staleClassifications: [], unclassifiedExports: [] };
   const failed =
     audit.excessDeclarations.length > 0 ||

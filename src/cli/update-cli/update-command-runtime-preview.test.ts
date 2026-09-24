@@ -12,6 +12,7 @@ import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
+import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
 import * as packageUpdate from "./update-command-package.js";
 import { updateCommand } from "./update-command.js";
 
@@ -50,9 +51,12 @@ const cases = [
 ];
 
 it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, entry, { json }))))(
-  "previews package runtime admission without mutation ($name, json=$json)",
+  "previews installed package runtime admission without mutation ($name, json=$json)",
   async ({ restart, compatible, current, refresh, json, owned = true, running = true }) => {
     fixture.managedServiceNodeRunner = "/service/node";
+    const provisionRuntime = vi
+      .spyOn(runtimeRecovery, "resolveTargetNodeRuntime")
+      .mockRejectedValue(new Error("A retained service runtime must not be provisioned"));
     vi.spyOn(shared, "resolveNodeRunner").mockReturnValue("/current/node");
     vi.spyOn(gatewaySupervision, "assertGatewayServiceMutationAllowed").mockReturnValue();
     const service = createMockGatewayService({
@@ -194,7 +198,9 @@ it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, e
     expect(fs.readFileSync(path.join(fixture.root, "package.json"))).toEqual(manifest);
 
     if (!current) {
-      await expect(updateCommand({ ...opts, json: true })).rejects.toBeInstanceOf(Error);
+      await expect(
+        updateCommand({ ...opts, json: true, admission: "installed" }),
+      ).rejects.toBeInstanceOf(Error);
       if (compatible || replacement) {
         expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledWith(
           expect.objectContaining({ nodeRunner: replacement ? "/current/node" : "/service/node" }),
@@ -222,6 +228,7 @@ it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, e
       }
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
     }
+    expect(provisionRuntime).not.toHaveBeenCalled();
   },
 );
 

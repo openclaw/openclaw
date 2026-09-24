@@ -57,6 +57,7 @@ it.each(["token", "password"] as const)(
       stateDir: path.join(root, "source"),
       candidateRoot: root,
       env: {
+        ...process.env,
         OPENCLAW_GATEWAY_TOKEN: "synthetic-environment-token",
         OPENCLAW_GATEWAY_PASSWORD: "synthetic-environment-password",
       },
@@ -84,8 +85,19 @@ it.each(["token", "password"] as const)(
       expect(rehearsal.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
       expect(rehearsal.env.OPENCLAW_GATEWAY_PASSWORD).toBeUndefined();
       expect(config).toEqual(original);
+      const refused = new Error("cleanup authority retired");
+      await expect(
+        rehearsal.cleanup(() => {
+          throw refused;
+        }),
+      ).rejects.toBe(refused);
+      expect(await fs.readFile(rehearsal.configPath, "utf8")).toBeTruthy();
     } finally {
-      await rehearsal.cleanup();
+      const checked: string[] = [];
+      await rehearsal.cleanup((directory) => {
+        checked.push(directory);
+      });
+      expect(checked).toEqual([rehearsal.stateDir, ...rehearsal.cleanupDirectories]);
     }
   },
 );

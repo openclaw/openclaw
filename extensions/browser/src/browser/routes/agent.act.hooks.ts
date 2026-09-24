@@ -1,10 +1,11 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 /**
  * Browser agent action hook routes.
  *
  * Handles file chooser and dialog interception for both Playwright-backed
  * OpenClaw profiles and Chrome MCP existing-session profiles.
  */
-import { formatErrorMessage } from "../../infra/errors.js";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
 import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -97,6 +98,7 @@ export function registerBrowserAgentActHookRoutes(
             inputRef,
             element,
             paths: resolvedPaths,
+            timeoutMs,
             ssrfPolicy: ctx.state().resolved.ssrfPolicy,
             signal,
             ...(assertCurrent ? { assertCurrent } : {}),
@@ -133,7 +135,7 @@ export function registerBrowserAgentActHookRoutes(
     const body = readBody(req);
     const targetId = resolveTargetIdFromBody(body);
     const accept = toBoolean(body.accept);
-    const promptText = toStringOrEmpty(body.promptText) || undefined;
+    const promptText = readStringValue(body.promptText);
     let timeoutMs: number | undefined;
     try {
       timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);

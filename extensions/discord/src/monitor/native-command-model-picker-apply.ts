@@ -1,4 +1,3 @@
-// Discord plugin module implements native command model picker apply behavior.
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -10,7 +9,10 @@ import {
   type DiscordModelPickerPreferenceScope,
 } from "./model-picker-preferences.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
-import type { DiscordDispatchReplyFromConfig } from "./native-command.types.js";
+import type {
+  DiscordBuildInboundContext,
+  DiscordDispatchReplyFromConfig,
+} from "./native-command.types.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
@@ -46,6 +48,7 @@ export async function applyDiscordModelPickerSelection(params: {
   accountId: string;
   sessionPrefix: string;
   threadBindings: ThreadBindingManager;
+  buildContext?: DiscordBuildInboundContext;
   dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
   route: ResolvedAgentRoute;
   resolvedModelRef: string;
@@ -70,6 +73,7 @@ export async function applyDiscordModelPickerSelection(params: {
         preferFollowUp: true,
         threadBindings: params.threadBindings,
         suppressReplies: true,
+        buildContext: params.buildContext,
         dispatchReplyFromConfig: params.dispatchReplyFromConfig,
         pluginCommandDispatch: { kind: "non-plugin" },
       }),

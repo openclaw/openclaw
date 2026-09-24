@@ -37,7 +37,6 @@ import {
   readCodexPluginConfig,
   type CodexPluginConfig,
 } from "./config.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   filterCodexDynamicTools,
   filterCodexDynamicToolsForDisabledNativeSurface,
@@ -61,6 +60,8 @@ import {
   createGatewayExecProjection,
   createGatewayProcessProjection,
   createNodeExecAliasDynamicTool,
+  createSandboxExecProjection,
+  createSandboxProcessProjection,
   isCodexDynamicToolExcluded,
   type NodeExecAvailabilityRef,
 } from "./shell-dynamic-tools.js";
@@ -91,7 +92,7 @@ const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
 ]);
 
 /** Keeps node filesystem and process ownership on its native exec-server. */
-export function resolveCodexNodePlacementToolConstructionPlan(
+function resolveCodexNodePlacementToolConstructionPlan(
   sandbox: OpenClawSandboxContext | undefined,
   nativeToolSurfaceEnabled: boolean | undefined,
 ): OpenClawCodingToolsOptions["toolConstructionPlan"] {
@@ -190,20 +191,11 @@ export function resolveCodexAppServerHookChannelId(
     messageTo: params.messageTo,
   }).channelId;
 }
-type CodexDynamicToolBuildStageSummary = StageTimingSummary;
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS = 1_000;
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS = 500;
-/** Captures bounded preparation stages before a slow turn needs diagnosis. */
-export function createCodexDynamicToolBuildStageTracker(): {
-  mark: (name: string) => void;
-  snapshot: () => CodexDynamicToolBuildStageSummary;
-} {
-  const { mark, snapshot } = createStageTimingTracker();
-  return { mark, snapshot };
-}
 /** Returns true when dynamic-tool construction is slow enough to warrant a warning log. */
 export function shouldWarnCodexDynamicToolBuildStageSummary(
-  summary: CodexDynamicToolBuildStageSummary,
+  summary: StageTimingSummary,
   profilerEnabled = false,
 ): boolean {
   const totalWarnMs = profilerEnabled ? CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS : 10_000;
@@ -212,12 +204,6 @@ export function shouldWarnCodexDynamicToolBuildStageSummary(
     summary.totalMs >= totalWarnMs ||
     summary.stages.some((stage) => stage.durationMs >= stageWarnMs)
   );
-}
-/** Formats per-stage timings into the compact form used by Codex app-server logs. */
-export function formatCodexDynamicToolBuildStageSummary(
-  summary: CodexDynamicToolBuildStageSummary,
-): string {
-  return formatStageTimings(summary.stages);
 }
 /** Builds, filters, and normalizes Codex-compatible runtime tools for a single turn. */
 export async function buildDynamicTools(
@@ -240,10 +226,9 @@ export async function buildDynamicTools(
     input.onWebSearchPolicyResolved?.(false);
     return [];
   }
-  const toolBuildStages = createCodexDynamicToolBuildStageTracker();
+  const toolBuildStages = createStageTimingTracker();
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
-  const injectedOpenClawCodingToolsFactory = dynamicToolBuildState.openClawCodingToolsFactory;
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForRun(params, {
     agentId: input.policyAgentId,
     runtimeSessionKey: input.sandboxSessionKey,
@@ -313,7 +298,6 @@ export async function buildDynamicTools(
     ...(params.skillLibraryAuthoring
       ? { skillWorkshop: { libraryAuthoring: params.skillLibraryAuthoring } }
       : {}),
-    githubPublicationAvailable: params.githubPublicationAvailable,
     authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
     abortSignal: input.runAbortController.signal,
     emitBeforeToolCallDiagnostics: false,
@@ -369,12 +353,6 @@ export async function buildDynamicTools(
   input.onMessageToolTargetResolved?.(options.requireExplicitMessageTarget === true);
   const buildOpenClawCodingTools = () => {
     const bindingOptions = { cwd: input.effectiveCwd ?? input.effectiveWorkspace };
-    if (injectedOpenClawCodingToolsFactory) {
-      return params.hostCapabilities.bindToolSurface(
-        injectedOpenClawCodingToolsFactory(options),
-        bindingOptions,
-      );
-    }
     const createToolSurface = params.hostCapabilities.createToolSurface;
     if (!createToolSurface) {
       throw new Error("Codex tool construction requires a current host capability");
@@ -527,7 +505,7 @@ export async function buildDynamicTools(
   if (shouldWarnCodexDynamicToolBuildStageSummary(summary, input.profilerEnabled)) {
     const phase = input.forceHeartbeatTool ? "registered-tools" : "runtime-tools";
     embeddedAgentLog.warn(
-      `codex app-server dynamic tool build timings runId=${params.runId} sessionId=${params.sessionId} phase=${phase} totalMs=${summary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(summary)}`,
+      `codex app-server dynamic tool build timings runId=${params.runId} sessionId=${params.sessionId} phase=${phase} totalMs=${summary.totalMs} stages=${formatStageTimings(summary.stages)}`,
       {
         runId: params.runId,
         sessionId: params.sessionId,
@@ -800,38 +778,14 @@ function addSandboxShellDynamicToolsIfAvailable(
   const processTool = allTools.find(
     (tool) => normalizeCodexDynamicToolName(tool.name) === "process",
   );
-  if (!execTool || !processTool) {
+  if (!execTool) {
     return filteredTools;
   }
-  const sandboxExecTool: OpenClawDynamicTool = {
-    ...execTool,
-    name: "sandbox_exec",
-    description:
-      "Run a shell command through OpenClaw's configured sandbox backend for this session. Use when OpenClaw sandboxing is active or when a command must execute in the sandbox backend, such as an SSH-backed sandbox or Docker container-path bind layout. Use Codex's native shell only when no OpenClaw sandbox is active and native Code Mode is available.",
-    execute: async (toolCallId, args, signal, onUpdate) => {
-      const result = await execTool.execute(toolCallId, args, signal, onUpdate);
-      return {
-        ...result,
-        content: result.content.map((item) =>
-          item.type === "text"
-            ? Object.assign({}, item, {
-                text: item.text.replace(
-                  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
-                  "Use sandbox_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
-                ),
-              })
-            : item,
-        ),
-      };
-    },
-  };
-  const sandboxProcessTool: OpenClawDynamicTool = {
-    ...processTool,
-    name: "sandbox_process",
-    description:
-      "Manage background shell sessions through OpenClaw's configured sandbox backend for this session: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for sandbox follow-up; use Codex's native shell session handling only when no OpenClaw sandbox is active and native Code Mode is available.",
-  };
-  return [...filteredTools, sandboxExecTool, sandboxProcessTool];
+  const sandboxTools = [...filteredTools, createSandboxExecProjection(execTool)];
+  // Core exec already disables backgrounding when process is filtered out.
+  return processTool
+    ? [...sandboxTools, createSandboxProcessProjection(processTool)]
+    : sandboxTools;
 }
 function isSandboxShellDynamicToolExcluded(config: CodexPluginConfig): boolean {
   return isCodexDynamicToolExcluded(config, ["exec", "sandbox_exec", "process", "sandbox_process"]);

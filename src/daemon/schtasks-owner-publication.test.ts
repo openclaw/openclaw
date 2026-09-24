@@ -180,7 +180,8 @@ it.each(["snapshot", "per-pid"])(
         hints: [],
       });
       spawnSync.mockImplementation((command, args) => {
-        if (command.toLowerCase().endsWith("taskkill.exe")) {
+        const executable = command.toLowerCase();
+        if (executable.endsWith("taskkill.exe")) {
           forced = args?.includes("/F") ?? false;
           if (forced) {
             legacy.release();
@@ -189,6 +190,17 @@ it.each(["snapshot", "per-pid"])(
             pid: 0,
             output: [null, "", ""],
             stdout: "",
+            stderr: "",
+            status: 0,
+            signal: null,
+          };
+        }
+        if (executable.endsWith("tasklist.exe")) {
+          const output = forced ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
+          return {
+            pid: 0,
+            output: [null, output, ""],
+            stdout: output,
             stderr: "",
             status: 0,
             signal: null,

@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectRootPackageExcludedExtensionDirs } from "../scripts/lib/bundled-plugin-build-entries.mjs";
+import { vitestWorkerRuntimeAssets } from "../scripts/lib/vitest-worker-declarations.mts";
 import { isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
@@ -28,10 +29,9 @@ describeLive("agent exec Code Mode with environment authentication", () => {
     const sourceDist = path.join(repoRoot, "dist");
     const excludedPlugins = collectRootPackageExcludedExtensionDirs({ cwd: repoRoot });
     await fs.mkdir(installedRoot, { recursive: true });
-    await fs.copyFile(
-      path.join(repoRoot, "package.json"),
-      path.join(installedRoot, "package.json"),
-    );
+    for (const filename of ["package.json", ...vitestWorkerRuntimeAssets]) {
+      await fs.copyFile(path.join(repoRoot, filename), path.join(installedRoot, filename));
+    }
     // A source checkout discovers external plugins beside dist. Copy the built
     // distribution with its package exclusions so discovery sees a clean install.
     await fs.cp(sourceDist, path.join(installedRoot, "dist"), {

@@ -1,9 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
+import { createGatewayMethodRegistry } from "../methods/registry.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { environmentsHandlers } from "../server-methods/environments.js";
+import { dispatchGatewayMethodInProcess } from "../server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../server-plugin-in-process-dispatch.test-support.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
@@ -66,6 +77,7 @@ describe("on-demand prepared worker admission", () => {
     const f = await fixture();
     support.getDevelopmentProfile().readyWorkers = 0;
     const result = await f.service.prepare(f.request);
+    const baseCommit = await requireGit(f.projectPath, ["rev-parse", "HEAD"]);
     const record = support.testState.store.get(result.environmentId)!;
     expect(result).toEqual({
       environmentId: record.environmentId,
@@ -79,7 +91,7 @@ describe("on-demand prepared worker admission", () => {
         executionMode: "worker-turn",
         project: {
           root: f.projectPath,
-          baseCommit: await requireGit(f.projectPath, ["rev-parse", "HEAD"]),
+          baseCommit,
         },
       },
       preparation: { purpose: "build", demandAtMs: 1_000, expiresAtMs: 11_000, consumedAtMs: null },
@@ -89,9 +101,13 @@ describe("on-demand prepared worker admission", () => {
     );
     await support.waitForFast(() => expect(f.provision).toHaveBeenCalledOnce());
     expect(support.testState.store.get(record.environmentId)?.destroyRequestedAtMs).toBeNull();
-    expect(f.service.list()[0]?.preparation).toMatchObject({
+    expect(f.service.list()[0]?.preparation).toEqual({
       purpose: "build",
       key: result.preparationKey,
+      demandAtMs: 1_000,
+      expiresAtMs: 11_000,
+      consumedAtMs: null,
+      project: { label: "project", baseCommit },
     });
   });
 
@@ -106,7 +122,7 @@ describe("on-demand prepared worker admission", () => {
         executionMode: "worker-turn",
         setupAuthorized: true,
       });
-      const existing = support.testState.store.createIntent({
+      const existing = await support.testState.store.createIntent({
         environmentId: "existing-prepared",
         provisionOperationId: "existing-operation",
         providerId: intent.providerId,
@@ -193,7 +209,7 @@ describe("on-demand prepared worker admission", () => {
           executionMode: "worker-turn",
           setupAuthorized: true,
         });
-        ({ environmentId } = support.testState.store.createIntent({
+        ({ environmentId } = await support.testState.store.createIntent({
           environmentId: "automatic-reserve",
           provisionOperationId: "automatic-reserve-operation",
           providerId: intent.providerId,
@@ -212,8 +228,12 @@ describe("on-demand prepared worker admission", () => {
       if (purpose === "expired reserve") {
         support.testState.nowMs = 11_001;
       }
+      const cancelled = new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
       const destroyed = f.service.destroyUnattached(environmentId);
       try {
+        await cancelled;
         expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBe(
           support.testState.nowMs,
         );
@@ -239,23 +259,68 @@ describe("on-demand prepared worker admission", () => {
     expect(support.testState.store.list()).toHaveLength(1);
   });
 
-  it("revalidates caller authority after asynchronous preparation before admission", async () => {
-    const f = await fixture();
-    let authorized = true;
-    f.provider.resolvePreparationTarget = () => {
-      authorized = false;
-      return { machineClass: "small", platform: "linux", arch: "x64" };
-    };
-    await expect(
-      f.service.prepare(f.request, () => {
-        if (!authorized) {
-          throw new Error("Caller revoked");
+  it.each([false, true])(
+    "enforces the original Gateway source at durable admission with revoked=%s",
+    async (revoked) => {
+      const f = await fixture();
+      support.getDevelopmentProfile().readyWorkers = 0;
+      const context = createContext();
+      context.resolveGatewayContext = () => context;
+      context.getRuntimeConfig = () => support.testState.config;
+      context.workerEnvironmentService = f.service;
+      context.getGatewayMethodRegistry = () =>
+        createGatewayMethodRegistry(createCoreGatewayMethodDescriptors(environmentsHandlers));
+      const client = createOperatorClient({
+        profileId: "preparation-operator",
+        scopes: ["operator.admin"],
+      });
+      const controller = new AbortController();
+      const source = expectDefined(
+        captureGatewayOperatorRunAuthority({
+          client,
+          context,
+          sourceAuthority: {
+            signal: controller.signal,
+            assertCurrent: () => controller.signal.throwIfAborted(),
+          },
+        }),
+        "original preparation source",
+      );
+      client.internal = { operatorRunAuthority: source.authority };
+      const prepareTarget = vi.fn(() => {
+        if (revoked) {
+          controller.abort(new Error("Original preparation source revoked"));
         }
-      }),
-    ).rejects.toThrow("Caller revoked");
-    expect(support.testState.store.list()).toHaveLength(0);
-    expect(f.provision).not.toHaveBeenCalled();
-  });
+        return { machineClass: "small", platform: "linux" as const, arch: "x64" as const };
+      });
+      f.provider.resolvePreparationTarget = prepareTarget;
+      try {
+        const request = withPluginRuntimeGatewayRequestScope(
+          { context, client, isWebchatConnect: () => false },
+          () =>
+            dispatchGatewayMethodInProcess<{ environmentId: string; reused: boolean }>(
+              "environments.prepare",
+              f.request,
+            ),
+        );
+        if (revoked) {
+          await expect(request).rejects.toThrow();
+          expect(support.testState.store.list()).toHaveLength(0);
+          expect(f.provision).not.toHaveBeenCalled();
+        } else {
+          const result = await request;
+          expect(result.reused).toBe(false);
+          expect(support.testState.store.get(result.environmentId)?.preparation?.purpose).toBe(
+            "build",
+          );
+          await support.waitForFast(() => expect(f.provision).toHaveBeenCalledOnce());
+        }
+        expect(prepareTarget).toHaveBeenCalled();
+      } finally {
+        source.release();
+      }
+    },
+  );
 
   it.each([
     "missing-profile",

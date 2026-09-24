@@ -18,6 +18,10 @@ import {
   resolveCodexAppServerHookChannelId,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
+import {
+  assertCodexNativeHookRelayAllowed,
+  CodexManagedHooksOnlyError,
+} from "./native-hook-relay.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
@@ -26,6 +30,10 @@ import {
   buildLegacyScheduledCodexAppRecoveryPrompt,
 } from "./scheduled-app-authority.js";
 import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
+import {
+  createIsolatedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
+} from "./shared-client.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
@@ -224,11 +232,65 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig, sandbox);
-  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+  let nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     runtimeParams,
     sandbox,
     { agentId: policyAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
   );
+  if (
+    nativeToolSurfaceEnabled &&
+    sandbox?.enabled &&
+    sandbox.backend &&
+    params.hostCapabilities.retainSourceAuthority
+  ) {
+    const client = await attemptClientFactory({
+      assertCurrent: connection.assertCurrent,
+      startOptions: appServer.start,
+      pluginConfig,
+      ...(startupPreparedAuth
+        ? { preparedAuth: startupPreparedAuth }
+        : { authProfileId: startupClientAuthProfileId }),
+      authRequirement: connection.startupAuthRequirement,
+      authProfileStore: attemptAuthProfileStore,
+      authBindingFingerprint: preparedAuthBinding?.fingerprint,
+      ...(connection.runtimeArtifactRequest
+        ? {
+            runtimeArtifactMode: "capture" as const,
+            ...(connection.runtimeArtifactRequest.expected
+              ? { expectedRuntimeArtifact: connection.runtimeArtifactRequest.expected }
+              : {}),
+          }
+        : {}),
+      agentId: sessionAgentId,
+      agentDir,
+      config: params.config,
+      abandonSignal: runAbortController.signal,
+      timeoutMs: appServer.requestTimeoutMs,
+    });
+    try {
+      connection.assertCurrent();
+      await assertCodexNativeHookRelayAllowed(
+        client,
+        runAbortController.signal,
+        appServer.requestTimeoutMs,
+      );
+      connection.assertCurrent();
+    } catch (error) {
+      if (!(error instanceof CodexManagedHooksOnlyError)) {
+        throw error;
+      }
+      connection.assertCurrent();
+      // Choose the existing sandbox-backed tools before their catalog and prompt are built.
+      nativeToolSurfaceEnabled = false;
+      embeddedAgentLog.info("Codex managed-only hooks require sandbox-backed OpenClaw tools");
+    } finally {
+      if (attemptClientFactory === createIsolatedCodexAppServerClient) {
+        await client.closeAndWait();
+      } else {
+        releaseLeasedSharedCodexAppServerClient(client);
+      }
+    }
+  }
   const configuredMcpSurface = scheduledConfiguredMcpSurface
     ? "scheduled"
     : !nativeToolSurfaceEnabled && bundleMcpThreadConfig.staticServerNames.length > 0
@@ -269,6 +331,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       modelProviderOverride: usesSupervisionConnection
         ? undefined
         : resolveCodexAppServerThreadModelSelection({
+            homeScope: appServer.start.homeScope,
             provider: params.provider,
             model: params.modelId,
             binding: mutable.startupBinding,

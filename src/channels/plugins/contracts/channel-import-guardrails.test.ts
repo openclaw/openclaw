@@ -4,8 +4,10 @@ import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mts";
+import { collectModuleReferencesFromSource } from "../../../../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../../../../scripts/lib/native-typescript.mts";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
@@ -17,6 +19,8 @@ import {
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
@@ -495,6 +499,13 @@ function getSourceAnalysis(path: string): SourceAnalysis {
   return analysis;
 }
 
+function expectNoCorePluginPrivateSrcImports(file: string, text: string): void {
+  const imports = collectModuleReferencesFromSource(parser.parseSourceFile(file, text), {
+    acceptSpecifier: (specifier) => /(?:^|\/)extensions\/[^/]+\/src\//u.test(specifier),
+  });
+  expect(imports, `${file} should not import plugin-private src paths`).toEqual([]);
+}
+
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
   for (const specifier of imports) {
     const normalized = specifier.replaceAll("\\", "/");
@@ -635,12 +646,34 @@ describe("channel import guardrails", () => {
     expect(collectExtensionForbiddenImportMatches(["src/infra/outbound/send-deps"])).toEqual([]);
   });
 
+  it.each([
+    'import { client } from "../../extensions/feishu/src/client.js";',
+    'import "../../extensions/feishu/src/client.js";',
+    'await import("../../extensions/feishu/src/client.js");',
+    'export * from "../../extensions/feishu/src/client.js";',
+    'export { client } from "../../extensions/feishu/src/client.js";',
+    'require("../../extensions/feishu/src/client.js");',
+    'import client = require("../../extensions/feishu/src/client");',
+  ])("rejects core plugin-private module references: %s", (source) => {
+    expect(() => expectNoCorePluginPrivateSrcImports("source.ts", source)).toThrow(
+      "should not import plugin-private src paths",
+    );
+  });
+
+  it("allows diagnostic paths and import examples without loading plugin-private modules", () => {
+    expectNoCorePluginPrivateSrcImports(
+      "source.ts",
+      [
+        'const modulePath = "extensions/feishu/src/client.ts";',
+        '// import "../../extensions/feishu/src/client.js";',
+        'const example = `require("../../extensions/feishu/src/client.js")`;',
+      ].join("\n"),
+    );
+  });
+
   it("keeps core production files off plugin-private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
-      const text = readSource(file);
-      expect(text, `${file} should not import plugin-private src paths`).not.toMatch(
-        /["'][^"']*extensions\/[^/"']+\/src\//,
-      );
+      expectNoCorePluginPrivateSrcImports(file, readSource(file));
     }
   });
 

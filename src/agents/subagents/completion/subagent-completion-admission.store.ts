@@ -36,12 +36,15 @@ import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { resolveTaskCleanupAfter } from "../../../tasks/task-retention.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import {
-  ensureCompletionState,
   ensureDeliveryState,
   isCompletedRequesterDeliveryBlocked,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
-import { resolveSubagentTaskTerminalStatus } from "../registry/subagent-registry-completion.js";
+import {
+  resolveFinalizedSubagentTaskState,
+  resolveSubagentTaskTerminalStatus,
+} from "../registry/subagent-registry-completion.js";
+import { updateSubagentArchiveAtMs } from "../registry/subagent-registry-helpers.js";
 import {
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
@@ -49,12 +52,14 @@ import {
 } from "../registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { publishSubagentRunsAfterAtomicStore } from "../registry/subagent-registry-state.js";
+import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import {
-  bindSubagentRunRecord,
   deleteSubagentRunRowInDatabase,
+  upsertSubagentRunRowInDatabase,
+} from "../registry/subagent-registry.store.kernel.js";
+import {
   loadSubagentRunsForChildSessionFromSqlite,
   readSubagentRun,
-  upsertSubagentRunRowInDatabase,
 } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
@@ -241,17 +246,30 @@ function retiredCancellationEndedAt(subagent: SubagentRunRecord, now: number): n
   return endedAt;
 }
 
-function ownsRetiredCancellation(
+function ownsTasklessCompletion(
   database: OpenClawStateDatabase,
   subagent: SubagentRunRecord,
   expected: SubagentRunRecord,
 ): boolean {
+  // Announce records transport observations before committing suspension; they do
+  // not transfer ownership of the result, execution, or requester wake.
+  const ownerPayload = ({ delivery, ...entry }: SubagentRunRecord) =>
+    bindSubagentRunRecord({
+      ...entry,
+      delivery: delivery && {
+        ...delivery,
+        disposition: undefined,
+        enqueuedAt: undefined,
+        lastError: undefined,
+        lastDropReason: undefined,
+      },
+    }).payload_json;
   const newerSibling = (candidate: SubagentRunRecord) =>
     candidate.childSessionKey === subagent.childSessionKey &&
     compareSubagentRunGeneration(candidate, subagent) > 0;
   return (
     subagentRuns.get(subagent.runId) === expected &&
-    bindSubagentRunRecord(subagent).payload_json === bindSubagentRunRecord(expected).payload_json &&
+    ownerPayload(subagent) === ownerPayload(expected) &&
     !findTaskRecordByRunIdForViewInDatabase(database.db, subagent.taskRunId ?? subagent.runId) &&
     ![...subagentRuns.values()].some(newerSibling) &&
     !loadSubagentRunsForChildSessionFromSqlite(subagent.childSessionKey, database).some(
@@ -284,7 +302,7 @@ export function reconcileRetiredSubagentCancellation(
     if (findTaskRecordByRunIdForViewInDatabase(database.db, subagent.taskRunId ?? subagent.runId)) {
       return undefined;
     }
-    if (!ownsRetiredCancellation(database, subagent, expected)) {
+    if (!ownsTasklessCompletion(database, subagent, expected)) {
       return false;
     }
     subagent.killReconciliation = undefined;
@@ -301,6 +319,7 @@ type BlockSubagentCompletionParams = {
   taskId: string;
   reason: string;
   suspendedReason?: "expiry" | "permanent_failure";
+  storeReplaced?: true;
   lastDropReason?: NonNullable<SubagentRunRecord["delivery"]>["lastDropReason"];
   disposition?: NonNullable<SubagentRunRecord["delivery"]>["disposition"];
   databaseOptions?: OpenClawStateDatabaseOptions;
@@ -323,28 +342,49 @@ function prepareBlockedSubagentCompletion(
 ): CompletionMutation | undefined {
   const generation = params.subagent.delivery?.generation ?? 1;
   const task = readTaskRecord(database.db, params.taskId);
-  if (subagent && !task && !params.taskId && params.suspendedReason === undefined) {
-    const endedAt = retiredCancellationEndedAt(subagent, now);
-    // Old cancellation cleanup can outlive its task's retention window.
-    // Recover that exact completed owner without recreating historical work.
+  if (subagent && !task) {
+    // Missing task ownership cannot recover on retry. Fence the exact persisted
+    // completion and retain its result instead of recreating historical work.
     if (
-      endedAt === undefined ||
+      subagent.execution.status !== "terminal" ||
+      !Number.isFinite(subagent.execution.endedAt) ||
+      subagent.pauseReason ||
+      subagent.killIntent ||
       subagent.killReconciliation ||
-      !ownsRetiredCancellation(database, subagent, params.subagent)
+      subagent.terminalOwner ||
+      subagent.execution.restartRecovery ||
+      subagent.suppressAnnounceReason === "steer-restart" ||
+      subagent.expectsCompletionMessage !== true ||
+      subagent.completion?.required !== true ||
+      !["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
+      subagent.delivery?.deliveredAt !== undefined ||
+      subagent.delivery?.announcedAt !== undefined ||
+      !ownsTasklessCompletion(database, subagent, params.subagent)
     ) {
       return undefined;
     }
-    const completion = ensureCompletionState(subagent);
     const delivery = ensureDeliveryState(subagent);
-    completion.resultText ??= null;
-    completion.capturedAt ??= endedAt;
     Object.assign(delivery, {
-      status: "failed" as const,
-      disposition: params.disposition ?? delivery.disposition,
-      lastError: params.reason,
+      status: "discarded" as const,
+      disposition: "permanent_failure" as const,
+      discardReason: "task-missing" as const,
+      discardedAt: now,
+      lastError: "task-missing",
       nextAttemptAt: undefined,
+      queueId: undefined,
     });
-    subagent.suppressCompletionDelivery = true;
+    Object.assign(subagent, {
+      suppressCompletionDelivery: true,
+      // Revoke the in-flight announce tail; cleanupCompletedAt fences restarts.
+      cleanupHandled: false,
+      cleanupCompletedAt: now,
+      requesterSettleWake: undefined,
+      requesterTurnRunId: undefined,
+      requesterTurnYielded: undefined,
+      retireAfterRequesterTurn: undefined,
+      wakeOnDescendantSettle: undefined,
+    });
+    updateSubagentArchiveAtMs(subagent);
     return { subagent };
   }
   if (
@@ -363,7 +403,7 @@ function prepareBlockedSubagentCompletion(
   // outcomes, not reply readiness; missing or superseded owners still refuse settlement.
   if (
     !successful &&
-    (params.suspendedReason !== undefined ||
+    ((params.suspendedReason !== undefined && !params.storeReplaced) ||
       !["cancelled", "failed", "timed_out"].includes(task.status) ||
       resolveSubagentTaskTerminalStatus(subagent) !== task.status ||
       !["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending"))
@@ -371,12 +411,22 @@ function prepareBlockedSubagentCompletion(
     return undefined;
   }
   const delivery = ensureDeliveryState(subagent);
+  if (
+    params.storeReplaced &&
+    (delivery.status === "delivered" ||
+      delivery.announcedAt !== undefined ||
+      delivery.deliveredAt !== undefined)
+  ) {
+    return undefined;
+  }
   delivery.payload ??= loadPendingFinalDeliveryPayload(subagent);
   Object.assign(delivery, {
     status: params.suspendedReason ? ("suspended" as const) : ("failed" as const),
-    disposition: params.suspendedReason
-      ? ("permanent_failure" as const)
-      : (params.disposition ?? delivery.disposition),
+    disposition: params.storeReplaced
+      ? ("intentional_non_delivery" as const)
+      : params.suspendedReason
+        ? ("permanent_failure" as const)
+        : (params.disposition ?? delivery.disposition),
     lastError: params.reason,
     deliveredAt: undefined,
     announcedAt: undefined,
@@ -387,7 +437,9 @@ function prepareBlockedSubagentCompletion(
     queueId: undefined,
   });
   Object.assign(subagent, { cleanupHandled: false, wakeOnDescendantSettle: undefined });
-  if (params.suspendedReason) {
+  if (params.storeReplaced) {
+    subagent.requesterSettleWake = undefined;
+  } else if (params.suspendedReason) {
     if (isCompletedRequesterDeliveryBlocked(subagent)) {
       // This requester already ran. An ordinary settle wake would replay it;
       // a separately owned yield batch still has genuine unfinished work.
@@ -400,7 +452,7 @@ function prepareBlockedSubagentCompletion(
   } else {
     subagent.suppressCompletionDelivery = true;
   }
-  if (successful) {
+  if (successful && !params.storeReplaced) {
     const terminal = resolveRequiredCompletionDeliveryFailureTerminalResult(params.reason);
     Object.assign(task, {
       ...terminal,
@@ -413,7 +465,9 @@ function prepareBlockedSubagentCompletion(
     lastEventAt: now,
   });
   const text =
-    successful && task.notifyPolicy !== "silent" ? formatTaskBlockedFollowupMessage(task) : null;
+    successful && !params.storeReplaced && task.notifyPolicy !== "silent"
+      ? formatTaskBlockedFollowupMessage(task)
+      : null;
   const queued = text
     ? prepareClaimedSessionDelivery(
         {
@@ -478,6 +532,14 @@ function commitCompletionMutations(
     }
     for (const emit of events) {
       emit();
+    }
+    for (const { subagent } of mutations) {
+      if (subagent.delivery?.discardReason === "task-missing") {
+        log.warn("Subagent completion retired: task-missing", {
+          runId: subagent.runId,
+          disposition: "task-missing",
+        });
+      }
     }
     for (const { queued } of mutations) {
       if (queued) {
@@ -565,16 +627,35 @@ export function settleRequesterCompletionBatch(params: {
             checkedOmittedIds.add(id);
           }
         }
+        // Decoding restores restart defaults, not the active process's cleanup ownership.
+        subagent.cleanupHandled = expected.cleanupHandled;
+        // An exact requester receipt can arrive after expiry transferred this result to its wake.
+        const acknowledgeExpiredDelivery =
+          params.outcome.delivered &&
+          subagent.delivery?.status === "suspended" &&
+          subagent.delivery.suspendedReason === "expiry";
         let mutation: CompletionMutation = { subagent };
         if (
           subagent.pauseReason !== "sessions_yield" &&
           subagent.expectsCompletionMessage === true &&
-          ["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending")
+          (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
+            acknowledgeExpiredDelivery)
         ) {
           if (params.outcome.delivered) {
             const task = readTaskRecord(database.db, taskId ?? "");
+            if (!task) {
+              const missing = prepareBlockedSubagentCompletion(
+                database,
+                { subagent: expected, taskId: taskId ?? "", reason: "task-missing" },
+                now,
+                subagent,
+              );
+              if (!missing) {
+                throw changedOwner();
+              }
+              return missing;
+            }
             if (
-              !task ||
               task.runtime !== "subagent" ||
               task.runId !== (subagent.taskRunId ?? subagent.runId)
             ) {
@@ -590,6 +671,18 @@ export function settleRequesterCompletionBatch(params: {
               lastDropReason: undefined,
             });
             clearSubagentPendingDelivery(subagent);
+            if (acknowledgeExpiredDelivery) {
+              const finalized = resolveFinalizedSubagentTaskState(subagent);
+              if (!finalized || finalized.status !== task.status) {
+                throw changedOwner();
+              }
+              // Restore the execution/result verdict, not an unconditional success.
+              Object.assign(task, {
+                error: finalized.error,
+                terminalOutcome: finalized.terminalOutcome ?? undefined,
+                terminalSummary: finalized.terminalSummary ?? undefined,
+              });
+            }
             Object.assign(task, { deliveryStatus: "delivered", lastEventAt: now });
             mutation.task = task;
           } else {
@@ -601,6 +694,8 @@ export function settleRequesterCompletionBatch(params: {
                 reason:
                   params.outcome.error ?? params.outcome.reason ?? "requester settle wake failed",
                 disposition: params.outcome.disposition,
+                storeReplaced: params.outcome.storeReplaced,
+                suspendedReason: params.outcome.storeReplaced ? "permanent_failure" : undefined,
               },
               now,
               subagent,
@@ -612,6 +707,9 @@ export function settleRequesterCompletionBatch(params: {
           }
         }
         const settled = mutation.subagent;
+        if (settled.delivery?.discardReason === "task-missing") {
+          return mutation;
+        }
         if (settled.pauseReason !== "sessions_yield") {
           if (settled.requesterTurnRunId && settled.expectsCompletionMessage === true) {
             settled.retireAfterRequesterTurn =

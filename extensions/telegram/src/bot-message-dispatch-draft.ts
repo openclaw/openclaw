@@ -12,7 +12,8 @@ import type {
   TelegramAnswerBlockDelivery,
 } from "./bot-message-dispatch.types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
-import { createTelegramDraftStream, type TelegramDraftPreview } from "./draft-stream.js";
+import type { TelegramDraftPreview } from "./draft-stream-message.js";
+import { createTelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState, LaneName } from "./lane-delivery-text-deliverer.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
@@ -100,6 +101,10 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           thread: params.context.threadSpec,
           replyToMessageId: params.draftReplyToMessageId,
           replyToMode: params.replyToMode,
+          replyQuote:
+            params.draftReplyToMessageId != null
+              ? params.replyQuoteByMessageId[String(params.draftReplyToMessageId)]
+              : undefined,
           richMessages: params.telegramCfg.richMessages,
           linkPreview: params.telegramCfg.linkPreview,
           minInitialChars: DRAFT_MIN_INITIAL_CHARS,
@@ -236,24 +241,36 @@ export async function rotateLaneForNewMessage(turn: Turn, lane: DraftLaneState):
   resetLaneState(turn, lane);
 }
 
+export async function retireAnswerLane(
+  turn: Turn,
+  previewCleanup: "defer" | "clear" = "defer",
+): Promise<void> {
+  const lane = turn.answerLane;
+  if (lane.finalized) {
+    // Accepted messages outlive the progress window that originally carried them.
+    await rotateLaneForNewMessage(turn, lane);
+  } else if (previewCleanup === "defer") {
+    repositionLaneForNewMessage(turn, lane);
+  } else {
+    // Clear settles in-flight sends and stops the stream before it can reopen.
+    await lane.stream?.clear();
+    lane.stream?.forceNewMessage();
+    resetLaneState(turn, lane);
+  }
+}
+
 export async function rotateAnswerLaneForNewMessage(turn: Turn) {
   // An accepted block must become durable before rotation; otherwise cleanup
   // can discard its only visible preview.
   await turn.materializeAnswerLaneBeforeRotation();
-  if (!turn.answerLane.finalized) {
-    // Unaccepted partial text remains a preview, including across tool-only
-    // messages. Reposition with cleanup instead of retaining it as a reply.
-    repositionLaneForNewMessage(turn, turn.answerLane);
-    return;
-  }
-  await rotateLaneForNewMessage(turn, turn.answerLane);
+  await retireAnswerLane(turn);
 }
 
-export async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boolean> {
+async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boolean> {
   if (!turn.activeAnswerDraftIsToolProgressOnly) {
     return false;
   }
-  repositionLaneForNewMessage(turn, turn.answerLane);
+  await retireAnswerLane(turn);
   turn.progressCompositor.resetActivity({ suppressed: true });
   turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
   return true;
@@ -552,6 +569,7 @@ export function isQueuedAnswerBlock(
 }
 
 export function beginDraftQueuedFollowup(turn: Turn): void {
+  turn.progressContinuationAdopted = false;
   for (const lane of [turn.answerLane, turn.reasoningLane]) {
     if (!lane.stream) {
       continue;
@@ -562,19 +580,9 @@ export function beginDraftQueuedFollowup(turn: Turn): void {
 }
 
 export async function cleanupDrafts(turn: Turn, superseded: boolean): Promise<void> {
-  for (const lane of [turn.answerLane, turn.reasoningLane]) {
-    const stream = lane.stream;
-    if (!stream) {
-      continue;
-    }
-    if (superseded) {
-      await stream.discard();
-    } else if (lane.finalized) {
-      await stream.stop();
-    } else {
-      await stream.clear();
-    }
-  }
+  await turn.previewLifecycle.cleanup({
+    failed: superseded || turn.dispatchError != null || turn.agentRunFailed,
+  });
 }
 
 export const waitForDraftEvents = (turn: Turn) => turn.draftEventQueue;

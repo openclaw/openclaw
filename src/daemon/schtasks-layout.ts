@@ -12,8 +12,9 @@ import {
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
-import { resolveGatewayTaskScriptPath } from "./paths.js";
+import { resolveGatewayTaskScriptPath as resolveTaskScriptPath } from "./paths.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
@@ -150,10 +151,6 @@ export function shouldFallbackToStartupEntry(params: { code: number; detail: str
   );
 }
 
-export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
-  return resolveGatewayTaskScriptPath(env);
-}
-
 function resolveWindowsStartupDir(env: GatewayServiceEnv): string {
   const appData = env.APPDATA?.trim();
   if (appData) {
@@ -281,7 +278,11 @@ export async function writeTaskXmlTempFile(xml: string): Promise<string> {
   // Task Scheduler `/XML` expects UTF-16 LE with a BOM on every locale.
   const bom = Buffer.from([0xff, 0xfe]);
   const body = Buffer.from(xml, "utf16le");
-  await fs.writeFile(xmlPath, Buffer.concat([bom, body]));
+  await publishServiceFile({
+    filePath: xmlPath,
+    contents: Buffer.concat([bom, body]),
+    mode: 0o600,
+  });
   return xmlPath;
 }
 
@@ -488,10 +489,6 @@ function quoteVbsString(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
-function quoteVbsRunCommand(scriptPath: string): string {
-  return quoteVbsString(`"${scriptPath}"`);
-}
-
 export function buildHiddenLauncherScript(params: {
   description?: string;
   scriptPath: string;
@@ -509,8 +506,8 @@ export function buildHiddenLauncherScript(params: {
       `shell.Environment("Process")("${WINDOWS_TASK_LAUNCHER_ENV}") = "${WINDOWS_TASK_LAUNCHER_ACTIVE}"`,
     );
   }
-  lines.push(`WScript.Quit shell.Run(${quoteVbsRunCommand(params.scriptPath)}, 0, True)`);
+  lines.push(`WScript.Quit shell.Run(${quoteVbsString(`"${params.scriptPath}"`)}, 0, True)`);
   return `${lines.join("\r\n")}\r\n`;
 }
 
-export { encodeWindowsLauncherScript };
+export { encodeWindowsLauncherScript, resolveTaskScriptPath };

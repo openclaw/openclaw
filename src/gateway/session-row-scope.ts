@@ -16,21 +16,19 @@ type SessionRowScope =
   | undefined;
 
 /** Early publications retain literal paths until topology has prepared their aliases. */
-export function matchesSessionRowScope(
-  row: SessionRowScopeTarget,
+export function createSessionRowScopeMatcher(
   query: SessionRowScopeQuery,
   scope: SessionRowScope,
   logicalOwnerOnly = false,
 ) {
-  return (
+  const paths = query.storePath
+    ? (scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath])
+    : undefined;
+  return (row: SessionRowScopeTarget) =>
     (!query.agentId ||
       row.agentId === query.agentId ||
       (!logicalOwnerOnly && row.storeTarget.agentId === query.agentId)) &&
-    (!query.storePath ||
-      (scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath]).includes(
-        row.storeTarget.storePath,
-      ))
-  );
+    (!paths || paths.includes(row.storeTarget.storePath));
 }
 
 export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
@@ -51,20 +49,31 @@ export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
     indexes: { byKey, byStore, byAgent },
     scope,
   } = params;
+  const storePaths =
+    !query.key && query.storePath
+      ? (scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath])
+      : undefined;
   const candidates = query.key
     ? byKey.get(`${kind}:${query.key}`)
-    : query.storePath
-      ? new Set(
-          (scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath]).flatMap(
-            (storePath) => Array.from(byStore.get(storePath) ?? []),
-          ),
-        )
+    : storePaths
+      ? storePaths.length === 1
+        ? byStore.get(storePaths[0]!)
+        : new Set(storePaths.flatMap((storePath) => Array.from(byStore.get(storePath) ?? [])))
       : query.agentId
         ? byAgent.get(query.agentId)
         : rows.keys();
-  return [...(candidates ?? [])]
-    .map((id) => rows.get(id))
-    .filter((row): row is T => row !== undefined && matchesSessionRowScope(row, query, scope));
+  if (!candidates) {
+    return [];
+  }
+  const matches = createSessionRowScopeMatcher(query, scope);
+  const selected: T[] = [];
+  for (const id of candidates) {
+    const row = rows.get(id);
+    if (row !== undefined && matches(row)) {
+      selected.push(row);
+    }
+  }
+  return selected;
 }
 
 /** Resolve query-specific federation once when the physical topology is published. */
@@ -138,7 +147,8 @@ export function prepareSessionRowScopes(
   return {
     select,
     physicalPaths(locator: string, agentId?: string) {
-      const normalized = residentPath(path.resolve(locator));
+      // Resident physical locators were normalized when the topology was prepared.
+      const normalized = filenames.has(locator) ? locator : residentPath(path.resolve(locator));
       const owners = aliases.get(normalized);
       return agentId
         ? [owners?.get(normalizeAgentId(agentId)) ?? normalized]
@@ -160,17 +170,21 @@ export function selectSessionRowEntries(
     dirty: ReadonlySet<string>;
     matching: (query: records.Query, kind?: string) => records.Row[];
     acquire: (row: records.Row) => records.Row | undefined;
+    referenced: (reference: string) => records.Row | undefined;
   },
   query: records.Query,
 ) {
   const { cfg, scope, byAgent, byParent, rows, dirty, matching, acquire } = params;
+  const matches = createSessionRowScopeMatcher(query, scope, true);
   const parent = query.parentSessionKey;
   const owner = parent && parseAgentSessionKey(parent)?.agentId;
   const agents = owner ? [owner] : query.agentId ? [query.agentId] : byAgent.keys();
   const children = new Set<string>();
   if (parent) {
     for (const ref of [
-      ...[...agents].map((agentId) => records.parentReference(cfg, parent, agentId)),
+      ...[...agents].map((agentId) =>
+        records.parentReference(cfg, parent, agentId, undefined, params.referenced),
+      ),
       ...matching({ ...query, key: parent }).map((row) =>
         records.physical(row.storeTarget.storePath, parent),
       ),
@@ -186,7 +200,7 @@ export function selectSessionRowEntries(
     // Broad publications can change IDs before the resident index has caught up.
     for (const id of dirty) {
       const row = rows.get(id);
-      if (row && matchesSessionRowScope(row, query, scope, true)) {
+      if (row && matches(row)) {
         acquire(row);
       }
     }
@@ -199,9 +213,12 @@ export function selectSessionRowEntries(
     : parent
       ? [...children].map((id) => rows.get(id))
       : matching(query);
-  const selected = candidates
-    .map((row) => (row && !sessionIdOrKey && dirty.has(records.identity(row)) ? acquire(row) : row))
-    .filter(records.hasEntry)
-    .filter((row) => matchesSessionRowScope(row, query, scope, true));
+  const acquired =
+    sessionIdOrKey || dirty.size === 0
+      ? candidates
+      : candidates.map((row) => (row && dirty.has(records.identity(row)) ? acquire(row) : row));
+  const selected = acquired.filter(
+    (row): row is records.EntryRow => records.hasEntry(row) && matches(row),
+  );
   return records.sort(selected, query.sortBy);
 }

@@ -203,6 +203,7 @@ describe.each(["registry", "prepared static"] as const)("initial model setup usi
           expect(planned[0]?.model).toBe(scenario.planned);
           const hook = "hook" in scenario ? scenario.hook : undefined;
           const setup = await resolveEmbeddedRunModelSetup({
+            assertCurrent: () => {},
             runParams,
             ...initial,
             agentDir: snapshot.agentDir,
@@ -224,6 +225,7 @@ describe.each(["registry", "prepared static"] as const)("initial model setup usi
           let currentModel = setup.model;
           let harness = setup.agentHarness;
           const auth = await prepareEmbeddedRunAuthPlan({
+            assertCurrent: () => {},
             runParams,
             provider: setup.provider,
             modelId: setup.modelId,

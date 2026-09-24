@@ -1,4 +1,3 @@
-// Discord plugin module implements listeners behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
@@ -659,7 +658,7 @@ export class DiscordThreadDeleteListener extends ThreadDeleteListener {
       event: this.type,
       run: async () => {
         const threadId = data.id;
-        getThreadBindingManager(this.accountId)?.unbindThread({
+        await getThreadBindingManager(this.accountId)?.unbindThread({
           threadId,
           reason: "thread-delete",
           sendFarewell: false,

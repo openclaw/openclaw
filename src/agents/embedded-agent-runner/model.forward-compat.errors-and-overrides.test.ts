@@ -27,7 +27,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("../auth-profiles.js", () => ({
-  loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
+  loadAuthProfileStoreForRuntimeAsync: async () => ({ version: 1, profiles: {} }),
   resolveAuthProfileOrder: () => [],
 }));
 
@@ -83,8 +83,6 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
       const errorMessage = suppressionError(input);
       return errorMessage ? { suppress: true, errorMessage } : undefined;
     },
-    shouldSuppressBuiltInModelCore: (input: Parameters<typeof suppressionError>[0]) =>
-      Boolean(suppressionError(input)),
     shouldUnconditionallySuppress: () => false,
     buildSuppressedBuiltInModelError: suppressionError,
   };

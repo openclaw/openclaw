@@ -11,6 +11,7 @@ import { uiSessionEventMatches } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ApplicationContext } from "./context.ts";
+import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
 
 export type { SessionRunCompletedEvent as SessionCompletionNotice } from "../../../packages/gateway-protocol/src/schema/sessions-run-completed.ts";
 
@@ -92,14 +93,7 @@ export function showSessionCompletionNotice(params: {
     return;
   }
   const profileId = snapshot.selfUser?.id ?? null;
-  const hello = snapshot.hello;
-  const revision = context.gateway.connectionRevision;
-  const isCurrentOwner = () =>
-    context.gateway.snapshot.client === client &&
-    context.gateway.snapshot.phase === "connected" &&
-    context.gateway.snapshot.hello === hello &&
-    context.gateway.connectionRevision === revision &&
-    (context.gateway.snapshot.selfUser?.id ?? null) === profileId;
+  const isCurrentOwner = captureSessionNoticeOwner(context);
   let tracker = notices.get(client);
   if (!tracker || tracker.profileId !== profileId) {
     tracker = { profileId, seen: new Map() };

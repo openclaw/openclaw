@@ -42,7 +42,7 @@ export const skillsCuratorHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const status = getSkillCuratorStatus({ config: context.getRuntimeConfig() });
+    const status = await getSkillCuratorStatus({ config: context.getRuntimeConfig() });
     if (
       hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.SKILL_CURATOR_LIVE_INVENTORY)
     ) {

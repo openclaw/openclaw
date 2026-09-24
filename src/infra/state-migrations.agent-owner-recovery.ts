@@ -1,7 +1,6 @@
 /** Doctor recovers only proven duplicate files, before either owner's schema changes. */
 import fs from "node:fs";
 import path from "node:path";
-import { checkpointDoctorSqliteFile } from "../commands/doctor-sqlite-compact.js";
 import { isSessionArchiveArtifactName } from "../config/sessions/artifacts.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -9,6 +8,8 @@ import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-mai
 import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
+import { sameFileContentsSync } from "./fs-safe-advanced.js";
+import { FsSafeError } from "./fs-safe.js";
 import {
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
@@ -17,6 +18,7 @@ import {
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { moveSqliteFilesAside } from "./sqlite-recovery-files.js";
+import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import { formatAgentDatabaseOwnershipRepairHint } from "./state-migrations.agent-owner-guidance.js";
 
 type Target = { agentId: string; path: string };
@@ -42,22 +44,18 @@ function filesEqual(left: string, right: string): boolean {
   try {
     const rightFd = fs.openSync(right, "r");
     try {
-      const a = Buffer.allocUnsafe(1024 * 1024);
-      const b = Buffer.allocUnsafe(a.length);
-      for (let offset = 0; offset < leftStat.size;) {
-        const aRead = fs.readSync(leftFd, a, 0, a.length, offset);
-        const bRead = fs.readSync(rightFd, b, 0, b.length, offset);
-        if (aRead === 0 || aRead !== bRead || !a.subarray(0, aRead).equals(b.subarray(0, bRead))) {
-          return false;
-        }
-        offset += aRead;
-      }
       return (
+        sameFileContentsSync(leftFd, rightFd, { maxBytes: Number(leftStat.size) }) &&
         sameFileMutationFingerprint(leftStat, fs.fstatSync(leftFd, { bigint: true })) &&
         sameFileMutationFingerprint(rightStat, fs.fstatSync(rightFd, { bigint: true })) &&
         sameFileMutationFingerprint(leftStat, fs.lstatSync(left, { bigint: true })) &&
         sameFileMutationFingerprint(rightStat, fs.lstatSync(right, { bigint: true }))
       );
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "too-large") {
+        return false;
+      }
+      throw error;
     } finally {
       fs.closeSync(rightFd);
     }
@@ -105,7 +103,7 @@ function checkpoint(target: Target, maintenance: OpenClawStateLeaseContext): voi
     assertOpenClawAgentDatabaseOwner(database, { agentId: target.agentId, pathname: target.path });
     assertSqliteIntegrity(database, target.path);
     maintenance.assertOwned();
-    checkpointDoctorSqliteFile(database, target.path);
+    truncateSqliteWal(database, target.path);
   } finally {
     database.close();
   }

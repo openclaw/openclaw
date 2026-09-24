@@ -10,24 +10,31 @@ export function resolveUpdateCandidatePluginSourceEntries(
   config: OpenClawConfig,
 ) {
   const plugins = normalizePluginsConfig(config.plugins);
-  const entries = new Map<string, { rootDir: string; entryFile: string }>();
+  const entries = new Map<string, { pluginId: string; rootDir: string; entryFile: string }>();
   for (const candidate of candidates) {
     if (candidate.format === "bundle") {
       continue;
     }
     const manifest = loadPluginManifest(candidate.rootDir);
+    const pluginId =
+      candidate.effectivePluginId ?? (manifest.ok ? manifest.manifest.id : candidate.idHint);
     const enabled = resolveEffectiveEnableState({
-      id: candidate.effectivePluginId ?? (manifest.ok ? manifest.manifest.id : candidate.idHint),
+      id: pluginId,
       origin: candidate.origin,
       config: plugins,
       rootConfig: config,
     }).enabled;
     const packageManifest = candidate.packageManifest;
     if (enabled) {
-      entries.set(candidate.source, { rootDir: candidate.rootDir, entryFile: candidate.source });
+      entries.set(candidate.source, {
+        pluginId,
+        rootDir: candidate.rootDir,
+        entryFile: candidate.source,
+      });
     }
     if (candidate.setupSource && (enabled || packageManifest?.setupFeatures?.configPromotion)) {
       entries.set(candidate.setupSource, {
+        pluginId,
         rootDir: candidate.rootDir,
         entryFile: candidate.setupSource,
       });
@@ -47,6 +54,7 @@ export function resolveUpdateCandidatePluginSourceEntries(
     });
     if (doctor) {
       entries.set(doctor.modulePath, {
+        pluginId,
         rootDir: doctor.boundaryRoot,
         entryFile: doctor.modulePath,
       });

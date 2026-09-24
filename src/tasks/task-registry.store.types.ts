@@ -39,3 +39,25 @@ export type TaskLiveFlowAuthority = {
   assertCurrent(): void;
   isSelected(selection: TaskLiveFlowSelection): boolean;
 };
+
+type TaskRegistryObserverRecord = Omit<TaskRecord, "detail">;
+
+export type TaskRegistryObservers = {
+  // Observers are incremental/best-effort only. Persistence belongs to TaskRegistryStore.
+  onEvent?: (event: TaskRegistryObserverEvent) => void;
+};
+
+export type TaskRegistryObserverEvent =
+  | {
+      kind: "restored";
+    }
+  | {
+      kind: "upserted";
+      task: TaskRegistryObserverRecord;
+      previous?: TaskRegistryObserverRecord;
+    }
+  | {
+      kind: "deleted";
+      taskId: string;
+      previous: TaskRegistryObserverRecord;
+    };

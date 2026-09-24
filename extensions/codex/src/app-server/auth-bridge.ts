@@ -33,6 +33,10 @@ import {
   readFirstNonEmptyEnv,
 } from "./auth-cache-key.js";
 import {
+  CodexAppServerAuthProfileUnavailableError,
+  formatCodexAuthProfileUnavailableMessage,
+} from "./auth-profile-recovery.js";
+import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileStore,
   isCodexAppServerNativeAuthProfile,
@@ -41,6 +45,7 @@ import {
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
+  withClearedEnvironmentVariables,
   withEphemeralCodexAuthStore,
 } from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -233,7 +238,7 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
     return undefined;
   }
   const credential = store.profiles[profileId];
-  if (!credential || !isCodexAppServerAuthProfileCredential(credential)) {
+  if (!credential || !isCodexAppServerAuthProvider(credential.provider)) {
     return undefined;
   }
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
@@ -306,6 +311,11 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   }
 
   const authProfileId = params.authProfileId?.trim() || undefined;
+  if (authProfileId && !params.authProfileStore.profiles[authProfileId]) {
+    throw new CodexAppServerAuthProfileUnavailableError(
+      formatCodexAuthProfileUnavailableMessage(authProfileId),
+    );
+  }
   const nativeAuthProfile = isCodexAppServerNativeAuthProfile({
     authProfileId,
     authProfileStore: params.authProfileStore,
@@ -370,7 +380,7 @@ export async function resolveCodexAppServerAuthAccountCacheKey(params: {
     return undefined;
   }
   const credential = store.profiles[profileId];
-  if (!credential || !isCodexAppServerAuthProfileCredential(credential)) {
+  if (!credential || !isCodexAppServerAuthProvider(credential.provider)) {
     return undefined;
   }
   const accountId = resolveChatgptAccountId(profileId, credential);
@@ -770,11 +780,6 @@ function createCodexAppServerAuthError(message: string, cause?: unknown): Error 
   return Object.assign(error, { status: 401 as const });
 }
 
-class CodexAppServerAuthProfileUnavailableError extends Error {
-  readonly status = 401;
-  readonly code = "selected_auth_profile_unavailable";
-}
-
 async function resolveCodexAppServerAuthProfileLoginParams(params: {
   agentDir: string;
   authProfileId?: string;
@@ -875,10 +880,10 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   const credential = store.profiles[profileId];
   if (!credential) {
     throw new CodexAppServerAuthProfileUnavailableError(
-      `Codex app-server auth profile "${profileId}" was not found. Select an existing OpenAI profile or sign in again with OpenClaw, then retry.`,
+      formatCodexAuthProfileUnavailableMessage(profileId),
     );
   }
-  if (!isCodexAppServerAuthProfileCredential(credential)) {
+  if (!isCodexAppServerAuthProvider(credential.provider)) {
     throw new CodexAppServerAuthProfileUnavailableError(
       `Codex app-server auth profile "${profileId}" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
     );
@@ -1014,7 +1019,7 @@ async function resolveOAuthCredentialForCodexAppServer(
       !isCodexAppServerAuthProvider(persistedCredential.provider))
   ) {
     throw new CodexAppServerAuthProfileUnavailableError(
-      `Codex app-server auth profile "${profileId}" is no longer available. Sign in again with OpenClaw, then retry.`,
+      `Codex app-server auth profile "${profileId}" is no longer an OpenAI OAuth credential in its persisted OpenClaw store. Run "openclaw doctor" to inspect credential ownership, or select an existing OpenAI profile.`,
     );
   }
   const store = useScopedCredential
@@ -1107,7 +1112,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     !resolved.apiKey.trim()
   ) {
     throw new CodexAppServerAuthProfileUnavailableError(
-      `Codex app-server auth profile "${profileId}" is no longer available. Sign in again with OpenClaw, then retry.`,
+      `Codex app-server auth profile "${profileId}" could not resolve usable OAuth credentials from its OpenClaw credential store. Run "openclaw doctor" to inspect credential ownership, or select an existing OpenAI profile.`,
     );
   }
   const candidate = { ...resolved.credential, access: resolved.apiKey };
@@ -1236,10 +1241,7 @@ function assertCodexOAuthRefreshWorkspace(
     return;
   }
   const loginParams = buildChatgptAuthTokensParams(profileId, credential, credential.access.trim());
-  if (
-    loginParams.type !== "chatgptAuthTokens" ||
-    loginParams.chatgptAccountId !== expectedAccountId
-  ) {
+  if (loginParams.chatgptAccountId !== expectedAccountId) {
     throw new Error(
       "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
     );
@@ -1249,10 +1251,6 @@ function assertCodexOAuthRefreshWorkspace(
 // Runtime consumes canonical auth state; doctor owns retired profile-id migration.
 function isCodexAppServerAuthProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === CODEX_APP_SERVER_AUTH_PROVIDER;
-}
-
-function isCodexAppServerAuthProfileCredential(credential: AuthProfileCredential): boolean {
-  return isCodexAppServerAuthProvider(credential.provider);
 }
 
 function shouldClearOpenAiApiKeyForCodexAuthProfile(params: {
@@ -1273,26 +1271,11 @@ function isCodexSubscriptionCredential(credential: AuthProfileCredential | undef
   return credential.type === "oauth" || credential.type === "token";
 }
 
-function withClearedEnvironmentVariables(
-  startOptions: CodexAppServerStartOptions,
-  envVars: readonly string[],
-): CodexAppServerStartOptions {
-  const clearEnv = startOptions.clearEnv ?? [];
-  const missingEnvVars = envVars.filter((envVar) => !clearEnv.includes(envVar));
-  if (missingEnvVars.length === 0) {
-    return startOptions;
-  }
-  return {
-    ...startOptions,
-    clearEnv: [...clearEnv, ...missingEnvVars],
-  };
-}
-
 function buildChatgptAuthTokensParams(
   profileId: string,
   credential: AuthProfileCredential,
   accessToken: string,
-): CodexLoginAccountParams {
+): Extract<CodexLoginAccountParams, { type: "chatgptAuthTokens" }> {
   const storedAccountId = resolveExplicitChatgptAccountId(credential);
   const tokenAccountId = resolveOpenAICodexAuthIdentity({ access: accessToken }).accountId;
   if (storedAccountId && tokenAccountId && storedAccountId !== tokenAccountId) {

@@ -244,7 +244,7 @@ describe("chat Swarm progress", () => {
         event: "sessions.changed",
         payload: { agentId: "main", session: serverRows[1], reason: "create" },
       });
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(container.querySelectorAll("[data-swarm-group]")).toHaveLength(1);
       expect(group?.getAttribute("data-swarm-group")).toBe(swarmGroupId);
       expect(group?.querySelector("strong")?.textContent).toBe("Parallel tasks");

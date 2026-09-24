@@ -7,14 +7,15 @@ import crypto from "node:crypto";
 import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { Type } from "typebox";
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
@@ -45,10 +46,9 @@ import {
   parseAgentSessionKey,
   parseSessionDeliveryRoute,
 } from "../../sessions/session-key-utils.js";
-import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
-import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
@@ -67,14 +67,10 @@ import { ToolInputError } from "../tool-input-error.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
-import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
-  runWithGatewayToolCleanupContext,
+  runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
@@ -90,141 +86,17 @@ import {
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
-import { resumeSessionsSendTask } from "./sessions-send-resume.js";
+import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import { normalizeSessionsSendArguments } from "./sessions-send-tool.arguments.js";
 import { startSessionsSendAgentRun } from "./sessions-send-tool.delivery.js";
-
-const SessionsSendToolSchema = Type.Object({
-  sessionKey: Type.Optional(Type.String()),
-  label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
-  agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
-  message: Type.String(),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
-  watch: Type.Optional(Type.Boolean()),
-  mode: Type.Optional(
-    Type.Union([
-      Type.Literal("notify"),
-      Type.Literal("steer"),
-      Type.Literal("followup"),
-      Type.Literal("resume"),
-    ]),
-  ),
-});
+import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
+import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-const SessionsSendDeliverySchema = Type.Object(
-  {
-    status: Type.Union([Type.Literal("pending"), Type.Literal("skipped")]),
-    mode: Type.Literal("announce"),
-  },
-  { additionalProperties: false },
-);
-
-const SessionsSendOutputSchema = Type.Union([
-  Type.Object(
-    {
-      status: Type.Literal("accepted"),
-      mode: Type.Literal("resume"),
-      runId: Type.String(),
-      taskRunId: Type.String(),
-      sessionKey: Type.String(),
-      completion: Type.Literal("task"),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      status: Type.Literal("queued"),
-      sessionKey: Type.String(),
-      notificationId: Type.String(),
-      durability: Type.Literal("process"),
-      runStarted: Type.Literal(false),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      runId: Type.String(),
-      status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
-      error: Type.String(),
-      sessionKey: Type.Optional(Type.String()),
-      sentBeforeError: Type.Optional(Type.Literal(true)),
-      watched: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      runId: Type.String(),
-      status: Type.Literal("accepted"),
-      sessionKey: Type.String(),
-      targetDisposition: Type.Union([Type.Literal("queued"), Type.Literal("steered")]),
-      delivery: SessionsSendDeliverySchema,
-      watched: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      runId: Type.String(),
-      status: Type.Literal("timeout"),
-      error: Type.String(),
-      sentBeforeError: Type.Literal(true),
-      sessionKey: Type.String(),
-      delivery: Type.Optional(SessionsSendDeliverySchema),
-      watched: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      runId: Type.String(),
-      status: Type.Literal("no_reply"),
-      sessionKey: Type.String(),
-      message: Type.String(),
-      watched: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      runId: Type.String(),
-      status: Type.Literal("ok"),
-      sessionKey: Type.String(),
-      delivery: SessionsSendDeliverySchema,
-      reply: Type.String(),
-      watched: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
-]);
-
 type GatewayCaller = AgentToolGatewayRequestCaller;
-const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
 const NO_REPLY_MESSAGE = "No visible reply or pending announcement. Continue or retry if needed.";
-
-function normalizeSessionsSendArguments(args: unknown): Record<string, unknown> {
-  const params =
-    args && typeof args === "object" && !Array.isArray(args)
-      ? { ...(args as Record<string, unknown>) }
-      : {};
-
-  if (typeof params.message !== "string" || !params.message.trim()) {
-    for (const alias of SESSIONS_SEND_MESSAGE_ALIASES) {
-      const value = readToolStringParam(params, alias, { trim: false });
-      if (value?.trim()) {
-        params.message = stripFormattedReasoningMessage(value);
-        break;
-      }
-    }
-  }
-
-  for (const alias of SESSIONS_SEND_MESSAGE_ALIASES) {
-    delete params[alias];
-  }
-  return params;
-}
 
 function resolveConfiguredAgentMainSessionKey(params: {
   cfg: OpenClawConfig;
@@ -310,19 +182,8 @@ function isPendingErrorAgentWaitTimeout(result: AgentWaitResult): boolean {
   );
 }
 
-export function createSessionsSendTool(opts?: {
-  agentId?: string;
-  agentSessionKey?: string;
-  agentChannel?: string;
-  sandboxed?: boolean;
-  config?: OpenClawConfig;
-  callGateway?: GatewayCaller;
-  /** Backend-derived target incarnation; never sourced from model arguments. */
-  expectedTargetSessionId?: string;
-  /** Backend-owned downstream operation id; never sourced from model arguments. */
-  idempotencyKey?: string;
-  signal?: AbortSignal;
-}): AnyAgentTool {
+export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
+  const requesterOrigin = normalizeDeliveryContext(opts?.requesterOrigin);
   return {
     label: "Session Send",
     name: "sessions_send",
@@ -349,17 +210,8 @@ export function createSessionsSendTool(opts?: {
       ) {
         throw new ToolInputError("mode must be notify, steer, followup, or resume");
       }
-      const caller = mode === "resume" ? getGatewayToolCallerIdentity() : undefined;
-      const assertCallerCurrent =
-        mode === "resume" ? captureGatewayToolCallerAssertion() : undefined;
       const resumeCaller =
-        caller && assertCallerCurrent
-          ? {
-              agentId: caller.agentId,
-              sessionKey: caller.sessionKey,
-              assertCurrent: assertCallerCurrent,
-            }
-          : undefined;
+        mode === undefined || mode === "resume" ? captureSessionsSendResumeCaller() : undefined;
       if (mode === "resume" && !resumeCaller) {
         return jsonResult({
           runId: crypto.randomUUID(),
@@ -656,6 +508,22 @@ export function createSessionsSendTool(opts?: {
         projection: "full",
       });
       const requesterSessionEntry = requesterSession.store[requesterSession.canonicalKey];
+      const requesterContinuationSession = opts?.agentSessionId
+        ? {
+            sessionId: opts.agentSessionId,
+            lifecycleRevision: requesterSessionEntry?.lifecycleRevision,
+          }
+        : undefined;
+      const requesterDeliveryGeneration: SessionDeliveryGeneration | undefined =
+        requesterSessionEntry?.sessionId
+          ? {
+              agentId: requesterSession.agentId,
+              storePath: requesterSession.storePath,
+              sessionKey: requesterSession.canonicalKey,
+              sessionId: opts?.agentSessionId ?? requesterSessionEntry.sessionId,
+              lifecycleRevision: requesterSessionEntry.lifecycleRevision ?? null,
+            }
+          : undefined;
       const requesterIsSubagent = isSubagentSessionFromEntry(
         requesterSession.canonicalKey,
         requesterSessionEntry,
@@ -669,9 +537,10 @@ export function createSessionsSendTool(opts?: {
       const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
       const requesterSessionKey = rawRequesterSessionKey;
       let replyRequesterSessionKey = rawRequesterSessionKey;
-      // Only unthreaded DMs need reply-address normalization. Resolving other
-      // requesters as direct peers can reject valid channel-only bindings.
+      // Preserve exact admitted incarnations. Legacy key-only callers still normalize
+      // unthreaded DM reply addresses to their monitored main session.
       if (
+        !opts?.agentSessionId &&
         rawRequesterSessionKey &&
         parsedRequesterSessionKey &&
         rawRequesterSessionKey !== resolvedKey &&
@@ -774,13 +643,10 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = opts?.idempotencyKey ?? crypto.randomUUID();
       let runId: string = idempotencyKey;
+      const sameSession = requesterSessionKey === resolvedKey && targetAgentId === requesterAgentId;
       // Fire-and-forget self-send remains a channel-delivery path. A synchronous
       // self-send would wait behind its own active session lane until timeout.
-      if (
-        timeoutSeconds !== 0 &&
-        requesterSessionKey === resolvedKey &&
-        targetAgentId === requesterAgentId
-      ) {
+      if (timeoutSeconds !== 0 && sameSession) {
         return jsonResult({
           runId,
           status: "error",
@@ -964,7 +830,17 @@ export function createSessionsSendTool(opts?: {
             extraSystemPrompt: agentMessageContext,
             inputProvenance,
           };
-          if (mode === "resume") {
+          if (
+            mode === "resume" ||
+            (mode === undefined &&
+              resumeCaller &&
+              !targetAcpMeta &&
+              shouldResumeParentSubagent({
+                cfg,
+                caller: resumeCaller,
+                childSessionKey: resolvedKey,
+              }))
+          ) {
             if (!resumeCaller) {
               throw new ToolInputError("Task resume requires an admitted parent tool caller.");
             }
@@ -1002,6 +878,7 @@ export function createSessionsSendTool(opts?: {
             runId,
             mode,
             sendParams,
+            sourceOrigin: sameSession ? requesterOrigin : undefined,
             sessionKey: mode ? resolvedKey : displayKey,
             sessionStoreTarget: targetSession,
             deliveryTimeoutMs: announceTimeoutMs,
@@ -1077,8 +954,8 @@ export function createSessionsSendTool(opts?: {
               return;
             }
             // Detached turns must not retain the caller's resource or runtime generation scope.
-            runWithGatewayToolCleanupContext(() => {
-              void runWithGatewayDetachedWorkContinuation(
+            void runWithGatewayToolContinuationContext(() =>
+              runWithGatewayDetachedWorkContinuation(
                 () =>
                   runOutsidePreparedModelRuntimePluginGenerationScope(() =>
                     runWithoutOwnedSessionTranscriptWrites(() =>
@@ -1094,21 +971,25 @@ export function createSessionsSendTool(opts?: {
                         replyMode,
                         requesterSessionKey: replyRequesterSessionKey,
                         requesterAgentId,
+                        requesterSession: requesterContinuationSession,
+                        requesterDeliveryGeneration,
+                        requesterOrigin,
                         requesterChannel,
                         roundOneReply: reply?.replyText,
                         sourceReplyDelivered: reply?.sourceReplyDelivered,
                         waitRunId: reply ? undefined : runId,
+                        replyRunId: runId,
                         notifyRequesterOnWaitFailure:
                           notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
                       }),
                     ),
                   ),
                 "session:a2a-send",
-              ).catch((err: unknown) => {
-                log.warn("sessions_send announce flow admission failed", {
-                  runId,
-                  error: formatErrorMessage(err),
-                });
+              ),
+            ).catch((err: unknown) => {
+              log.warn("sessions_send announce flow admission failed", {
+                runId,
+                error: formatErrorMessage(err),
               });
             });
           };
@@ -1157,7 +1038,7 @@ export function createSessionsSendTool(opts?: {
             return jsonResult({
               runId,
               status: "timeout",
-              error: result.error,
+              error: result.error ?? "agent run timed out",
               sentBeforeError: true,
               sessionKey: displayKey,
               ...watchField,

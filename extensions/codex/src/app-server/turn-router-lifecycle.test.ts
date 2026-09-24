@@ -1,4 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import type { JsonObject } from "./protocol.js";
@@ -559,31 +560,144 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     });
   });
 
-  it("fails and removes a route when its pre-bind buffer is full", async () => {
-    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+  it("drains an exact terminal receipt after physical closure releases a paused route", async () => {
     const harness = createHarness();
-    const router = getCodexAppServerTurnRouter(harness.client);
-    const route = router.reserveThread({
-      threadId: "thread-overflow",
-      onNotification: vi.fn(),
+    const notifications = vi.fn();
+    const receipts = vi.fn();
+    const beforeNotifications = createDeferred<void>();
+    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: "thread-closed-paused",
+      onNotification: notifications,
+      onNotificationReceived: receipts,
     });
     route.armTurn();
-    for (let index = 0; index <= 256; index += 1) {
-      harness.send({
-        method: "item/started",
-        params: { threadId: "thread-overflow", turnId: "turn-overflow" },
-      });
-    }
-    await settleInput();
+    const started = {
+      method: "item/started",
+      params: { threadId: route.threadId, turnId: "turn-current" },
+    };
+    harness.send(started);
+    const binding = route.bindTurn("turn-current", {
+      beforeNotifications: beforeNotifications.promise,
+    });
+    const settled = vi.fn();
+    void binding.then(settled, settled);
+    const completed = {
+      method: "turn/completed",
+      params: {
+        threadId: route.threadId,
+        turn: { id: "turn-current", status: "completed", items: [] },
+      },
+    };
+    try {
+      harness.send(completed);
+      harness.process.emit("exit", 0, null);
+      await route.drain();
+      await settleInput();
 
-    await expect(route.bindTurn("turn-overflow")).rejects.toThrow(
-      "pre-bind notification buffer exceeded 256 entries",
-    );
-    expect(() =>
-      router.reserveThread({
-        threadId: "thread-overflow",
-        onNotification: vi.fn(),
-      }),
-    ).not.toThrow();
+      expect(route.completed).toBe(true);
+      expect(route.signal.aborted).toBe(true);
+      expect(receipts.mock.calls.map(([notification]) => notification)).toEqual([
+        started,
+        completed,
+      ]);
+      expect(notifications).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+
+      beforeNotifications.resolve();
+      await binding;
+      expect(notifications.mock.calls.map(([notification]) => notification)).toEqual([
+        started,
+        completed,
+      ]);
+      expect(receipts).toHaveBeenCalledTimes(2);
+    } finally {
+      beforeNotifications.resolve();
+      await binding.catch(() => undefined);
+      route.release();
+    }
   });
+
+  it.each([
+    { label: "pre-bind notifications", paused: false, overflowMethod: "item/started" },
+    { label: "paused notifications", paused: true, overflowMethod: "item/started" },
+    { label: "paused global warnings", paused: true, overflowMethod: "configWarning" },
+  ])(
+    "fails and removes a route when its buffer is full of $label",
+    async ({ paused, overflowMethod }) => {
+      vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const harness = createHarness();
+      const router = getCodexAppServerTurnRouter(harness.client);
+      const notifications = vi.fn();
+      const requests = vi.fn(() => ({ decision: "accept" }));
+      const siblingNotifications = vi.fn();
+      router.reserveThread({ threadId: "thread-sibling", onNotification: siblingNotifications });
+      const route = router.reserveThread({
+        threadId: "thread-overflow",
+        onNotification: notifications,
+        onRequest: requests,
+      });
+      route.armTurn();
+      const beforeNotifications = createDeferred<void>();
+      const binding = paused
+        ? route.bindTurn("turn-overflow", { beforeNotifications: beforeNotifications.promise })
+        : undefined;
+      void binding?.catch(() => undefined);
+      harness.send({
+        id: "request-overflow",
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: route.threadId, turnId: "turn-overflow", itemId: "item-overflow" },
+      });
+      for (let index = 0; index < 256; index += 1) {
+        harness.send({
+          method: "item/started",
+          params: { threadId: "thread-overflow", turnId: "turn-overflow" },
+        });
+      }
+      await settleInput();
+      try {
+        expect(route.signal.aborted).toBe(false);
+        expect(notifications).not.toHaveBeenCalled();
+        expect(requests).not.toHaveBeenCalled();
+        harness.send({
+          method: overflowMethod,
+          params:
+            overflowMethod === "configWarning"
+              ? { message: "global overflow" }
+              : { threadId: route.threadId, turnId: "turn-overflow" },
+        });
+        await settleInput();
+
+        expect(route.signal.aborted).toBe(true);
+        await expect(binding ?? route.bindTurn("turn-overflow")).rejects.toThrow(
+          "pre-bind notification buffer exceeded 256 entries",
+        );
+        expect(await waitForResponse(harness, "request-overflow")).toEqual({
+          id: "request-overflow",
+          result: { decision: "decline" },
+        });
+        beforeNotifications.resolve();
+        await settleInput();
+        expect(notifications).not.toHaveBeenCalled();
+        expect(requests).not.toHaveBeenCalled();
+
+        const siblingNotification = {
+          method: "thread/status/changed",
+          params: { threadId: "thread-sibling", status: { type: "active" } },
+        };
+        harness.send(siblingNotification);
+        await vi.waitFor(() =>
+          expect(siblingNotifications).toHaveBeenCalledWith(siblingNotification, {
+            threadId: "thread-sibling",
+          }),
+        );
+        expect(() =>
+          router.reserveThread({ threadId: route.threadId, onNotification: vi.fn() }),
+        ).not.toThrow();
+      } finally {
+        beforeNotifications.resolve();
+        route.release();
+        await binding?.catch(() => undefined);
+      }
+    },
+  );
 });

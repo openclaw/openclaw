@@ -4,6 +4,8 @@ import path from "node:path";
 import { isRootFileMissingFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { tempFile } from "../infra/fs-safe-advanced.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 
 export const CONFIG_BACKUP_COUNT = 5;
 
@@ -17,7 +19,8 @@ export async function prepareConfigFileWrite(params: {
   destinationHardlinks?: "reject";
   durable?: boolean;
 }) {
-  const { configPath, fsModule, assertCurrent } = params;
+  const { configPath, fsModule } = params;
+  const assertCurrent = createConfigWriteAuthorityGuard(params.assertCurrent);
   assertCurrent?.();
   let backup: Awaited<ReturnType<typeof tempFile>> | undefined;
   try {
@@ -37,8 +40,16 @@ export async function prepareConfigFileWrite(params: {
         assertCurrent?.();
       }
     }
-  } catch {
-    await backup?.[Symbol.asyncDispose]();
+  } catch (error) {
+    try {
+      await backup?.[Symbol.asyncDispose]();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Config backup preparation and cleanup failed",
+        { cause: cleanupError },
+      );
+    }
     backup = undefined;
     // Backup creation remains best effort; failed preparation never consumes history.
     assertCurrent?.();
@@ -55,6 +66,7 @@ export async function prepareConfigFileWrite(params: {
         syncTempFile: params.durable,
         syncParentDir: params.durable,
         fileSystem: fsModule,
+        throwOnCleanupError: true,
         beforeRename: () => {
           if (!backup) {
             return;
@@ -86,16 +98,43 @@ export async function prepareConfigFileWrite(params: {
               if (!source.ok) {
                 return;
               }
-              assertCurrent?.();
+              const assertDestination = () => {
+                if (!to) {
+                  return;
+                }
+                const current = fsModule.lstatSync(to, { bigint: true, throwIfNoEntry: false });
+                const captured = destination?.ok
+                  ? fsModule.fstatSync(destination.fd, { bigint: true })
+                  : undefined;
+                if (
+                  captured
+                    ? !current ||
+                      current.isSymbolicLink() ||
+                      current.nlink !== 1n ||
+                      current.dev !== captured.dev ||
+                      current.ino !== captured.ino
+                    : current
+                ) {
+                  throw new ConfigMutationConflictError("config backup destination changed", {
+                    retryable: false,
+                  });
+                }
+              };
+              assertCurrent();
+              assertDestination();
               if (to) {
                 fsModule.fchmodSync(source.fd, 0o600);
-                assertCurrent?.();
+                assertCurrent();
+                assertDestination();
                 fsModule.renameSync(source.path, to);
               } else {
                 fsModule.unlinkSync(source.path);
               }
-            } catch {
-              assertCurrent?.();
+            } catch (error) {
+              assertCurrent();
+              if (error instanceof ConfigMutationConflictError) {
+                throw error;
+              }
             }
           };
           const base = `${configPath}.bak`;

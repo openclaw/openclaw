@@ -1,11 +1,16 @@
+import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import type { TurnAdoptionLifecycle } from "../../auto-reply/get-reply-options.types.js";
 import type { QueuedFollowupReplyDelivery } from "../../auto-reply/reply/queue/types.js";
+import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import {
   completeQueuedChatTurn,
   registerQueuedChatTurn,
   retireQueuedChatTurnCancellation,
   type QueuedChatTurnMap,
 } from "../chat-queued-turns.js";
+import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
+import type { WebchatReplyMediaRequesterContext } from "./chat-reply-media.js";
 import { createChatSendLateFollowupDisposition } from "./chat-send-late-followup.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { createChatSendLateReplyFinalizer } from "./chat-send-source-finalization.js";
@@ -13,12 +18,15 @@ import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export function createChatSendTurnAdoptionLifecycle(params: {
+  requesterContext?: WebchatReplyMediaRequesterContext;
   accountId: string | undefined;
   chatQueuedTurns: QueuedChatTurnMap;
   context: GatewayRequestContext;
   runId: string;
   controller: AbortController;
-  sessionBinding: { readonly sessionId: string };
+  sessionBinding: Readonly<
+    Pick<ChatAbortControllerEntry, "sessionKey" | "sessionId" | "agentId" | "lifecycleGeneration">
+  >;
   sessionKey: string;
   agentId?: string;
   ownerConnId?: string;
@@ -31,24 +39,65 @@ export function createChatSendTurnAdoptionLifecycle(params: {
     "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
   >;
   hasCronCreatorAuthority: boolean;
+  suppressReplies?: boolean;
   retainWorkAdmission: () => () => void;
+  armOperatorRunCancellation?: () => void;
+  retireOperatorRunCancellation?: () => void;
 }): {
   lifecycle: TurnAdoptionLifecycle;
   isEnqueued: () => boolean;
+  isCompleted: () => boolean;
   onQueueDisposition: (reason: string) => void;
   onQueuedFollowupReplyBatch: QueuedFollowupReplyDelivery;
 } {
   let enqueued = false;
+  let terminalKnown = false;
+  let completed = false;
   let releaseWorkAdmission: (() => void) | undefined;
+  const recordQueuedTerminal = (status: "completed" | "aborted") => {
+    // An active source dispatch still owns terminal recording after its work settles.
+    if (
+      !params.suppressReplies &&
+      (status !== "aborted" || params.context.chatAbortControllers.has(params.runId))
+    ) {
+      return;
+    }
+    const now = Date.now();
+    setGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      key: `chat:${params.runId}`,
+      session: captureAgentJobSession(params.sessionBinding),
+      entry: {
+        ts: now,
+        ok: true,
+        payload:
+          status === "aborted"
+            ? buildAbortedChatSendPayload({
+                runId: params.runId,
+                endedAt: now,
+                stopReason: resolveAgentRunAbortLifecycleFields(params.controller.signal)
+                  .stopReason,
+              })
+            : { runId: params.runId, status },
+      },
+    });
+  };
   const lateFollowup = createChatSendLateFollowupDisposition({
     runId: params.runId,
     originatingChannel: params.originatingChannel,
     logGateway: params.context.logGateway,
-    deliver: createChatSendLateReplyFinalizer({
-      accountId: params.accountId,
-      context: params.context,
-      session: params.session,
-    }),
+    deliver: params.suppressReplies
+      ? async ({ completion }) => {
+          terminalKnown ||= completion.kind !== "progress";
+          return { kind: "dropped" as const, reason: "no-visible-content" as const };
+        }
+      : createChatSendLateReplyFinalizer({
+          requesterContext: params.requesterContext,
+          abortSignal: params.controller.signal,
+          accountId: params.accountId,
+          context: params.context,
+          session: params.session,
+        }),
   });
   const lifecycle: TurnAdoptionLifecycle = {
     // Gateway cancel identity only — share collect key via ownerKey.
@@ -72,28 +121,55 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         agentId: params.agentId,
         ownerConnId: normalizeOptionalChatText(params.ownerConnId),
         ownerDeviceId: normalizeOptionalChatText(params.ownerDeviceId),
+        // Queue cancellation supersedes the source run's earlier custody acknowledgement.
+        onAborted: () => recordQueuedTerminal("aborted"),
       });
       if (enqueued && !releaseWorkAdmission) {
-        // Retain the session fence until this detached queued turn is adopted.
+        // Retain the session fence until this detached queued ownership ends.
         releaseWorkAdmission = params.retainWorkAdmission();
       }
       if (enqueued) {
         lateFollowup.recordQueued();
+        params.armOperatorRunCancellation?.();
       }
       return enqueued;
     },
     onCancellationRetired: () => {
-      retireQueuedChatTurnCancellation(params.chatQueuedTurns, params.runId, params.controller);
+      if (
+        retireQueuedChatTurnCancellation(params.chatQueuedTurns, params.runId, params.controller)
+      ) {
+        params.retireOperatorRunCancellation?.();
+      }
+    },
+    onAbandoned: () => {
+      terminalKnown = true;
     },
     onSettled: () => {
-      completeQueuedChatTurn(params.chatQueuedTurns, params.runId, params.controller);
-      releaseWorkAdmission?.();
-      releaseWorkAdmission = undefined;
+      const ownsCompletion = completeQueuedChatTurn(
+        params.chatQueuedTurns,
+        params.runId,
+        params.controller,
+      );
+      // Consumed steering also settles custody, but has no terminal batch. Only
+      // the exact queued owner can retire an executed or abandoned refresh.
+      completed = ownsCompletion && terminalKnown;
+      try {
+        if (ownsCompletion) {
+          params.retireOperatorRunCancellation?.();
+        }
+        if (completed) {
+          recordQueuedTerminal("completed");
+        }
+      } finally {
+        releaseWorkAdmission?.();
+        releaseWorkAdmission = undefined;
+      }
     },
   };
   return {
     lifecycle,
     isEnqueued: () => enqueued,
+    isCompleted: () => completed,
     onQueueDisposition: (reason) => {
       params.context.logGateway.info("chat queue turn intentionally skipped", {
         runId: params.runId,

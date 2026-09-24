@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 
 const closeTrackedBrowserTabsForSessionsImpl = vi.hoisted(() => vi.fn());
 const tryLoadActivatedBundledPluginPublicSurfaceModule = vi.hoisted(() => vi.fn());
@@ -142,13 +143,32 @@ describe("browser maintenance", () => {
     expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("delegates cleanup through the browser maintenance surface", async () => {
+  it("does not dispatch cleanup after its owner changes during plugin activation", async () => {
+    const { promise, resolve } = createDeferred();
+    tryLoadActivatedBundledPluginPublicSurfaceModule.mockImplementationOnce(async () => {
+      await promise;
+      return { closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl };
+    });
+    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
+    let current = true;
+    const cleanup = closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:test"],
+      isCurrent: () => current,
+    });
+    expect(tryLoadActivatedBundledPluginPublicSurfaceModule).toHaveBeenCalledOnce();
+    current = false;
+    resolve();
+    await expect(cleanup).resolves.toBe(0);
+    expect(closeTrackedBrowserTabsForSessionsImpl).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, () => true])("delegates cleanup with owner guard %s", async (isCurrent) => {
     closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(2);
 
     const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
 
     await expect(
-      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:test"] }),
+      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:test"], isCurrent }),
     ).resolves.toBe(2);
     expect(tryLoadActivatedBundledPluginPublicSurfaceModule).toHaveBeenCalledWith({
       dirName: "browser",
@@ -156,6 +176,7 @@ describe("browser maintenance", () => {
     });
     expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledWith({
       sessionKeys: ["agent:main:test"],
+      isCurrent,
     });
   });
 

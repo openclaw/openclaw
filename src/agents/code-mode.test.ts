@@ -1,5 +1,6 @@
 /** Tests Code Mode catalog and model-visible surface. */
 
+import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,10 +38,10 @@ describe("Code Mode catalog and model-visible surface", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   const runTerminalNestedCall = async (
@@ -265,21 +266,6 @@ describe("Code Mode catalog and model-visible surface", () => {
     ]);
   });
 
-  it("uses a flat enum for the exec language schema", () => {
-    const { tools } = createCodeModeHarness();
-    const parameters = expectDefined(tools[0], "tools[0] test invariant").parameters as {
-      properties?: Record<string, Record<string, unknown>>;
-    };
-    const language = parameters.properties?.language;
-
-    expect(language).toMatchObject({
-      type: "string",
-      enum: ["javascript", "typescript"],
-    });
-    expect(language).not.toHaveProperty("anyOf");
-    expect(language).not.toHaveProperty("oneOf");
-  });
-
   it("describes code-mode runtime constraints in the model-visible exec schema", () => {
     const { tools } = createCodeModeHarness();
     const execTool = expectDefined(tools[0], "tools[0] test invariant");
@@ -321,7 +307,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description).not.toContain("ALL_TOOLS");
     expect(execTool.description).not.toContain("tools.call");
     expect(execTool.description).not.toContain("exact id");
-    expect(execTool.description).toContain('"javascript" or "typescript"');
+    expect(execTool.description).toContain("JavaScript");
     expect(execTool.description).toContain("never a shell command");
     expect(execTool.description).toContain("do not retry failed shell source");
     const nodesGuidance =
@@ -331,7 +317,9 @@ describe("Code Mode catalog and model-visible surface", () => {
       execTool.description.lastIndexOf(nodesGuidance),
     );
 
-    expect(parameters.properties?.code?.description).toContain("no Python, shell");
+    expect(parameters.properties?.code?.description).toContain(
+      "no TypeScript annotations, Python, shell",
+    );
     expect(parameters.properties?.code?.description).toContain(
       "a trailing expression yields `null`",
     );
@@ -345,10 +333,27 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(parameters.properties?.restartSafe?.description).toContain(
       "never for write, edit, exec, or any mutation",
     );
-    expect(parameters.properties?.language?.description).toContain(
-      'Must be "javascript" or "typescript"',
-    );
-    expect(parameters).toMatchObject({ required: ["code"] });
+    expect(parameters.properties).not.toHaveProperty("language");
+    expect(parameters.properties).not.toHaveProperty("typecheck");
+    for (const title of [undefined, "", "   "]) {
+      expect(() =>
+        validateToolArguments(execTool, {
+          type: "toolCall",
+          id: "untitled-cell",
+          name: "exec",
+          arguments: { code: "return 42;", ...(title === undefined ? {} : { title }) },
+        }),
+      ).toThrow("title");
+    }
+    const titledCell = { title: "Inspect the dependency graph", code: "return 42;" };
+    expect(
+      validateToolArguments(execTool, {
+        type: "toolCall",
+        id: "titled-cell",
+        name: "exec",
+        arguments: titledCell,
+      }),
+    ).toEqual(titledCell);
     expect(parameters.properties).not.toHaveProperty("command");
   });
 

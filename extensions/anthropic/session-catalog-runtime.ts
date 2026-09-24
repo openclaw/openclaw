@@ -13,6 +13,12 @@ export function currentClaudeSessionCatalogConfig(api: OpenClawPluginApi): OpenC
   return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
 }
 
+type BoundClaudeSource = { adopted: boolean; hostId: string; threadId: string };
+
+/** An OpenClaw session that drives a Claude thread. `adopted` marks the ones
+    this catalog owns; the rest merely route their turns through the Claude CLI. */
+export type BoundClaudeSession = { adopted: boolean; sessionKey: string };
+
 function boundClaudeSource(
   pluginId: string,
   entry: {
@@ -23,7 +29,7 @@ function boundClaudeSource(
     modelSelectionLocked?: boolean;
     pluginExtensions?: unknown;
   },
-): { hostId: string; threadId: string } | undefined {
+): BoundClaudeSource | undefined {
   const anthropic = isRecord(entry.pluginExtensions) ? entry.pluginExtensions.anthropic : undefined;
   const marker = isRecord(anthropic) ? anthropic.sessionCatalog : undefined;
   const hostId =
@@ -32,16 +38,21 @@ function boundClaudeSource(
       : entry.execHost === "node" && typeof entry.execNode === "string" && entry.execNode.trim()
         ? `node:${entry.execNode.trim()}`
         : CLAUDE_LOCAL_SESSION_HOST_ID;
+  // A CLI resume binding only records which Claude thread this session last
+  // drove. Catalog ownership is what makes the session a Claude Code
+  // conversation, so the two are reported separately: an ordinary OpenClaw
+  // session routed to the Claude CLI is bound, never adopted.
+  const adopted = entry.pluginOwnerId === pluginId;
   const bindings = isRecord(entry.cliSessionBindings) ? entry.cliSessionBindings : undefined;
   const binding = bindings?.[CLAUDE_CLI_BACKEND_ID];
   if (isRecord(binding) && typeof binding.sessionId === "string" && binding.sessionId) {
-    return { hostId, threadId: binding.sessionId };
+    return { adopted, hostId, threadId: binding.sessionId };
   }
-  if (entry.pluginOwnerId !== pluginId || entry.modelSelectionLocked !== true) {
+  if (!adopted || entry.modelSelectionLocked !== true) {
     return undefined;
   }
   return isRecord(marker) && typeof marker.sourceThreadId === "string"
-    ? { hostId, threadId: marker.sourceThreadId }
+    ? { adopted, hostId, threadId: marker.sourceThreadId }
     : undefined;
 }
 
@@ -49,9 +60,9 @@ export function listBoundClaudeSessions(
   api: OpenClawPluginApi,
   agentId?: string,
   sessionEntries?: SessionCatalogEntrySnapshot,
-): Map<string, string> {
+): Map<string, BoundClaudeSession> {
   const config = currentClaudeSessionCatalogConfig(api);
-  const bound = new Map<string, string>();
+  const bound = new Map<string, BoundClaudeSession>();
   for (const { sessionKey, entry } of listSessionCatalogEntries({
     agentId,
     config,
@@ -59,9 +70,18 @@ export function listBoundClaudeSessions(
     sessionEntries,
   })) {
     const source = boundClaudeSource(api.id, entry);
-    if (source) {
-      bound.set(adoptedSourceKey(source.hostId, source.threadId), sessionKey);
+    if (!source) {
+      continue;
     }
+    const sourceKey = adoptedSourceKey(source.hostId, source.threadId);
+    // Sessions from several agents can hold a binding to one Claude thread, and
+    // this key does not carry the agent. Adoption is the fact the catalog reads
+    // here, so an adopted entry holds the key: a sibling agent's plain CLI
+    // binding must never decide that an adopted row is unowned.
+    if (bound.get(sourceKey)?.adopted && !source.adopted) {
+      continue;
+    }
+    bound.set(sourceKey, { adopted: source.adopted, sessionKey });
   }
   return bound;
 }

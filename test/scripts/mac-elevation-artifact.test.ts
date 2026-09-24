@@ -662,19 +662,20 @@ describe.skipIf(process.platform !== "darwin")(
         }),
     );
 
-    it.concurrent.for(["bin/node", `${workerDist}/entry.js`, `${workerDist}/build-info.json`])(
-      "rejects an incomplete worker missing %s",
-      async (relative, { mac }) =>
-        mac.lifetime.run(async () => {
-          const harness = await artifactFixture(mac);
-          await rm(harness.at(`${workerRoot}/x86_64/${relative}`));
-          const result = await harness.verify();
-          expect(result.status, result.stderr).toBe(1);
-          // The npm-style entrypoint link must also remain valid when its target disappears.
-          expect(result.stderr).toMatch(
-            /elevation worker payload is incomplete|broken or cyclic elevation worker symlink/,
-          );
-        }),
+    it.concurrent.for([
+      "bin/node",
+      `${workerDist}/mac-node-worker.js`,
+      `${workerDist}/build-info.json`,
+    ])("rejects an incomplete worker missing %s", async (relative, { mac }) =>
+      mac.lifetime.run(async () => {
+        const harness = await artifactFixture(mac);
+        await rm(harness.at(`${workerRoot}/x86_64/${relative}`));
+        const result = await harness.verify();
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toMatch(
+          /elevation worker payload is incomplete|broken or cyclic elevation worker symlink/,
+        );
+      }),
     );
 
     it.concurrent.for(["version", "commit", "builtAt", "buildId"] as const)(
@@ -742,7 +743,7 @@ describe.skipIf(process.platform !== "darwin")(
       `${workerRoot}/arm64/bin`,
       `${workerRoot}/arm64/lib/node_modules/openclaw`,
       `${workerRoot}/arm64/bin/node`,
-      `${workerRoot}/arm64/${workerDist}/entry.js`,
+      `${workerRoot}/arm64/${workerDist}/mac-node-worker.js`,
       `${workerRoot}/arm64/${workerDist}/build-info.json`,
       `${workerRoot}/arm64/${addon}`,
     ])(

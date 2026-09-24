@@ -19,6 +19,7 @@ import {
   withPluginCache,
   type PluginCache,
 } from "./plugin-cache.js";
+import { retainPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import {
   retainPluginSourceCaptureInstance,
@@ -56,6 +57,7 @@ export function retainGatewayPluginMetadata() {
     );
   }
   const sourceCaptures = retainPluginSourceCaptureInstance();
+  const releaseReaders = retainPluginMetadataSnapshotReaders();
   void sweepPluginSourceCaptureDirectories();
   const owner: GatewayMetadataOwner = {
     cache: bootstrapCache,
@@ -228,6 +230,7 @@ export function retainGatewayPluginMetadata() {
           }
           await sourceCaptures.releaseAsync();
           gatewayMetadataOwners.delete(owner);
+          releaseReaders();
           return cleanup;
         } catch (error) {
           throw new PluginRuntimeCloseRetainedError(error);

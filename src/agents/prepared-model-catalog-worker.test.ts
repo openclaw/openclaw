@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import * as cryptoDigest from "../infra/crypto-digest.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -137,9 +138,6 @@ describe("prepared model catalog worker input", () => {
     });
     expect(cloned.authStore.order).toEqual(authStore.order);
     expect(cloned.authStore.lastGood).toEqual(authStore.lastGood);
-    expect(cloned.input.runtimePluginSelections).toEqual([
-      { provider: "selected", modelId: "model" },
-    ]);
     expect(cloned.input).not.toHaveProperty("inheritedAuthDir");
     expect(cloned.input).not.toHaveProperty("loadRuntimePlugins");
     const builtInput = structuredClone(
@@ -150,6 +148,7 @@ describe("prepared model catalog worker input", () => {
     expect(builtInput.generationFingerprint).not.toBe(cloned.generationFingerprint);
     const request = {
       kind: "catalog" as const,
+      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts(),
       syntheticAuth: [
         {
           providerRef: "native",

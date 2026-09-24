@@ -3,7 +3,8 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
-  type bumpSkillsSnapshotVersion,
+  bumpSkillsSnapshotVersion,
+  getSkillsResourceVersion,
   getSkillsSnapshotVersion,
   getSkillsSourceVersion,
 } from "./refresh-state.js";
@@ -13,13 +14,20 @@ import {
 } from "./refresh.watcher.test-support.js";
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
-const { createdWatchers, watchMock, watchForSkillRoot } = createSkillsWatcherMock();
+const { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot } =
+  createSkillsWatcherMock();
 let refreshModule: typeof import("./refresh.js");
 let buildSkillSnapshot: typeof import("../loading/workspace-skill-prompt.js").buildSkillSnapshot;
 let syncWorkspaceSkills: typeof import("../loading/workspace-skill-sync.runtime.js").syncWorkspaceSkills;
 let fixtureWorkspaceDir: string;
 
 vi.mock("chokidar", () => ({ default: { watch: watchMock } }));
+vi.mock("./refresh-ancestor-native.js", () => ({
+  createNativeSkillsAncestorWatcher: nativeWatchMock,
+}));
+vi.mock("./refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: nativeContentWatchMock,
+}));
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
   resolvePluginSkillRootsFromMetadata: () => [],
@@ -45,12 +53,165 @@ describe("skills watcher churn", () => {
     fixtureWorkspaceDir = fixture.workspaceDir;
   });
 
+  it("settles shared-ancestor discovery once without invalidating the published entries again", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = fixtureWorkspaceDir;
+    const ancestor = await createFixtureDirectory("shared-ancestor");
+    const firstRoot = path.join(ancestor, "left", "skills");
+    const secondRoot = path.join(ancestor, "right", "skills");
+    const config = { skills: { load: { extraDirs: [firstRoot, secondRoot] } } };
+    const baseSkill = await createFixtureDirectory("workspace/skills/guide");
+    await fs.writeFile(
+      path.join(baseSkill, "SKILL.md"),
+      "---\nname: guide\ndescription: Workspace winner\n---\nBase instructions\n",
+    );
+    await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
+      const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+      const options = {
+        config,
+        bundledSkillsDir: "",
+        managedSkillsDir: path.join(workspaceDir, "missing-managed"),
+      };
+      refreshModule.ensureSkillsWatcher({ workspaceDir, config });
+      const first = watchForSkillRoot(firstRoot).watcher;
+      expect(watchForSkillRoot(secondRoot).watcher).toBe(first);
+      const before = loadWorkspaceSkills(workspaceDir, options);
+      expect(before.map((entry) => entry.skill.name)).toEqual(["guide"]);
+      const publications: Array<{
+        version: number;
+        entries: ReturnType<typeof loadWorkspaceSkills>;
+      }> = [];
+      refreshModule.registerSkillsChangeListener((event) => {
+        if (event.workspaceDir === workspaceDir && event.reason === "watch") {
+          publications.push({
+            version: getSkillsSourceVersion(workspaceDir),
+            entries: loadWorkspaceSkills(workspaceDir, options),
+          });
+        }
+      });
+      for (const [root, name, description] of [
+        [firstRoot, "guide", "Losing extra instructions"],
+        [secondRoot, "new-guide", "New ancestor instructions"],
+      ] as const) {
+        const dir = path.join(root, name);
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(
+          path.join(dir, "SKILL.md"),
+          `---\nname: ${name}\ndescription: ${description}\n---\nComplete instructions\n`,
+        );
+      }
+      // One physical notification promotes several logical roots for this workspace.
+      first.emit("raw", "rename", undefined, { watchedPath: ancestor });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(publications).toHaveLength(1);
+      expect(getSkillsSourceVersion(workspaceDir)).toBe(publications[0]!.version);
+      const entries = loadWorkspaceSkills(workspaceDir, options);
+      expect(entries).toEqual(publications[0]!.entries);
+      expect(entries.find((entry) => entry.skill.name === "guide")).toEqual(before[0]);
+      expect(entries.map((entry) => entry.skill.name).toSorted()).toEqual(["guide", "new-guide"]);
+      const snapshot = await buildSkillSnapshot(workspaceDir, options);
+      expect(snapshot.resolvedSkills).toEqual(entries.map((entry) => entry.skill));
+      expect(snapshot.prompt).toContain("Workspace winner");
+      expect(snapshot.prompt).toContain("New ancestor instructions");
+      expect(snapshot.prompt).not.toContain("Losing extra instructions");
+      const version = getSkillsSnapshotVersion(workspaceDir);
+      bumpSkillsSnapshotVersion({ workspaceDir, reason: "manual" });
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
+      expect(loadWorkspaceSkills(workspaceDir, options)).toEqual(entries);
+      expect(await buildSkillSnapshot(workspaceDir, options)).toEqual(snapshot);
+    });
+  });
+
+  it("keeps due work independent of another target's later debounce deadline", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = fixtureWorkspaceDir;
+    const secondWorkspace = await createFixtureDirectory("later-workspace");
+    const laterRoot = await createFixtureDirectory("later-workspace/skills");
+    refreshModule.ensureSkillsWatcher({ workspaceDir });
+    refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace });
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => seen.push(change));
+    const firstPath = path.join(workspaceDir, "skills", "guide", "SKILL.md");
+    const laterPath = path.join(laterRoot, "guide", "SKILL.md");
+    watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit("all", "change", firstPath);
+    await vi.advanceTimersByTimeAsync(200);
+    watchForSkillRoot(laterRoot).watcher.emit("all", "change", laterPath);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(seen).toEqual([{ workspaceDir, reason: "watch", changedPath: firstPath }]);
+    await vi.advanceTimersByTimeAsync(199);
+    expect(seen).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(seen).toEqual([
+      { workspaceDir, reason: "watch", changedPath: firstPath },
+      { workspaceDir: secondWorkspace, reason: "watch", changedPath: laterPath },
+    ]);
+  });
+
+  it("retains shared supporting resources alongside an execution-only discovery change", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = fixtureWorkspaceDir;
+    const executionWorkspaceDir = await createFixtureDirectory("mixed-execution");
+    const executionRoot = await createFixtureDirectory("mixed-execution/skills");
+    const skillDir = await createFixtureDirectory("workspace/skills/demo");
+    const scriptDir = await createFixtureDirectory("workspace/skills/demo/scripts");
+    const targetWorkspaceDir = await createFixtureDirectory("mixed-sandbox");
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: demo\ndescription: Demo\n---\n",
+    );
+    const scriptPath = path.join(scriptDir, "run.sh");
+    await fs.writeFile(scriptPath, "before");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
+      refreshModule.ensureSkillsWatcher({ workspaceDir, executionWorkspaceDir });
+      const loadOptions = {
+        bundledSkillsDir: "",
+        managedSkillsDir: path.join(workspaceDir, "missing"),
+      };
+      const skillsSnapshot = await buildSkillSnapshot(workspaceDir, loadOptions);
+      const syncOptions = {
+        sourceWorkspaceDir: workspaceDir,
+        targetWorkspaceDir,
+        skillsSnapshot,
+        ...loadOptions,
+      };
+      await syncWorkspaceSkills(syncOptions);
+      const baseVersion = getSkillsSourceVersion(workspaceDir);
+      const resourceVersion = getSkillsResourceVersion(workspaceDir);
+      const executionVersion = getSkillsSourceVersion(workspaceDir, { executionWorkspaceDir });
+      await fs.writeFile(scriptPath, "after");
+      watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit(
+        "all",
+        "change",
+        scriptPath,
+      );
+      watchForSkillRoot(executionRoot).watcher.emit(
+        "all",
+        "change",
+        path.join(executionRoot, "guide", "SKILL.md"),
+      );
+      await vi.advanceTimersByTimeAsync(250);
+      expect(getSkillsSourceVersion(workspaceDir)).toBe(baseVersion);
+      expect(getSkillsResourceVersion(workspaceDir)).toBeGreaterThan(resourceVersion);
+      expect(getSkillsSourceVersion(workspaceDir, { executionWorkspaceDir })).toBeGreaterThan(
+        executionVersion,
+      );
+      await syncWorkspaceSkills(syncOptions);
+      const copiedScript = path.join(targetWorkspaceDir, "skills", "demo", "scripts", "run.sh");
+      expect(await fs.readFile(copiedScript, "utf8")).toBe("after");
+    });
+  });
+
   it.each(["add", "change", "unlink"] as const)(
     "ignores non-skill file %s events under watched worktrees",
     async (event) => {
       vi.useFakeTimers();
       const workspaceDir = fixtureWorkspaceDir;
       const executionWorkspaceDir = await createFixtureDirectory("busy-worktree");
+      for (const root of [workspaceDir, executionWorkspaceDir]) {
+        for (const directory of ["skills", ".agents/skills"]) {
+          await fs.mkdir(path.join(root, directory), { recursive: true });
+        }
+      }
       refreshModule.ensureSkillsWatcher({ workspaceDir, executionWorkspaceDir });
       const version = getSkillsSnapshotVersion(workspaceDir);
       const seen: SkillsChangeEvent[] = [];
@@ -300,8 +461,8 @@ describe("skills watcher churn", () => {
     const secondVersion = getSkillsSourceVersion(workspaceDir, {
       executionWorkspaceDir: secondExecution,
     });
-    for (const watcher of createdWatchers.slice(watcherCount)) {
-      watcher.emit("ready");
+    for (let index = watcherCount; index < createdWatchers.length; index += 1) {
+      createdWatchers[index]!.emit("ready");
     }
     expect(getSkillsSourceVersion(workspaceDir)).toBe(afterReady);
     expect(

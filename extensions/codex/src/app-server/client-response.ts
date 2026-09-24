@@ -1,6 +1,5 @@
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import {
-  projectCodexCatalogNativeResponse,
+  reuseCodexCatalogPreview,
   type CodexCatalogPreviewCache,
 } from "../session-catalog-native-projection.js";
 import {
@@ -20,6 +19,7 @@ export function dispatchCodexAppServerResponse(
     { preview?: CodexCatalogPreviewCache; remainingRows?: number }
   >,
   source: CodexCatalogSource,
+  previewStates?: (boolean | undefined)[],
 ): boolean {
   const pending = attempts.get(response.id);
   if (!pending) {
@@ -36,19 +36,31 @@ export function dispatchCodexAppServerResponse(
     isJsonObject(response.result) &&
     Array.isArray(response.result.data) &&
     response.result.data.length > 0;
+  const cache = catalogResponses.get(pending)?.preview;
   if (
-    catalogResponses.has(pending) &&
+    cache &&
+    previewStates &&
     isJsonObject(response.result) &&
     Array.isArray(response.result.data)
   ) {
-    const projection = catalogResponses.get(pending);
     try {
-      response.result = projectCodexCatalogNativeResponse(
-        response.result,
-        sanitizeTerminalText,
-        projection?.preview,
-        projection?.remainingRows,
-      );
+      for (const [index, row] of response.result.data.entries()) {
+        if (isJsonObject(row) && typeof row.id === "string" && row.ephemeral !== true) {
+          const preview = reuseCodexCatalogPreview(
+            {
+              id: row.id,
+              path: typeof row.path === "string" ? row.path : null,
+              updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : null,
+              recencyAt: typeof row.recencyAt === "number" ? row.recencyAt : null,
+            },
+            previewStates[index],
+            cache,
+          );
+          if (preview !== undefined) {
+            row.preview = preview;
+          }
+        }
+      }
     } catch (error) {
       pending.reject(
         error instanceof Error

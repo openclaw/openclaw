@@ -5,6 +5,7 @@ import type { GatewayRequestContext } from "../../gateway/server-methods/types.j
 import { resolveWorkerToolAuthority } from "../../gateway/worker-environments/worker-tool-authority.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
@@ -40,6 +41,9 @@ vi.mock("../delegation-capability.js", () => ({
 vi.mock("../model-auth.js", () => ({
   applyAuthHeaderOverride: vi.fn((model: unknown) => model),
   applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
+  // Catalog construction also probes media providers; this fixture has no credentials.
+  getCustomProviderApiKey: vi.fn(() => undefined),
+  resolveEnvApiKey: vi.fn(() => undefined),
 }));
 
 vi.mock("../tool-terminal-outcome.js", () => ({
@@ -350,7 +354,7 @@ describe("embedded run retry dispatch", () => {
     try {
       await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(afterTurnError);
       expect(onContextAccountingEvent.mock.calls).toEqual([
-        [{ kind: "model", contextTokens: undefined }],
+        [{ kind: "model", contextTokens: undefined, successful: false }],
         [{ kind: "compaction", tokensAfter: 40 }],
       ]);
     } finally {
@@ -478,7 +482,7 @@ describe("embedded run retry dispatch", () => {
     },
   );
 
-  it.each(["closed", "aborted", "replaced"])(
+  it.each(["closed", "aborted", "replaced", "attempt-replaced"])(
     "does not dispatch when GitHub preparation outlives a %s owner",
     async (kind) => {
       let gateway = {} as GatewayRequestContext;
@@ -496,15 +500,23 @@ describe("embedded run retry dispatch", () => {
       const dispatch = prepareAndDispatchEmbeddedRunAttempt(input);
       const rejected = expect(dispatch).rejects.toThrow("outlived its admitted Gateway run");
       await started.promise;
+      const replacement =
+        kind === "attempt-replaced"
+          ? input.runInput.laneController.createAttemptControls({ admittedRunContext })
+          : undefined;
       if (kind === "closed") {
         admission.close();
       } else if (kind === "aborted") {
         input.runInput.laneController.laneTaskAbortController.abort();
-      } else {
+      } else if (kind === "replaced") {
         gateway = {} as GatewayRequestContext;
       }
       release.resolve(true);
-      await rejected;
+      try {
+        await rejected;
+      } finally {
+        replacement?.close();
+      }
 
       expect(mocks.runAttempt).not.toHaveBeenCalled();
       expect(input.clearPostCompactionAbortController).toHaveBeenCalledOnce();
@@ -526,13 +538,17 @@ describe("embedded run retry dispatch", () => {
   );
 
   it.each([true, false])(
-    "settles accepted spawns before a late post-compaction abort (yielded: %s)",
+    "retains accepted spawns for the logical owner after a late post-compaction abort (yielded: %s)",
     async (yieldDetected) => {
       const postCompactionAbortError = new Error("post-compaction loop detected");
       const input = makeDispatchInput({}, createEmbeddedRunReplayState());
       input.getPostCompactionAbortError = vi.fn(() => postCompactionAbortError);
       const acceptedSessionSpawns = [
-        { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+        {
+          runId: "child-run",
+          childSessionKey: "agent:main:subagent:child",
+          expectsCompletionMessage: true,
+        },
       ];
       mocks.runAttempt.mockResolvedValueOnce({
         terminal: { kind: "ok" },
@@ -545,13 +561,10 @@ describe("embedded run retry dispatch", () => {
         postCompactionAbortError,
       );
 
-      expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
-        requesterAgentId: "main",
-        requesterSessionKey: "agent:main:session-1",
-        requesterTurnRunId: "run-1",
-        requesterYielded: yieldDetected,
+      expect(mergeAcceptedSessionSpawnsForRun(admittedRunContext.operationalRunInstance)).toEqual(
         acceptedSessionSpawns,
-      });
+      );
+      expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
     },
   );
 });

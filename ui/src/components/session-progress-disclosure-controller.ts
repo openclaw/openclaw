@@ -1,6 +1,7 @@
 import { nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
+import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import {
   subscribeTranscriptScroll,
   type TranscriptScrollObservation,
@@ -12,11 +13,11 @@ import {
   type ProgressDisclosureState,
 } from "./session-progress-disclosure.ts";
 
-export type ComposerProgressRunLifecycle = {
+export type ComposerProgressDisclosureContext = {
+  presented?: boolean;
   gatewayScope?: object;
   sessionIdentity?: string;
-  activeRunId?: string | null;
-  completedRunId?: string | null;
+  cardLifetime?: object;
   readingHistory?: boolean;
   onManipulate?: () => void;
 };
@@ -24,8 +25,7 @@ export type ComposerProgressRunLifecycle = {
 type DisclosureInput = [
   sessionKey: string,
   initialOpen: boolean,
-  collapseByDefault: boolean,
-  lifecycle?: ComposerProgressRunLifecycle,
+  lifecycle?: ComposerProgressDisclosureContext,
 ];
 
 type ScrollGesture = {
@@ -34,19 +34,21 @@ type ScrollGesture = {
   distancePx: number;
 };
 
-type RememberedChoice = boolean | { extent: number; runId: string };
-const manualChoicesByGateway = new WeakMap<object, Map<string, RememberedChoice>>();
+type RememberedChoice = { choice: boolean | number };
+const choicesByCard = new WeakMap<object, RememberedChoice>();
 
 class ProgressDisclosureController {
   private state: ProgressDisclosureState;
   private sessionKey: string;
   private gatewayScope: object | undefined;
+  private cardLifetime: object | undefined;
+  private rememberedChoice: RememberedChoice | undefined;
   private transcript: HTMLElement | null = null;
   private unsubscribeTranscript: (() => void) | undefined;
   private disposed = false;
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
   private scrollSettled = false;
-  private lifecycle?: ComposerProgressRunLifecycle;
+  private lifecycle?: ComposerProgressDisclosureContext;
   private summary?: HTMLElement;
   private body?: HTMLElement;
   private listeners?: AbortController;
@@ -63,46 +65,36 @@ class ProgressDisclosureController {
     input: DisclosureInput,
   ) {
     this.sessionKey = input[0];
-    this.gatewayScope = input[3]?.gatewayScope;
+    this.gatewayScope = input[2]?.gatewayScope;
+    this.cardLifetime = input[2]?.cardLifetime;
     this.state = this.mount(input);
     this.element.addEventListener("click", this.click);
   }
 
-  private mount([sessionKey, initialOpen, , lifecycle]: DisclosureInput): ProgressDisclosureState {
+  private mount([, initialOpen, lifecycle]: DisclosureInput): ProgressDisclosureState {
     this.resetScrollInput();
     this.cancelDrag();
-    const remembered = this.gatewayScope
-      ? manualChoicesByGateway.get(this.gatewayScope)?.get(sessionKey)
-      : undefined;
-    const runId = lifecycle?.activeRunId ?? lifecycle?.completedRunId;
-    const manualOpen =
-      typeof remembered === "object"
-        ? remembered.runId === runId
-          ? remembered.extent
-          : undefined
-        : remembered;
+    this.rememberedChoice = this.cardLifetime ? choicesByCard.get(this.cardLifetime) : undefined;
     return resolveProgressDisclosure(undefined, {
       type: "mount",
-      open: initialOpen,
-      manualOpen,
-      activeRunId: lifecycle?.activeRunId ?? null,
-      completedRunId: lifecycle?.completedRunId ?? null,
+      open: initialOpen && !isMobileNavLayout(),
+      manualOpen: this.rememberedChoice?.choice,
       readingHistory: lifecycle?.readingHistory === true,
     });
   }
 
   update(input: DisclosureInput): void {
-    const [sessionKey, , collapseByDefault, lifecycle] = input;
+    const [sessionKey, , lifecycle] = input;
     this.lifecycle = lifecycle;
-    if (sessionKey !== this.sessionKey || lifecycle?.gatewayScope !== this.gatewayScope) {
+    if (
+      sessionKey !== this.sessionKey ||
+      lifecycle?.gatewayScope !== this.gatewayScope ||
+      lifecycle?.cardLifetime !== this.cardLifetime
+    ) {
       this.sessionKey = sessionKey;
       this.gatewayScope = lifecycle?.gatewayScope;
+      this.cardLifetime = lifecycle?.cardLifetime;
       this.state = this.mount(input);
-    }
-    if (lifecycle?.activeRunId && lifecycle.activeRunId !== this.state.activeRunId) {
-      this.resetScrollInput();
-      this.cancelDrag();
-      this.dispatch({ type: "run", runId: lifecycle.activeRunId, open: !collapseByDefault });
     }
     const readingHistory = lifecycle?.readingHistory === true;
     if (readingHistory !== this.state.readingHistory) {
@@ -111,8 +103,11 @@ class ProgressDisclosureController {
       }
       this.dispatch({ type: "history", readingHistory });
     }
-    if (lifecycle?.completedRunId) {
-      this.dispatch({ type: "complete", runId: lifecycle.completedRunId });
+    // A question retains the card but takes over its input surface. Hidden
+    // transcript gestures must not change the disclosure restored afterward.
+    if (lifecycle?.presented === false) {
+      this.takeover();
+      this.disconnectHeader();
     }
     this.connectHeader();
     this.apply();
@@ -130,34 +125,15 @@ class ProgressDisclosureController {
   private dispatch(event: ProgressDisclosureEvent): void {
     const previous = this.state;
     this.state = resolveProgressDisclosure(previous, event);
-    if (!this.gatewayScope) {
+    if (!this.cardLifetime) {
       return;
     }
-    const choices =
-      manualChoicesByGateway.get(this.gatewayScope) ?? new Map<string, RememberedChoice>();
-    if (event.type === "click") {
-      choices.set(this.sessionKey, this.state.open);
-      manualChoicesByGateway.set(this.gatewayScope, choices);
-    } else if (
-      (event.type === "extent" || event.type === "clamp") &&
-      typeof this.state.manualOpen === "number"
-    ) {
-      const runId = this.state.activeRunId ?? this.state.completedRunId;
-      if (runId) {
-        choices.set(this.sessionKey, { extent: this.state.manualOpen, runId });
-        manualChoicesByGateway.set(this.gatewayScope, choices);
-      }
-    } else if (event.type === "settle" && previous.open && !this.state.open) {
-      const remembered = choices.get(this.sessionKey);
-      // Do not erase a newer choice made in another pane.
-      if (
-        remembered === true ||
-        (typeof remembered === "object" &&
-          remembered.runId === this.state.activeRunId &&
-          remembered.extent === previous.manualOpen)
-      ) {
-        choices.delete(this.sessionKey);
-      }
+    const manual = event.type === "click" || event.type === "extent" || event.type === "clamp";
+    const collapsed = event.type === "settle" && previous.open && !this.state.open;
+    // Another pane may have made a newer choice while this pane was scrolling.
+    if (manual || (collapsed && choicesByCard.get(this.cardLifetime) === this.rememberedChoice)) {
+      this.rememberedChoice = { choice: this.state.manualOpen ?? this.state.open };
+      choicesByCard.set(this.cardLifetime, this.rememberedChoice);
     }
   }
 
@@ -205,6 +181,9 @@ class ProgressDisclosureController {
   }
 
   private readonly handleTranscriptScroll = (observation: TranscriptScrollObservation) => {
+    if (observation.type !== "input" && observation.type !== "offset") {
+      return;
+    }
     this.touching = observation.touching;
     if (observation.type === "offset") {
       this.scrolling = observation.scrolling;
@@ -266,7 +245,9 @@ class ProgressDisclosureController {
       return;
     }
     const transcript =
-      this.element.closest(".chat-main")?.querySelector<HTMLElement>(".chat-thread") ?? null;
+      this.lifecycle?.presented === false
+        ? null
+        : (this.element.closest(".chat-main")?.querySelector<HTMLElement>(".chat-thread") ?? null);
     if (transcript === this.transcript) {
       return;
     }
@@ -279,7 +260,7 @@ class ProgressDisclosureController {
   }
 
   private connectHeader(): void {
-    if (this.disposed) {
+    if (this.disposed || this.lifecycle?.presented === false) {
       return;
     }
     this.summary ??= this.element.querySelector<HTMLElement>("summary") ?? undefined;

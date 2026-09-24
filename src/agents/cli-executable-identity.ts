@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256File } from "../infra/directory-durability.js";
-import { resolveExecutablePath } from "../infra/executable-path.js";
+import { resolveExecutablePath, resolveExecutablePathCandidate } from "../infra/executable-path.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
@@ -165,10 +165,13 @@ function resolveCommandPath(params: {
     // The Windows resolver returns the raw command when PATH lookup misses.
     return undefined;
   }
-  return resolveExecutablePath(command, {
+  const options = {
     ...(params.cwd ? { cwd: params.cwd } : {}),
     env: params.env,
-  });
+  };
+  return process.platform === "win32" && isDurableRootedCommand(params.command)
+    ? resolveExecutablePathCandidate(command, options)
+    : resolveExecutablePath(command, options);
 }
 
 function hasShebang(prefix: Buffer): boolean {
@@ -507,6 +510,14 @@ async function resolveWindowsIdentity(params: {
     execPath: nodePath,
   });
   if (candidate.resolution === "unresolved-wrapper") {
+    return undefined;
+  }
+  // The Windows adapter binds supported scripts to Node; PATHEXT only governs
+  // commands that still need native executable admission.
+  if (
+    candidate.resolution !== "node-entrypoint" &&
+    !resolveExecutablePath(params.resolvedPath, { env: params.env })
+  ) {
     return undefined;
   }
   if (

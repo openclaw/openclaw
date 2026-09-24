@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 import { serialize } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
+import { SQLITE_WORKER_MAX_RESULT_BYTES } from "./sqlite-worker-contract.js";
 import {
-  SQLITE_WORKER_MAX_RESULT_BYTES,
   SQLITE_WORKER_TRANSFER_FRAME_BYTES,
-} from "./sqlite-worker-contract.js";
-import {
   createSqliteWorkerTransferOwner,
   createSqliteWorkerTransferReceiver,
   type SqliteWorkerTransferFrame,
@@ -87,9 +85,16 @@ describe("bounded SQLite worker value transfers", () => {
     expect(consume).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["id", "sequence", "kind", "offset", "length", "completion"] as const)(
+  it.each([
+    ["id", { id: 2 }],
+    ["sequence", { sequence: 1 }],
+    ["kind", { kind: "other" }],
+    ["offset", { offset: 1 }],
+    ["length", { recordBytes: serialize("complete row").byteLength - 1 }],
+    ["completion", { recordDone: false }],
+  ] as const)(
     "rejects invalid %s framing without consuming a value or accepting continuation",
-    (invalid) => {
+    (_invalid, patch) => {
       const bytes = serialize("complete row");
       const handle = { id: 1, kinds: ["row"] };
       const consume = vi.fn();
@@ -104,27 +109,7 @@ describe("bounded SQLite worker value transfers", () => {
         recordDone: true,
         bytes,
       };
-      const invalidFrame = { ...frame };
-      switch (invalid) {
-        case "id":
-          invalidFrame.id = 2;
-          break;
-        case "sequence":
-          invalidFrame.sequence = 1;
-          break;
-        case "kind":
-          invalidFrame.kind = "other";
-          break;
-        case "offset":
-          invalidFrame.offset = 1;
-          break;
-        case "length":
-          invalidFrame.recordBytes = bytes.byteLength - 1;
-          break;
-        case "completion":
-          invalidFrame.recordDone = false;
-          break;
-      }
+      const invalidFrame = { ...frame, ...patch };
       expect(() => receiver.accept(invalidFrame)).toThrow(/SQLite read transfer/);
       expect(consume).not.toHaveBeenCalled();
       expect(() => receiver.accept({ ...frame, sequence: 1 })).toThrow("out of order");

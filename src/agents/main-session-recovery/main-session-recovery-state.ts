@@ -13,6 +13,7 @@ import {
   isCronSessionKey,
   isSubagentSessionKey,
 } from "../../routing/session-key.js";
+import { interruptAdmittedMainSessionRecovery } from "./main-session-recovery-admitted-interruption.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import type {
   MainSessionRecoveryCommand,
@@ -158,6 +159,16 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
     !state?.foregroundClaims &&
     !state?.reservation &&
     !state?.tombstone
+  );
+}
+
+/** Failed foreground admission can leave an unfinished recovery cycle behind. */
+export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry): boolean {
+  return (
+    (entry.status === undefined || entry.status === "running" || entry.status === "failed") &&
+    entry.abortedLastRun !== true &&
+    entry.mainRestartRecovery !== undefined &&
+    !entry.mainRestartRecovery.tombstone
   );
 }
 
@@ -550,38 +561,19 @@ export function transitionMainSessionRecovery(
           Object.assign(entry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         }
       }
-      return { kind: "admitted_recovery" };
+      return {
+        kind: "admitted_recovery",
+        admission: {
+          cycleId: state.cycleId,
+          attempt: state.chargedAttempts,
+          lifecycleGeneration: command.lifecycleGeneration,
+          runId: command.runId,
+          sessionId: command.sessionId,
+        },
+      };
     }
-    case "mark_admitted_recovery_interrupted": {
-      const state = entry.mainRestartRecovery;
-      if (entry.sessionId !== command.sessionId) {
-        return { kind: "rejected", reason: "session_replaced" };
-      }
-      if (
-        !state ||
-        state.reservation ||
-        !entry.restartRecoveryRuns?.some(
-          (run) =>
-            run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
-        )
-      ) {
-        return { kind: "rejected", reason: "stale_reservation" };
-      }
-      entry.status = "running";
-      entry.lifecycleRunId = undefined;
-      entry.lastRunId = undefined;
-      entry.abortedLastRun = true;
-      entry.startedAt = undefined;
-      entry.endedAt = undefined;
-      entry.runtimeMs = undefined;
-      if (entry.restartRecoveryDeliveryRunId === command.runId) {
-        // Gateway accepted this RPC id before setup failed. Rotate it on retry
-        // or the dedupe cache replays that terminal pre-dispatch failure.
-        entry.restartRecoveryDeliveryRunId = undefined;
-      }
-      entry.updatedAt = command.now;
-      return { kind: "applied" };
-    }
+    case "mark_admitted_recovery_interrupted":
+      return interruptAdmittedMainSessionRecovery(entry, command);
     case "claim_foreground": {
       if (
         entry.sessionId === command.sessionId &&

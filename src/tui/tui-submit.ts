@@ -8,7 +8,15 @@ import type {
 
 export type TuiSubmitAction = "local shell" | "command" | "message";
 
+function isBrowserSetupInput(text: string): boolean {
+  return /^\/browser-setup(?:\s|$)/i.test(text.trimStart());
+}
+
 function resolveEditorSubmitAction(text: string): TuiSubmitAction {
+  // Reject pasted extra arguments locally, without leaking them into model chat or recall.
+  if (isBrowserSetupInput(text)) {
+    return "command";
+  }
   if (text.includes("\n")) {
     return "message";
   }
@@ -76,7 +84,9 @@ export function createEditorSubmitHandler(params: {
       clearSubmittedEditor();
       const command = action === "local shell" ? raw : value;
       const handle = action === "local shell" ? params.handleBangLine : params.handleCommand;
-      params.editor.addToHistory(command);
+      if (!isBrowserSetupInput(command)) {
+        params.editor.addToHistory(command);
+      }
       runSubmitAction(action, () => handle(command), params.onSubmitError);
       return;
     }

@@ -11,7 +11,6 @@ import {
   SessionGoalOperationError,
   type SessionGoalOperation,
 } from "../../config/sessions/goals-operations.js";
-import { recordSessionGoalChanged } from "../../sessions/session-state-events.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -20,10 +19,10 @@ import {
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { emitSessionsChanged } from "./session-change-event.js";
+import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import { fingerprintSessionGoalRequest } from "./session-goal-request.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 async function handleSessionGoalMutation(
   options: GatewayRequestHandlerOptions,
@@ -143,23 +142,13 @@ async function handleSessionGoalMutation(
       assertCurrent,
     });
     if (!committed.replayed && committed.sessionEntry) {
-      const goalChanged = recordSessionGoalChanged({
+      await publishCommittedSessionGoalChange(context, {
         sessionKey: target.canonicalKey,
         agentId: target.agentId,
         entry: committed.sessionEntry,
         actor: gatewayClientSessionCreator(client),
         summary: `goal ${request.action}`,
       });
-      try {
-        // Fence the committed projection before yielding to best-effort shared-state signaling.
-        emitSessionsChanged(context, {
-          sessionKey: target.canonicalKey,
-          agentId: target.agentId,
-          reason: "goal",
-        });
-      } finally {
-        await goalChanged;
-      }
     }
     respond(
       true,
@@ -189,20 +178,14 @@ async function handleSessionGoalMutation(
 }
 
 export const sessionGoalHandlers: GatewayRequestHandlers = {
-  "sessions.goal.update": async (options) => {
-    const { params, respond } = options;
-    if (
-      assertValidParams(params, validateSessionsGoalUpdateParams, "sessions.goal.update", respond)
-    ) {
-      await handleSessionGoalMutation(options, params);
-    }
-  },
-  "sessions.goal.clear": async (options) => {
-    const { params, respond } = options;
-    if (
-      assertValidParams(params, validateSessionsGoalClearParams, "sessions.goal.clear", respond)
-    ) {
-      await handleSessionGoalMutation(options, { ...params, action: "clear" });
-    }
-  },
+  "sessions.goal.update": defineValidatedGatewayHandler(
+    "sessions.goal.update",
+    validateSessionsGoalUpdateParams,
+    (options) => handleSessionGoalMutation(options, options.params),
+  ),
+  "sessions.goal.clear": defineValidatedGatewayHandler(
+    "sessions.goal.clear",
+    validateSessionsGoalClearParams,
+    (options) => handleSessionGoalMutation(options, { ...options.params, action: "clear" }),
+  ),
 };

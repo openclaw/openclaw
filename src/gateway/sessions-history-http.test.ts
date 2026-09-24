@@ -285,8 +285,7 @@ function sessionHistoryRowIdentity(message: unknown): string {
     (typeof firstContent?.text === "string" ? firstContent.text : undefined) ??
     (typeof firstContent?.id === "string" ? firstContent.id : undefined) ??
     (typeof record.toolCallId === "string" ? record.toolCallId : "");
-  const kind = record.openclawMessageToolMirror ? "mirror" : String(record.role);
-  return `${String(metadata.seq)}:${kind}:${label}`;
+  return `${String(metadata.seq)}:${String(record.role)}:${label}`;
 }
 
 async function readSessionHistoryBody(
@@ -1127,22 +1126,21 @@ describe("session history HTTP endpoints", () => {
         },
       },
       {
-        id: "history-tool-result-first",
+        id: "history-commentary",
         message: {
-          role: "toolResult",
-          toolName: "message",
-          toolCallId: "call-message-first",
-          content: { ok: true, messageId: "same-sequence-first" },
+          ...makeTranscriptAssistantMessage({ text: "" }),
+          content: ["First visible reply.", "Second visible reply."].map((text, index) => ({
+            type: "text",
+            text,
+            textSignature: JSON.stringify({ v: 1, id: `commentary-${index}`, phase: "commentary" }),
+          })),
           timestamp: sharedTimestamp,
         },
       },
       {
-        id: "history-tool-result-second",
+        id: "history-hidden-reply",
         message: {
-          role: "toolResult",
-          toolName: "message",
-          toolCallId: "call-message-second",
-          content: { ok: true, messageId: "same-sequence-second" },
+          ...makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
           timestamp: sharedTimestamp,
         },
       },
@@ -1160,10 +1158,8 @@ describe("session history HTTP endpoints", () => {
         query: "?limit=1",
       });
       expect(firstPage.messages?.map(sessionHistoryRowIdentity)).toEqual([
-        "3:toolResult:call-message-first",
-        "4:toolResult:call-message-second",
-        "3:mirror:First visible reply.",
-        "4:mirror:Second visible reply.",
+        "3:assistant:First visible reply.",
+        "3:assistant:Second visible reply.",
       ]);
       expect(firstPage.hasMore).toBe(true);
       expect(firstPage.nextCursor).toBe("3");
@@ -1200,14 +1196,12 @@ describe("session history HTTP endpoints", () => {
       expect(chronologicalRows.map(sessionHistoryRowIdentity)).toEqual([
         "1:user:reply here",
         "2:assistant:call-message-first",
-        "3:toolResult:call-message-first",
-        "4:toolResult:call-message-second",
-        "3:mirror:First visible reply.",
-        "4:mirror:Second visible reply.",
+        "3:assistant:First visible reply.",
+        "3:assistant:Second visible reply.",
       ]);
       expect(
         chronologicalRows.map((message) => requireRecord(message, "history timestamp").timestamp),
-      ).toEqual(Array.from({ length: 6 }, () => sharedTimestamp));
+      ).toEqual(Array.from({ length: 4 }, () => sharedTimestamp));
       expect(
         pages
           .flatMap((page) => page.messages ?? [])

@@ -74,6 +74,12 @@ jobs:
       workflow_repository: ${{ steps.identity.outputs.workflow_repository }}
       workflow_sha: ${{ steps.identity.outputs.workflow_sha }}
     steps:
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Verify dispatched workflow identity
         id: identity
         env:
@@ -253,6 +259,7 @@ jobs:
       candidate_tree: ${{ steps.archive.outputs.candidate_tree }}
       candidate_version: ${{ steps.archive.outputs.candidate_version }}
       manifest_sha256: ${{ steps.archive.outputs.manifest_sha256 }}
+      run_attempt: ${{ steps.archive.outputs.run_attempt }}
       status: ${{ steps.record_status.outputs.status }}
     steps:
       - name: Require trusted dispatched workflow identity
@@ -472,6 +479,7 @@ jobs:
             echo "candidate_tree=$CANDIDATE_TREE"
             echo "candidate_version=$candidate_version"
             echo "manifest_sha256=$(sha256sum "$manifest_path" | awk '{print $1}')"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
           } >>"$GITHUB_OUTPUT"
 
       - name: Upload raw candidate archive
@@ -648,6 +656,12 @@ jobs:
           fetch-depth: 1
           path: .candidate-source
           persist-credentials: false
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Compare candidate tracked source and tree
         id: compare_source
@@ -1476,7 +1490,7 @@ jobs:
             signal_name="${1:?}"
             requested_identity="${2:?}"
             case "$signal_name" in
-              SIGCONT|SIGUSR1|SIGUSR2) ;;
+              SIGCONT|SIGUSR2|SIGQUIT) ;;
               *) echo "Unsupported Telegram SUT signal: ${signal_name}" >&2; exit 1 ;;
             esac
             load_process_identity "$requested_identity"
@@ -2151,16 +2165,11 @@ jobs:
             exit 1
           fi
 
-          for attempt in 1 2; do
-            if run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"; then
-              exit 0
-            fi
-            terminate_sut_uid
-            if [[ "$attempt" == "2" ]]; then
-              exit 1
-            fi
-            echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2
-          done
+          if run_qa_attempt "attempt-1" "${remaining_scenarios[@]}"; then
+            exit 0
+          fi
+          terminate_sut_uid
+          exit 1
 
       - name: Terminate isolated Telegram SUT
         id: terminate_sut
@@ -2656,6 +2665,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Record advisory status
         id: record_status
         env:
@@ -2666,6 +2681,7 @@ jobs:
           BUILD_STATUS: ${{ needs.build_candidate.outputs.status }}
           CANDIDATE_ARTIFACT_DIGEST: ${{ needs.build_candidate.outputs.artifact_digest }}
           CANDIDATE_ARTIFACT_ID: ${{ needs.build_candidate.outputs.artifact_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ needs.build_candidate.outputs.run_attempt }}
           CANDIDATE_VERSION: ${{ needs.build_candidate.outputs.candidate_version }}
           EVIDENCE_ARTIFACT_DIGEST: ${{ needs.run_telegram.outputs.evidence_artifact_digest }}
           EVIDENCE_ARTIFACT_ID: ${{ needs.run_telegram.outputs.evidence_artifact_id }}

@@ -1,4 +1,8 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
+import {
+  createPluginExecutionFrame,
+  getPluginExecutionFrame,
+} from "../../plugins/plugin-instance-invocation.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type {
   PreparedModelRuntimeInput,
@@ -48,6 +52,22 @@ export const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
     manifestPluginCount: 0,
   },
 };
+
+export const getCurrentPluginMetadataSnapshotMock: Mock<
+  typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
+> = vi.fn(() => emptyPluginMetadataSnapshot);
+
+export function mockCompactHooksPluginMetadata(): void {
+  vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+    getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
+    isCurrentPluginMetadataSnapshotRuntimeGeneration: () => false,
+    resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
+    createPluginMetadataSnapshotFrame: () =>
+      getPluginExecutionFrame() ?? createPluginExecutionFrame({}, undefined),
+    withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
+    runOutsidePluginMetadataSnapshotScope: <T>(run: () => T): T => run(),
+  }));
+}
 
 export async function acquireCompactHooksPreparedModelRuntime(
   input: PreparedModelRuntimeInput,

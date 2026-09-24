@@ -355,7 +355,11 @@ describe("package runtime compatibility guidance", () => {
     "renders the target engine range for unsupported Node %s",
     async (node) => {
       probeState.text = false;
-      vi.stubGlobal("process", { ...process, versions: { ...process.versions, node } });
+      vi.stubGlobal("process", {
+        ...process,
+        execPath: path.resolve("/fixture/node"),
+        versions: { ...process.versions, node },
+      });
       const engine = ">=24.16.0 <25 || >=26.1.0";
       const result = await resolvePackageRuntimePreflight({
         target: { version: "2026.9.3", nodeEngine: engine },
@@ -386,7 +390,11 @@ describe("package runtime compatibility guidance", () => {
     [">=26.2.0-rc.1 <27", "26.2.0"],
   ])("recommends a release usable by the updater and candidate %s", async (engine, minimum) => {
     const node = "22.23.2";
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node } });
+    vi.stubGlobal("process", {
+      ...process,
+      execPath: path.resolve("/fixture/node"),
+      versions: { ...process.versions, node },
+    });
     const result = await resolvePackageRuntimePreflight({
       target: { version: "2027.1.0", nodeEngine: engine },
     });
@@ -431,6 +439,9 @@ describe("package runtime compatibility guidance", () => {
   ]) {
     it(name, async () => {
       const version = "2027.1.0";
+      if (minimum) {
+        vi.stubGlobal("process", { ...process, execPath: path.resolve("/fixture/node") });
+      }
       const result = await resolvePackageRuntimePreflight({
         target: { version, nodeEngine: engine },
       });

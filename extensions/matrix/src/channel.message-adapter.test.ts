@@ -154,11 +154,11 @@ describe("matrix channel message adapter", () => {
     }
     const payload = { text: "durable tool send" };
 
-    expect(prepareSendPayload({ ctx: { action: "send", cfg } as never, payload } as never)).toBe(
-      payload,
-    );
     expect(
-      prepareSendPayload({ ctx: { action: "edit", cfg } as never, payload } as never),
+      await prepareSendPayload({ ctx: { action: "send", cfg } as never, payload } as never),
+    ).toBe(payload);
+    expect(
+      await prepareSendPayload({ ctx: { action: "edit", cfg } as never, payload } as never),
     ).toBeNull();
   });
 

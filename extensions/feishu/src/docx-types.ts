@@ -1,4 +1,3 @@
-// Feishu plugin module implements docx types behavior.
 type FeishuBlockText = {
   elements?: Array<{
     text_run?: {

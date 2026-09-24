@@ -4,8 +4,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
+import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import * as artworkLoader from "../../plugins/icon-loader.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
@@ -153,6 +156,65 @@ describe("chat transcript rendering", () => {
       }
     },
   );
+
+  it("refreshes settled avatar hats when only plugin artwork or hat selection changes", async () => {
+    const previousBranding = currentThemeBranding();
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const fetchArtwork = vi
+      .spyOn(artworkLoader, "fetchPluginThemeArtworkBlobUrl")
+      .mockImplementation(async ({ url }) => `blob:${url}`);
+    let branding = {
+      mascot: "claw" as const,
+      critters: [],
+      avatarHat: "beret",
+      artwork: { hats: { beret: { url: "/hat?v=1" } } },
+    };
+    const agentId = expectDefined(
+      Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
+        resolveAvatarHat(id, branding),
+      ),
+      "agent wearing a hat",
+    );
+    const props = threadProps("pane-artwork-refresh", `agent:${agentId}:main`, [
+      { role: "assistant", content: "A settled reply", timestamp: 1_000 },
+    ]);
+    props.currentAgentId = agentId;
+    props.fullMessageAgentId = agentId;
+    props.userId = "synthetic-owner";
+    props.assistantAvatar = "🦀";
+    props.branding = branding;
+    const container = document.body.appendChild(document.createElement("div"));
+    const transcript = createTestTranscript();
+    const draw = async () => {
+      setCurrentThemeBranding(props.branding!);
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+      await vi.dynamicImportSettled();
+    };
+    try {
+      await draw();
+      transcript.hostConnected();
+      expect(container.querySelector(".identity-avatar__hat-img")?.getAttribute("src")).toBe(
+        "blob:/hat?v=1",
+      );
+      branding = { ...branding, artwork: { hats: { beret: { url: "/hat?v=2" } } } };
+      props.branding = branding;
+      await draw();
+      expect(container.querySelector(".identity-avatar__hat-img")?.getAttribute("src")).toBe(
+        "blob:/hat?v=2",
+      );
+      props.branding = { ...branding, avatarHat: "crown" };
+      await draw();
+      expect(container.querySelector(".identity-avatar__hat--crown svg")).not.toBeNull();
+      expect(container.querySelector(".identity-avatar__hat-img")).toBeNull();
+    } finally {
+      setCurrentThemeBranding(previousBranding);
+      transcript.hostDisconnected();
+      container.remove();
+      fetchArtwork.mockRestore();
+      now.mockRestore();
+    }
+  });
 
   it("keeps one inline compaction row through completion and history refresh", async () => {
     const props: ReturnType<typeof threadProps> = {
@@ -709,20 +771,31 @@ describe("chat transcript rendering", () => {
     },
   );
 
-  it.each(["click", "Enter", " "])("opens focused transcript file links with %j", async (key) => {
+  it.each(
+    [
+      "skills/review/SKILL.md",
+      "qa-café/index.md",
+      "qa241-unicode/café note.md",
+      "qa241-unicode/emoji-🌱.md",
+      "qa241-unicode/100% ready.txt",
+      "qa241-unicode/日本語.txt",
+    ].flatMap((path) => ["click", "Enter", " "].map((key) => ({ path, key }))),
+  )("opens focused transcript file $path with $key", async ({ path, key }) => {
     const transcript = createTestTranscript();
     const onOpenWorkspaceFile = vi.fn();
+    const onOpenSessionLink = vi.fn();
     const onHistoryIntent = vi.fn();
     const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-file-link", "agent:main:main", [
         {
           role: "assistant",
-          content: "Inspect [index.md](qa-caf%C3%A9/index.md:17)",
+          content: `Inspect [Read file](${encodeURI(path)}:17)`,
           timestamp: 1_000,
         },
       ]),
       onOpenWorkspaceFile,
+      onOpenSessionLink,
       onHistoryIntent,
     };
     render(renderChatThread(props, transcript), container);
@@ -741,7 +814,8 @@ describe("chat transcript rendering", () => {
       link?.dispatchEvent(event);
       expect(event.defaultPrevented).toBe(true);
     }
-    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "qa-café/index.md", line: 17 });
+    expect(onOpenWorkspaceFile).toHaveBeenCalledExactlyOnceWith({ path, line: 17 });
+    expect(onOpenSessionLink).not.toHaveBeenCalled();
     expect(onHistoryIntent).not.toHaveBeenCalled();
     transcript.hostDisconnected();
   });

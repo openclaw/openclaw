@@ -8,7 +8,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SandboxSshSettings } from "../../config/types.sandbox.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
-import { resolveAgentConfig } from "../agent-scope.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import { resolveSandboxDockerEnv, resolveSandboxScope } from "./config-contract.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
@@ -231,14 +231,8 @@ export function resolveSandboxConfigForAgent(
   if (agentConfig?.sandbox) {
     agentSandbox = agentConfig.sandbox;
   }
-  const legacyAgentSandbox = agentSandbox as
-    | (typeof agentSandbox & { perSession?: boolean })
-    | undefined;
-  const legacyDefaultSandbox = agent as (typeof agent & { perSession?: boolean }) | undefined;
-
   const scope = resolveSandboxScope({
     scope: agentSandbox?.scope ?? agent?.scope,
-    perSession: legacyAgentSandbox?.perSession ?? legacyDefaultSandbox?.perSession,
   });
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);

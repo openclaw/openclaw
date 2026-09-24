@@ -41,15 +41,12 @@ export function isFinalizedInboundContext<T extends Record<string, unknown>>(
 }
 
 function resolveCanonicalInboundText(
-  ctx: Record<string, unknown>,
+  ctx: MsgContext & { BodyStripped?: unknown },
   opts: Pick<FinalizeInboundContextOptions, "forceBodyForAgent" | "forceBodyForCommands"> = {},
 ): CanonicalInboundText {
-  const body = normalizeTextField(ctx.Body) ?? "";
+  const body = ctx.Body ?? "";
   const rawTextFromAliases =
-    normalizeTextField(ctx.RawBody) ??
-    normalizeTextField(ctx.Transcript) ??
-    normalizeTextField(ctx.BodyStripped) ??
-    body;
+    ctx.RawBody ?? ctx.Transcript ?? normalizeTextField(ctx.BodyStripped) ?? body;
   const forceTextProjection = opts.forceBodyForAgent || opts.forceBodyForCommands;
   const rawText = forceTextProjection
     ? rawTextFromAliases
@@ -58,13 +55,13 @@ function resolveCanonicalInboundText(
     ? body
     : (normalizeTextField(ctx.agentText) ??
       normalizeTextField(ctx.BodyForAgent) ??
-      normalizeTextField(ctx.CommandBody) ??
+      ctx.CommandBody ??
       rawText);
   const commandText = opts.forceBodyForCommands
-    ? (normalizeTextField(ctx.CommandBody) ?? rawText)
+    ? (ctx.CommandBody ?? rawText)
     : (normalizeTextField(ctx.commandText) ??
       normalizeTextField(ctx.BodyForCommands) ??
-      normalizeTextField(ctx.CommandBody) ??
+      ctx.CommandBody ??
       rawText);
   // Literal input has no executable projection, including before command handlers
   // run or when media enrichment forces text projection again.

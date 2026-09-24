@@ -233,7 +233,17 @@ export function writeAcpSessionMetaForMigration(params: {
   runOpenClawStateWriteTransaction(
     (database) => {
       upsertAcpSessionMetaRow(database.db, row);
-      sessionChanges.emit({ all: true, scope: "acp" }, database.db);
+      for (const identity of parseAcpDatabaseSessionKeyCandidates(sessionKey)) {
+        const keys = new Set([
+          identity.storeSessionKey,
+          resolveLegacyFreeAcpSessionKey(identity.storeSessionKey),
+        ]);
+        for (const key of keys) {
+          if (key) {
+            sessionChanges.emit({ sessionKey: key, agentId: identity.agentId }, database.db);
+          }
+        }
+      }
     },
     { database: params.database, env: params.env, path: params.databasePath },
   );

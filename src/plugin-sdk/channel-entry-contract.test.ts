@@ -513,7 +513,7 @@ describe("loadBundledEntryExportSync", () => {
     });
   });
 
-  it("transforms OpenClaw SDK dependencies after a native built sidecar load declines", async () => {
+  it("keeps the host SDK native when a built sidecar needs plugin transformation", async () => {
     const sourceLoad = vi.fn(() => ({ sentinel: 42 }));
     const createJiti = vi.fn((_filename: string, _options?: Record<string, unknown>) => sourceLoad);
     const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
@@ -553,12 +553,34 @@ describe("loadBundledEntryExportSync", () => {
       | { nativeModules?: string[]; tryNative?: boolean }
       | undefined;
     expect(jitiOptions?.tryNative).toBe(false);
-    expect(jitiOptions?.nativeModules).toEqual([]);
+    expect(jitiOptions?.nativeModules).toEqual(["openclaw"]);
     expect(sourceLoad).toHaveBeenCalledWith(sidecarPath);
+  });
+
+  it("does not replay a failed native sidecar through the plugin transformer", () => {
+    const root = tempDirs.make("openclaw-channel-entry-failure-");
+    const pluginRoot = path.join(root, "dist", "extensions", "fixture");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    const importerPath = path.join(pluginRoot, "setup-entry.cjs");
+    const evaluations = path.join(root, "evaluations.txt");
+    fs.writeFileSync(importerPath, "module.exports = {};\n");
+    fs.writeFileSync(
+      path.join(pluginRoot, "sidecar.cjs"),
+      `require("node:fs").appendFileSync(${JSON.stringify(evaluations)}, "evaluation\\n");
+       throw new Error("sidecar initialization failed");`,
+    );
+
+    expect(() =>
+      loadBundledEntryExportSync(pathToFileURL(importerPath).href, {
+        specifier: "./sidecar.cjs",
+      }),
+    ).toThrow("sidecar initialization failed");
+    expect(fs.readFileSync(evaluations, "utf8")).toBe("evaluation\n");
   });
 
   it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
     const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
+    fs.writeFileSync(path.join(tempRoot, "package.json"), '{"type":"module"}\n');
 
     const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
     fs.mkdirSync(pluginRoot, { recursive: true });

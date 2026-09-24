@@ -11,6 +11,7 @@ import { buildProviderLoginRecovery } from "../../../auto-reply/provider-login-r
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  hasReplyPayloadSpeechContent,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
@@ -27,6 +28,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
+import { trimTextPreservingCode } from "../../../shared/text/text-projection.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
   formatAssistantErrorText,
@@ -48,6 +50,10 @@ import {
 import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
+import {
+  hasCompletedMessagingToolDeliveryEvidence,
+  hasVisibleCommittedMessagingToolDeliveryEvidence,
+} from "../delivery-evidence.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
 
@@ -257,8 +263,10 @@ export function buildEmbeddedRunPayloads(params: {
             ? parseReplyDirectives(fallbackAnswerSourceText)
             : null;
       const shouldUseCanonicalFinalAnswer = Boolean(
-        fallbackAnswerDirectiveState &&
-        normalizeTextForComparison(fallbackAnswerDirectiveState.text),
+        (fallbackAnswerDirectiveState &&
+          (normalizeTextForComparison(fallbackAnswerDirectiveState.text) ||
+            fallbackAnswerDirectiveState.mediaUrls?.length)) ||
+        storedDelivery?.tts?.text?.trim(),
       );
       const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
       const answerTexts =
@@ -337,13 +345,16 @@ export function buildEmbeddedRunPayloads(params: {
     assistantMessageIndex: params.assistantMessageIndex,
   });
   // A conversational NO_REPLY is an authored outcome, not a missing answer.
-  // For example, a rate-limited context read must not turn a reaction to
-  // "thank you" into a synthetic tool-error message. Keep failure reporting
-  // for missing answers, unknown/mutating actions, and scheduled work.
+  // Native shell calls are conservatively classified as mutating even when
+  // they only search files. That replay-safety classification must not replace
+  // a completed answer with a synthetic warning. A scheduled report can also
+  // finish silently after a confirmed completed message-tool delivery. Progress
+  // updates alone must not suppress a scheduled task's failure reporting.
   const respectIntentionalSilence =
     hasIntentionalSilentFinal &&
-    params.lastToolError?.mutatingAction === false &&
-    !params.isCronTrigger &&
+    (!params.isCronTrigger ||
+      (hasVisibleCommittedMessagingToolDeliveryEvidence(params) &&
+        hasCompletedMessagingToolDeliveryEvidence(params))) &&
     !params.isHeartbeatTrigger &&
     !params.runAborted;
   if (params.lastToolError && !respectIntentionalSilence) {
@@ -392,7 +403,7 @@ export function buildEmbeddedRunPayloads(params: {
       const assistantMessageIndex =
         getReplyPayloadMetadata(item)?.assistantMessageIndex ?? params.assistantMessageIndex;
       const payload: ReplyPayload = copyReplyPayloadMetadata(item, {
-        text: normalizeOptionalString(item.text),
+        text: trimTextPreservingCode(item.text ?? "") || undefined,
       });
       const mediaUrl = item.mediaUrl ?? item.media?.[0];
       if (mediaUrl) {
@@ -494,7 +505,7 @@ export function buildEmbeddedRunPayloads(params: {
       if (payload.text && isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN)) {
         const silentText = payload.text;
         payload.text = undefined;
-        if (hasReplyPayloadContent(payload)) {
+        if (hasReplyPayloadContent(payload) || hasReplyPayloadSpeechContent(payload)) {
           return payload;
         }
         payload.text = silentText;
@@ -502,7 +513,7 @@ export function buildEmbeddedRunPayloads(params: {
       return payload;
     })
     .filter((p) => {
-      if (!hasReplyPayloadContent(p) && !getReplyPayloadMetadata(p)?.tts) {
+      if (!hasReplyPayloadContent(p) && !hasReplyPayloadSpeechContent(p)) {
         return false;
       }
       if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {

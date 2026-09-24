@@ -110,6 +110,7 @@ export function buildTurnStartParams(
   const modelSelection = options.preserveNativeTurnSettings
     ? undefined
     : resolveCodexAppServerRequestModelSelection({
+        homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider: options.modelProvider,
         authProfileId: params.authProfileId,
@@ -141,6 +142,13 @@ export function buildTurnStartParams(
   // including automatic/disabled defaults, without replacing other context entries.
   additionalContext = {
     ...additionalContext,
+    // Codex emits changed context only. Unknown must replace a disconnected Mac's hint.
+    openclaw_active_computer: {
+      kind: "application",
+      value:
+        params.hostCapabilities.activeComputerContext?.() ??
+        "Current active computer: active_node=unknown (host presence unavailable)",
+    },
     openclaw_source_delivery: {
       kind: "application",
       value: [

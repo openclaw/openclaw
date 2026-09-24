@@ -25,7 +25,6 @@ type CatalogPageLoad = {
 type PluginDiscoveryGateway = {
   getClient: () => GatewayBrowserClient | null;
   isConnected: () => boolean;
-  onEntriesChanged?: () => void;
 };
 
 function compareOfficialDownloads(left: PluginDiscoveryEntry, right: PluginDiscoveryEntry): number {
@@ -68,6 +67,10 @@ export class PluginDiscoveryController {
   error: string | null = null;
   remoteError: string | null = null;
   categories: PluginDiscoveryCategory[] = [];
+  categoriesError: string | null = null;
+  private categoriesReady = false;
+  private categoriesStarted = false;
+  private readonly categoriesTask: Task;
   featured: PluginDiscoveryEntry[] = [];
   trending: PluginDiscoveryEntry[] = [];
   loadMoreError: string | null = null;
@@ -84,6 +87,26 @@ export class PluginDiscoveryController {
     private readonly host: ReactiveControllerHost,
     private readonly gateway: PluginDiscoveryGateway,
   ) {
+    this.categoriesTask = new Task(host, {
+      autoRun: false,
+      args: () => [NO_CATALOG_CLIENT] as const,
+      task: ([client], { signal }) =>
+        client
+          ? client.request<{ categories: PluginDiscoveryCategory[] }>(
+              "plugins.catalog.categories",
+              {},
+              { signal },
+            )
+          : initialState,
+      onComplete: ({ categories }) => {
+        this.categories = categories;
+        this.categoriesReady = true;
+        this.categoriesError = null;
+      },
+      onError: (error) => {
+        this.categoriesError = formatUiError(error);
+      },
+    });
     this.browseTask = new Task(host, {
       autoRun: false,
       args: () =>
@@ -105,7 +128,15 @@ export class PluginDiscoveryController {
         };
         this.remoteError = page.remoteError ?? null;
         if (page.overview) {
-          this.categories = page.categories ?? [];
+          // The overview is already fetched for cards. Use its canonical categories
+          // if it beats the lightweight read (including older ClawHub servers that
+          // cannot serve that endpoint), and retire the slower request.
+          if (page.categories) {
+            void this.categoriesTask.run([null]);
+            this.categories = page.categories;
+            this.categoriesReady = true;
+            this.categoriesError = null;
+          }
           this.featured = rankedOverviewShelf(page.items, "featured", "featuredRank").slice(
             0,
             CATALOG_SECTION_SIZE,
@@ -115,7 +146,6 @@ export class PluginDiscoveryController {
             CATALOG_SECTION_SIZE,
           );
         }
-        this.gateway.onEntriesChanged?.();
       },
       onError: (error) => {
         this.error = formatUiError(error);
@@ -148,7 +178,6 @@ export class PluginDiscoveryController {
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         };
         this.loadMoreError = page.remoteError ?? null;
-        this.gateway.onEntriesChanged?.();
       },
       onError: (error) => {
         this.loadMoreError = formatUiError(error);
@@ -158,6 +187,30 @@ export class PluginDiscoveryController {
 
   get loading(): boolean {
     return this.gateway.isConnected() && this.browseTask.status === TaskStatus.PENDING;
+  }
+
+  get categoriesLoading(): boolean {
+    return (
+      this.gateway.isConnected() &&
+      this.categoriesStarted &&
+      !this.categoriesReady &&
+      this.categoriesTask.status === TaskStatus.PENDING
+    );
+  }
+
+  async ensureCategories(retry = false): Promise<void> {
+    const client = this.gateway.getClient();
+    if (
+      !client ||
+      !this.gateway.isConnected() ||
+      this.categoriesReady ||
+      (this.categoriesStarted && (this.categoriesTask.status === TaskStatus.PENDING || !retry))
+    ) {
+      return;
+    }
+    this.categoriesError = null;
+    this.categoriesStarted = true;
+    await this.categoriesTask.run([client]);
   }
 
   get featuredLoading(): boolean {
@@ -223,6 +276,9 @@ export class PluginDiscoveryController {
     this.committedQuery = this.query.trim();
     void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
     this.result = null;
+    this.categories = [];
+    this.categoriesReady = false;
+    this.categoriesError = null;
     this.error = null;
     this.remoteError = null;
     this.featured = [];
@@ -231,6 +287,8 @@ export class PluginDiscoveryController {
   }
 
   disconnect(): void {
+    this.categoriesStarted = false;
+    void this.categoriesTask.run([null]);
     if (this.searchTimer) {
       clearTimeout(this.searchTimer);
       this.searchTimer = null;

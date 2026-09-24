@@ -152,13 +152,14 @@ export async function applyMessageSendingHook(params: {
   payload: ReplyPayload;
   payloadSummary: NormalizedOutboundPayload;
 }> {
+  const unchanged = () => ({
+    cancelled: false,
+    contentRewritten: false,
+    payload: params.payload,
+    payloadSummary: params.payloadSummary,
+  });
   if (!params.enabled) {
-    return {
-      cancelled: false,
-      contentRewritten: false,
-      payload: params.payload,
-      payloadSummary: params.payloadSummary,
-    };
+    return unchanged();
   }
   try {
     const group = getGroupThreadDispatchContext();
@@ -193,49 +194,25 @@ export async function applyMessageSendingHook(params: {
       };
     }
     if (sendingResult?.content == null) {
-      return {
-        cancelled: false,
-        contentRewritten: false,
-        payload: params.payload,
-        payloadSummary: params.payloadSummary,
-      };
+      return unchanged();
     }
-    if (params.payloadSummary.hookContent && !params.payloadSummary.text) {
-      const spokenText = sendingResult.content;
-      return {
-        cancelled: false,
-        contentRewritten: true,
-        payload: {
-          ...params.payload,
-          spokenText,
-        },
-        payloadSummary: {
-          ...params.payloadSummary,
-          hookContent: spokenText,
-        },
-      };
-    }
-    const payload = {
+    const spokenOnly = params.payloadSummary.hookContent && !params.payloadSummary.text;
+    const payload = copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
-      text: sendingResult.content,
-    };
+      [spokenOnly ? "spokenText" : "text"]: sendingResult.content,
+    });
     return {
       cancelled: false,
       contentRewritten: true,
       payload,
       payloadSummary: {
         ...params.payloadSummary,
-        text: sendingResult.content,
+        [spokenOnly ? "hookContent" : "text"]: sendingResult.content,
       },
     };
   } catch {
     // Don't block delivery on hook failure.
-    return {
-      cancelled: false,
-      contentRewritten: false,
-      payload: params.payload,
-      payloadSummary: params.payloadSummary,
-    };
+    return unchanged();
   }
 }
 

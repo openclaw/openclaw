@@ -1,5 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { UI_APPEARANCE_THEME_VALUES } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import {
@@ -14,16 +14,6 @@ import {
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 
-// Derived from the wire contract so a theme the profile store rejects can never
-// be offered here; new Set<ThemeName> makes an unknown protocol name a type error.
-// "custom" is config-syncable (honored only by browsers with an imported
-// palette) but intentionally not profile-storable, so it is appended here
-// rather than added to the wire contract.
-const THEMES: ReadonlySet<ThemeName> = new Set<ThemeName>([
-  ...UI_APPEARANCE_THEME_VALUES,
-  "custom",
-]);
-
 export function isAppearancePref(
   key: string,
 ): key is "theme" | "themeMode" | "accent" | "fontUi" | "fontChat" {
@@ -35,7 +25,6 @@ export function isAppearancePref(
     key === "fontChat"
   );
 }
-const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
 
 type SyncedPrefSpec<T> = {
   configSync?: boolean;
@@ -65,7 +54,7 @@ const fontPrefSpec = (key: "fontUi" | "fontChat") =>
  */
 export const SYNCED_PREFS = {
   theme: prefSpec<ThemeName>({
-    extract: (value) => (THEMES.has(value as ThemeName) ? (value as ThemeName) : undefined),
+    extract: (value) => (value === "custom" || isThemeId(value) ? value : undefined),
     local: (settings) => settings.theme,
     write: (value) => ({ theme: value ?? UI_APPEARANCE_DEFAULTS.theme }),
     clearable: true,
@@ -75,7 +64,7 @@ export const SYNCED_PREFS = {
     canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
   }),
   themeMode: prefSpec<ThemeMode>({
-    extract: (value) => (THEME_MODES.has(value as ThemeMode) ? (value as ThemeMode) : undefined),
+    extract: normalizeThemeMode,
     local: (settings) => settings.themeMode,
     write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
     clearable: true,

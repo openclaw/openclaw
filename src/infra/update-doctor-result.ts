@@ -42,10 +42,28 @@ export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
 };
 
 const configHashSchema = z.string().regex(/^[0-9a-f]{64}$/u);
+const DoctorMaintenanceRefusalSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("deferred"),
+    reason: z.enum(["coordinator-contention", "agent-database-in-use", "admission-unavailable"]),
+  }),
+  z.object({
+    kind: z.literal("data-at-risk"),
+    reason: z.enum([
+      "active-mutation",
+      "unreadable-state",
+      "incomplete-migration",
+      "gateway-state-unverified",
+    ]),
+  }),
+]);
+export type DoctorMaintenanceRefusal = z.infer<typeof DoctorMaintenanceRefusalSchema>;
+
 const doctorResultEvidence = {
   configHash: z.union([z.literal("unchanged"), configHashSchema]).optional(),
   configInputHash: configHashSchema.optional(),
   warnings: z.array(z.string()).optional(),
+  maintenanceRefusal: DoctorMaintenanceRefusalSchema.optional(),
   // Invalid optional diagnostics cannot change the child's classified outcome.
   failureFacts: z.array(UpdateFailureFactSchema).catch([]).optional(),
   configChanges: z.array(UpdateDoctorConfigChangeSchema).optional(),
@@ -80,6 +98,17 @@ export class UpdateDoctorError extends Error {
   }
 }
 
+export class DoctorMaintenanceRefusalError extends UpdateDoctorError {
+  constructor(
+    message: string,
+    readonly refusal: DoctorMaintenanceRefusal,
+    options?: ErrorOptions & { failureFacts?: UpdateFailureFact[] },
+  ) {
+    super(message, options?.failureFacts ?? [], options);
+    this.name = "DoctorMaintenanceRefusalError";
+  }
+}
+
 export function collectUpdateDoctorFailureFacts(error: unknown): UpdateFailureFact[] {
   return normalizeUpdateFailureFacts(
     collectNestedErrorCandidates(error).flatMap((candidate) =>
@@ -110,7 +139,11 @@ export type DoctorConfigCapture = {
   configChanges: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
 };
-export type UpdateDoctorWriteAuthority = { inputHash: string; assertCurrent: () => void };
+export type UpdateDoctorWriteAuthority = {
+  inputHash: string;
+  assertCurrent: () => void;
+  postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
+};
 const doctorConfigWrites = new AsyncLocalStorage<{
   capture: DoctorConfigCapture;
   authority?: UpdateDoctorWriteAuthority;
@@ -282,17 +315,10 @@ export async function writeUpdatePostInstallDoctorResult(params: {
   result: UpdatePostInstallDoctorResult;
 }): Promise<void> {
   const resultPath = resolveSafeUpdatePostInstallDoctorResultPath(params.resultPath);
-  const { warnings, failureFacts, ...result } = params.result;
-  const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
-  const facts = normalizeUpdateFailureFacts(failureFacts ?? []);
   // Advisory details can contain config-derived IDs; pre-existing paths must fail closed.
   await fs.writeFile(
     resultPath,
-    `${JSON.stringify({
-      ...result,
-      ...(normalizedWarnings.length ? { warnings: normalizedWarnings } : {}),
-      ...(facts.length ? { failureFacts: facts } : {}),
-    })}\n`,
+    `${JSON.stringify(normalizeUpdatePostInstallDoctorResult(params.result))}\n`,
     {
       encoding: "utf8",
       mode: 0o600,
@@ -323,10 +349,14 @@ export async function consumeUpdatePostInstallDoctorResult(
 
 function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDoctorResult | null {
   const parsed = UpdatePostInstallDoctorResultSchema.safeParse(value);
-  if (!parsed.success) {
-    return null;
-  }
-  const { warnings, failureFacts, ...result } = parsed.data;
+  return parsed.success ? normalizeUpdatePostInstallDoctorResult(parsed.data) : null;
+}
+
+function normalizeUpdatePostInstallDoctorResult({
+  warnings,
+  failureFacts,
+  ...result
+}: UpdatePostInstallDoctorResult): UpdatePostInstallDoctorResult {
   const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
   const facts = normalizeUpdateFailureFacts(failureFacts ?? []);
   return {

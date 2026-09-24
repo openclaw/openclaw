@@ -5,6 +5,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { pruneDeliveryQueueTombstones } from "./delivery-queue-sqlite-bound.js";
 import {
   countFailedDeliveryQueueEntries,
   getDeliveryQueueEntryStatus,
@@ -12,14 +13,14 @@ import {
   loadDeliveryQueueEntry,
   pruneExpiredDeliveryQueueTombstones,
   terminalizePendingDeliveryQueueEntry,
-  updateDeliveryQueueEntry,
-  upsertDeliveryQueueEntry,
 } from "./delivery-queue-sqlite.js";
 import {
   completeDeliveryQueueEntryInDatabase,
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
+  updateDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
+import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
 import type { DeliveryQueueCompletionRetention } from "./delivery-queue-sqlite.types.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
@@ -40,7 +41,7 @@ describe("delivery queue pending terminal transition", () => {
   } as const;
   const enqueueRetained = (ownerQueue: string, id: string, enqueuedAt: number) => {
     const entry = { id, enqueuedAt, retryCount: 0, retainOnFailure: true as const };
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: ownerQueue,
       entry,
       stateDir,
@@ -83,7 +84,7 @@ describe("delivery queue pending terminal transition", () => {
         completionRetention: boundedRetention,
         payloads: [{ text: "private" }],
       };
-      upsertDeliveryQueueEntry({ queueName, entry, stateDir });
+      seedDeliveryQueueEntry({ queueName, entry, stateDir });
       expect(terminalizePendingDeliveryQueueEntry({ queueName, id, entry, stateDir })).toEqual({
         status: "terminalized",
         retained: true,
@@ -130,7 +131,7 @@ describe("delivery queue pending terminal transition", () => {
         completionRetention: DeliveryQueueCompletionRetention,
       ) => {
         const entry = { id, enqueuedAt: Date.now(), retryCount: 0, completionRetention };
-        upsertDeliveryQueueEntry({ queueName: ownerQueue, entry, stateDir });
+        seedDeliveryQueueEntry({ queueName: ownerQueue, entry, stateDir });
         const database = openOpenClawStateDatabase({
           env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         });
@@ -166,7 +167,7 @@ describe("delivery queue pending terminal transition", () => {
       vi.setSystemTime(3_200);
       fail(queueName, permanentId, "permanent");
       vi.setSystemTime(4_000);
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName,
         entry: {
           id: triggerId,
@@ -194,53 +195,94 @@ describe("delivery queue pending terminal transition", () => {
     }
   });
 
-  it("groups backfilled bounded count limits by producer prefix during exact lookup", () => {
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    const insert = db.prepare(
-      `INSERT INTO delivery_queue_entries (
+  it.each(["exact lookup", "global cleanup"] as const)(
+    "groups backfilled bounded count limits by queue and producer prefix during %s",
+    (mode) => {
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      const insert = db.prepare(
+        `INSERT INTO delivery_queue_entries (
          queue_name, id, status, retry_count, recovery_state, entry_json,
          enqueued_at, updated_at, failed_at
        ) VALUES (?, ?, 'failed', 0, 'completed_bounded', ?, ?, ?, ?)`,
-    );
-    const policies = [
-      { ...boundedRetention, maxAgeMs: 12 * 60 * 60_000, maxEntries: 1 },
-      { ...boundedRetention, maxAgeMs: 24 * 60 * 60_000, maxEntries: 1 },
-    ] as const;
-    const ids = ["terminal-bounded-old", "terminal-bounded-new"] as const;
-    ids.forEach((id, index) => {
-      const failedAt = Date.now() + index;
-      insert.run(
-        queueName,
-        id,
-        JSON.stringify({
-          id,
-          enqueuedAt: failedAt,
-          retryCount: 0,
-          failedAt,
-          completionRetention: policies[index],
-          recoveryState: "completed_bounded",
-        }),
-        failedAt,
-        failedAt,
-        failedAt,
       );
-    });
-    // A missing-id lookup must stay on the primary-key path and leave the
-    // backfilled over-cap group untouched.
-    expect(getDeliveryQueueEntryStatus(queueName, "missing", stateDir)).toBeUndefined();
-    expect(
-      db
-        .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")
-        .all(queueName),
-    ).toEqual(ids.toSorted().map((id) => ({ id })));
-    expect(getDeliveryQueueEntryStatus(queueName, ids[0], stateDir)).toBeUndefined();
-    expect(getDeliveryQueueEntryStatus(queueName, ids[1], stateDir)).toBe("failed");
-  });
+      const policies = [
+        { ...boundedRetention, maxAgeMs: 12 * 60 * 60_000, maxEntries: 1 },
+        { ...boundedRetention, maxAgeMs: 24 * 60 * 60_000, maxEntries: 1 },
+      ] as const;
+      const ids = ["terminal-bounded-old", "terminal-bounded-new"] as const;
+      const otherQueue = "other-producer-queue";
+      for (const ownerQueue of [queueName, otherQueue]) {
+        ids.forEach((id, index) => {
+          const failedAt = Date.now() + index;
+          insert.run(
+            ownerQueue,
+            id,
+            JSON.stringify({
+              id,
+              enqueuedAt: failedAt,
+              retryCount: 0,
+              failedAt,
+              completionRetention: policies[index],
+              recoveryState: "completed_bounded",
+            }),
+            failedAt,
+            failedAt,
+            failedAt,
+          );
+        });
+      }
+      const ordinaryId = "ordinary-completed";
+      seedDeliveryQueueEntry({
+        queueName: otherQueue,
+        entry: { id: ordinaryId, enqueuedAt: Date.now() - 31 * 24 * 60 * 60_000, retryCount: 0 },
+        status: "completed",
+        stateDir,
+      });
+      const retainedIds = (ownerQueue: string) =>
+        db
+          .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")
+          .all(ownerQueue)
+          .map((row) => row.id);
+      // A missing-id lookup must stay on the primary-key path and leave the
+      // backfilled over-cap group untouched.
+      expect(getDeliveryQueueEntryStatus(queueName, "missing", stateDir)).toBeUndefined();
+      expect(retainedIds(queueName)).toEqual(ids.toSorted());
+      const prepare = vi.spyOn(db, "prepare");
+      try {
+        if (mode === "exact lookup") {
+          expect(getDeliveryQueueEntryStatus(queueName, ids[0], stateDir)).toBeUndefined();
+          const prune = prepare.mock.results
+            .flatMap((result) => (result.type === "return" ? [result.value] : []))
+            .find((statement) => statement.sourceSQL.startsWith("WITH "));
+          expect(prune).toBeDefined();
+          const plan = db
+            .prepare(`EXPLAIN QUERY PLAN ${prune!.expandedSQL}`)
+            .all()
+            .map((row) => row.detail)
+            .join("\n");
+          expect(plan).toMatch(
+            /SEARCH delivery_queue_entries USING INDEX \S+ \(queue_name=\? AND status=\?\)/,
+          );
+          expect(plan).not.toContain("SCAN delivery_queue_entries");
+        } else {
+          pruneDeliveryQueueTombstones(db, Date.now());
+        }
+      } finally {
+        prepare.mockRestore();
+      }
+      expect(retainedIds(queueName)).toEqual([ids[1]]);
+      expect(retainedIds(otherQueue)).toEqual(
+        mode === "exact lookup" ? [ordinaryId, ...ids.toSorted()] : [ids[1]],
+      );
+    },
+  );
 
   it("keeps health reads immutable and expires tombstones during maintenance", async () => {
-    const retention = { idPrefix: "health:", maxAgeMs: 1_000, maxEntries: 1 } as const;
+    const now = Date.now();
+    const hour = 60 * 60_000;
+    const retention = { idPrefix: "health:", maxAgeMs: hour, maxEntries: 1 } as const;
     const { db } = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
@@ -274,9 +316,9 @@ describe("delivery queue pending terminal transition", () => {
         failedAt,
       );
     };
-    insertRetained("health:expired", 1_000, retention);
-    insertRetained("health:over-cap", 9_000, retention);
-    insertRetained("health:newest", 9_500, retention);
+    insertRetained("health:expired", now - 2 * hour, retention);
+    insertRetained("health:over-cap", now - hour / 2, retention);
+    insertRetained("health:newest", now - hour / 4, retention);
     insertRetained("health:permanent", 1_000, "permanent");
     insertFailed.run(
       queueName,
@@ -287,40 +329,34 @@ describe("delivery queue pending terminal transition", () => {
       1_000,
       1_000,
     );
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName,
       entry: {
         id: "health:ordinary-completed",
-        enqueuedAt: 10_000 - 31 * 24 * 60 * 60_000,
+        enqueuedAt: now - 31 * 24 * 60 * 60_000,
         retryCount: 0,
       },
       status: "completed",
       stateDir,
     });
 
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(10_000);
-      expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([
-        { queueName, count: 5, oldestFailedAt: 1_000 },
-      ]);
-      expect(
-        db
-          .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")
-          .all(queueName),
-      ).toEqual([
-        { id: "health:expired" },
-        { id: "health:malformed" },
-        { id: "health:newest" },
-        { id: "health:ordinary-completed" },
-        { id: "health:over-cap" },
-        { id: "health:permanent" },
-      ]);
+    expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([
+      { queueName, count: 5, oldestFailedAt: 1_000 },
+    ]);
+    expect(
+      db
+        .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")
+        .all(queueName),
+    ).toEqual([
+      { id: "health:expired" },
+      { id: "health:malformed" },
+      { id: "health:newest" },
+      { id: "health:ordinary-completed" },
+      { id: "health:over-cap" },
+      { id: "health:permanent" },
+    ]);
 
-      pruneExpiredDeliveryQueueTombstones(stateDir);
-    } finally {
-      vi.useRealTimers();
-    }
+    await pruneExpiredDeliveryQueueTombstones(stateDir);
     expect(
       db
         .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")
@@ -478,7 +514,7 @@ describe("delivery queue pending terminal transition", () => {
         lastError: "raw provider error",
         payloads: [{ text: "private payload", mediaUrl: "/private/media" }],
       };
-      upsertDeliveryQueueEntry({ queueName: ownerQueue, entry, stateDir });
+      seedDeliveryQueueEntry({ queueName: ownerQueue, entry, stateDir });
       vi.useFakeTimers();
       try {
         vi.setSystemTime(50_000);
@@ -540,11 +576,16 @@ describe("delivery queue pending terminal transition", () => {
 
   it("does not terminalize a replacement pending owner", () => {
     const entry = { id: "terminal-race", enqueuedAt: 1_000, retryCount: 0 };
-    upsertDeliveryQueueEntry({ queueName, entry, stateDir });
-    updateDeliveryQueueEntry(queueName, entry.id, stateDir, (current) => ({
-      ...current,
-      retryCount: 1,
-    }));
+    seedDeliveryQueueEntry({ queueName, entry, stateDir });
+    updateDeliveryQueueEntryInDatabase(
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+      queueName,
+      entry.id,
+      (current) => ({
+        ...current,
+        retryCount: 1,
+      }),
+    );
     expect(
       terminalizePendingDeliveryQueueEntry({ queueName, id: entry.id, entry, stateDir }),
     ).toEqual({ status: "not_pending" });

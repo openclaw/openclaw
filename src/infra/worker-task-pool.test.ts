@@ -2,19 +2,22 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
+import { once } from "node:events";
 import fs from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { getTrackedWorkerCpuSources } from "./worker-cpu.js";
+import { workerTaskPoolEntrypoints } from "./worker-task-pool-runtime.test-support.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
-const workerUrl = new URL("./worker-task-pool.test-support.ts", import.meta.url);
+const workerUrl = resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.worker);
 const pools: WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>[] = [];
 const workers = vi.hoisted(() => [] as Worker[]);
 const directories = createTempDirTracker();
@@ -60,12 +63,32 @@ afterEach(async () => {
 });
 
 describe("worker task pool", () => {
+  it("acknowledges input custody on its channel without a host exchange and reuses the healthy worker", async () => {
+    const pool = createPool();
+    const released = vi.fn();
+    const onRequest = vi.fn(async () => {
+      throw new Error("Consumption-only task must not request host work");
+    });
+    const first = await pool.run(
+      { label: "closed", consumeInput: true },
+      { onInputConsumed: released, onRequest },
+    );
+    expect(released).toHaveBeenCalledOnce();
+    expect(onRequest).not.toHaveBeenCalled();
+    const next = await pool.run({ label: "next" }, {});
+    expect(next.threadId).toBe(first.threadId);
+    expect(workers).toHaveLength(1);
+  });
+
   it("rotates after active settlement and native exit while preserving queued order and deadlines", async () => {
+    const initialCpuSources = getTrackedWorkerCpuSources();
     const pool = createPool();
     const counters = new Int32Array(new SharedArrayBuffer(8));
     const active = pool.run({ label: "active", counters: counters.buffer, wait: true }, {});
     await expect.poll(() => Atomics.load(counters, 0)).toBe(1);
     const oldWorker = workers.at(-1)!;
+    const oldCpuSources = getTrackedWorkerCpuSources();
+    expect(oldCpuSources.workers).toHaveLength(initialCpuSources.workers.length + 1);
     const order: string[] = [];
     const next = pool.run(() => {
       expect(oldWorker.threadId).toBe(-1);
@@ -92,6 +115,12 @@ describe("worker task pool", () => {
     expect(results[0].threadId).not.toBe(first.threadId);
     expect(results[1].threadId).toBe(results[0].threadId);
     expect(order).toEqual(["next", "last"]);
+    const newCpuSources = getTrackedWorkerCpuSources();
+    expect(newCpuSources.workers).toHaveLength(oldCpuSources.workers.length);
+    expect(newCpuSources.revision).toBeGreaterThan(oldCpuSources.revision);
+    expect(newCpuSources.workers).not.toContain(oldCpuSources.workers.at(-1));
+    await pool.close();
+    expect(getTrackedWorkerCpuSources().workers).toEqual(initialCpuSources.workers);
   });
 
   it("never feeds canceled asynchronous preparation to a worker after rotation", async () => {
@@ -275,13 +304,22 @@ describe("worker task pool", () => {
     const pool = createPool({ workerUrl, maxPendingTasks: 1 });
     const gate = createDeferredCore<PoolFixtureInput>();
     const controller = new AbortController();
-    const first = pool.run(() => gate.promise, { signal: controller.signal });
+    const executionSettled = vi.fn();
+    const disposed = createDeferredCore();
+    const first = pool.run(() => gate.promise, {
+      signal: controller.signal,
+      onExecutionSettled: executionSettled,
+      onInputConsumed: disposed.resolve,
+    });
     const settled = Promise.allSettled([first]);
     controller.abort();
     await settled;
+    expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
     await expect(pool.run({ label: "excess" }, {})).rejects.toMatchObject({ code: "overloaded" });
     gate.resolve({ label: "canceled" });
-    await gate.promise;
+    await disposed.promise;
+    expect(pool.getSnapshot().pendingTasks).toBe(0);
+    expect(executionSettled).toHaveBeenCalledOnce();
     expect(await pool.run({ label: "recovered" }, {})).toMatchObject({ label: "recovered" });
   });
 
@@ -786,19 +824,35 @@ describe("worker task pool", () => {
     await expect.poll(() => worker.threadId).toBe(-1);
   });
 
+  it("keeps a promptly recreated worker warm across intermittent tasks, then expires it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const pool = createPool();
+    try {
+      await pool.run({ label: "cold" }, {});
+      const coldExit = once(workers.at(-1)!, "exit");
+      await vi.advanceTimersByTimeAsync(70_000);
+      await coldExit;
+      const warm = await pool.run({ label: "hot script" }, {});
+      for (let index = 0; index < 8; index++) {
+        await vi.advanceTimersByTimeAsync(70_000);
+        const next = await pool.run({ label: "intermittent" }, {});
+        expect(next.threadId).toBe(warm.threadId);
+      }
+      expect(pool.getSnapshot().workersCreated).toBe(2);
+      const warmExit = once(workers.at(-1)!, "exit");
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await warmExit;
+      expect(pool.getSnapshot().workers).toBe(0);
+    } finally {
+      await pool.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("lets a headless process exit while warm workers are idle", async () => {
-    const moduleUrl = new URL("./worker-task-pool.ts", import.meta.url);
     const { stdout } = await promisify(execFile)(
       process.execPath,
-      [
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "-e",
-        `import { WorkerTaskPool } from ${JSON.stringify(moduleUrl.href)};
-       const pool = new WorkerTaskPool({ workerUrl: new URL(${JSON.stringify(workerUrl.href)}) });
-       console.log((await pool.run({ label: "finished" }, { timeoutMs: 10000 })).label);`,
-      ],
+      resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.headless)),
       { timeout: 15_000 },
     );
     expect(stdout.trim()).toBe("finished");
@@ -807,18 +861,18 @@ describe("worker task pool", () => {
   it.each([
     {
       name: "releases parent inputs while their worker copies are still executing",
-      entrypoint: new URL("./worker-task-pool.retention.test-support.ts", import.meta.url),
+      entrypoint: workerTaskPoolEntrypoints.inputRetention,
     },
     {
       name: "releases delivered replies while their worker remains warm",
-      entrypoint: new URL("./worker-task-pool.reply-retention.test-support.ts", import.meta.url),
+      entrypoint: workerTaskPoolEntrypoints.replyRetention,
     },
   ])(
     "$name",
     async ({ entrypoint }) => {
       await promisify(execFile)(
         process.execPath,
-        ["--expose-gc", "--import", "tsx", fileURLToPath(entrypoint)],
+        ["--expose-gc", ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(entrypoint))],
         { timeout: 20_000 },
       );
     },

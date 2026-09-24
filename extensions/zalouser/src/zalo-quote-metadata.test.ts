@@ -2,10 +2,9 @@
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -60,7 +59,7 @@ async function withStoredSession<T>(params: {
   run: () => Promise<T>;
 }): Promise<T> {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-message-"));
-  saveStoredZaloCredentials(
+  await saveStoredZaloCredentials(
     params.profile,
     {
       imei: "test-imei",
@@ -107,10 +106,8 @@ function createInboundMessage(data: Record<string, unknown>): Message {
 beforeEach(() => {
   resetPluginStateStoreForTests();
   const runtime = createPluginRuntimeMock();
-  runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
     createPluginStateKeyedStoreForTests<T>("zalouser", options);
-  runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("zalouser", options);
   setZalouserRuntime(runtime);
   createZaloMock.mockReset();
 });

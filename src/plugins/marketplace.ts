@@ -8,13 +8,15 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { pathExists } from "../infra/fs-safe.js";
+import { pathExists, root as fsRoot } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { readChunkWithIdleTimeout } from "../infra/http-response-body-timeout.js";
+import type { TimedInstallModeOptions } from "../infra/install-mode-options.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { tempWorkspace, type TempWorkspace } from "../infra/private-temp-workspace.js";
 import { readRegularFile } from "../infra/regular-file.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { resolveUserPath } from "../utils.js";
@@ -240,7 +242,6 @@ function marketplaceEntrySourceToInput(source: MarketplaceEntrySource): string {
     case "github":
       return `${source.repo}${source.ref ? `#${source.ref}` : ""}`;
     case "git":
-      return `${source.url}${source.ref ? `#${source.ref}` : ""}`;
     case "git-subdir":
       return `${source.url}${source.ref ? `#${source.ref}` : ""}`;
     case "url":
@@ -747,10 +748,6 @@ function hasStreamingResponseBody(
   );
 }
 
-async function cancelUnreadMarketplaceResponseBody(response: Response): Promise<void> {
-  await response.body?.cancel().catch(() => undefined);
-}
-
 function parseMarketplaceContentLength(raw: string): number {
   const trimmed = raw.trim();
   if (!/^\d+$/.test(trimmed)) {
@@ -763,35 +760,16 @@ function parseMarketplaceContentLength(raw: string): number {
   return size;
 }
 
-async function writeMarketplaceChunk(
-  fileHandle: Awaited<ReturnType<typeof fs.open>>,
-  chunk: Uint8Array,
-): Promise<void> {
-  let offset = 0;
-  while (offset < chunk.length) {
-    const { bytesWritten } = await fileHandle.write(chunk, offset, chunk.length - offset);
-    if (bytesWritten <= 0) {
-      throw new Error("failed to write download chunk");
-    }
-    offset += bytesWritten;
-  }
-}
-
-async function streamMarketplaceResponseToFile(params: {
-  response: Response & { body: ReadableStream<Uint8Array> };
-  targetPath: string;
-  maxBytes: number;
-  chunkTimeoutMs: number;
-}): Promise<void> {
-  const reader = params.response.body.getReader();
-  const fileHandle = await fs.open(params.targetPath, "wx");
-  let total = 0;
-
+async function* marketplaceResponseChunks(
+  body: ReadableStream<Uint8Array>,
+  timeoutMs: number,
+): AsyncIterable<Uint8Array> {
+  const reader = body.getReader();
   try {
     while (true) {
       const { done, value } = await readChunkWithIdleTimeout(
         reader,
-        params.chunkTimeoutMs,
+        timeoutMs,
         ({ chunkTimeoutMs }) => new Error(`download timed out after ${chunkTimeoutMs}ms`),
       );
       if (done) {
@@ -801,21 +779,10 @@ async function streamMarketplaceResponseToFile(params: {
         continue;
       }
 
-      const nextTotal = total + value.length;
-      if (nextTotal > params.maxBytes) {
-        throw new Error(`download too large: ${nextTotal} bytes (limit: ${params.maxBytes} bytes)`);
-      }
-
-      await writeMarketplaceChunk(fileHandle, value);
-      total = nextTotal;
+      yield value;
     }
-  } catch (error) {
-    if (typeof reader.cancel === "function") {
-      await reader.cancel().catch(() => undefined);
-    }
-    throw error;
   } finally {
-    await fileHandle.close().catch(() => undefined);
+    await reader.cancel().catch(() => undefined);
     try {
       reader.releaseLock();
     } catch {}
@@ -837,7 +804,7 @@ async function downloadUrlToTempFile(
     }
 > {
   let sourceFileName = "plugin.tgz";
-  let tmpDir: string | undefined;
+  let workspace: TempWorkspace | undefined;
   try {
     sourceFileName = resolveSafeMarketplaceDownloadFileName(url, sourceFileName);
     const downloadTimeoutMs = resolveMarketplaceDownloadTimeoutMs(timeoutMs);
@@ -848,7 +815,6 @@ async function downloadUrlToTempFile(
     });
     try {
       if (!response.ok) {
-        await cancelUnreadMarketplaceResponseBody(response);
         return {
           ok: false,
           error: formatMarketplaceDownloadError(url, `HTTP ${response.status}`),
@@ -862,7 +828,6 @@ async function downloadUrlToTempFile(
       }
       // Fail closed unless we can stream and enforce the archive size bound incrementally.
       if (!hasStreamingResponseBody(response)) {
-        await cancelUnreadMarketplaceResponseBody(response);
         return {
           ok: false,
           error: formatMarketplaceDownloadError(url, "streaming response body unavailable"),
@@ -871,15 +836,8 @@ async function downloadUrlToTempFile(
 
       const contentLength = response.headers.get("content-length");
       if (contentLength) {
-        let size: number;
-        try {
-          size = parseMarketplaceContentLength(contentLength);
-        } catch (error) {
-          await cancelUnreadMarketplaceResponseBody(response);
-          throw error;
-        }
+        const size = parseMarketplaceContentLength(contentLength);
         if (size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
-          await cancelUnreadMarketplaceResponseBody(response);
           throw new Error(
             `download too large: ${size} bytes (limit: ${MAX_MARKETPLACE_ARCHIVE_BYTES} bytes)`,
           );
@@ -888,32 +846,35 @@ async function downloadUrlToTempFile(
 
       const finalFileName = resolveSafeMarketplaceDownloadFileName(finalUrl, sourceFileName);
       const fileName = resolveArchiveKind(finalFileName) ? finalFileName : sourceFileName;
-      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-download-"));
-      const createdTmpDir = tmpDir;
-      const targetPath = path.resolve(createdTmpDir, fileName);
-      if (!isPathInside(createdTmpDir, targetPath)) {
-        throw new Error("invalid download filename");
-      }
-      await streamMarketplaceResponseToFile({
-        response,
-        targetPath,
-        maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
-        chunkTimeoutMs: downloadTimeoutMs,
+      workspace = await tempWorkspace({
+        rootDir: os.tmpdir(),
+        prefix: "openclaw-marketplace-download-",
       });
+      const createdWorkspace = workspace;
+      const targetPath = workspace.path(fileName);
+      const destination = await fsRoot(workspace.dir);
+      await destination.create(
+        fileName,
+        marketplaceResponseChunks(response.body, downloadTimeoutMs),
+        {
+          maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
+          mode: 0o666 & ~process.umask(),
+          durable: false,
+        },
+      );
       return {
         ok: true,
         path: targetPath,
         cleanup: async () => {
-          await fs.rm(createdTmpDir, { recursive: true, force: true }).catch(() => undefined);
+          await createdWorkspace.cleanup().catch(() => undefined);
         },
       };
     } finally {
+      await response.body?.cancel().catch(() => undefined);
       await release().catch(() => undefined);
     }
   } catch (error) {
-    if (tmpDir) {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-    }
+    await workspace?.cleanup().catch(() => undefined);
     return {
       ok: false,
       error: formatMarketplaceDownloadError(url, formatErrorMessage(error)),
@@ -944,8 +905,8 @@ async function ensureInsideMarketplaceRoot(
 
       const rootRealPath = await fs.realpath(options.canonicalRootDir);
       let existingPath = resolved;
-      // `pathExists` uses `fs.access`, so dangling symlinks are treated as missing and we walk up
-      // to the nearest existing ancestor. Live symlinks stop here and are canonicalized below.
+      // Dangling symlinks are treated as missing; live symlinks stop the ancestor
+      // search here and are canonicalized below.
       while (!(await pathExists(existingPath))) {
         const parentPath = path.dirname(existingPath);
         if (parentPath === existingPath) {
@@ -1079,64 +1040,44 @@ async function resolveMarketplaceEntryInstallPath(params: {
     return { ok: true, path: resolved.path };
   }
 
-  if (
-    params.source.kind === "github" ||
-    params.source.kind === "git" ||
-    params.source.kind === "git-subdir"
-  ) {
-    const sourceSpec =
-      params.source.kind === "github"
-        ? `${params.source.repo}${params.source.ref ? `#${params.source.ref}` : ""}`
-        : `${params.source.url}${params.source.ref ? `#${params.source.ref}` : ""}`;
-    const cloned = await cloneMarketplaceRepo({
-      source: sourceSpec,
-      timeoutMs: params.timeoutMs,
-      logger: params.logger,
-    });
-    if (!cloned.ok) {
-      return cloned;
+  if (params.source.kind === "url") {
+    if (resolveArchiveKind(params.source.url)) {
+      return await downloadUrlToTempFile(params.source.url, params.timeoutMs);
     }
-    const subPath =
-      params.source.kind === "github" || params.source.kind === "git"
-        ? normalizeOptionalString(params.source.path) || "."
-        : params.source.path.trim();
-    const canonicalRootDir = await fs.realpath(cloned.rootDir);
-    const target = await ensureInsideMarketplaceRoot(cloned.rootDir, subPath, {
-      canonicalRootDir,
-    });
-    if (!target.ok) {
-      await cloned.cleanup();
-      return target;
+    if (!normalizeGitCloneSource(params.source.url)) {
+      return {
+        ok: false,
+        error: `unsupported URL plugin source: ${params.source.url}`,
+      };
     }
-    return {
-      ok: true,
-      path: target.path,
-      cleanup: cloned.cleanup,
-    };
-  }
-
-  if (resolveArchiveKind(params.source.url)) {
-    return await downloadUrlToTempFile(params.source.url, params.timeoutMs);
-  }
-
-  if (!normalizeGitCloneSource(params.source.url)) {
-    return {
-      ok: false,
-      error: `unsupported URL plugin source: ${params.source.url}`,
-    };
   }
 
   const cloned = await cloneMarketplaceRepo({
-    source: params.source.url,
+    source: marketplaceEntrySourceToInput(params.source),
     timeoutMs: params.timeoutMs,
     logger: params.logger,
   });
   if (!cloned.ok) {
     return cloned;
   }
+  if (params.source.kind === "url") {
+    return { ok: true, path: cloned.rootDir, cleanup: cloned.cleanup };
+  }
+  const subPath =
+    params.source.kind === "git-subdir"
+      ? params.source.path.trim()
+      : normalizeOptionalString(params.source.path) || ".";
+  const canonicalRootDir = await fs.realpath(cloned.rootDir);
+  const target = await ensureInsideMarketplaceRoot(cloned.rootDir, subPath, {
+    canonicalRootDir,
+  });
+  if (!target.ok) {
+    await cloned.cleanup();
+    return target;
+  }
   return {
     ok: true,
-    path: cloned.rootDir,
+    path: target.path,
     cleanup: cloned.cleanup,
   };
 }
@@ -1212,18 +1153,15 @@ export async function resolveMarketplaceInstallShortcut(
 }
 
 export async function installPluginFromMarketplace(
-  params: InstallSafetyOverrides & {
-    marketplace: string;
-    plugin: string;
-    logger?: MarketplaceLogger;
-    timeoutMs?: number;
-    mode?: "install" | "update";
-    extensionsDir?: string;
-    dryRun?: boolean;
-    expectedPluginId?: string;
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    beforePersistentApply?: () => void;
-  },
+  params: InstallSafetyOverrides &
+    TimedInstallModeOptions<MarketplaceLogger> & {
+      marketplace: string;
+      plugin: string;
+      extensionsDir?: string;
+      expectedPluginId?: string;
+      onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+      beforePersistentApply?: () => void;
+    },
 ): Promise<MarketplaceInstallResult> {
   const loaded = await loadMarketplace({
     source: params.marketplace,
@@ -1270,6 +1208,7 @@ export async function installPluginFromMarketplace(
         mode: params.mode,
         extensionsDir: params.extensionsDir,
         timeoutMs: params.timeoutMs,
+        workTimeoutMs: params.workTimeoutMs,
         dryRun: params.dryRun,
         expectedPluginId: params.expectedPluginId,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,

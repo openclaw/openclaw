@@ -210,6 +210,14 @@ export function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
+    // Only quota classifications refine HTTP 429. A generic provider fallback
+    // such as timeout must not erase its billing or rate-limit semantics.
+    if (
+      opts?.preserveProviderSignalClassification &&
+      (messageReason === "billing" || messageReason === "rate_limit")
+    ) {
+      return messageClassification;
+    }
     if (messageReason === "billing" && !isAmbiguousGeneric429BalanceMessage(message ?? "")) {
       return toReasonClassification("billing");
     }
@@ -268,11 +276,18 @@ export function classifyFailoverClassificationFromHttpStatus(
   }
   if (status === 499 || (status >= 500 && status < 600)) {
     // Gateways can wrap a deterministic request rejection in a 5xx response.
-    return messageReason === "overloaded" ||
+    if (
+      messageReason === "overloaded" ||
       messageReason === "server_error" ||
       (status >= 500 && messageReason === "format")
-      ? messageClassification
-      : toReasonClassification("timeout");
+    ) {
+      return messageClassification;
+    }
+    return toReasonClassification(
+      status === 499 || status === 504 || status === 522 || status === 524
+        ? "timeout"
+        : "server_error",
+    );
   }
   if (status === 400 || status === 422) {
     // 400/422 are ambiguous: inspect the payload first so provider-specific
@@ -316,6 +331,8 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
       return "rate_limit";
     case "DEACTIVATED_WORKSPACE":
       return "auth_permanent";
+    case "SELECTED_AUTH_PROFILE_UNAVAILABLE":
+      return "auth";
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";

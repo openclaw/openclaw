@@ -51,7 +51,7 @@ Common forms:
 - `/codex review` starts Codex native review for the attached thread.
 - `/codex diagnostics [note]` asks before sending Codex feedback for the
   attached thread.
-- `/codex account` shows account and rate-limit status for the selected connection. Native Codex accounts stay separate from saved OpenClaw profiles, even when they share an email address.
+- `/codex account` shows account and rate-limit status for the selected connection. Native Codex accounts stay separate from saved OpenClaw profiles, even when they share an email address. If both reads fail, the command reports that connection's errors.
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 - `/codex plugins list` shows configured native plugins; `/codex plugins

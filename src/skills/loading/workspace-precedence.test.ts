@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as cryptoDigest from "../../infra/crypto-digest.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -10,6 +11,7 @@ import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import * as frontmatter from "./frontmatter.js";
 import { createSyntheticSourceInfo } from "./skill-contract.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
@@ -61,6 +63,13 @@ function captureJsonWarningLogger() {
     error: vi.fn(),
   };
   return warn;
+}
+
+function captureInfoLogger() {
+  setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+  const log = vi.fn();
+  loggingState.rawConsole = { log, info: log, warn: vi.fn(), error: vi.fn() };
+  return log;
 }
 
 function createSkillEntry(params: {
@@ -268,6 +277,177 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
     expect(entries.filter((entry) => entry.skill.name === "demo-skill")).toHaveLength(1);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("silently reuses identical skill content across copies and rebuilds without changing winners", async () => {
+    const root = await fixtureSuite.createCaseDir("identical-content");
+    const bundledSkillsDir = path.join(root, "bundled");
+    const name = "identical-collision";
+    await writeSkill({ dir: path.join(bundledSkillsDir, name), name, description: "Shared facts" });
+    const raw = await fs.readFile(path.join(bundledSkillsDir, name, "SKILL.md"), "utf8");
+    const warn = captureWarningLogger();
+    const hash = vi.spyOn(cryptoDigest, "sha256Hex");
+    const parse = vi.spyOn(frontmatter, "parseSkillFrontmatter");
+    try {
+      for (const id of ["first", "second"]) {
+        const workspaceDir = path.join(root, id);
+        const executionWorkspaceDir = path.join(root, `${id}-execution`);
+        for (const dir of [
+          path.join(workspaceDir, "skills", name),
+          path.join(workspaceDir, ".agents", "skills", name),
+          path.join(executionWorkspaceDir, "skills", name),
+        ]) {
+          await fs.mkdir(dir, { recursive: true });
+          await fs.writeFile(path.join(dir, "SKILL.md"), raw);
+        }
+        const options = {
+          bundledSkillsDir,
+          executionWorkspaceDir,
+          managedSkillsDir: path.join(root, "managed"),
+          pluginSkillsDir: path.join(root, "plugins"),
+        };
+        const first = loadWorkspaceSkills(workspaceDir, options);
+        const prompt = (await buildSkillSnapshot(workspaceDir, options)).prompt;
+        bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+        expect(loadWorkspaceSkills(workspaceDir, options)).toEqual(first);
+        expect((await buildSkillSnapshot(workspaceDir, options)).prompt).toBe(prompt);
+        expect(first.find((entry) => entry.skill.name === name)?.skill).toMatchObject({
+          filePath: path.join(workspaceDir, "skills", name, "SKILL.md"),
+          source: "openclaw-workspace",
+          sourceInfo: { path: path.join(workspaceDir, "skills", name, "SKILL.md") },
+        });
+      }
+      expect(hash.mock.calls.filter(([input]) => input === raw)).toHaveLength(1);
+      expect(parse.mock.calls.filter(([input]) => input === raw)).toHaveLength(1);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      hash.mockRestore();
+      parse.mockRestore();
+    }
+  });
+
+  it("reports different collision content once across workspaces and reports changed content again", async () => {
+    const root = await fixtureSuite.createCaseDir("different-content");
+    const bundledSkillsDir = path.join(root, "bundled");
+    const name = "different-collision";
+    await writeSkill({
+      dir: path.join(bundledSkillsDir, name),
+      name,
+      description: "Shared metadata",
+      body: "Bundled",
+    });
+    const warn = captureInfoLogger();
+    for (const id of ["first", "second"]) {
+      const workspaceDir = path.join(root, id);
+      const dir = path.join(workspaceDir, "skills", name);
+      await writeSkill({ dir, name, description: "Shared metadata", body: "Override" });
+      const options = { bundledSkillsDir, managedSkillsDir: path.join(root, "managed") };
+      loadWorkspaceSkills(workspaceDir, options);
+      bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      loadWorkspaceSkills(workspaceDir, options);
+      expect(warn).toHaveBeenCalledOnce();
+    }
+    const workspaceDir = path.join(root, "second");
+    const dir = path.join(workspaceDir, "skills", name);
+    const options = { bundledSkillsDir, managedSkillsDir: path.join(root, "managed") };
+    for (const [description, body, count] of [
+      ["Shared metadata", "Changed instructions", 2],
+      ["Changed metadata", "Changed instructions", 3],
+      ["Shared metadata", "Override", 3],
+    ] as const) {
+      await writeSkill({ dir, name, description, body });
+      bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      loadWorkspaceSkills(workspaceDir, options);
+      expect(warn).toHaveBeenCalledTimes(count);
+    }
+    // A new collision must not replay the existing pair.
+    for (const [base, description] of [
+      [bundledSkillsDir, "Bundled"],
+      [path.join(workspaceDir, "skills"), "Workspace"],
+    ] as const) {
+      await writeSkill({
+        dir: path.join(base, "another-collision"),
+        name: "another-collision",
+        description,
+      });
+    }
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+    loadWorkspaceSkills(workspaceDir, options);
+    expect(warn).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(String(warn.mock.calls[0]?.[0]))).toMatchObject({
+      message: "Skill precedence collision resolved.",
+      skill: name,
+      winnerPath: path.join(root, "first", "skills", name, "SKILL.md"),
+      loserPath: path.join(bundledSkillsDir, name, "SKILL.md"),
+    });
+  });
+
+  it("reports a shared workspace override once at info across 50 worktrees", async () => {
+    const root = await fixtureSuite.createCaseDir("worktree-overrides");
+    const name = "shared-override";
+    const bundledSkillsDir = path.join(root, "bundled");
+    await writeSkill({
+      dir: path.join(bundledSkillsDir, name),
+      name,
+      description: name,
+      body: "Bundled",
+    });
+    const workspaces = Array.from({ length: 50 }, (_, index) => path.join(root, `tree-${index}`));
+    for (const workspaceDir of workspaces) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description: name,
+        body: "Override",
+      });
+    }
+    const info = captureInfoLogger();
+    const warn = loggingState.rawConsole!.warn;
+    for (const workspaceDir of workspaces) {
+      const options = { bundledSkillsDir, managedSkillsDir: path.join(root, "managed") };
+      expect(
+        loadWorkspaceSkills(workspaceDir, options).find((entry) => entry.skill.name === name)?.skill
+          .source,
+      ).toBe("openclaw-workspace");
+      bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      loadWorkspaceSkills(workspaceDir, options);
+    }
+    console.log(
+      `50-worktree collision counts: warn=${vi.mocked(warn).mock.calls.length}, info=${info.mock.calls.length}`,
+    );
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledOnce();
+  });
+
+  it("groups same-source collisions across 50 roots in a discovery pass", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("grouped-collisions");
+    const name = "same-tier-collision";
+    const extraDirs = Array.from({ length: 50 }, (_, index) =>
+      path.join(workspaceDir, `root-${index}`),
+    );
+    for (const [index, dir] of extraDirs.entries()) {
+      await writeSkill({
+        dir: path.join(dir, name),
+        name,
+        description: name,
+        body: `Variant ${index}`,
+      });
+    }
+    const warn = captureJsonWarningLogger();
+    const entries = loadWorkspaceSkills(workspaceDir, {
+      bundledSkillsDir: "",
+      managedSkillsDir: path.join(workspaceDir, "managed"),
+      config: { skills: { load: { extraDirs } } },
+    });
+    console.log(`50-root collision warning count: ${warn.mock.calls.length}`);
+    expect(entries.find((entry) => entry.skill.name === name)?.skill.filePath).toBe(
+      path.join(extraDirs[49]!, name, "SKILL.md"),
+    );
+    expect(warn).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(warn.mock.calls[0]?.[0]))).toMatchObject({
+      skill: name,
+      affectedRoots: 50,
+    });
   });
   it("gates by bins, config, and always", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");

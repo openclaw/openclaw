@@ -19,11 +19,12 @@ import { callGatewayTool } from "../../tools/gateway.js";
 import { resolveSubagentRunTimerDelayMs } from "../registry/subagent-run-timeout.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { readSubagentGatewayExecutionIdentity } from "./subagent-spawn-execution-identity.js";
 import {
   ADMIN_SCOPE,
   callGateway,
+  dispatchGatewayMethodInProcess,
+  hasInProcessGatewayContext,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./subagent-spawn.runtime.js";
 
@@ -63,15 +64,13 @@ async function callSubagentGatewayWithDispatchMode(
     authorizedParams,
   );
   const allowModelOverride = authorization !== undefined;
-  const deps = getSubagentSpawnDeps();
   const gatewayCaller = getGatewayToolCallerIdentity();
   const gatewayContextResolver =
     options?.gatewayContextResolver ??
     gatewayCaller?.gatewayContextResolver ??
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   // A closed owner still requires in-process rejection, never a new socket route.
-  const hasInProcessGateway =
-    gatewayContextResolver !== undefined || deps.hasInProcessGatewayContext();
+  const hasInProcessGateway = gatewayContextResolver !== undefined || hasInProcessGatewayContext();
   const needsOutOfProcessModelOverrideAuth = allowModelOverride && !hasInProcessGateway;
   const scopes =
     params.scopes ??
@@ -123,7 +122,7 @@ async function callSubagentGatewayWithDispatchMode(
               sessionSpawnContext,
             }
           : undefined;
-      return await deps.dispatchGatewayMethodInProcess(
+      return await dispatchGatewayMethodInProcess(
         request.method,
         requestParams,
         withInProcessAgentRuntimeIdentity(
@@ -185,7 +184,7 @@ async function callSubagentGatewayWithDispatchMode(
             ),
           ),
         )
-      : deps.callGateway(typeof timeoutMs === "number" ? { ...request, timeoutMs } : request);
+      : callGateway(typeof timeoutMs === "number" ? { ...request, timeoutMs } : request);
   };
   // Only agent launches have an idempotency key backed by authoritative Gateway state.
   // Other methods must not repeat after a transport-ambiguous failure.

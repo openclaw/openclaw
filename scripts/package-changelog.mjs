@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { findChangelogSection, findReleaseChangelog } from "./lib/release-changelog.mjs";
 import { compactReleaseNotes } from "./lib/release-notes-compaction.mjs";
 
@@ -90,9 +91,14 @@ export function extractCurrentPackageChangelog(content, packageVersion, options 
   }
   const packagedBytes = Buffer.byteLength(packaged, "utf8");
   if (packagedBytes > MAX_PACKAGED_CHANGELOG_BYTES) {
-    throw new Error(
-      `Packaged changelog is ${packagedBytes} bytes, which exceeds the ${MAX_PACKAGED_CHANGELOG_BYTES} byte safety limit.`,
-    );
+    const message = `Packaged changelog is ${packagedBytes} bytes, which exceeds the ${MAX_PACKAGED_CHANGELOG_BYTES} byte size limit.`;
+    if (
+      reportLimitViolations([
+        { file: CHANGELOG_PATH, title: "Packaged changelog size budget", message },
+      ])
+    ) {
+      throw new Error(message);
+    }
   }
   return packaged;
 }

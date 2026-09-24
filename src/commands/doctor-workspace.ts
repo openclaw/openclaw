@@ -70,7 +70,7 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
   return true;
 }
 
-export type RootMemoryFilesDetection = {
+type RootMemoryFilesDetection = {
   workspaceDir: string;
   canonicalPath: string;
   legacyPath: string;
@@ -112,9 +112,7 @@ async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> 
 }
 
 /** Detects canonical and legacy root memory files in a workspace. */
-export async function detectRootMemoryFiles(
-  workspaceDir: string,
-): Promise<RootMemoryFilesDetection> {
+async function detectRootMemoryFiles(workspaceDir: string): Promise<RootMemoryFilesDetection> {
   const resolvedWorkspace = path.resolve(workspaceDir);
   const canonicalPath = resolveCanonicalRootMemoryPath(resolvedWorkspace);
   const legacyPath = resolveLegacyRootMemoryPath(resolvedWorkspace);
@@ -143,7 +141,7 @@ function formatBytes(bytes?: number): string {
 }
 
 /** Formats the warning for split canonical/legacy root memory files. */
-export function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection): string | null {
+function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection): string | null {
   if (detection.canonicalExists && detection.legacyExists) {
     return [
       "Split root durable memory files detected:",
@@ -157,7 +155,7 @@ export function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection
   return null;
 }
 
-export type RootMemoryMigrationResult = {
+type RootMemoryMigrationResult = {
   changed: boolean;
   canonicalPath: string;
   legacyPath: string;
@@ -208,7 +206,7 @@ function buildMergedLegacyRootMemorySection(params: {
 }
 
 /** Archives and merges a legacy root memory file into canonical memory. */
-export async function migrateLegacyRootMemoryFile(
+async function migrateLegacyRootMemoryFile(
   workspaceDir: string,
 ): Promise<RootMemoryMigrationResult> {
   const detection = await detectRootMemoryFiles(workspaceDir);

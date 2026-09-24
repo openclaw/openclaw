@@ -8,6 +8,7 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import {
   emitSessionIdentityMutation,
   emitSessionLifecycleEvent,
@@ -119,6 +120,61 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
     const before = projection.materializedCount;
     await append("Pending update");
     expect(projection.materializedCount).toBe(before);
+    const reads: string[] = [];
+    const readDatabases = history.withSessionHistoryWorkerDatabases;
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation((targets, consume) =>
+      readDatabases(targets, (owners) =>
+        consume(
+          owners.map((owner) => ({
+            ...owner,
+            readRowFacts(input) {
+              reads.push(...input.sessionKeys);
+              return owner.readRowFacts(input);
+            },
+          })),
+        ),
+      ),
+    );
+    sessionChanges.emit({ all: true, scope: "catalog" });
+    await projection.ensureMaterialized();
+    expect(reads).toEqual([target.sessionKey]);
+    reads.length = 0;
+    const captured = createDeferredCore();
+    const resume = createDeferredCore();
+    let pause = true;
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation((targets, consume) =>
+      readDatabases(targets, (owners) =>
+        consume(
+          owners.map((owner) => ({
+            ...owner,
+            async readRowFacts(input) {
+              reads.push(...input.sessionKeys);
+              const result = await owner.readRowFacts(input);
+              if (pause) {
+                pause = false;
+                captured.resolve();
+                await resume.promise;
+              }
+              return result;
+            },
+          })),
+        ),
+      ),
+    );
+    sessionChanges.emit({ all: true, scope: "catalog", factsInvalidated: true });
+    const refreshing = projection.ensureMaterialized();
+    try {
+      await captured.promise;
+      await persistSessionTranscriptTurn(target, {
+        messages: [{ message: { role: "assistant", content: "Update during renewal" } }],
+        touchSessionEntry: false,
+      });
+    } finally {
+      resume.resolve();
+      await refreshing;
+    }
+    expect(reads.filter((key) => key === target.sessionKey)).toHaveLength(2);
+    expect(reads.filter((key) => key !== target.sessionKey)).toHaveLength(2);
     replaceSessionEntrySync(target, {
       sessionId: target.sessionId,
       updatedAt: 2,
@@ -310,7 +366,7 @@ it.each([false, true])(
         const before = projection.materializedCount;
         getModelCatalog.mockReturnValue(replacement.promise);
         notifyPreparedModelRuntimePublication({ phase: "catalog-published", modelFactsChanged });
-        expect(projection.dirtyRowCount).toBe(modelFactsChanged ? 1 : 0);
+        expect(projection.dirtyRowCount).toBe(0);
         const response = vi.fn();
         const pendingList = list().then(response);
         // The actual RPC must reply before the deferred catalog is released.

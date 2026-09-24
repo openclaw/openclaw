@@ -12,12 +12,14 @@ import {
   getPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "../../agents/prepared-model-runtime.js";
+import { resolvePreparedModelRuntimeOwnerBySnapshot } from "../../agents/prepared-model-runtime.owner.js";
 import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 
-it("models.list retains a failed renewal before shared worker recovery", async () => {
+it("models.list retains a failed renewal before shared worker recovery", async ({ signal }) => {
   const state = await createOpenClawTestState({
     label: "catalog-worker-recovery",
     env: {
@@ -93,7 +95,7 @@ it("models.list retains a failed renewal before shared worker recovery", async (
               const { threadId } = require("node:worker_threads");
               const rows = await getCachedLiveCatalogValue({
                 keyParts: [${JSON.stringify(baseUrl)}, provider, auth.discoveryApiKey],
-                ttlMs: provider === ${JSON.stringify(provider)} ? 1 : 86400000,
+                ttlMs: provider === ${JSON.stringify(provider)} ? 0 : 86400000,
                 load: async () => {
                   const response = await fetch(${JSON.stringify(baseUrl)} + "/" + provider, {
                     headers: { "x-fixture-thread": String(threadId) },
@@ -149,7 +151,14 @@ it("models.list retains a failed renewal before shared worker recovery", async (
           ...(selectedProvider ? { provider: selectedProvider } : {}),
         });
       const savedConfig = await fs.readFile(state.configPath, "utf8");
-      const initial = await list(true);
+      const refresh = (selectedProvider?: string) =>
+        waitForCatalogPublication({
+          signal,
+          start: () => list(true, selectedProvider),
+          read: () => list(false, selectedProvider),
+          ready: (result) => !result.pendingProviders?.length,
+        });
+      const initial = await refresh();
       expect(
         initial.models
           .filter((row) => providers.includes(row.provider))
@@ -162,13 +171,26 @@ it("models.list retains a failed renewal before shared worker recovery", async (
         config: cfg,
       });
       expect(original).toBeDefined();
+      const providerFacts = resolvePreparedModelRuntimeOwnerBySnapshot(
+        original!,
+      )?.catalogInventory?.providers.get(provider);
+      if (!providerFacts) {
+        throw new Error("Missing published recovery fixture inventory");
+      }
+      expect(providerFacts.expiresAt).toBeUndefined();
+      const initialRequests = requests;
+      expect((await list()).models).toEqual(initial.models);
+      expect(requests).toBe(initialRequests);
       releasePublication = registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "published" && !original!.isCurrent()) {
           events.emit("recovered");
         }
       });
+      // Arm the held request before making renewal due; a wall-clock TTL can expire
+      // during the initial models.list response, before this observer exists.
       hold = true;
       const renewal = once(events, "request");
+      providerFacts.expiresAt = 0;
       const retained = await list();
       expect(retained.models).toEqual(initial.models);
       await withTestTimeout(renewal, 3_000, "models.list did not start the due renewal");
@@ -245,14 +267,14 @@ it("models.list retains a failed renewal before shared worker recovery", async (
       });
       expect(await fs.readFile(state.configPath, "utf8")).toBe(savedConfig);
       expect(requests).toBe(failedRequests);
-      expect((await list(true, sibling)).refreshFailed).toBe(true);
+      expect((await refresh(sibling)).refreshFailed).toBe(true);
       expect(requests).toBe(failedRequests);
       advertised = ["original", "recovered"];
       hold = false;
       for (const response of held.splice(0)) {
         reply(response);
       }
-      const refreshed = await list(true, provider);
+      const refreshed = await refresh(provider);
       expect(
         refreshed.models.filter((row) => row.provider === provider).map((row) => row.id),
       ).toEqual(["original", "recovered"]);

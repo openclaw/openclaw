@@ -1,19 +1,21 @@
-// Feishu plugin module implements chat behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { FeishuChatSchema, type FeishuChatParams } from "./chat-schema.js";
+import { assertFeishuApiSuccess } from "./api-response.js";
+import { FeishuChatSchema } from "./chat-schema.js";
 import { resolveFeishuChatType } from "./chat-type.js";
 import { createFeishuClient } from "./client.js";
 import { formatFeishuApiError } from "./comment-shared.js";
 import {
   assertFeishuChatReadAllowed,
   authorizeFeishuChatMemberRead,
+  readFeishuChatInfoWithAuthorization,
   resolveFeishuChatReadPreliminaryAuthorization,
   type FeishuChatMemberReadAuthorization,
 } from "./read-policy.js";
-import { resolveAnyEnabledFeishuToolsConfig, resolveFeishuToolAccount } from "./tool-account.js";
+import { resolveFeishuToolAccount } from "./tool-account.js";
+import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
 
 function readChatPageSize(params: Record<string, unknown>): number | undefined {
@@ -43,9 +45,7 @@ export function buildFeishuDirectChatMembers(
 
 export async function getChatInfo(client: Lark.Client, chatId: string) {
   const res = await client.im.chat.get({ path: { chat_id: chatId } });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
 
   const chat = res.data;
   return {
@@ -63,22 +63,6 @@ export async function getChatInfo(client: Lark.Client, chatId: string) {
     moderation_permission: chat?.moderation_permission,
     avatar: chat?.avatar,
   };
-}
-
-function authorizeFeishuChatInfo(params: {
-  cfg: NonNullable<OpenClawPluginApi["config"]>;
-  account: ReturnType<typeof resolveFeishuToolAccount>;
-  chatId: string;
-  chat: Awaited<ReturnType<typeof getChatInfo>>;
-  ctx: OpenClawPluginToolContext;
-}): void {
-  assertFeishuChatReadAllowed({
-    cfg: params.cfg,
-    account: params.account,
-    chatId: params.chatId,
-    chatType: resolveFeishuChatType(params.chat),
-    ctx: params.ctx,
-  });
 }
 
 async function getAuthorizedFeishuChatInfo(params: {
@@ -102,30 +86,15 @@ async function getAuthorizedFeishuChatInfo(params: {
       ctx: params.ctx,
     });
   }
-  let chat: Awaited<ReturnType<typeof getChatInfo>>;
-  try {
-    // Only targets with at least one authorized conversation kind reach metadata.
-    // Hide lookup failures when type is needed so metadata cannot become an existence oracle.
-    chat = await getChatInfo(params.client, preliminary.chatId);
-  } catch (error) {
-    if (preliminary.decision === "needs-metadata") {
-      assertFeishuChatReadAllowed({
-        cfg: params.cfg,
-        account: params.account,
-        chatId: preliminary.chatId,
-        ctx: params.ctx,
-      });
-    }
-    throw error;
-  }
-  authorizeFeishuChatInfo({
-    cfg: params.cfg,
-    account: params.account,
-    chatId: preliminary.chatId,
-    chat,
-    ctx: params.ctx,
-  });
-  return chat;
+  return readFeishuChatInfoWithAuthorization(
+    {
+      cfg: params.cfg,
+      account: params.account,
+      ctx: params.ctx,
+      preliminary,
+    },
+    (chatId) => getChatInfo(params.client, chatId),
+  );
 }
 
 export async function getChatMembers(
@@ -145,9 +114,7 @@ export async function getChatMembers(
     },
   });
 
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
 
   return {
     chat_id: chatId,
@@ -201,9 +168,7 @@ export async function getFeishuMemberInfo(
     },
   });
 
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
 
   const user = res.data?.user;
   return {
@@ -238,124 +203,76 @@ export async function getFeishuMemberInfo(
 }
 
 export function registerFeishuChatTools(api: OpenClawPluginApi) {
-  api.registerTool(
-    (toolContext: OpenClawPluginToolContext) => {
-      const cfg = toolContext.runtimeConfig ?? toolContext.config ?? api.config;
-      if (!cfg || !resolveAnyEnabledFeishuToolsConfig(cfg).chat) {
-        return null;
-      }
-      return {
-        name: "feishu_chat",
-        resultContentSource: "network",
-        label: "Feishu Chat",
-        description: "Feishu chat operations. Actions: members, info, member_info",
-        parameters: FeishuChatSchema,
-        async execute(_toolCallId, params) {
-          const rawParams = params as Record<string, unknown>;
-          const p = params as FeishuChatParams;
-          try {
-            const account = resolveFeishuToolAccount({
-              cfg,
-              defaultAccountId: toolContext.agentAccountId,
-              requiredTool: { family: "chat", label: "chat" },
-            });
-            const client = createFeishuClient(account);
-            switch (p.action) {
-              case "members":
-                if (!p.chat_id) {
-                  return json({ error: "chat_id is required for action members" });
-                }
-                {
-                  const chat = await getAuthorizedFeishuChatInfo({
-                    client,
-                    cfg,
-                    account,
-                    chatId: p.chat_id,
-                    ctx: toolContext,
-                  });
-                  const authorization = authorizeFeishuChatMemberRead({
-                    cfg,
-                    account,
-                    chatId: p.chat_id,
-                    chatType: resolveFeishuChatType(chat),
-                    ctx: toolContext,
-                    memberIdType: p.member_id_type,
-                  });
-                  if (authorization.kind === "direct") {
-                    return json(buildFeishuDirectChatMembers(authorization));
-                  }
-                }
-                return json(
-                  await getChatMembers(
-                    client,
-                    p.chat_id,
-                    readChatPageSize(rawParams),
-                    p.page_token,
-                    p.member_id_type,
-                  ),
-                );
-              case "info":
-                if (!p.chat_id) {
-                  return json({ error: "chat_id is required for action info" });
-                }
-                {
-                  const chat = await getAuthorizedFeishuChatInfo({
-                    client,
-                    cfg,
-                    account,
-                    chatId: p.chat_id,
-                    ctx: toolContext,
-                  });
-                  return json(chat);
-                }
-              case "member_info":
-                if (!p.member_id) {
-                  return json({ error: "member_id is required for action member_info" });
-                }
-                if (!p.chat_id) {
-                  return json({ error: "chat_id is required for action member_info" });
-                }
-                {
-                  const chat = await getAuthorizedFeishuChatInfo({
-                    client,
-                    cfg,
-                    account,
-                    chatId: p.chat_id,
-                    ctx: toolContext,
-                  });
-                  const authorization = authorizeFeishuChatMemberRead({
-                    cfg,
-                    account,
-                    chatId: p.chat_id,
-                    chatType: resolveFeishuChatType(chat),
-                    ctx: toolContext,
-                    memberId: p.member_id,
-                    memberIdType: p.member_id_type,
-                  });
-                  if (authorization.kind === "group") {
-                    const memberIdType = p.member_id_type ?? "open_id";
-                    await assertFeishuChatMember(client, p.chat_id, p.member_id, memberIdType);
-                    return json(await getFeishuMemberInfo(client, p.member_id, memberIdType));
-                  }
-                  return json(
-                    await getFeishuMemberInfo(
-                      client,
-                      authorization.memberId,
-                      authorization.memberIdType,
-                    ),
-                  );
-                }
-              default:
-                return json({ error: `Unknown action: ${String(p.action)}` });
-            }
-          } catch (err) {
-            return json({ error: formatFeishuApiError(err, { includeNestedErrorLogId: true }) });
-          }
-        },
+  registerFeishuTool(api, {
+    family: "chat",
+    name: "feishu_chat",
+    label: "Feishu Chat",
+    description: "Feishu chat operations. Actions: members, info, member_info",
+    parameters: FeishuChatSchema,
+    createExecute(ctx, cfg) {
+      return async (p) => {
+        const account = resolveFeishuToolAccount({
+          cfg,
+          defaultAccountId: ctx.agentAccountId,
+          requiredTool: { family: "chat", label: "chat" },
+        });
+        const client = createFeishuClient(account);
+        switch (p.action) {
+          case "members":
+          case "info":
+          case "member_info":
+            break;
+          default:
+            return json({ error: `Unknown action: ${String(p.action)}` });
+        }
+        if (p.action === "member_info" && !p.member_id) {
+          return json({ error: "member_id is required for action member_info" });
+        }
+        if (!p.chat_id) {
+          return json({ error: `chat_id is required for action ${p.action}` });
+        }
+        const chat = await getAuthorizedFeishuChatInfo({
+          client,
+          cfg,
+          account,
+          chatId: p.chat_id,
+          ctx,
+        });
+        if (p.action === "info") {
+          return json(chat);
+        }
+        const authorization = authorizeFeishuChatMemberRead({
+          cfg,
+          account,
+          chatId: p.chat_id,
+          chatType: resolveFeishuChatType(chat),
+          ctx,
+          memberId: p.action === "member_info" ? p.member_id : undefined,
+          memberIdType: p.member_id_type,
+        });
+        if (p.action === "members") {
+          return json(
+            authorization.kind === "direct"
+              ? buildFeishuDirectChatMembers(authorization)
+              : await getChatMembers(
+                  client,
+                  p.chat_id,
+                  readChatPageSize(p),
+                  p.page_token,
+                  p.member_id_type,
+                ),
+          );
+        }
+        if (authorization.kind === "group") {
+          const memberIdType = p.member_id_type ?? "open_id";
+          await assertFeishuChatMember(client, p.chat_id, p.member_id!, memberIdType);
+          return json(await getFeishuMemberInfo(client, p.member_id!, memberIdType));
+        }
+        return json(
+          await getFeishuMemberInfo(client, authorization.memberId, authorization.memberIdType),
+        );
       };
     },
-    {
-      name: "feishu_chat",
-    },
-  );
+    onError: (err) => json({ error: formatFeishuApiError(err, { includeNestedErrorLogId: true }) }),
+  });
 }

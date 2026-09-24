@@ -15,6 +15,7 @@ import {
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { refreshCodexHostedApps } from "./command-apps-refresh.js";
 import {
+  assertCodexHostOwnerCurrent,
   canMutateCodexHost,
   CODEX_HOST_INSPECTION_AUTH_ERROR,
   CODEX_NATIVE_EXECUTION_AUTH_ERROR,
@@ -164,7 +165,11 @@ export async function handleCodexSubcommand(
           options.pluginConfig,
           CODEX_CONTROL_METHODS.installPlugin,
           requestParams,
-          { ...scope, config: ctx.config },
+          {
+            ...scope,
+            config: ctx.config,
+            assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
+          },
         )) as v2.PluginInstallResponse;
       },
       refresh: async (workspaceDir) => {
@@ -200,7 +205,6 @@ export async function handleCodexSubcommand(
             appServerVersion: client.getServerVersion(),
             runtimeIdentity: client.getRuntimeIdentity(),
           });
-          defaultCodexPluginMetadataCache.invalidate(appCacheKey);
           return await refreshCodexPluginRuntimeState({
             configCwd: workspaceDir,
             appCache: defaultCodexAppInventoryCache,
@@ -277,11 +281,11 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex stop" };
     }
-    return { text: await stopConversationTurn(deps, ctx, options.pluginConfig) };
+    return { text: await stopConversationTurn(deps, ctx) };
   }
   if (normalized === "steer") {
     return {
-      text: await steerConversationTurn(deps, ctx, options.pluginConfig, rest.join(" ")),
+      text: await steerConversationTurn(deps, ctx, rest.join(" ")),
     };
   }
   if (normalized === "model") {
@@ -401,11 +405,7 @@ export async function handleCodexSubcommand(
 function resolvePluginRuntimeRefreshMethod(method: string) {
   const supported = [
     CODEX_CONTROL_METHODS.listPlugins,
-    CODEX_CONTROL_METHODS.listSkills,
-    CODEX_CONTROL_METHODS.listHooks,
-    CODEX_CONTROL_METHODS.reloadMcpServers,
     CODEX_CONTROL_METHODS.installedApps,
-    CODEX_CONTROL_METHODS.listApps,
     CODEX_CONTROL_METHODS.readApps,
   ] as const;
   const recognized = supported.find((candidate) => candidate === method);

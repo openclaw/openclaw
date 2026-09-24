@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { resolveCliRuntimeCanonicalProvider } from "../../agents/cli-backends.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -21,6 +22,7 @@ afterEach(() => resetPluginRuntimeStateForTest());
 test("keeps thinking defaults separate for distinct literal model IDs", async () => {
   await withStateDirEnv("reply-thinking-identities-", async () => {
     const selection = await createModelSelectionState({
+      agentId: "main",
       cfg: { plugins: { enabled: false } },
       agentCfg: undefined,
       defaultProvider: "custom",
@@ -78,6 +80,7 @@ test.each(["origin", "notice"])(
             }),
       };
       const selection = await createModelSelectionState({
+        agentId: "main",
         cfg: { plugins: { enabled: false } },
         agentCfg: undefined,
         sessionEntry: entry,
@@ -129,6 +132,8 @@ type SelectionCase = {
   oneTurn?: boolean;
   cli?: boolean;
   missingAuthPin?: boolean;
+  operatorRestricted?: boolean;
+  operatorRejected?: boolean;
 };
 
 test.each<SelectionCase>([
@@ -140,6 +145,30 @@ test.each<SelectionCase>([
   { name: "one-turn override", pin: "middle", expected: "once", oneTurn: true },
   { name: "bound CLI provider", pin: "cli-model", expected: "cli-model", cli: true },
   { name: "missing auth pin", pin: "plain-model", expected: "plain-model", missingAuthPin: true },
+  { name: "role-denied stored pin", pin: "middle", expected: "default", operatorRestricted: true },
+  {
+    name: "role-denied inherited pin",
+    pin: "middle",
+    expected: "default",
+    inherited: true,
+    operatorRestricted: true,
+  },
+  {
+    name: "role-denied locked pin",
+    pin: "middle",
+    expected: "middle",
+    locked: true,
+    operatorRestricted: true,
+    operatorRejected: true,
+  },
+  {
+    name: "role-denied one-turn override",
+    pin: "middle",
+    expected: "once",
+    oneTurn: true,
+    operatorRestricted: true,
+    operatorRejected: true,
+  },
   {
     name: "resolved prefix rejected by a colliding exact allowlist",
     pin: "custom/model",
@@ -258,15 +287,6 @@ test.each<SelectionCase>([
       },
     });
     setActivePluginRegistry(registry);
-    if (fixture.cli) {
-      expect(
-        resolveCliRuntimeCanonicalProvider({
-          runtime: "demo-cli",
-          config: cfg,
-          includeSetupRegistry: true,
-        }),
-      ).toBe("custom");
-    }
     const provider = fixture.provider ?? (fixture.cli ? "demo-cli" : "custom");
     const pinnedEntry: SessionEntry = { sessionId: "resolved-pin", updatedAt: 1 };
     applyModelOverrideToSessionEntry({
@@ -324,7 +344,7 @@ test.each<SelectionCase>([
           model: fixture.readerModel ?? (fixture.raw ? "middle" : fixture.pin),
           routeResolution: fixture.raw ? "raw" : "resolved",
         });
-        const selection = await createModelSelectionState({
+        const pendingSelection = createModelSelectionState({
           cfg,
           agentId: "main",
           agentCfg: cfg.agents?.defaults,
@@ -334,21 +354,47 @@ test.each<SelectionCase>([
           parentSessionKey: fixture.inherited ? parentSessionKey : undefined,
           defaultProvider: "custom",
           defaultModel: "default",
-          provider: "custom",
-          model: fixture.oneTurn ? "once" : fixture.heartbeat ? "heartbeat" : "default",
+          provider: fixture.inherited ? provider : "custom",
+          model: fixture.oneTurn
+            ? "once"
+            : fixture.heartbeat
+              ? "heartbeat"
+              : fixture.inherited
+                ? fixture.pin
+                : "default",
           hasModelDirective: false,
           hasOneTurnModelOverride: fixture.oneTurn,
           isHeartbeat: fixture.heartbeat,
           hasResolvedHeartbeatModelOverride: fixture.heartbeat,
           preparedModelCatalog,
+          ...(fixture.operatorRestricted
+            ? {
+                operatorAuthority: createAdmittedRunOperatorAuthority({
+                  profileId: "limited-operator",
+                  scopes: ["operator.write"],
+                  assertCurrent: () => {},
+                  modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main" } }),
+                }),
+              }
+            : {}),
         });
+        if (fixture.operatorRejected) {
+          await expect(pendingSelection).rejects.toThrow(
+            "Your operator role cannot use this model",
+          );
+          expect(pinnedEntry.modelOverride).toBe(fixture.pin);
+          return;
+        }
+        const selection = await pendingSelection;
         expect(selection).toMatchObject({
-          provider: "custom",
+          provider: fixture.cli ? "demo-cli" : "custom",
           model: fixture.expected,
           resetModelOverride: fixture.disallowed === true && !fixture.inherited,
         });
-        if (fixture.disallowed && !fixture.inherited) {
+        if (fixture.disallowed) {
           expect(selection.resetModelOverrideReason).toBe("disallowed");
+        }
+        if (fixture.disallowed && !fixture.inherited) {
           expect(entry.modelOverride).toBeUndefined();
         } else {
           expect(pinnedEntry.modelOverride).toBe(fixture.pin);

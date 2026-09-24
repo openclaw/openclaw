@@ -6,6 +6,7 @@ import { loadGlobalRuntimeDotEnvFilesCore } from "../infra/dotenv-global-core.js
 
 export { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
 export { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+export { watchNodeHostParentStdin } from "./launcher-client.js";
 
 export function resolveNodeHostLauncherStateDir(
   argv: string[],

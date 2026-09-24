@@ -45,6 +45,15 @@ export type CronCreatorAuthorityRunScope = {
   readonly signal: AbortSignal;
   readonly grantTokens: Set<string>;
   readonly managementEntitlement?: CronManagementEntitlement;
+  /** Separately admitted channel-owner identity, not implied by automation management rights. */
+  readonly requesterOwner?: Readonly<{
+    isCurrent: () => boolean;
+    senderId?: string;
+    channel?: string;
+    accountId?: string;
+  }>;
+  /** Fresh admission only; never transferred with a management continuation. */
+  readonly callerScopedCreation?: true;
   /** @deprecated Read managementEntitlement. Harness source compatibility lasts through 2026-10-12. */
   readonly controlUiAdmin?: true;
   readonly isCurrent?: () => boolean;
@@ -83,6 +92,8 @@ export function createCronCreatorAuthorityRunScope(
   managementEntitlement?: CronManagementEntitlement,
   isCurrent?: () => boolean,
   channelRequester?: CronAuthenticatedChannelRequester,
+  requesterOwner?: CronCreatorAuthorityRunScope["requesterOwner"],
+  callerScopedCreation?: true,
 ): CronCreatorAuthorityRunScope {
   const abortController = new AbortController();
   const requester = normalizeCronAuthenticatedChannelRequester(channelRequester);
@@ -92,6 +103,8 @@ export function createCronCreatorAuthorityRunScope(
     signal: abortController.signal,
     grantTokens: new Set(),
     ...(managementEntitlement ? { managementEntitlement } : {}),
+    ...(requesterOwner ? { requesterOwner } : {}),
+    ...(callerScopedCreation ? { callerScopedCreation } : {}),
     get controlUiAdmin(): true | undefined {
       return managementEntitlement?.source === "control-ui-admin" ? true : undefined;
     },
@@ -111,7 +124,11 @@ export function hasCronChannelRequester(scope: CronCreatorAuthorityRunScope): bo
 }
 
 function hasCronAuthenticatedRequester(scope: CronCreatorAuthorityRunScope): boolean {
-  return scope.callerOrigin.kind === "local" || hasCronChannelRequester(scope);
+  return (
+    scope.callerOrigin.kind === "local" ||
+    hasCronChannelRequester(scope) ||
+    scope.callerScopedCreation === true
+  );
 }
 
 export function mintCronCreatorAuthorityGrant(
@@ -133,7 +150,13 @@ export function mintCronCreatorAuthorityGrant(
   ) {
     throw management ? expiredManagementError() : expiredAuthorityError();
   }
-  if (!management && scope.managementEntitlement && scope.callerOrigin.kind === "unknown") {
+  // Remote admission can prove the requester, never materialize fresh runtime authority.
+  if (
+    !management &&
+    scope.managementEntitlement &&
+    scope.callerOrigin.kind === "unknown" &&
+    !(capture === "requester" && scope.callerScopedCreation)
+  ) {
     throw new TypeError(
       "Automation creation is not granted to this turn. Use the Automations page to create an automation.",
     );
@@ -304,13 +327,11 @@ function expiredManagementError(): TypeError {
   );
 }
 
-/** Redeem once, retaining the exact operational owner through every await and commit. */
-export async function withCronManagementGrant<T>(
+function findCronManagementGrant(
   grant: CronCreatorAuthorityGrant,
   identity: CronManagementCaller,
   method: string,
-  run: () => Promise<T>,
-): Promise<T> {
+) {
   const entry = grantsByToken.get(grant.token);
   const management = entry?.management;
   const authority = identity.delegatedAuthority;
@@ -325,8 +346,35 @@ export async function withCronManagementGrant<T>(
     management.authority.lifecycleGeneration !== authority.lifecycleGeneration ||
     management.authority.claimId !== authority.claimId
   ) {
+    return undefined;
+  }
+  return { entry, management };
+}
+
+/**
+ * Lets the method-scope fence admit a caller holding an unredeemed grant bound to this
+ * method. The cron handler still redeems it once and checks it is active.
+ */
+export function holdsCronManagementGrant(
+  grant: CronCreatorAuthorityGrant,
+  identity: CronManagementCaller,
+  method: string,
+): boolean {
+  return findCronManagementGrant(grant, identity, method) !== undefined;
+}
+
+/** Redeem once, retaining the exact operational owner through every await and commit. */
+export async function withCronManagementGrant<T>(
+  grant: CronCreatorAuthorityGrant,
+  identity: CronManagementCaller,
+  method: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const found = findCronManagementGrant(grant, identity, method);
+  if (!found) {
     throw expiredManagementError();
   }
+  const { entry, management } = found;
   revokeCronCreatorAuthorityGrant(grant.token);
   const assertActive = () => {
     if (

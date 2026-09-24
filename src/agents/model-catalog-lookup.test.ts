@@ -63,6 +63,16 @@ describe("catalog model identity", () => {
     expect(findModelCatalogEntry([upper], { modelId: " " })).toBeUndefined();
   });
 
+  it("skips sparse catalog holes for literal and fallback matches", () => {
+    const catalog: ModelCatalogEntry[] = [];
+    catalog.length = 5;
+    catalog[2] = upper;
+
+    expect(findModelInCatalog(catalog, "custom", "Reader")).toBe(upper);
+    expect(findModelInCatalog(catalog, "custom", "reader")).toBe(upper);
+    expect(findModelInCatalog(catalog, "custom", "missing")).toBeUndefined();
+  });
+
   it("uses provider-owned canonical aliases without applying them to other providers", () => {
     const canonical = { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" };
     const unrelated = { ...canonical, provider: "custom" };

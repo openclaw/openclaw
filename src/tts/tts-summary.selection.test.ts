@@ -4,7 +4,7 @@ import { requireApiKey } from "../agents/model-auth.js";
 import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
-  acquireSimpleCompletionModel,
+  acquireSimpleCompletionModelWithSelection,
   completeWithPreparedSimpleCompletionModel,
 } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -314,7 +314,9 @@ it("retains the shipped injected callback shape and caller-owned returned model"
   await withSummaryFixture(
     { api: "openai-completions", summaryModel: "fast@work" },
     async (cfg, _state, requests) => {
-      const prepared = await acquireSimpleCompletionModel({ cfg, provider, modelId: "plain" });
+      const prepared = await acquireSimpleCompletionModelWithSelection({ cfg }, () => ({
+        selection: { provider, modelId: "plain" },
+      }));
       if ("error" in prepared) {
         throw new Error(prepared.error);
       }

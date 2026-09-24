@@ -15,9 +15,12 @@ import {
   upsertTaskWithDeliveryStateInDatabase,
 } from "./task-registry.store.kernel.js";
 
-export type { TaskCreateResult } from "./task-registry-create.operation.js";
+export type { TaskCreateInput, TaskCreateResult } from "./task-registry-create.operation.js";
 
-type TaskCreateOptions = Pick<TaskCreateOperations, "onCommitted" | "assertCurrent">;
+type TaskCreateOptions = Pick<
+  TaskCreateOperations,
+  "onCommitted" | "assertCurrent" | "retainTaskCommit"
+>;
 
 /** Shared writer custody spans the operation; write owns each separate transaction. */
 export function createTaskRecordInDatabase(
@@ -36,10 +39,10 @@ export function createTaskRecordInDatabase(
           ? readTaskFlowRecord(db, parentFlowId)
           : undefined,
       );
+      // Creation reuses an exact run; sibling-session discovery belongs to publication readback.
       const snapshot = readTaskRegistryMutationSnapshotInDatabase(db, {
         taskId: input.taskId,
         runId: params.runId,
-        childSessionKey: params.childSessionKey,
       });
       const existing = selectExistingTaskForCreate({
         ...params,
@@ -63,5 +66,6 @@ export function createTaskRecordInDatabase(
     },
     onCommitted: options.onCommitted,
     assertCurrent: options.assertCurrent,
+    retainTaskCommit: options.retainTaskCommit,
   });
 }

@@ -36,8 +36,8 @@ import {
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -78,6 +78,7 @@ import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "./compaction.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
+import { resolveAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import {
   clearAgentHarnesses,
@@ -87,14 +88,13 @@ import {
 import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
 import { resolveAgentHarnessDeliveryDefaults } from "./selection-decision.js";
 import {
-  resolveAgentHarnessNativeToolPolicyRestricted,
   resolveAvailableAgentHarnessPolicy,
-  resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
   runAgentHarnessSettledTurnFinalization,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
 } from "./selection.js";
+import { createHarnessAttemptParams } from "./selection.test-support.js";
 import {
   buildAgentHarnessSupportContext,
   resolveAgentHarnessPreparedAuthSupport,
@@ -269,10 +269,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   vi.unstubAllEnvs();
   clearRuntimeConfigSnapshot();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   trajectoryTempDirs.cleanup();
   selectionAdmission.close();
   resetAgentRunRegistryForTest();
@@ -296,23 +296,7 @@ afterEach(async () => {
 });
 
 function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams {
-  return {
-    admittedRunContext: selectionAdmittedRunContext,
-    prompt: "hello",
-    sessionId: "session-1",
-    runId: "run-1",
-    sessionFile: "/tmp/session.jsonl",
-    workspaceDir: "/tmp/workspace",
-    timeoutMs: 5_000,
-    provider: "codex",
-    modelId: "gpt-5.4",
-    model: { id: "gpt-5.4", provider: "codex" } as Model,
-    authStorage: {} as never,
-    authProfileStore: { version: 1, profiles: {} },
-    modelRegistry: {} as never,
-    thinkLevel: "low",
-    config,
-  } as EmbeddedRunAttemptParams;
+  return createHarnessAttemptParams(selectionAdmittedRunContext, config);
 }
 
 function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
@@ -2193,66 +2177,6 @@ describe("runAgentHarnessAttempt", () => {
     expect(attempt?.extraSystemPrompt).toContain("this chat is not allowed by policy");
   });
 
-  it.each([
-    {
-      name: "narrow allowlist",
-      config: { tools: { allow: ["message"] } } as OpenClawConfig,
-    },
-    {
-      name: "specific denylist",
-      config: { tools: { deny: ["exec"] } } as OpenClawConfig,
-    },
-    {
-      name: "narrow profile",
-      config: { tools: { profile: "coding" } } as OpenClawConfig,
-    },
-  ])("marks plugin side questions restricted for a $name", ({ config }) => {
-    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toEqual([]);
-  });
-
-  it.each([
-    { name: "full tool profile", config: { tools: { profile: "full" } } as OpenClawConfig },
-    { name: "explicit empty allowlist", config: { tools: { allow: [] } } as OpenClawConfig },
-  ])("leaves plugin side questions unrestricted for an $name", ({ config }) => {
-    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toBeUndefined();
-  });
-
-  it("leaves owner WebChat unrestricted by wildcard sender policy for plugin harnesses", () => {
-    const config = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["*"] },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolvePluginHarnessPolicyToolsAllow({
-        ...createAttemptParams(config),
-        messageProvider: "webchat",
-        senderIsOwner: true,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("keeps non-owner WebChat restricted by wildcard sender policy for plugin harnesses", () => {
-    const config = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["*"] },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolvePluginHarnessPolicyToolsAllow({
-        ...createAttemptParams(config),
-        messageProvider: "webchat",
-        senderIsOwner: false,
-      }),
-    ).toEqual([]);
-  });
-
   it("leaves OpenClaw harness params unchanged for channel group sender deny-all policy", async () => {
     await runAgentHarnessAttempt({
       ...createAttemptParams(groupSenderDenyAllConfig()),
@@ -2748,7 +2672,7 @@ describe("selectAgentHarness", () => {
       }).modelProvider,
     ).toMatchObject({
       requestTransportOverrides: "none",
-      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+      runtimePolicy: { compatibleIds: ["openclaw", "codex", "agentsapi"] },
     });
   });
 
@@ -2812,11 +2736,11 @@ describe("selectAgentHarness", () => {
   );
 
   it.each([
-    ["Platform", "openai-responses", "https://api.openai.com/v1"],
-    ["ChatGPT", "openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex"],
+    ["Platform", "openai-responses", "https://api.openai.com/v1", ["agentsapi"]],
+    ["ChatGPT", "openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex", []],
   ] as const)(
     "keeps authored reasoning metadata and native controls on %s Codex",
-    (_label, api, baseUrl) => {
+    (_label, api, baseUrl, additionalRuntimes) => {
       const config: OpenClawConfig = {
         models: {
           providers: {
@@ -2879,7 +2803,7 @@ describe("selectAgentHarness", () => {
         }).modelProvider,
       ).toMatchObject({
         requestTransportOverrides: "none",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        runtimePolicy: { compatibleIds: ["openclaw", "codex", ...additionalRuntimes] },
       });
     },
   );

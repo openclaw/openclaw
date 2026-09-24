@@ -90,6 +90,9 @@ export function renderNostrProfileForm(params: {
     const error = state.fieldErrors[field];
 
     const inputId = `nostr-profile-${field}`;
+    const helpId = `${inputId}-help`;
+    const errorId = `${inputId}-error`;
+    const descriptionIds = [help ? helpId : "", error ? errorId : ""].filter(Boolean).join(" ");
     const control =
       type === "textarea"
         ? html`
@@ -100,6 +103,8 @@ export function renderNostrProfileForm(params: {
               placeholder=${placeholder ?? ""}
               maxlength=${maxLength ?? 2000}
               rows="3"
+              aria-describedby=${descriptionIds || nothing}
+              aria-invalid=${error ? "true" : nothing}
               @input=${(e: InputEvent) => {
                 const target = e.target as HTMLTextAreaElement;
                 callbacks.onFieldChange(field, target.value);
@@ -115,6 +120,8 @@ export function renderNostrProfileForm(params: {
               .value=${value}
               placeholder=${placeholder ?? ""}
               maxlength=${maxLength ?? 256}
+              aria-describedby=${descriptionIds || nothing}
+              aria-invalid=${error ? "true" : nothing}
               @input=${(e: InputEvent) => {
                 const target = e.target as HTMLInputElement;
                 callbacks.onFieldChange(field, target.value);
@@ -127,10 +134,12 @@ export function renderNostrProfileForm(params: {
       <div class="settings-row settings-row--stacked">
         <div class="settings-row__text">
           <label class="settings-row__title" for="${inputId}">${label}</label>
-          ${help ? html`<span class="settings-row__desc">${help}</span>` : nothing}
+          ${help ? html`<span id=${helpId} class="settings-row__desc">${help}</span>` : nothing}
           ${
             error
-              ? html`<span class="settings-row__desc" style="color: var(--danger);">${error}</span>`
+              ? html`<span id=${errorId} class="settings-row__desc" style="color: var(--danger);"
+                  >${error}</span
+                >`
               : nothing
           }
         </div>
@@ -180,7 +189,7 @@ export function renderNostrProfileForm(params: {
     ${
       state.error
         ? html`
-            <div class="settings-row">
+            <div class="settings-row" role="alert">
               <div class="settings-row__text">
                 <span class="settings-row__title"
                   >${renderSettingsStatus({ kind: "danger", label: t("channels.lastError") })}</span
@@ -194,7 +203,7 @@ export function renderNostrProfileForm(params: {
     ${
       state.success
         ? html`
-            <div class="settings-row">
+            <div class="settings-row" role="status">
               <div class="settings-row__text">
                 <span class="settings-row__desc">${state.success}</span>
               </div>
@@ -280,7 +289,11 @@ export function renderNostrProfileForm(params: {
           ${state.importing ? t("common.importing") : t("common.importFromRelays")}
         </button>
 
-        <button class="btn" @click=${callbacks.onToggleAdvanced}>
+        <button
+          class="btn"
+          aria-expanded=${String(state.showAdvanced)}
+          @click=${callbacks.onToggleAdvanced}
+        >
           ${state.showAdvanced ? t("common.hideAdvanced") : t("common.showAdvanced")}
         </button>
 

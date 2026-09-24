@@ -1,3 +1,6 @@
+# shellcheck source=scripts/pr-lib/github.sh
+source "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/github.sh" || return 1
+
 set_review_mode() {
   local mode="$1"
   # Security: shell-escape values to prevent command injection when sourced.
@@ -31,10 +34,12 @@ review_claim() {
     local user_log
     user_log=".local/review-claim-user-attempt-$attempt.log"
 
-    # A relay's REST /user may identify its caller, not the local mutation writer.
-    if reviewer=$(gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login 2>"$user_log"); then
+    if reviewer=$(pr_gh_writer_login 2>"$user_log"); then
       printf "%s\n" "$reviewer" >"$user_log"
       break
+    elif [ "$?" -eq 75 ]; then
+      cat "$user_log" >&2
+      return 1
     fi
 
     echo "Claim reviewer lookup failed (attempt $attempt/$max_attempts)."
@@ -54,9 +59,12 @@ review_claim() {
     local claim_log
     claim_log=".local/review-claim-assignee-attempt-$attempt.log"
 
-    if gh_plain pr edit "$pr" --add-assignee "$reviewer" >"$claim_log" 2>&1; then
+    if pr_gh_plain assign-reviewer "$pr" "$reviewer" >"$claim_log" 2>&1; then
       echo "review claim succeeded: @$reviewer assigned to PR #$pr"
       return 0
+    elif [ "$?" -eq 75 ]; then
+      cat "$claim_log" >&2
+      return 1
     fi
 
     echo "Claim assignee update failed (attempt $attempt/$max_attempts)."
@@ -79,8 +87,8 @@ review_checkout_main() {
   set_review_mode main
 
   echo "review mode set to main baseline"
-  echo "branch=$(git branch --show-current)"
-  echo "head=$(git rev-parse --short HEAD)"
+  echo "branch=$(pr_git branch --show-current)"
+  echo "head=$(pr_git rev-parse --short HEAD)"
 }
 
 review_checkout_pr() {
@@ -95,8 +103,8 @@ review_checkout_pr() {
   set_review_mode pr
 
   echo "review mode set to PR head"
-  echo "branch=$(git branch --show-current)"
-  echo "head=$(git rev-parse --short HEAD)"
+  echo "branch=$(pr_git branch --show-current)"
+  echo "head=$(pr_git rev-parse --short HEAD)"
 }
 
 review_guard() {
@@ -116,9 +124,9 @@ review_guard() {
   fi
 
   local branch
-  branch=$(git branch --show-current)
+  branch=$(pr_git branch --show-current)
   local head_sha
-  head_sha=$(git rev-parse HEAD)
+  head_sha=$(pr_git rev-parse HEAD)
 
   case "${REVIEW_MODE:-}" in
     main)
@@ -231,6 +239,91 @@ require_ready_review_recommendation() {
   fi
 }
 
+require_correction_review_recommendation() {
+  if ! jq -e '.recommendation == "NEEDS WORK" and
+    any(.findings[]; .severity == "BLOCKER" or .severity == "IMPORTANT")' \
+    .local/review.json >/dev/null; then
+    echo "Correction preparation requires a validated NEEDS WORK review with actionable findings."
+    return 1
+  fi
+}
+
+run_prepared_correction_review() (
+  local pr="$1" command="$2"
+  require_artifact .local/prep-context.env || return 1
+  local PREP_REVIEW_MODE="" PREP_INCOMING_JSON_OID=""
+  local PR_NUMBER="" PR_HEAD_SHA_BEFORE="" PREP_BRANCH=""
+  # shellcheck disable=SC1091
+  source .local/prep-context.env || return 1
+  if [ "$PREP_REVIEW_MODE" != correction ] || [ "$PR_NUMBER" != "$pr" ] ||
+    [ -z "$PREP_INCOMING_JSON_OID" ] ||
+    [ -z "$PREP_BRANCH" ]; then
+    echo "Missing exact incoming review binding; run prepare-correction-init first." >&2
+    return 1
+  fi
+  local head branch_head
+  head=$(pr_git rev-parse HEAD) || return 1
+  branch_head=$(pr_git rev-parse "refs/heads/$PREP_BRANCH") || return 1
+  if [ "$head" != "$branch_head" ]; then
+    echo "Correction review requires the current preparation branch." >&2
+    return 1
+  fi
+  validate_review_artifact_data || return 1
+  node "$(dirname "$(review_artifacts_helper_path)")/correction-review.mjs" \
+    "$command" "$pr" "$PR_HEAD_SHA_BEFORE" "$head" \
+    "$PREP_INCOMING_JSON_OID"
+)
+
+require_prepared_review() {
+  local pr="$1" mode=ready
+  validate_review_artifact_data || return 1
+  if [ -s .local/prep-context.env ]; then
+    mode=$(
+      unset PREP_REVIEW_MODE
+      # shellcheck disable=SC1091
+      source .local/prep-context.env || exit 1
+      printf '%s\n' "${PREP_REVIEW_MODE:-ready}"
+    ) || return 1
+  fi
+  case "$mode" in
+    ready) require_ready_review_recommendation ;;
+    correction) run_prepared_correction_review "$pr" validate ;;
+    *) echo "Unknown preparation review mode: $mode" >&2; return 1 ;;
+  esac
+}
+
+# A correction's review authority must survive every awaited admission read.
+# Normal READY preparation keeps its existing contract; the nonempty snapshot
+# also detects loss of correction mode during an operation.
+correction_review_snapshot() (
+  local pr="$1" PREP_REVIEW_MODE=""
+  [ -s .local/prep-context.env ] || return 0
+  source .local/prep-context.env || return 1
+  [ "$PREP_REVIEW_MODE" = correction ] || return 0
+  require_prepared_review "$pr" >/dev/null || return 1
+  local publication_receipt=()
+  if [ -e .local/prep.env ] || [ -L .local/prep.env ]; then
+    [ -f .local/prep.env ] && [ ! -L .local/prep.env ] || return 1
+    publication_receipt+=(.local/prep.env)
+  fi
+  pr_git hash-object --no-filters -- \
+    .local/prep-context.env .local/pr-meta.json .local/pr-meta.env \
+    .local/review.json \
+    .local/correction-review.json \
+    .local/correction-incoming-review.json \
+    ${publication_receipt[@]+"${publication_receipt[@]}"}
+)
+
+verify_correction_review_snapshot() {
+  local pr="$1" expected="$2" current
+  [ -n "$expected" ] || return 0
+  current=$(correction_review_snapshot "$pr") || return 1
+  if [ "$expected" != "$current" ]; then
+    echo "Correction review authority changed during admission; no publication or merge is authorized." >&2
+    return 1
+  fi
+}
+
 # Pure local admission: malformed or unfinished input must not start a fetch or
 # leave an operation lock behind. This does not establish remote freshness.
 review_artifact_preflight() (
@@ -250,7 +343,17 @@ review_artifact_preflight() (
     echo "Review artifact identity mismatch: expected PR #$pr. Re-run scripts/pr review-init $pr"
     return 1
   fi
-  if [ "$ready" = true ]; then require_ready_review_recommendation || return 1; fi
+  case "$ready" in
+    true) require_ready_review_recommendation || return 1 ;;
+    correction) require_correction_review_recommendation || return 1 ;;
+    prepared)
+      # Ordinary READY remains sufficient. A truthful incoming NEEDS WORK may
+      # reach merge only through the exact correction owner's local validation.
+      if ! jq -e '.recommendation == "READY FOR /prepare-pr"' .local/review.json >/dev/null; then
+        run_prepared_correction_review "$pr" validate >/dev/null || return 1
+      fi
+      ;;
+  esac
 )
 
 review_validate_artifacts() {
@@ -326,17 +429,23 @@ review_init() {
   local json pr_url
   # Metadata reads are read-only, so fetching before the side-effect marker keeps a
   # transient GitHub failure inside the lock's auto-release window.
-  json=$(pr_meta_json "$pr") || return 1
+  json=$(pr_meta_json "$pr" false) || return 1
 
   enter_worktree "$pr" true || return 1
-  write_pr_meta_files "$json"
+  if [ "$(printf '%s\n' "$json" | jq -r .baseRefOid)" != "$PR_MAIN_SHA" ]; then
+    # Cold provisioning can outlive the metadata's base. Collect a new snapshot
+    # before acquisition rather than compare files from different main states.
+    json=$(pr_meta_json "$pr" false) || return 1
+  fi
   pr_url=$(printf '%s\n' "$json" | jq -r .url)
 
   local expected_sha
   expected_sha=$(pr_view_string_field "$json" headRefOid "$pr") || return 1
-  fetch_pr_head "$pr" "$expected_sha" "refs/heads/pr-$pr" || return 1
+  fetch_pr_head "$pr" "$expected_sha" "refs/heads/pr-$pr" "$json" || return 1
+  verify_pr_metadata_identity "$pr" "$json" "$PR_HEAD_OBSERVATION" || return 1
+  write_pr_meta_files "$json"
   local mb
-  mb=$(git merge-base "$PR_MAIN_SHA" "refs/heads/pr-$pr")
+  mb=$(pr_git merge-base "$PR_MAIN_SHA" "refs/heads/pr-$pr")
 
   # Security: shell-escape values to prevent command injection when sourced.
   printf '%s=%q\n' \
@@ -350,7 +459,7 @@ review_init() {
   echo "worktree=$PWD"
   echo "pr_url=$pr_url"
   echo "merge_base=$mb"
-  echo "branch=$(git branch --show-current)"
+  echo "branch=$(pr_git branch --show-current)"
   echo "wrote=.local/pr-meta.json .local/pr-meta.env .local/review-context.env .local/review-mode.env"
   cat <<EOF_GUIDE
 Review guidance:

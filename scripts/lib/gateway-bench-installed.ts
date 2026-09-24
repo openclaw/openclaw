@@ -10,6 +10,11 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts
 import { writeJsonAtomic } from "../../src/infra/json-files.ts";
 import { stopChild, stopGatewayGracefully } from "./gateway-bench-child.ts";
 import {
+  collectInstalledCpuProfile,
+  prepareInstalledCpuProfile,
+  readInstalledDiagnosticState,
+} from "./gateway-bench-installed-diagnostic.ts";
+import {
   assertSeparatePaths,
   hashFile,
   hashInstall,
@@ -59,9 +64,9 @@ const FRESH_TIMEOUT_MS = 180_000;
 const RESTART_TIMEOUT_MS = 60_000;
 const STOP_TIMEOUT_MS = 60_000;
 
-function plannedSamples(comparison = false): Sample[] {
+function plannedSamples(comparison = false, diagnostic = false): Sample[] {
   const samples: Sample[] = [];
-  for (let armIndex = 0; armIndex < 9; armIndex += 1) {
+  for (let armIndex = 0; armIndex < (diagnostic ? 2 : 9); armIndex += 1) {
     const order = comparison
       ? armIndex > 0 && armIndex % 2 === 0
         ? ["candidate", "baseline"]
@@ -128,7 +133,7 @@ function observe(sample: Sample, name: string, value: unknown) {
   );
 }
 
-async function firstRequests(port: number, startedAt: number, sample: Sample) {
+async function firstRequests(port: number, startedAt: number, sample: Sample, diagnostic: boolean) {
   const client = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
   try {
     await client.waitOpen();
@@ -153,8 +158,14 @@ async function firstRequests(port: number, startedAt: number, sample: Sample) {
       ["health", { probe: true }],
     ] as const) {
       const requestedAt = performance.now();
+      const requestedMonotonicUs = diagnostic
+        ? Number(process.hrtime.bigint() / 1_000n)
+        : undefined;
       const response = await client.request(method, params);
       observe(sample, method, {
+        ...(diagnostic
+          ? { requestedMonotonicUs, completedMonotonicUs: Number(process.hrtime.bigint() / 1_000n) }
+          : {}),
         requestedAtMs: requestedAt - startedAt,
         completedAtMs: performance.now() - startedAt,
         requestMs: performance.now() - requestedAt,
@@ -195,11 +206,13 @@ async function runSample(params: {
   installRoot: string;
   root: string;
   config: string;
+  diagnostic: boolean;
+  cpuProfile?: Awaited<ReturnType<typeof prepareInstalledCpuProfile>>;
 }) {
   const { sample } = params;
   const port = await getFreePort();
   const env = createGatewayBenchEnv(params.root, params.config, {
-    startupTrace: false,
+    startupTrace: params.diagnostic,
     caseEnv: {
       USERPROFILE: params.root,
       APPDATA: path.join(params.root, "AppData", "Roaming"),
@@ -215,12 +228,20 @@ async function runSample(params: {
   stopPreload.searchParams.set("parentPid", String(process.pid));
   stopPreload.searchParams.set("entry", params.entry);
   const startedAt = performance.now();
+  const startedMonotonicUs = params.diagnostic
+    ? Number(process.hrtime.bigint() / 1_000n)
+    : undefined;
   const child = spawn(
     process.execPath,
-    buildGatewayBenchChildArgs(params.entry, port, ["--import", stopPreload.href]),
+    buildGatewayBenchChildArgs(params.entry, port, [
+      "--import",
+      stopPreload.href,
+      ...(params.cpuProfile?.nodeArgs ?? []),
+    ]),
     { cwd: params.installRoot, env, stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true },
   );
   observe(sample, "launch", {
+    ...(params.diagnostic ? { startedMonotonicUs, profiled: params.cpuProfile !== undefined } : {}),
     controllerPid: process.pid,
     pid: child.pid,
     port,
@@ -279,7 +300,7 @@ async function runSample(params: {
     assert.equal(readyz.status, 200, "Gateway readyz failed");
     assert.ok(readyz.ms !== null, "Gateway never became ready");
     sample.readyMs = readyz.ms;
-    await firstRequests(port, startedAt, sample);
+    await firstRequests(port, startedAt, sample, params.diagnostic);
   } catch (error) {
     sample.errors.push(String(error));
   } finally {
@@ -306,18 +327,40 @@ async function runSample(params: {
         clearTimeout(timer);
       }
     }
+    if (params.cpuProfile) {
+      try {
+        observe(
+          sample,
+          "cpuProfile",
+          await collectInstalledCpuProfile(params.cpuProfile, child.pid),
+        );
+      } catch (error) {
+        observe(sample, "cpuProfileError", String(error));
+        sample.errors.push(String(error));
+      }
+    }
     sample.outcome = sample.errors.length ? "failed" : "passed";
   }
   return sample.outcome;
 }
 
-type InstalledOptions = { inputPath: string; outputPath: string; child: boolean; argv: string[] };
+type InstalledOptions = {
+  inputPath: string;
+  outputPath: string;
+  child: boolean;
+  argv: string[];
+  diagnostic: boolean;
+};
 
 export async function runInstalledGatewayBenchmark(options: InstalledOptions): Promise<number> {
   const output = path.resolve(options.outputPath);
   const inputPath = path.resolve(options.inputPath);
   const input = inputSchema.parse(JSON.parse(await fs.readFile(inputPath, "utf8")));
-  const plan = plannedSamples(input.comparison !== undefined);
+  assert.ok(
+    !options.diagnostic || !input.comparison,
+    "CPU diagnostics require one installed package",
+  );
+  const plan = plannedSamples(input.comparison !== undefined, options.diagnostic);
   if (!options.child) {
     await fs.mkdir(path.dirname(output), { recursive: true });
     // A retained failed attempt is immutable; callers choose a fresh artifact path.
@@ -356,7 +399,9 @@ export async function runInstalledGatewayBenchmark(options: InstalledOptions): P
     await writeJsonAtomic(`${output}.outer.json`, outerSettlement);
     let report: z.infer<typeof checkpointSchema>;
     try {
-      report = checkpointSchema.parse(JSON.parse(await fs.readFile(output, "utf8")));
+      report = checkpointSchema
+        .extend({ samples: z.array(sampleSchema).length(plan.length) })
+        .parse(JSON.parse(await fs.readFile(output, "utf8")));
     } catch {
       return 1;
     } // Preserve malformed raw evidence alongside the independent settlement receipt.
@@ -387,7 +432,7 @@ export async function runInstalledGatewayBenchmark(options: InstalledOptions): P
       ...report,
       outcome: passed ? "passed" : "failed",
       establishedReadySummary:
-        passed && !input.comparison
+        passed && !input.comparison && !options.diagnostic
           ? summarizeNumbers(
               report.samples
                 .slice(1)
@@ -405,6 +450,14 @@ export async function runInstalledGatewayBenchmark(options: InstalledOptions): P
   const baseline = await prepareInstalledPackage(input);
   const comparison = input.comparison ? await prepareInstalledPackage(input.comparison) : undefined;
   const targets = comparison ? [baseline, comparison] : [baseline];
+  if (options.diagnostic) {
+    for (const root of [baseline.installRoot, baseline.root]) {
+      for (const artifact of [output, `${output}.profiles`]) {
+        assertSeparatePaths(root, artifact);
+        assertSeparatePaths(artifact, root);
+      }
+    }
+  }
   if (comparison) {
     assert.equal(comparison.input.toolingSha, input.toolingSha, "Comparison tooling differs");
     assert.deepEqual(comparison.input.runtime, input.runtime, "Comparison runtime differs");
@@ -429,6 +482,8 @@ export async function runInstalledGatewayBenchmark(options: InstalledOptions): P
     ...[
       "gateway-bench-installed.ts",
       "gateway-bench-installed-package.ts",
+      "gateway-bench-installed-diagnostic.ts",
+      "gateway-bench-startup-cpu-preload.mjs",
       "gateway-bench-stop-preload.mjs",
       "gateway-bench-child.ts",
       "gateway-bench-runtime.ts",
@@ -446,6 +501,7 @@ export async function runInstalledGatewayBenchmark(options: InstalledOptions): P
   const samples = plan;
   const report = {
     artifactKind: "installed-package",
+    measurementMode: options.diagnostic ? "cpu-diagnostic" : "timing-cohort",
     outcome: "running",
     input,
     buildInfo: baseline.buildInfo,
@@ -470,11 +526,15 @@ export async function runInstalledGatewayBenchmark(options: InstalledOptions): P
     },
     limitations: [
       "Fresh means new synthetic state, not a cold filesystem",
-      comparison
-        ? "Two immutable installs; separate state/cache; fresh A,B then eight alternating restart pairs"
-        : "One immutable install; first sample is separate from eight retained-state restarts",
+      options.diagnostic
+        ? "One unprofiled fresh prime, then one profiled established launch; not a timing comparison"
+        : comparison
+          ? "Two immutable installs; separate state/cache; fresh A,B then eight alternating restart pairs"
+          : "One immutable install; first sample is separate from eight retained-state restarts",
       "A dedicated runner is a new baseline, not a causal comparison to desktop measurements",
-      "No synchronous process sampling or startup profiling; the stop-only preload is retained",
+      options.diagnostic
+        ? "Native CPU profiling and trace interception add overhead; main-isolate samples omit unprofiled child and Worker CPU"
+        : "No synchronous process sampling or startup profiling; the stop-only preload is retained",
       "RPC success is recorded separately from plugin availability and degraded diagnostic facts",
     ],
     deadlines: {
@@ -500,8 +560,29 @@ export async function runInstalledGatewayBenchmark(options: InstalledOptions): P
       const config = configs.get(target.root);
       assert.ok(config, "Prepared installation has no config");
       sample.observations.stateRoot = target.root;
+      if (options.diagnostic) {
+        observe(sample, "stateBefore", await readInstalledDiagnosticState(config));
+      }
+      const cpuProfile =
+        options.diagnostic && sample.phase === "established"
+          ? await prepareInstalledCpuProfile(output, target.entry)
+          : undefined;
       await save();
-      const outcome = await runSample({ sample, ...target, config });
+      const outcome = await runSample({
+        sample,
+        ...target,
+        config,
+        diagnostic: options.diagnostic,
+        cpuProfile,
+      });
+      if (options.diagnostic) {
+        observe(sample, "stateAfter", await readInstalledDiagnosticState(config));
+        assert.deepEqual(
+          await hashInstall(target.installRoot),
+          target.before,
+          "Installed tree changed between diagnostic launches",
+        );
+      }
       await save();
       console.log(
         `[gateway-startup-bench] installed ${sample.arm ?? "single"} ${sample.phase} ${sample.index}: ${sample.outcome} ready=${sample.readyMs ?? "missing"}ms`,

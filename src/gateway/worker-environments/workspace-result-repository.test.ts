@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
@@ -14,6 +15,7 @@ import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspac
 import { runCommandWithTimeout } from "../../process/exec.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -29,6 +31,7 @@ import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-res
 import { createWorkerPlacementReclaim } from "./placement-reclaim.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { SessionWorkspaceReservationBusyError } from "./placement-workspace-reservation.js";
 import { createRepositoryWorkspaceMutationService } from "./repository-workspace-mutation.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import {
@@ -50,6 +53,7 @@ import {
   setupWorkerTurnLauncherTest,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 import { reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 import {
@@ -63,6 +67,8 @@ vi.mock("./worker-github-binding.js", () => ({
 }));
 
 describe("repository workspace result ownership", () => {
+  const seedDirs = useAutoCleanupTempDirTracker(afterAll);
+  const originSeeds = new Map<boolean, string>();
   let closeNode: (() => Promise<void>) | undefined;
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(async () => {
@@ -70,14 +76,15 @@ describe("repository workspace result ownership", () => {
       await closeNode?.();
     } finally {
       closeNode = undefined;
-      await cleanupWorkerTurnLauncherTest();
+      await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
     }
   });
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  });
 
-  async function fixture(executionMode: "worker-turn" | "remote-exec", runSetupScript = false) {
-    setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
-    const origin = path.join(root, "origin");
-    await fs.mkdir(origin);
+  async function initializeOriginSeed(origin: string, runSetupScript: boolean) {
     if (runSetupScript) {
       await fs.mkdir(path.join(origin, ".openclaw"));
       await fs.writeFile(
@@ -91,7 +98,7 @@ describe("repository workspace result ownership", () => {
         timeoutMs: 10_000,
         baseEnv: {
           PATH: process.env.PATH,
-          HOME: root,
+          HOME: origin,
           GIT_CONFIG_GLOBAL: os.devNull,
           GIT_CONFIG_NOSYSTEM: "1",
         },
@@ -111,6 +118,19 @@ describe("repository workspace result ownership", () => {
       "-m",
       "base",
     );
+  }
+
+  async function fixture(executionMode: "worker-turn" | "remote-exec", runSetupScript = false) {
+    setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
+    let seed = originSeeds.get(runSetupScript);
+    if (!seed) {
+      seed = seedDirs.make("openclaw-repository-result-seed-");
+      await initializeOriginSeed(seed, runSetupScript);
+      originSeeds.set(runSetupScript, seed);
+    }
+    const origin = path.join(root, "origin");
+    // Only pristine source bytes are shared; checkpoints and Git refs stay case-owned.
+    await fs.cp(seed, origin, { recursive: true });
     const store = getSessionRepositoryWorkspaceStore();
     const repository = store.create({
       agentId: sessionTarget.agentId,
@@ -217,8 +237,7 @@ describe("repository workspace result ownership", () => {
         throw new Error("unexpected prepared binding");
       },
       get: () => attachedEnvironment(),
-      create: vi.fn(async () => attachedEnvironment()),
-      createFromProfileSnapshot: vi.fn(async () => attachedEnvironment()),
+      createWithRequest: vi.fn(async () => attachedEnvironment()),
       attachSession: vi.fn(async () => credential()),
       destroy: vi.fn(async () => attachedEnvironment()),
       startTunnel: vi.fn(async () => tunnel),
@@ -243,8 +262,8 @@ describe("repository workspace result ownership", () => {
       workspaceOperations,
       runReclaimBarrier: async ({ begin, reclaim }) =>
         await reclaim(await resolveWorkspace(), begin()),
-      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
-      reportWorkspaceResultConflict: async () => {},
+      withPreparedRecovery: createWorkerWorkspaceRecoveryFixture({ resolveWorkspace })
+        .withPreparedRecovery,
     });
     return {
       remote,
@@ -329,9 +348,7 @@ describe("repository workspace result ownership", () => {
           environments: f.environments,
           failure: createPlacementFailureActions({ placements, environments: f.environments }),
           workspaceOperations: f.workspaceOperations,
-          resolveWorkspace: f.resolveWorkspace,
-          resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
-          reportWorkspaceResultConflict: async () => {},
+          ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace: f.resolveWorkspace }),
         },
         false,
       );
@@ -371,7 +388,7 @@ describe("repository workspace result ownership", () => {
           mutate: async (assertCurrent) => {
             await expect(
               placements.withRepositoryWorkspaceReservation(sessionTarget, competing),
-            ).rejects.toThrow("checkpoint is busy");
+            ).rejects.toBeInstanceOf(SessionWorkspaceReservationBusyError);
             assertCurrent();
             return { changed: false, value: "unchanged" };
           },
@@ -622,8 +639,7 @@ describe("repository workspace result ownership", () => {
           throw new Error("unexpected prepared binding");
         },
         get: () => undefined,
-        create: vi.fn(async () => attachedEnvironment()),
-        createFromProfileSnapshot: vi.fn(async () => attachedEnvironment()),
+        createWithRequest: vi.fn(async () => attachedEnvironment()),
         attachSession: vi.fn(async () => credential()),
         destroy: vi.fn(async () => attachedEnvironment()),
         startTunnel: vi.fn(async () => {
@@ -641,13 +657,13 @@ describe("repository workspace result ownership", () => {
           environments,
           failure: createPlacementFailureActions({ placements: restarted, environments }),
           workspaceOperations: f.workspaceOperations,
-          resolveWorkspace: async () =>
-            materialized
-              ? { kind: "local", path: destination }
-              : { kind: "repository", repository: f.store.get(f.repository.workspaceId)! },
-          resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
-          reportWorkspaceResultConflict: async () => {},
-          reportWorkspaceResultRecoveryFailure,
+          ...createWorkerWorkspaceRecoveryFixture({
+            resolveWorkspace: async () =>
+              materialized
+                ? { kind: "local", path: destination }
+                : { kind: "repository", repository: f.store.get(f.repository.workspaceId)! },
+            reportFailure: reportWorkspaceResultRecoveryFailure,
+          }),
         },
         true,
       );

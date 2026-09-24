@@ -1,5 +1,6 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
+import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
@@ -26,7 +27,6 @@ const MAX_TRANSIENT_RETRY_TIME_MS = 90_000;
 const TRANSIENT_RETRY_BASE_DELAY_MS = 1_000;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 30_000;
 
-/** Resolves jittered exponential backoff without exceeding the turn retry ceiling. */
 function resolveTransientRetryDelayMs(params: {
   retryNumber: number;
   retryAfterMs?: number;
@@ -253,6 +253,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
       reason: TransientRetryReason;
       message?: string;
       retryAfterMs?: number;
+      /** Saved retry.provider.maxRetryDelayMs; undefined or 0 disables the cap. */
+      maxRetryDelayMs?: number;
+      /** False when the attempt cannot fail over (replay-unsafe tool activity). */
+      failoverEligible?: boolean;
       onRetry?: (status: {
         attempt: number;
         maxRetries: number;
@@ -260,6 +264,26 @@ export function createEmbeddedRunFailoverRetryController(input: {
         reason: TransientRetryReason;
       }) => void | Promise<void>;
     }): Promise<boolean> => {
+      const recordDecision = (
+        decision: "accepted" | "rejected",
+        reason:
+          | "non_transient"
+          | "long_window_rate_limit"
+          | "retry_budget_exhausted"
+          | "retry_delay_unavailable"
+          | "retry_delay_exceeds_cap"
+          | "wait_interrupted"
+          | "backoff_completed",
+      ) =>
+        emitDiagnosticsTimelineEvent(
+          {
+            type: "mark",
+            name: "model.retry.decision",
+            runId: params.runId,
+            attributes: { decision, reason, retryCount: transientRetryCount },
+          },
+          { config: params.config },
+        );
       if (
         retry.reason !== "rate_limit" &&
         retry.reason !== "overloaded" &&
@@ -267,10 +291,42 @@ export function createEmbeddedRunFailoverRetryController(input: {
         retry.reason !== "timeout" &&
         retry.reason !== "output_limit"
       ) {
+        recordDecision("rejected", "non_transient");
         return false;
       }
       const rateLimit = retry.reason === "rate_limit";
       if (rateLimit && hasLongWindowRateLimitEvidence(retry.message)) {
+        recordDecision("rejected", "long_window_rate_limit");
+        return false;
+      }
+      // A 429 floor past the operator's maxRetryDelayMs is a usage window in
+      // everything but wording: Anthropic's session-window exhaustion answers
+      // with "try again later" and a Retry-After of hours, which matches no
+      // keyword pattern. The SDK already refused to wait that long under the
+      // same setting; sleeping it here instead holds the turn open until the
+      // run's own timeout kills it. With a fallback configured and an attempt
+      // that can still fail over, decline the wait now. Without either there is
+      // nothing to do but wait, so the floor is honored: after a replay-unsafe
+      // tool action neither profile rotation nor model fallback runs, so
+      // declining here would end the turn instead of continuing it.
+      const retryDelayCapMs =
+        retry.maxRetryDelayMs !== undefined &&
+        Number.isFinite(retry.maxRetryDelayMs) &&
+        retry.maxRetryDelayMs > 0
+          ? retry.maxRetryDelayMs
+          : undefined;
+      if (
+        rateLimit &&
+        fallbackConfigured &&
+        retry.failoverEligible !== false &&
+        retryDelayCapMs !== undefined &&
+        retry.retryAfterMs !== undefined &&
+        retry.retryAfterMs > retryDelayCapMs
+      ) {
+        recordDecision("rejected", "retry_delay_exceeds_cap");
+        log.warn(
+          `rate-limit retry floor ${retry.retryAfterMs === Infinity ? "exceeds representable time" : `${retry.retryAfterMs}ms`} exceeds retry.provider.maxRetryDelayMs=${retryDelayCapMs} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}; failing over`,
+        );
         return false;
       }
       rateLimitSeen ||= rateLimit;
@@ -280,6 +336,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         rateLimitSeen ? MAX_RATE_LIMIT_ATTEMPTS - 1 : Infinity,
       );
       if (retryCount >= retryBudget) {
+        recordDecision("rejected", "retry_budget_exhausted");
         return false;
       }
       const nowMs = Date.now();
@@ -296,9 +353,8 @@ export function createEmbeddedRunFailoverRetryController(input: {
           rateLimit || retry.reason === "output_limit" ? undefined : nowMs - retryWindowStartMs,
       });
       if (delayMs === undefined) {
-        // The window in resolveTransientRetryDelayMs outranks the attempt budget when
-        // requests are slow, so record the truncation: a configured maxRetries that
-        // never runs must be diagnosable. Replay safety still decides whether failover is eligible.
+        recordDecision("rejected", "retry_delay_unavailable");
+        // Explain why recovery stopped before the count limit; replay safety still gates fallback.
         log.warn(
           `transient retry ${retry.retryAfterMs === Infinity ? "floor exceeds representable time" : "window elapsed"} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${transientRetryCount}/${retryBudget} retries; stopping same-model retries`,
         );
@@ -325,8 +381,12 @@ export function createEmbeddedRunFailoverRetryController(input: {
         }
         completed = true;
       } finally {
+        if (!completed) {
+          recordDecision("rejected", "wait_interrupted");
+        }
         closeRetryWait?.(completed);
       }
+      recordDecision("accepted", "backoff_completed");
       transientRetryCount += 1;
       return true;
     },

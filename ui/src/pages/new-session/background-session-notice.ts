@@ -6,6 +6,7 @@ import {
   hasActiveNotificationPromptGesture,
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
+import { captureSessionNoticeOwner } from "../../app/session-notice-owner.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 
 type AgentWaitResult = {
@@ -31,6 +32,7 @@ async function notifyWhenBackgroundSessionEnds(params: {
   context: ApplicationContext;
   key: string;
   runId: string;
+  isCurrentOwner: () => boolean;
 }): Promise<void> {
   const tracker = trackBackgroundSessionCompletion({
     context: params.context,
@@ -89,6 +91,11 @@ async function notifyWhenBackgroundSessionEnds(params: {
     }
   }
 
+  if (!params.isCurrentOwner()) {
+    tracker.cancel();
+    return;
+  }
+
   // Keep explicit background intent until the parent settles after child work.
   if (result.yielded === true) {
     tracker.yield();
@@ -116,10 +123,15 @@ export function prepareBackgroundSessionCompletion(params: {
   client: GatewayBrowserClient;
   context: ApplicationContext;
 }): (key: string, runId?: string) => boolean {
+  const isCurrentOwner = captureSessionNoticeOwner(params.context);
   return (key, runId) => {
     const normalizedRunId = runId?.trim();
-    if (!params.enabled || !normalizedRunId) {
+    if (!params.enabled) {
       return false;
+    }
+    // Creation disposition is independent of whether the Gateway returned a watchable run.
+    if (!normalizedRunId) {
+      return true;
     }
     void notifyWhenBackgroundSessionEnds({
       agentId: params.agentId,
@@ -127,6 +139,7 @@ export function prepareBackgroundSessionCompletion(params: {
       context: params.context,
       key,
       runId: normalizedRunId,
+      isCurrentOwner,
     });
     return true;
   };

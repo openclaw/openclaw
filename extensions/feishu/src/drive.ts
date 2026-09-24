@@ -1,4 +1,3 @@
-// Feishu plugin module implements drive behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import {
   formatErrorMessage,
@@ -7,6 +6,7 @@ import {
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
+import { assertFeishuApiSuccess } from "./api-response.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import {
   encodeQuery,
@@ -17,12 +17,9 @@ import {
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
 import { withFeishuMessageDispatch } from "./send-context.js";
-import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
-import {
-  feishuExternalToolResult as jsonResult,
-  toolExecutionErrorResult,
-  unknownToolActionResult,
-} from "./tool-result.js";
+import { createFeishuToolClient } from "./tool-account.js";
+import { registerFeishuTool } from "./tool-registration.js";
+import { feishuExternalToolResult as jsonResult, unknownToolActionResult } from "./tool-result.js";
 
 // ============ Actions ============
 
@@ -292,9 +289,7 @@ async function listFolder(client: Lark.Client, params: Record<string, unknown> =
   const res = await client.drive.file.list({
     params: listParams,
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
 
   return {
     files:
@@ -313,9 +308,7 @@ async function listFolder(client: Lark.Client, params: Record<string, unknown> =
 
 async function getRootFileInfo(client: Lark.Client, fileToken: string) {
   const res = await client.drive.file.list({ params: {} });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
 
   const file = res.data?.files?.find((candidate) => candidate.token === fileToken);
   if (!file) {
@@ -363,9 +356,7 @@ async function getFileInfo(
   if (res.code === 99991672) {
     return getRootFileInfo(client, fileToken);
   }
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
 
   const file = res.data?.metas?.find(
     (meta) => meta.doc_token === fileToken || meta.request_doc_info?.doc_token === fileToken,
@@ -404,9 +395,7 @@ async function createFolder(client: Lark.Client, name: string, folderToken?: str
       folder_token: effectiveToken,
     },
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
 
   return {
     token: res.data?.token,
@@ -430,9 +419,7 @@ async function moveFile(client: Lark.Client, fileToken: string, type: string, fo
       folder_token: folderToken,
     },
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
 
   return {
     success: true,
@@ -456,9 +443,7 @@ async function deleteFile(client: Lark.Client, fileToken: string, type: string) 
         | "shortcut",
     },
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
 
   return {
     success: true,
@@ -716,80 +701,66 @@ export async function deliverCommentThreadText(
 // ============ Tool Registration ============
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
-  type FeishuDriveExecuteParams = FeishuDriveParams & { accountId?: string };
-
-  api.registerTool(
-    (ctx) => {
-      const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
-      if (!cfg || !resolveAnyEnabledFeishuToolsConfig(cfg).drive) {
-        return null;
-      }
+  registerFeishuTool(api, {
+    family: "drive",
+    name: "feishu_drive",
+    label: "Feishu Drive",
+    description:
+      "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete, list_comments, list_comment_replies, add_comment, reply_comment",
+    parameters: FeishuDriveSchema,
+    createExecute(ctx, cfg) {
       const defaultAccountId = ctx.agentAccountId;
-      return {
-        name: "feishu_drive",
-        resultContentSource: "network",
-        label: "Feishu Drive",
-        description:
-          "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete, list_comments, list_comment_replies, add_comment, reply_comment",
-        parameters: FeishuDriveSchema,
-        async execute(_toolCallId, params) {
-          const p = params as FeishuDriveExecuteParams;
-          try {
-            const client = createFeishuToolClient({
-              cfg,
-              executeParams: p,
-              defaultAccountId,
-              requiredTool: { family: "drive", label: "Drive" },
-            });
-            switch (p.action) {
-              case "list":
-                return jsonResult(
-                  await listFolder(client, {
-                    folder_token: p.folder_token,
-                    page_size: p.page_size,
-                    page_token: p.page_token,
-                  }),
-                );
-              case "info":
-                return jsonResult(await getFileInfo(client, p.file_token, p.type));
-              case "create_folder":
-                return jsonResult(await createFolder(client, p.name, p.folder_token));
-              case "move":
-                return jsonResult(await moveFile(client, p.file_token, p.type, p.folder_token));
-              case "delete":
-                return jsonResult(await deleteFile(client, p.file_token, p.type));
-              case "list_comments":
-              case "list_comment_replies": {
-                const resolved = resolveDriveCommentParams(p, ctx, p.action);
-                return jsonResult(await listDriveCommentPage(client, resolved));
-              }
-              case "add_comment":
-              case "reply_comment": {
-                const resolved = resolveDriveCommentParams(p, ctx, p.action);
-                try {
-                  return jsonResult(
-                    await (resolved.action === "add_comment"
-                      ? addComment(client, resolved)
-                      : deliverCommentThreadText(client, resolved)),
-                  );
-                } finally {
-                  // Typing cleanup must not delay the visible write result.
-                  void cleanupAmbientCommentTypingReaction({
-                    client: getDriveInternalClient(client),
-                    deliveryContext: ctx.deliveryContext,
-                  });
-                }
-              }
-              default:
-                return unknownToolActionResult((p as { action?: unknown }).action);
-            }
-          } catch (err) {
-            return toolExecutionErrorResult(err);
+      return async (p) => {
+        const client = createFeishuToolClient({
+          cfg,
+          executeParams: p,
+          defaultAccountId,
+          requiredTool: { family: "drive", label: "Drive" },
+        });
+        switch (p.action) {
+          case "list":
+            return jsonResult(
+              await listFolder(client, {
+                folder_token: p.folder_token,
+                page_size: p.page_size,
+                page_token: p.page_token,
+              }),
+            );
+          case "info":
+            return jsonResult(await getFileInfo(client, p.file_token, p.type));
+          case "create_folder":
+            return jsonResult(await createFolder(client, p.name, p.folder_token));
+          case "move":
+            return jsonResult(await moveFile(client, p.file_token, p.type, p.folder_token));
+          case "delete":
+            return jsonResult(await deleteFile(client, p.file_token, p.type));
+          case "list_comments":
+          case "list_comment_replies": {
+            const resolved = resolveDriveCommentParams(p, ctx, p.action);
+            return jsonResult(await listDriveCommentPage(client, resolved));
           }
-        },
+          case "add_comment":
+          case "reply_comment": {
+            const resolved = resolveDriveCommentParams(p, ctx, p.action);
+            try {
+              return jsonResult(
+                await (resolved.action === "add_comment"
+                  ? addComment(client, resolved)
+                  : deliverCommentThreadText(client, resolved)),
+              );
+            } finally {
+              // Typing cleanup must not delay the visible write result.
+              void cleanupAmbientCommentTypingReaction({
+                client: getDriveInternalClient(client),
+                deliveryContext: ctx.deliveryContext,
+              });
+            }
+          }
+          default:
+            return unknownToolActionResult((p as { action?: unknown }).action);
+        }
       };
     },
-    { name: "feishu_drive" },
-  );
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,5 +1,4 @@
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
@@ -29,7 +28,7 @@ export function subscribeSessionCatalogBrowserEvents(
 }
 
 type SidebarSessionListOwner = {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   sessionResultsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>>;
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
@@ -218,7 +217,7 @@ type SessionGatewayEventOwner = {
 };
 
 export function subscribeSessionDataGatewayEvents(
-  gateway: ApplicationContext<RouteId>["gateway"],
+  gateway: ApplicationContext["gateway"],
   owner: SessionGatewayEventOwner,
 ): () => void {
   return gateway.subscribeEvents((event) => {

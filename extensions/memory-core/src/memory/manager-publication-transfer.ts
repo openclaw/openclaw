@@ -6,6 +6,8 @@ import type {
 
 const FRAGMENT_CHARS = 16 * 1024;
 const BATCH_BYTES = 512 * 1024;
+// Numeric JSON uses fewer than 32 characters per item, including its separator.
+const NUMERIC_PART_ITEMS = 512;
 
 // Encode at most one bounded string slice at a time. A single oversized record
 // must not turn v8.serialize/JSON.stringify into a source-sized host operation.
@@ -22,7 +24,18 @@ function* jsonParts(value: unknown): Generator<string> {
       if (index) {
         yield ",";
       }
-      yield* jsonParts(value[index] ?? null);
+      const item: unknown = value[index] ?? null;
+      if (typeof item === "number") {
+        const limit = Math.min(value.length, index + NUMERIC_PART_ITEMS);
+        let end = index + 1;
+        while (end < limit && typeof value[end] === "number") {
+          end++;
+        }
+        yield JSON.stringify(value.slice(index, end)).slice(1, -1);
+        index = end - 1;
+      } else {
+        yield* jsonParts(item);
+      }
     }
     yield "]";
   } else if (value && typeof value === "object") {

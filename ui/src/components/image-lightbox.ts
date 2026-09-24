@@ -1,18 +1,14 @@
 import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
-import { css, html, nothing, type PropertyValues } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, query, queryAll, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
+import { ImageLightboxGalleryController } from "./image-lightbox-gallery.ts";
+import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
+import { imageLightboxStyles } from "./image-lightbox.styles.ts";
+import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 import "./modal-dialog.ts";
-
-export type ImageLightboxItem = {
-  kind?: "image" | "video";
-  src: string;
-  originalSrc?: string;
-  title: string;
-  release?: () => void;
-};
 
 const SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES = new Set([
   "image/avif",
@@ -24,6 +20,18 @@ const SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES = new Set([
 
 const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2.5;
+const SWIPE_THRESHOLD_PX = 56;
+const SWIPE_AXIS_THRESHOLD_PX = 8;
+const SLIDE_DURATION_MS = 180;
+const GALLERY_INPUTS = [
+  "src",
+  "originalSrc",
+  "gallery",
+  "loadFullResolution",
+  "imageWidth",
+  "imageHeight",
+  "mediaKind",
+] as const;
 
 function mimeTypeEssence(value: string): string {
   return value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -35,14 +43,20 @@ function dataUrlMimeType(source: string): string | undefined {
 }
 
 class OpenClawImageLightbox extends OpenClawLitElement {
+  @property({ attribute: false }) gallery?: ImageLightboxGallery;
+  @property({ attribute: false }) loadFullResolution?: ImageLightboxItem["loadFullResolution"];
   @property() mediaKind: "image" | "video" = "image";
   @property() src = "";
   @property() originalSrc = "";
   @property({ attribute: false }) imageTitle = "";
+  @property({ attribute: false }) imageWidth?: number;
+  @property({ attribute: false }) imageHeight?: number;
+  @query(".slide") private slide?: HTMLDivElement;
   @query(".stage") private stage?: HTMLDivElement;
   @query(".image") private image?: HTMLImageElement;
   @queryAll(".action, video[controls]") private focusables!: NodeListOf<HTMLElement>;
   @state() private openOriginalUrl = "";
+  @state() private resolvingOriginal = false;
   @state() private scale = 1;
   @state() private imageReady = false;
 
@@ -53,254 +67,50 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   private panzoomStage?: HTMLDivElement;
   private backdropPointer: { pointerId: number; clientX: number; clientY: number } | undefined;
   private motionQuery?: MediaQueryList;
-
-  static override styles = css`
-    :host {
-      --image-lightbox-control-background: rgba(12, 16, 24, 0.64);
-      --image-lightbox-control-background-hover: rgba(12, 16, 24, 0.78);
-      display: contents;
-    }
-
-    :host-context([data-theme-mode="dark"]) {
-      --image-lightbox-control-background: rgba(255, 255, 255, 0.16);
-      --image-lightbox-control-background-hover: rgba(255, 255, 255, 0.22);
-    }
-
-    openclaw-modal-dialog {
-      --openclaw-modal-width: 100vw;
-      --openclaw-modal-max-width: 100vw;
-      --openclaw-modal-max-height: 100dvh;
-      --openclaw-modal-backdrop-filter: none;
-    }
-
-    .lightbox {
-      width: 100vw;
-      height: 100dvh;
-      display: grid;
-      grid-template-rows: minmax(0, 1fr);
-      overflow: hidden;
-    }
-
-    .header {
-      display: contents;
-    }
-
-    .actions {
-      position: fixed;
-      z-index: 1;
-      top: max(16px, calc(12px + var(--safe-area-top, 0px)));
-      right: max(16px, calc(12px + var(--safe-area-right, 0px)));
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .actions .action,
-    .action.zoom-control {
-      color: var(--media-foreground);
-      background-color: var(--image-lightbox-control-background);
-      -webkit-backdrop-filter: blur(16px) saturate(140%);
-      backdrop-filter: blur(16px) saturate(140%);
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
-    }
-
-    .actions .action {
-      border-radius: 999px;
-      transition: background-color 180ms ease;
-    }
-
-    .actions .action:hover,
-    .zoom-control:hover:not(:disabled) {
-      background-color: var(--image-lightbox-control-background-hover);
-    }
-
-    .title {
-      display: none;
-    }
-
-    .action {
-      min-height: 36px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0 12px;
-      border: 0;
-      border-radius: var(--radius-md);
-      background: transparent;
-      color: #fff;
-      font: inherit;
-      font-size: 12px;
-      font-weight: 650;
-      text-decoration: none;
-      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
-    }
-
-    .action:hover {
-      background: color-mix(in srgb, var(--text) 10%, transparent);
-    }
-
-    .action:focus-visible {
-      outline: 2px solid #fff;
-      outline-offset: 2px;
-    }
-
-    .action:focus:not(:focus-visible) {
-      outline: none;
-    }
-
-    .open-original {
-      min-height: 44px;
-    }
-
-    .open-original-icon {
-      display: none;
-    }
-
-    .close {
-      width: 44px;
-      height: 44px;
-      padding: 0;
-      color: rgba(255, 255, 255, 0.82);
-    }
-
-    .close svg {
-      width: 17px;
-      height: 17px;
-      /* Shadow DOM: global icon stroke rules don't reach in here; without a
-         stroke the open-path x icon renders invisible. */
-      fill: none;
-      stroke: currentColor;
-      stroke-width: 2;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-    }
-
-    .stage {
-      min-height: 0;
-      width: 100%;
-      height: 100%;
-      display: grid;
-      place-items: center;
-      box-sizing: border-box;
-      padding: 20px 20px 72px;
-      overflow: hidden;
-    }
-
-    .image,
-    .video {
-      display: block;
-      min-width: 0;
-      min-height: 0;
-      max-width: 100%;
-      max-height: 100%;
-      height: auto;
-      object-fit: contain;
-    }
-
-    .image {
-      width: auto;
-      cursor: zoom-in;
-      -webkit-user-drag: none;
-    }
-
-    .video {
-      width: min(1280px, 100%);
-      background: var(--media-bg);
-    }
-
-    .image.zoomed {
-      cursor: grab;
-    }
-
-    .zoom-controls {
-      position: fixed;
-      z-index: 1;
-      bottom: max(14px, calc(10px + var(--safe-area-bottom, 0px)));
-      left: 50%;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      transform: translateX(-50%);
-    }
-
-    .zoom-control {
-      min-width: 40px;
-      min-height: 40px;
-      padding: 0 10px;
-      border: 0;
-      font-size: 15px;
-    }
-
-    .zoom-control:disabled {
-      color: rgba(255, 255, 255, 0.8);
-    }
-
-    .zoom-level {
-      min-width: 58px;
-      font-size: 11px;
-    }
-
-    @media (max-width: 768px),
-      (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-      openclaw-modal-dialog {
-        --openclaw-modal-width: 100vw;
-        --openclaw-modal-max-width: 100vw;
-        --openclaw-modal-max-height: 100dvh;
+  private readonly galleryController = new ImageLightboxGalleryController(() =>
+    this.requestUpdate(),
+  );
+  private displayedIndex = 0;
+  private displayedSource = "";
+  private slideAnimation?: Animation;
+  private swipe:
+    | {
+        pointerId: number;
+        x: number;
+        y: number;
+        offset: number;
+        horizontal: boolean;
       }
+    | undefined;
+  private readonly touchPointers = new Set<number>();
+  private suppressDoubleClick = false;
 
-      .lightbox {
-        width: 100vw;
-        height: 100dvh;
-      }
+  private get currentImage() {
+    return this.mediaKind === "image" ? this.galleryController.current : undefined;
+  }
 
-      .stage {
-        padding: calc(68px + var(--safe-area-top, 0px)) calc(12px + var(--safe-area-right, 0px))
-          calc(64px + var(--safe-area-bottom, 0px)) calc(12px + var(--safe-area-left, 0px));
-      }
+  private get hasGallery() {
+    return this.mediaKind === "image" && this.galleryController.count > 1;
+  }
 
-      .open-original {
-        width: 44px;
-        padding: 0;
-      }
+  private get direction() {
+    return getComputedStyle(this).direction === "rtl" ? -1 : 1;
+  }
 
-      .open-original-label {
-        display: none;
-      }
-
-      .open-original-icon {
-        display: inline-flex;
-      }
-
-      .open-original-icon svg {
-        width: 17px;
-        height: 17px;
-      }
-
-      .zoom-control {
-        min-width: 44px;
-        min-height: 44px;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      openclaw-modal-dialog {
-        --show-duration: 0ms;
-        --hide-duration: 0ms;
-      }
-
-      .actions .action {
-        transition: none;
-      }
-    }
-  `;
+  static override styles = imageLightboxStyles;
 
   override connectedCallback() {
     super.connectedCallback();
     this.motionQuery = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
     this.motionQuery?.addEventListener("change", this.handleMotionPreferenceChange);
     if (this.hasUpdated) {
+      this.resetGallery();
+      this.requestUpdate();
       void this.resolveOriginalUrl();
       void this.updateComplete.then(() => {
+        if (!this.isConnected) {
+          return;
+        }
         const image = this.image;
         if (image?.complete && image.naturalWidth > 0) {
           this.initializePanzoom(image);
@@ -310,6 +120,10 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   }
 
   override disconnectedCallback() {
+    this.galleryController.dispose();
+    this.cancelSwipe();
+    this.touchPointers.clear();
+    this.slideAnimation?.cancel();
     this.originalUrlRequest += 1;
     this.motionQuery?.removeEventListener("change", this.handleMotionPreferenceChange);
     this.motionQuery = undefined;
@@ -318,16 +132,53 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     super.disconnectedCallback();
   }
 
-  protected override updated(changed: PropertyValues<this>) {
-    if (changed.has("src") || changed.has("originalSrc") || changed.has("mediaKind")) {
+  private resetGallery() {
+    this.galleryController.reset(this.mediaKind === "image" ? this.gallery : undefined, {
+      src: this.src,
+      originalSrc: this.originalSrc,
+      title: this.imageTitle,
+      width: this.imageWidth,
+      height: this.imageHeight,
+      loadFullResolution: this.loadFullResolution,
+    });
+  }
+
+  protected override willUpdate(changed: PropertyValues) {
+    if (!this.isConnected) {
+      return;
+    }
+    if (GALLERY_INPUTS.some((key) => changed.has(key))) {
+      this.cancelSwipe();
+      this.resetGallery();
+    }
+  }
+
+  protected override updated(changed: PropertyValues) {
+    if (!this.isConnected) {
+      return;
+    }
+    const selectionChanged =
+      GALLERY_INPUTS.some((key) => changed.has(key)) ||
+      this.displayedIndex !== this.galleryController.index;
+    if (selectionChanged) {
+      this.displayedIndex = this.galleryController.index;
       this.destroyPanzoom();
       this.scale = 1;
+    }
+    const source = this.currentImage?.src ?? this.src;
+    if (selectionChanged || this.displayedSource !== source) {
+      this.displayedSource = source;
       void this.resolveOriginalUrl();
+      if (this.image?.complete && this.image.naturalWidth > 0) {
+        this.initializePanzoom(this.image);
+      }
     }
   }
 
   override render() {
-    const title = this.imageTitle.trim() || t("chat.imageLightbox.untitled");
+    const title =
+      (this.hasGallery ? (this.currentImage?.title ?? this.imageTitle) : this.imageTitle).trim() ||
+      t("chat.imageLightbox.untitled");
     const dialogLabel =
       this.mediaKind === "video"
         ? t("chat.mediaPlayer.videoPreview", { title })
@@ -337,6 +188,12 @@ class OpenClawImageLightbox extends OpenClawLitElement {
         ? t("chat.mediaPlayer.closeVideoPreview")
         : t("chat.imageLightbox.close");
     const canZoom = this.imageReady && this.panzoom !== undefined;
+    const width = this.currentImage?.width;
+    const height = this.currentImage?.height;
+    const sized = Number.isFinite(width) && width! > 0 && Number.isFinite(height) && height! > 0;
+    const imageSize = sized
+      ? `width: min(${width}px, 100cqw, calc(100cqh * ${width! / height!}))`
+      : nothing;
     return html`
       <openclaw-modal-dialog
         class="mobile-edge-to-edge viewport-edge-to-edge"
@@ -349,11 +206,13 @@ class OpenClawImageLightbox extends OpenClawLitElement {
             <strong class="title">${title}</strong>
             <div class="actions">
               ${
-                this.openOriginalUrl
+                this.openOriginalUrl || (this.hasGallery && this.resolvingOriginal)
                   ? html`
                       <a
                         class="action open-original"
-                        href=${this.openOriginalUrl}
+                        href=${this.openOriginalUrl || nothing}
+                        aria-disabled=${!this.openOriginalUrl}
+                        tabindex=${this.openOriginalUrl ? 0 : -1}
                         target="_blank"
                         rel="noreferrer"
                         aria-label=${t("chat.imageLightbox.openOriginal")}
@@ -380,10 +239,11 @@ class OpenClawImageLightbox extends OpenClawLitElement {
             </div>
           </header>
           <div
-            class="stage"
-            @pointerdown=${this.handleStagePointerDown}
+            class=${this.hasGallery ? "stage stage--gallery" : "stage"}
+            @pointerdown=${{ handleEvent: this.handleStagePointerDown, capture: true }}
+            @pointermove=${this.handleStagePointerMove}
             @pointerup=${this.handleStagePointerUp}
-            @pointercancel=${this.resetBackdropPointer}
+            @pointercancel=${this.handleStagePointerCancel}
             @dblclick=${this.handleDoubleClick}
           >
             ${
@@ -397,16 +257,54 @@ class OpenClawImageLightbox extends OpenClawLitElement {
                     playsinline
                     tabindex="0"
                   ></video>`
-                : html`<img
-                    class=${this.scale > 1 ? "image zoomed" : "image"}
-                    src=${this.src}
-                    alt=${title}
-                    @load=${this.handleImageLoad}
-                    @error=${this.handleImageError}
-                    @dragstart=${(event: DragEvent) => event.preventDefault()}
-                  />`
+                : html`<div class="slide">
+                    <img
+                      class=${this.scale > 1 ? "image zoomed" : "image"}
+                      style=${imageSize}
+                      src=${this.currentImage?.src ?? this.src}
+                      alt=${title}
+                      referrerpolicy="no-referrer"
+                      @load=${this.handleImageLoad}
+                      @error=${this.handleImageError}
+                      @dragstart=${(event: DragEvent) => event.preventDefault()}
+                    />
+                  </div>`
             }
           </div>
+          ${
+            this.hasGallery
+              ? html`
+                  <button
+                    class="action navigation previous"
+                    type="button"
+                    aria-label=${t("chat.imageLightbox.previous")}
+                    aria-disabled=${!this.galleryController.canMove(-1) || this.galleryController.busy}
+                    @click=${() => this.navigate(-1)}
+                  >
+                    ${icons.chevronLeft}
+                  </button>
+                  <button
+                    class="action navigation next"
+                    type="button"
+                    aria-label=${t("chat.imageLightbox.next")}
+                    aria-disabled=${!this.galleryController.canMove(1) || this.galleryController.busy}
+                    @click=${() => this.navigate(1)}
+                  >
+                    ${icons.chevronRight}
+                  </button>
+                  <p
+                    class="gallery-counter"
+                    dir="ltr"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                  >
+                    ${t("chat.imageLightbox.position", { current: String(this.galleryController.index + 1), total: String(this.galleryController.count) })}
+                  </p>
+                  ${this.galleryController.failed ? html`<p class="gallery-error" role="alert">${t("chat.imageLightbox.loadFailed")}</p>` : nothing}
+                `
+              : nothing
+          }
           ${
             this.mediaKind === "image"
               ? html`<div class="zoom-controls">
@@ -414,7 +312,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
                     class="action zoom-control"
                     type="button"
                     aria-label=${t("chat.imageLightbox.zoomOut")}
-                    ?disabled=${!canZoom || this.scale <= 1}
+                    aria-disabled=${!canZoom || this.scale <= 1}
                     @click=${this.zoomOut}
                   >
                     −
@@ -423,7 +321,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
                     class="action zoom-control zoom-level"
                     type="button"
                     aria-label=${t("chat.imageLightbox.resetZoom")}
-                    ?disabled=${!canZoom || this.scale === 1}
+                    aria-disabled=${!canZoom || this.scale === 1}
                     @click=${this.resetZoom}
                   >
                     ${Math.round(this.scale * 100)}%
@@ -432,7 +330,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
                     class="action zoom-control"
                     type="button"
                     aria-label=${t("chat.imageLightbox.zoomIn")}
-                    ?disabled=${!canZoom || this.scale >= MAX_SCALE}
+                    aria-disabled=${!canZoom || this.scale >= MAX_SCALE}
                     @click=${this.zoomIn}
                   >
                     +
@@ -458,12 +356,15 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     }
     this.destroyPanzoom();
     this.scale = 1;
-    this.imageReady = false;
   };
 
   private initializePanzoom(image: HTMLImageElement) {
     const stage = this.stage;
-    if (!stage || image !== this.image) {
+    if (!this.isConnected || !image.isConnected || !stage || image !== this.image) {
+      return;
+    }
+    // A decoded resolution upgrade keeps the current image, pan, and zoom.
+    if (image === this.panzoomImage && stage === this.panzoomStage) {
       return;
     }
     this.destroyPanzoom();
@@ -519,7 +420,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   };
 
   private handleDoubleClick = (event: MouseEvent) => {
-    if (!this.panzoom) {
+    if (!this.panzoom || this.suppressDoubleClick) {
       return;
     }
     event.preventDefault();
@@ -531,46 +432,153 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   };
 
   private handleStagePointerDown = (event: PointerEvent) => {
+    if (event.pointerType === "touch") {
+      this.touchPointers.add(event.pointerId);
+      if (this.touchPointers.size > 1) {
+        this.cancelSwipe();
+        this.backdropPointer = undefined;
+        return;
+      }
+    }
+    this.suppressDoubleClick = false;
     const stage = event.currentTarget;
-    if (
-      event.button !== 0 ||
-      !event.isPrimary ||
-      event.target !== stage ||
-      !(stage instanceof HTMLElement)
-    ) {
+    if (event.button !== 0 || !event.isPrimary || !(stage instanceof HTMLElement)) {
       this.backdropPointer = undefined;
       return;
     }
-    this.backdropPointer = {
-      pointerId: event.pointerId,
-      clientX: event.clientX,
-      clientY: event.clientY,
-    };
-    stage.setPointerCapture?.(event.pointerId);
+    const background = event.target === stage || event.target === this.slide;
+    this.backdropPointer = background
+      ? { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY }
+      : undefined;
+    if (
+      event.pointerType === "touch" &&
+      this.hasGallery &&
+      !this.galleryController.busy &&
+      this.scale <= 1
+    ) {
+      this.slideAnimation?.cancel();
+      this.swipe = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        offset: 0,
+        horizontal: false,
+      };
+      stage.setPointerCapture(event.pointerId);
+    } else if (background) {
+      stage.setPointerCapture?.(event.pointerId);
+    }
+  };
+
+  private handleStagePointerMove = (event: PointerEvent) => {
+    const swipe = this.swipe;
+    if (!swipe || swipe.pointerId !== event.pointerId) {
+      return;
+    }
+    if (this.scale > 1 || this.touchPointers.size !== 1) {
+      this.cancelSwipe();
+      return;
+    }
+    const x = event.clientX - swipe.x;
+    const y = event.clientY - swipe.y;
+    if (!swipe.horizontal) {
+      if (Math.max(Math.abs(x), Math.abs(y)) < SWIPE_AXIS_THRESHOLD_PX) {
+        return;
+      }
+      this.backdropPointer = undefined;
+      this.suppressDoubleClick = true;
+      if (Math.abs(y) >= Math.abs(x)) {
+        this.cancelSwipe();
+        return;
+      }
+      swipe.horizontal = true;
+    }
+    const delta = x * this.direction < 0 ? 1 : -1;
+    swipe.offset = this.galleryController.canMove(delta) ? x : x * 0.2;
+    if (this.slide) {
+      this.slide.style.transform = `translateX(${swipe.offset}px)`;
+    }
   };
 
   private handleStagePointerUp = (event: PointerEvent) => {
+    this.touchPointers.delete(event.pointerId);
+    const swipe = this.swipe;
+    if (swipe?.pointerId === event.pointerId) {
+      this.swipe = undefined;
+      if (swipe.horizontal) {
+        this.backdropPointer = undefined;
+        const delta = swipe.offset * this.direction < 0 ? 1 : -1;
+        if (
+          Math.abs(swipe.offset) >= SWIPE_THRESHOLD_PX &&
+          this.scale <= 1 &&
+          this.galleryController.canMove(delta)
+        ) {
+          void this.navigate(delta, swipe.offset);
+        } else {
+          this.animateSlide(swipe.offset);
+        }
+        return;
+      }
+    }
     const pointer = this.backdropPointer;
     this.backdropPointer = undefined;
-    const stage = event.currentTarget;
     const releaseTarget = this.shadowRoot?.elementFromPoint?.(event.clientX, event.clientY);
     const shouldClose =
       event.button === 0 &&
       event.isPrimary &&
       pointer?.pointerId === event.pointerId &&
-      releaseTarget === stage &&
+      (releaseTarget === this.stage || releaseTarget === this.slide) &&
       Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) <= 4;
     if (shouldClose) {
       this.emitClose();
     }
   };
 
-  private resetBackdropPointer = () => {
+  private handleStagePointerCancel = (event: PointerEvent) => {
+    this.touchPointers.delete(event.pointerId);
     this.backdropPointer = undefined;
+    this.cancelSwipe();
   };
+
+  private cancelSwipe() {
+    const offset = this.swipe?.offset ?? 0;
+    this.swipe = undefined;
+    this.animateSlide(offset);
+  }
+
+  private animateSlide(offset: number) {
+    this.slideAnimation?.cancel();
+    const slide = this.slide;
+    if (!slide) {
+      return;
+    }
+    slide.style.removeProperty("transform");
+    if (offset && !this.motionQuery?.matches && this.isConnected) {
+      this.slideAnimation = slide.animate(
+        [{ transform: `translateX(${offset}px)` }, { transform: "translateX(0)" }],
+        { duration: SLIDE_DURATION_MS, easing: "ease-out" },
+      );
+    }
+  }
+
+  private async navigate(delta: number, offset = 0) {
+    if (!this.hasGallery || !this.galleryController.canMove(delta)) {
+      this.animateSlide(offset);
+      return;
+    }
+    const changed = await this.galleryController.move(delta);
+    if (!this.isConnected) {
+      return;
+    }
+    await this.updateComplete;
+    this.animateSlide(changed ? delta * this.direction * (this.stage?.clientWidth ?? 0) : offset);
+  }
 
   private handleMotionPreferenceChange = (event: MediaQueryListEvent) => {
     this.panzoom?.setOptions({ duration: event.matches ? 0 : 200 });
+    if (event.matches) {
+      this.slideAnimation?.cancel();
+    }
   };
 
   private zoomIn = () => this.panzoom?.zoomIn();
@@ -588,7 +596,17 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   private async resolveOriginalUrl() {
     const request = ++this.originalUrlRequest;
     this.revokeOriginalBlobUrl();
-    const source = (this.originalSrc || this.src).trim();
+    this.resolvingOriginal = false;
+    if (this.currentImage?.loadFullResolution) {
+      this.openOriginalUrl = "";
+      return;
+    }
+    const source = (
+      this.currentImage?.originalSrc ||
+      this.currentImage?.src ||
+      this.originalSrc ||
+      this.src
+    ).trim();
     if (!source) {
       this.openOriginalUrl = "";
       return;
@@ -607,6 +625,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     if (isDataUrl && (!sourceType || !SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES.has(sourceType))) {
       return;
     }
+    this.resolvingOriginal = true;
     try {
       const response = await fetch(source);
       const blob = await response.blob();
@@ -625,10 +644,27 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       this.openOriginalUrl = this.originalBlobUrl;
     } catch {
       // The image remains viewable inline; omit an unusable original-link action.
+    } finally {
+      if (request === this.originalUrlRequest) {
+        this.resolvingOriginal = false;
+      }
     }
   }
 
   private handleKeydown = (event: KeyboardEvent) => {
+    if (panImageWithKeyboard(event, this.panzoom)) {
+      return;
+    }
+    if (
+      this.hasGallery &&
+      !event.shiftKey &&
+      (event.key === "ArrowLeft" || event.key === "ArrowRight")
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.navigate((event.key === "ArrowRight" ? 1 : -1) * this.direction);
+      return;
+    }
     if (this.panzoom && (event.key === "+" || event.key === "=")) {
       event.preventDefault();
       this.zoomIn();

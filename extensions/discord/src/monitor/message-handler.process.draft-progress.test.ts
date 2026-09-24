@@ -1,14 +1,17 @@
 // Discord message processing coverage split by cohesive behavior.
 import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it } from "vitest";
+import type { ReplyDispatchRuntimeInfo, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { describe, expect, it, vi } from "vitest";
 import {
   notifyDiscordActiveTurnThreadCreated,
   notifyDiscordActiveTurnThreadReplyDelivered,
 } from "../active-turn-thread-route.js";
 import {
+  createDirectMessageContextOverrides,
   createNoQueuedDispatchResult,
   createNonTerminalToolWarningPayload,
   deliverDiscordReply,
+  dispatchBufferedReplyForTest,
   dispatchInboundMessageForTest as dispatchInboundMessage,
   runProcessDiscordMessage,
   registerDiscordProcessTestLifecycle,
@@ -36,6 +39,99 @@ async function startToolProgress(
 }
 
 describe("processDiscordMessage draft streaming progress", () => {
+  it.each([
+    { accepted: true, direct: false },
+    { accepted: false, direct: false },
+    { accepted: true, direct: true },
+  ])(
+    "replaces the waiting final only when core accepts its route (accepted: $accepted, direct: $direct)",
+    async ({ accepted, direct }) => {
+      const draftStream = createMockDraftStreamForTest();
+      const adopt = vi.fn<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressContinuation"]>>(
+        async (receipt) =>
+          accepted &&
+          receipt.accountId === "default" &&
+          receipt.to === (direct ? "user:U1" : "channel:c1"),
+      );
+      dispatchBufferedReplyForTest.mockImplementationOnce(async (params) => {
+        await params.replyOptions?.onPlanUpdate?.({
+          phase: "update",
+          steps: [{ step: "Verify the child result", status: "in_progress" }],
+        });
+        const payload = { text: "Waiting for the child result." };
+        // Core adds the capability after beforeDeliver has frozen the parent draft.
+        await params.dispatcherOptions.beforeDeliver?.(payload, { kind: "final" });
+        await params.dispatcherOptions.deliver(payload, {
+          kind: "final",
+          adoptProgressContinuation: adopt,
+        });
+        await params.replyOptions?.onItemEvent?.({
+          itemId: "late-parent",
+          kind: "preamble",
+          progressText: "Late parent text must not replace the transferred card.",
+        });
+        return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+      });
+      const ctx = await createAutomaticDraftContext({
+        ...(direct ? createDirectMessageContextOverrides() : {}),
+        discordConfig: {
+          streaming: { mode: "progress", progress: { label: false, toolProgress: true } },
+        },
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      expect(adopt).toHaveBeenCalledOnce();
+      expect(getDeliveredFinalTexts()).toEqual(accepted ? [] : ["Waiting for the child result."]);
+      expect(draftStream.messageId()).toBeUndefined();
+      expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("Late parent text");
+    },
+  );
+
+  it.each([
+    { text: "Child attachment", mediaUrl: "https://example.com/result.png" },
+    {
+      text: "Choose the next step",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Continue", action: { type: "callback", value: "continue" } }],
+          },
+        ],
+      },
+    },
+  ] satisfies ReplyPayload[])(
+    "preserves waiting-final content outside the card: $text",
+    async (payload) => {
+      createMockDraftStreamForTest();
+      const adopt = vi.fn(async () => true);
+      dispatchBufferedReplyForTest.mockImplementationOnce(async (params) => {
+        await params.replyOptions?.onPlanUpdate?.({
+          phase: "update",
+          steps: [{ step: "Run child work", status: "in_progress" }],
+        });
+        await params.dispatcherOptions.beforeDeliver?.(payload, { kind: "final" });
+        await params.dispatcherOptions.deliver(payload, {
+          kind: "final",
+          adoptProgressContinuation: adopt,
+        });
+        return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+      });
+      const ctx = await createAutomaticDraftContext({
+        discordConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      expect(adopt).not.toHaveBeenCalled();
+      expect(getDeliveredFinalTexts()).toEqual([payload.text]);
+      expect(deliverDiscordReply).toHaveBeenCalledWith(
+        expect.objectContaining({ replies: [payload] }),
+      );
+    },
+  );
+
   it("moves progress and final delivery into a thread created from the source message", async () => {
     const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -115,8 +211,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith(
       "Investigating\n\n🛠️ Checked the pipeline.",
     );
-    expect(draftStream.stop).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.messageId()).toBeDefined();
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
@@ -392,7 +487,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec: running", { complete: true });
     expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("Temporary note.");
     // Cleanup still removes the unfinished tool-progress draft at run end.
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.messageId()).toBeUndefined();
   });
 
   it("does not update Discord commentary progress after final answer delivery starts", async () => {
@@ -523,13 +618,12 @@ describe("processDiscordMessage draft streaming progress", () => {
     });
     // The delivered final consumed the draft; the later tool warning must not
     // resurrect it or produce a second visible reply.
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(draftStream.messageId()).toBeUndefined();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     expectFinalAnswerText("delivery survived");
   });
 
-  it("consumes a progress draft once across repeated final payloads", async () => {
+  it("clears progress before delivering later final payloads", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -539,6 +633,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
+      expect(draftStream.messageId()).toBeUndefined();
       await params?.dispatcher.sendFinalReply({ text: "second answer" });
       await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
@@ -552,11 +647,8 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    const finals = getDeliveredFinalTexts();
-    expect(finals).toHaveLength(2);
-    expect(finals[0]).toBe("first answer");
-    expect(finals[1]).toBe("second answer");
+    expect(draftStream.messageId()).toBeUndefined();
+    expect(getDeliveredFinalTexts()).toEqual(["first answer", "second answer"]);
   });
 
   it("keeps the progress draft uncollapsed when the first final delivery fails", async () => {
@@ -570,6 +662,8 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
+      expect(draftStream.messageId()).toBeDefined();
+      expect(draftStream.lastDeliveredText()).toContain("exec done");
       await params?.dispatcher.sendFinalReply({ text: "retry answer" });
       await params?.dispatcher.waitForIdle();
       return {
@@ -587,11 +681,8 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    const attemptedFinals = getDeliveredFinalTexts();
-    expect(attemptedFinals).toHaveLength(2);
-    expect(attemptedFinals[0]).toBe("first answer");
-    expect(attemptedFinals[1]).toBe("retry answer");
+    expect(draftStream.messageId()).toBeUndefined();
+    expect(getDeliveredFinalTexts()).toEqual(["first answer", "retry answer"]);
   });
 
   it("re-arms progress collapse for a queued assistant turn", async () => {
@@ -604,10 +695,14 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
+      expect(draftStream.messageId()).toBeUndefined();
       await params?.replyOptions?.onQueuedFollowupAdmitted?.();
       await params?.replyOptions?.onToolStart?.({ name: "read", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "second tool done" });
       await elapseProgressDraftStartDelay();
+      expect(draftStream.messageId()).toBeDefined();
+      expect(draftStream.lastDeliveredText()).toContain("second tool done");
+      expect(draftStream.lastDeliveredText()).not.toContain("first tool done");
       await params?.dispatcher.sendFinalReply({ text: "second answer" });
       await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
@@ -621,12 +716,8 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.clear).toHaveBeenCalledTimes(2);
-    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    const finals = getDeliveredFinalTexts();
-    expect(finals).toHaveLength(2);
-    expect(finals[0]).toBe("first answer");
-    expect(finals[1]).toBe("second answer");
+    expect(draftStream.messageId()).toBeUndefined();
+    expect(getDeliveredFinalTexts()).toEqual(["first answer", "second answer"]);
   });
 
   it("does not collapse a text-only queued assistant turn", async () => {
@@ -639,7 +730,9 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
+      expect(draftStream.messageId()).toBeUndefined();
       await params?.replyOptions?.onQueuedFollowupAdmitted?.();
+      expect(draftStream.messageId()).toBeUndefined();
       await params?.dispatcher.sendFinalReply({ text: "text-only answer" });
       await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
@@ -653,7 +746,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.messageId()).toBeUndefined();
     expect(getDeliveredFinalTexts()).toEqual(["first answer", "text-only answer"]);
   });
 
@@ -671,6 +764,8 @@ describe("processDiscordMessage draft streaming progress", () => {
       await params?.replyOptions?.onToolStart?.({ name: "read", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "queued work" });
       await elapseProgressDraftStartDelay();
+      expect(draftStream.messageId()).toBeDefined();
+      expect(draftStream.lastDeliveredText()).toContain("queued work");
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
@@ -682,8 +777,38 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(2);
+    expect(getDeliveredFinalTexts()).toEqual(["first answer"]);
+    expect(draftStream.messageId()).toBeUndefined();
+  });
+
+  // A message queued behind an active turn runs after its own dispatch has
+  // returned, and its final is routed outside deliverDiscordPayload (#149640).
+  it("cleans up a late queued turn's progress draft after settlement", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+    const draftStream = createMockDraftStreamForTest();
+    let replyOptions: DispatchInboundParams["replyOptions"];
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      replyOptions = params?.replyOptions;
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticDraftContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    await replyOptions?.onQueuedFollowupAdmitted?.();
+    await replyOptions?.onToolStart?.({ name: "view_image", phase: "start" });
+    await replyOptions?.onItemEvent?.({ progressText: "viewing image" });
+    await elapseProgressDraftStartDelay();
+    expect(draftStream.messageId()).toBeDefined();
+
+    await replyOptions?.onQueuedFollowupSettled?.();
+
     expect(draftStream.messageId()).toBeUndefined();
   });
 

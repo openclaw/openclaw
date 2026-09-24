@@ -7,6 +7,7 @@ import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugi
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import * as machineState from "../state/config-machine-state.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -15,6 +16,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledDiscovery from "./bundled-discovery-state.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
@@ -90,32 +92,20 @@ function familyHashes(databasePath: string) {
   });
 }
 
-function observeParentSqlite() {
-  const native = requireNodeSqlite();
-  return [
-    vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-    vi.spyOn(native.DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(native.StatementSync.prototype, method),
-    ),
-  ];
-}
-
 it("returns a persisted index row without main-thread SQL", async () => {
   const env = environment();
   const message = "persisted fixture diagnostic";
   await seed(env, index(message));
-  const counters = observeParentSqlite();
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
   try {
     await withPluginCache(createPluginCache(), async () => {
       const loaded = await readPersistedInstalledPluginIndex({ env });
       expect(loaded?.diagnostics).toEqual([{ level: "warn", message }]);
     });
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
   } finally {
-    for (const counter of counters) {
-      counter.mockRestore();
-    }
+    sql.restore();
   }
 });
 
@@ -190,7 +180,8 @@ it("prepares cold metadata once and preserves the merged workspace inventory wit
       return activate;
     });
   const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
-  const counters = observeParentSqlite();
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
   try {
     await withPluginCache(createPluginCache(), async () => {
       const first = await resolveConfigWidePluginMetadataSnapshotAsync({
@@ -213,11 +204,9 @@ it("prepares cold metadata once and preserves the merged workspace inventory wit
         "installed-index",
       ]);
     });
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
   } finally {
-    for (const counter of counters) {
-      counter.mockRestore();
-    }
+    sql.restore();
     reads.mockRestore();
     mode.mockRestore();
   }
@@ -300,7 +289,8 @@ it("returns persisted bundled recovery locations through its existing async cons
     },
   ];
   await seed(env, stored);
-  const counters = observeParentSqlite();
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
   try {
     await using cache = createPluginCache();
     const recovered = await withPluginCache(cache, () =>
@@ -309,11 +299,9 @@ it("returns persisted bundled recovery locations through its existing async cons
     expect(recovered).toHaveLength(1);
     expect(recovered[0]?.pluginId).toBe("fixture");
     expect(recovered[0]?.loadPaths).toContain(rootDir);
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
   } finally {
-    for (const counter of counters) {
-      counter.mockRestore();
-    }
+    sql.restore();
   }
 });
 
@@ -326,34 +314,41 @@ it("reads the installed ledger inside the existing install lifecycle lease witho
   await seed(env, stored);
   await withPluginLifecycleLease({ env }, async (lease) => {
     lease.assertOwned();
-    const counters = observeParentSqlite();
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
     try {
       const options = { env, filePath: lease.databasePath };
       expect(await loadInstalledPluginIndexInstallRecords(options)).toEqual(stored.installRecords);
       expect((await readPersistedInstalledPluginIndex(options))?.installRecords).toEqual(
         stored.installRecords,
       );
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
     } finally {
-      for (const counter of counters) {
-        counter.mockRestore();
-      }
+      sql.restore();
     }
     lease.assertOwned();
   });
 });
 
-it.each(
-  [false, true].flatMap((pinned) =>
-    ["sync", "async", "async-empty-memo"].map((reader) => ({ pinned, reader })),
+it.each([
+  ...[false, true].flatMap((pinned) =>
+    ["sync", "async", "async-empty-memo"].map((reader) => ({
+      pinned,
+      reader,
+      initialMode: "compat" as const,
+    })),
   ),
-)(
-  "keeps captured inventory and policy together after a concurrent memo refresh ($reader, pinned roots: $pinned)",
-  async ({ pinned, reader }) => {
+  { pinned: false, reader: "sync", initialMode: undefined },
+])(
+  "reads captured policy once and keeps it with inventory after a concurrent memo refresh ($reader, pinned roots: $pinned, mode: $initialMode)",
+  async ({ pinned, reader, initialMode }) => {
     const env = environment();
     await seed(env, index("captured ledger"));
-    writeConfigMachineState("plugins.bundledDiscovery", "compat", { env });
+    if (initialMode) {
+      writeConfigMachineState("plugins.bundledDiscovery", initialMode, { env });
+    }
     await closeOpenClawStateDatabaseAsync();
+    const policyReads = vi.spyOn(machineState, "readConfigMachineState");
     const readEnv = pinned ? environment() : env;
     const captured = createDeferredCore();
     const resume = createDeferredCore();
@@ -368,6 +363,7 @@ it.each(
             async () => {
               captured.resolve();
               await resume.promise;
+              const previousReads = policyReads.mock.calls.length;
               if (reader !== "sync") {
                 await resolveConfigWidePluginMetadataSnapshotAsync({
                   config: {},
@@ -377,6 +373,14 @@ it.each(
               }
               const stored = readPersistedInstalledPluginIndexSync({ env: readEnv });
               const mode = bundledDiscovery.readBundledDiscoveryModeMemoized(readEnv);
+              for (let decision = 0; decision < 3; decision++) {
+                expect(bundledDiscovery.readBundledDiscoveryModeMemoized(readEnv)).toBe(mode);
+              }
+              expect(
+                policyReads.mock.calls
+                  .slice(previousReads)
+                  .filter(([key]) => key === "plugins.bundledDiscovery"),
+              ).toHaveLength(1);
               descendant = afterCleanup.promise.then(() =>
                 bundledDiscovery.readBundledDiscoveryModeMemoized(readEnv),
               );
@@ -404,14 +408,14 @@ it.each(
       }
       resume.resolve();
       expect(await reading).toEqual({
-        mode: "compat",
+        mode: initialMode,
         diagnostics: [{ level: "warn", message: "captured ledger" }],
       });
       expect(bundledDiscovery.readBundledDiscoveryModeMemoized(env)).toBe("allowlist");
-      // An escaped descendant must resume ordinary memo semantics after snapshot cleanup.
+      // An escaped descendant cannot replace its closed snapshot with live policy.
       writeConfigMachineState("plugins.bundledDiscovery", "compat", { env });
       afterCleanup.resolve();
-      expect(await descendant).toBe("allowlist");
+      await expect(descendant).rejects.toThrow(PluginCacheFactInvalidatedError);
     } finally {
       resume.resolve();
       afterCleanup.resolve();

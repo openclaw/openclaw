@@ -21,7 +21,7 @@ type DescriptorOptions = {
 };
 
 type RoundTripHarness = {
-  createDescriptor(options?: DescriptorOptions): WorkerLaunchDescriptor;
+  createDescriptor(options?: DescriptorOptions): Promise<WorkerLaunchDescriptor>;
   requestParams(method: string): unknown[];
   sessionTarget: Parameters<typeof SessionManager.open>[0];
   settleRun(runId: string): void;
@@ -53,7 +53,7 @@ function doneMessage(
 }
 
 export async function runWorkerProviderReplayRoundTrip(harness: RoundTripHarness): Promise<void> {
-  const baseDescriptor = harness.createDescriptor({ runId: "replay-run-1" });
+  const baseDescriptor = await harness.createDescriptor({ runId: "replay-run-1" });
   const model = {
     id: baseDescriptor.assignment.modelRef.model,
     name: "Fault replay model",
@@ -123,7 +123,7 @@ export async function runWorkerProviderReplayRoundTrip(harness: RoundTripHarness
       (request) => request.seq,
     ),
   );
-  const secondDescriptor = harness.createDescriptor({
+  const secondDescriptor = await harness.createDescriptor({
     runId: "replay-run-2",
     baseLeafId: first.transcriptLeafId,
     initialSeq: first.transcriptNextSeq,

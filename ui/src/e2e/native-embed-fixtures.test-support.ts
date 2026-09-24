@@ -4,6 +4,7 @@ import type { ApprovalHistoryResult } from "../../../packages/gateway-protocol/s
 import type { CronJobsListResult } from "../api/types.ts";
 import type { CommandLaneDiagnostics } from "../lib/gateway-diagnostics.ts";
 import type { DevicePairingList } from "../lib/nodes/index.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createNativeDeviceSettingsSnapshot } from "../test-helpers/native-device-settings.ts";
 
 // WEB-1 uses the existing device contract; its macOS snapshot remains unchanged.
@@ -166,7 +167,7 @@ export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown
         },
       ],
     },
-    "cron.list": {
+    "cron.list": cronListResponseFixture({
       jobs,
       snapshotRevision: "native-embed-layout",
       total: jobs.length,
@@ -174,7 +175,7 @@ export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown
       limit: 50,
       hasMore: false,
       nextOffset: null,
-    } satisfies CronJobsListResult,
+    }),
     "cron.runs": {
       entries: [],
       total: 0,

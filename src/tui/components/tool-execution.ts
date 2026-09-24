@@ -34,14 +34,17 @@ const MAX_PREVIEW_CHARS = PREVIEW_LINES * 256;
 // Bound the actual wrapped Markdown, not just source newlines: a single long
 // tool-output line can otherwise produce thousands of rows and stall the TUI.
 class ToolOutputComponent extends HyperlinkMarkdown {
-  private sourceText = "";
+  private sourceText: string | undefined;
+  private active = true;
   private renderedSource: string | undefined;
   private expanded = false;
   private literal = false;
   private literalOutput = new Text("", 0, 0);
 
   override setText(text: string, literal = false): void {
-    const sourceText = tuiFormatters.sanitizeTerminalControlsAndBinary(text);
+    const sourceText = text.trim()
+      ? tuiFormatters.sanitizeTerminalControlsAndBinary(text)
+      : undefined;
     if (this.sourceText === sourceText && this.literal === literal) {
       return;
     }
@@ -49,6 +52,10 @@ class ToolOutputComponent extends HyperlinkMarkdown {
     this.literal = literal;
     this.renderedSource = undefined;
     super.invalidate();
+  }
+
+  setActive(active: boolean): void {
+    this.active = active;
   }
 
   setExpanded(expanded: boolean): void {
@@ -63,9 +70,8 @@ class ToolOutputComponent extends HyperlinkMarkdown {
   override render(width: number): string[] {
     const safeWidth = Math.max(0, Math.floor(width));
     const previewBudget = Math.min(MAX_PREVIEW_CHARS, PREVIEW_LINES * Math.max(1, safeWidth));
-    const text = this.expanded
-      ? this.sourceText
-      : truncateUtf16Safe(this.sourceText, previewBudget);
+    const sourceText = this.sourceText ?? (this.active ? "…" : "");
+    const text = this.expanded ? sourceText : truncateUtf16Safe(sourceText, previewBudget);
 
     if (this.renderedSource !== text) {
       if (this.literal) {
@@ -79,10 +85,7 @@ class ToolOutputComponent extends HyperlinkMarkdown {
     const lines = this.literal
       ? this.literalOutput.render(safeWidth).map(tuiFormatters.isolateRtlRenderedLine)
       : super.render(safeWidth);
-    if (
-      this.expanded ||
-      (text.length === this.sourceText.length && lines.length <= PREVIEW_LINES)
-    ) {
+    if (this.expanded || (text.length === sourceText.length && lines.length <= PREVIEW_LINES)) {
       return lines;
     }
     return [...lines.slice(0, PREVIEW_LINES - 1), truncateToWidth("…", safeWidth, "")];
@@ -146,7 +149,6 @@ export class ToolExecutionComponent extends Container {
   private title = "";
   private isPartial = true;
   private isError = false;
-  private result?: ToolResult;
   private images: MessageImages;
   private activity?: AgentItemEventData | null;
   private expanded = false;
@@ -231,10 +233,11 @@ export class ToolExecutionComponent extends Container {
   }
 
   private updateResult(result: ToolResult | undefined, isPartial: boolean, isError = false) {
-    this.result = result;
     this.isPartial = isPartial;
     this.isError = isError;
     this.refreshResult();
+    // Code Mode JSON is literal data; prose normalization can change values and escapes.
+    this.output.setText(extractText(result), isCodeModeResult(this.toolName, result));
     this.images.setImages(extractTuiImageSources(result));
   }
 
@@ -254,11 +257,6 @@ export class ToolExecutionComponent extends Container {
             ? theme.toolErrorBg
             : theme.toolSuccessBg,
     );
-    const raw = extractText(this.result);
-    // Code Mode JSON is literal data; prose normalization can change values and escapes.
-    this.output.setText(
-      raw.trim() ? raw : this.isActive ? "…" : "",
-      isCodeModeResult(this.toolName, this.result),
-    );
+    this.output.setActive(this.isActive);
   }
 }

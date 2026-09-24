@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createStubChild, firstMockArg } from "./adapters/child.test-support.js";
 import { encodeServiceChildMessage } from "./service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
+import type { ProcessExtinctionResult } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), delay: vi.fn() }));
 vi.mock("node:child_process", () => ({ spawn: mocks.spawn }));
@@ -36,7 +37,7 @@ it.skipIf(process.platform === "win32").each([
       value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control, lineage],
     });
     mocks.spawn.mockReturnValue(stub.child);
-    let cleanup: Promise<void> | undefined;
+    let cleanup: Promise<ProcessExtinctionResult> | undefined;
     const starting = createServiceChildRelayAdapter({
       command: "synthetic-child",
       args: [],

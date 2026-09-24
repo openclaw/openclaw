@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFailed, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -9,13 +9,16 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../process/gateway-work-admission.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import * as modelCatalogAuth from "../server-model-catalog-auth.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
 
@@ -47,6 +50,21 @@ vi.mock("../server-runtime-services.js", async (importOriginal) => {
 });
 
 it("connect negotiates snapshots and preserves draft and saved-session catalog scopes", async () => {
+  const startedAt = performance.now();
+  const phases: { phase: string; elapsedMs: number }[] = [];
+  const publications: ModelsSnapshotEvent[] = [];
+  const enterPhase = (phase: string) => {
+    phases.push({ phase, elapsedMs: Math.round(performance.now() - startedAt) });
+  };
+  onTestFailed(() => {
+    console.error("Model catalog integration phases", {
+      phases,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      snapshots: publications.length,
+      activeRootWork: getActiveGatewayRootWorkCount(),
+    });
+  });
+  enterPhase("test state");
   const state = await createOpenClawTestState({
     label: "models-connect-publication",
     env: {
@@ -57,9 +75,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
     },
   });
-  const port = await getGatewayE2ePortBlock();
   const token = "synthetic-catalog-gateway-token";
-  const publications: ModelsSnapshotEvent[] = [];
   try {
     state.applyEnv();
     await state.writeAuthProfiles(
@@ -80,8 +96,11 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       },
       "alpha",
     );
+    enterPhase("Gateway startup and connect");
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const { port } = portClaim;
     const { client, server } = await startGatewayWithClient({
-      port,
+      portClaim,
       configPath: state.configPath,
       token,
       clientName: GATEWAY_CLIENT_IDS.CONTROL_UI,
@@ -133,6 +152,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       },
     });
     try {
+      enterPhase("draft catalogs");
       await expect
         .poll(() => publications, { timeout: 15_000 })
         .toMatchObject([
@@ -176,6 +196,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           await disconnectGatewayClient(other);
         }
       }
+      enterPhase("saved-session catalogs");
       const sessionKey = "agent:alpha:dashboard:12345678-1234-4123-8123-123456789abc";
       await upsertSessionEntryCore(
         { agentId: "alpha", sessionKey },
@@ -244,16 +265,22 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           await disconnectGatewayClient(saved);
         }
       }
+      enterPhase("initial publication supersession");
       const acquisitionStarted = createDeferred();
       const releaseAcquisition = createDeferred();
       const readPreparedCatalog = modelCatalogAuth.readPreparedCatalog;
+      let acquisitionSettled = false;
       const acquisition = vi
         .spyOn(modelCatalogAuth, "readPreparedCatalog")
         .mockImplementationOnce(async (...args) => {
           // The registered reader has captured the saved account before catalog acquisition.
           acquisitionStarted.resolve();
           await releaseAcquisition.promise;
-          return readPreparedCatalog(...args);
+          try {
+            return await readPreparedCatalog(...args);
+          } finally {
+            acquisitionSettled = true;
+          }
         });
       const racingPublications: ModelsSnapshotEvent[] = [];
       const sessionChanges: unknown[] = [];
@@ -298,7 +325,19 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         expect(racingPublications).toEqual([]);
         expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
         releaseAcquisition.resolve();
-        await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
+        try {
+          await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
+        } catch (error) {
+          try {
+            console.error("Model catalog root work did not settle", {
+              acquisitionSettled,
+              holders: getActiveGatewayRootWorkHolders(),
+            });
+          } catch {
+            // Diagnostic failures must not replace the original assertion.
+          }
+          throw error;
+        }
         // A response on this same socket is a delivery barrier after initial work settles.
         await expect(
           racingClient.request("models.list", { agentId: "alpha", sessionKey }),
@@ -323,6 +362,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           await disconnectGatewayClient(racingClient);
         }
       }
+      enterPhase("catalog request supersession");
       const unrelatedKey = "agent:alpha:catalog-other";
       await upsertSessionEntryCore(
         { agentId: "alpha", sessionKey: unrelatedKey },
@@ -362,6 +402,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         pendingAcquisition.mockRestore();
         await Promise.allSettled([pendingCatalog, superseded]);
       }
+      enterPhase("legacy clients");
       for (const clientName of [
         GATEWAY_CLIENT_IDS.CONTROL_UI,
         GATEWAY_CLIENT_IDS.CLI,
@@ -392,10 +433,13 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         }
       }
     } finally {
+      enterPhase("client cleanup");
       await disconnectGatewayClient(client);
+      enterPhase("Gateway cleanup");
       await server.close({ reason: "catalog publication test complete" });
     }
   } finally {
+    enterPhase("test state cleanup");
     await state.cleanup();
   }
 }, 60_000);

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { getSubagentExecutionObservation } from "./subagent-execution-observation.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -25,8 +26,22 @@ describe("subagent execution observation", () => {
     const original = run("original");
     subagentRuns.set(original.runId, original);
     const target = { taskRunId: original.runId, childSessionKey: original.childSessionKey };
+    const claim = claimAgentRunContext(
+      original.runId,
+      { sessionKey: original.childSessionKey },
+      { trackOwner: true, ownsContext: true },
+    );
+    try {
+      expect(getSubagentExecutionObservation(target)).toEqual({
+        state: "running",
+        executionRunId: original.runId,
+      });
+    } finally {
+      releaseAgentRunContext(original.runId, claim);
+    }
+    original.execution = { status: "queued" };
     expect(getSubagentExecutionObservation(target)).toEqual({
-      state: "running",
+      state: "unknown",
       executionRunId: original.runId,
     });
 

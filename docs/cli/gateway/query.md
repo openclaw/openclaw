@@ -14,6 +14,11 @@ The WebSocket RPC query subcommands and their shared options. Part of the [`open
 
 All query commands use WebSocket RPC.
 
+With token, password, or `none` authentication, ordinary RPC calls to the
+configured local loopback Gateway do not open the shared state database for device
+authentication. Explicit URL targets and paired remote connections retain their
+device authentication rules.
+
 <Tabs>
   <Tab title="Output modes">
     - Default: human-readable (colored in TTY).
@@ -327,6 +332,9 @@ openclaw gateway call health --port 18999
 openclaw gateway call logs.tail --params '{"limit": 200}'
 ```
 
+To add an existing checkout to the Control UI's Place picker, use the
+[project registration and listing examples](/web/control-ui/sessions-and-sidebar#register-an-existing-repository).
+
 For `sessions.send` and `chat.send`, JSON `timeoutMs` is the receiving agent's
 execution budget, not an acknowledgment timeout. Omit it for ordinary
 coordination; `--timeout` independently limits how long this CLI waits:
@@ -407,4 +415,6 @@ openclaw gateway resume <suspensionId> --port 18999 --json
 ```
 
 An already expired or resumed lease is a successful no-op. A different active
-suspension ID is rejected.
+suspension ID is rejected. Once shutdown commits, resume is refused even for the
+original owner; `gateway.suspend.status` reports that owner's shutdown progress
+until server teardown closes RPC access.

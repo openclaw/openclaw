@@ -2,6 +2,7 @@ import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
@@ -31,6 +32,14 @@ export async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Pro
   if (result.pluginInventoryChanged) {
     ctx.invalidatePluginMetadataSnapshot?.();
   }
+}
+
+export async function runLegacyPluginSourceCapturesHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { noteLegacyPluginSourceCaptures } =
+    await import("../commands/doctor-plugin-source-captures.js");
+  await noteLegacyPluginSourceCaptures(ctx.env ?? process.env, ctx.prompter.shouldRepair);
 }
 
 export async function runReleaseConfiguredPluginInstallsHealth(
@@ -112,6 +121,8 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
   await noteBackupDoctorHint(ctx.env ?? process.env);
+  const { noteBackupScratchHealth } = await import("../commands/doctor-backup-scratch.js");
+  await noteBackupScratchHealth(ctx.env ?? process.env, ctx.prompter.shouldRepair);
 }
 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -149,6 +160,7 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    onWarnings: (warnings) => recordDoctorHealthWarnings(ctx, [], warnings),
     ...(ctx.configResult.postSessionPluginMigration
       ? { postSessionPluginMigration: ctx.configResult.postSessionPluginMigration }
       : {}),
@@ -191,7 +203,6 @@ export async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): P
   await noteSessionSnapshotHealth({
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
-    shouldRepair: ctx.prompter.shouldRepair,
   });
 }
 

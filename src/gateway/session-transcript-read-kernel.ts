@@ -3,6 +3,7 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { resolveVisibleHistoryEventCount } from "../config/sessions/session-accessor.sqlite-history-projection.js";
 import {
   readRecentSessionTranscriptHistoryEventsFromProjection,
   readSessionTranscriptHistoryEventByIdFromProjection,
@@ -16,6 +17,8 @@ import type {
   CurrentTranscriptProjection,
   SessionTranscriptMessageEvent,
 } from "../config/sessions/session-accessor.sqlite-projection-read.js";
+import type { ReadSessionMessageByIdResult } from "../config/sessions/session-history-types.js";
+import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import type {
   TranscriptRecentReadLimits,
   TranscriptAnchorPageOptions,
@@ -62,12 +65,9 @@ type ReadSessionMessagesResult = {
   transcriptPath?: string;
 };
 
-type ReadSessionMessageByIdResult = {
-  message?: unknown;
-  seq?: number;
-  oversized: boolean;
-  found: boolean;
-  serializedBytes?: number;
+type SessionTranscriptReadOptions = {
+  allowResetArchiveFallback?: boolean;
+  readOnly?: boolean;
 };
 
 function archivedTranscriptReader(target: ResolvedTranscriptReadTarget): ArchivedTranscriptReader {
@@ -147,10 +147,32 @@ type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
 
 /** Share pagination and archive policy while the caller owns acquisition and restoration. */
 export function createSessionTranscriptReader(access: SessionTranscriptReadAccess) {
+  async function readSnapshotIfPresent<T>(
+    target: ResolvedTranscriptReadTarget,
+    read: (projection: CurrentTranscriptProjection) => T,
+  ): Promise<T | undefined> {
+    try {
+      return await access.readSnapshot(target, read);
+    } catch (error) {
+      if (
+        error instanceof SessionTranscriptStorageUnavailableError &&
+        error.reason === "database-missing"
+      ) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  async function readSessionMessageCountAsync(scope: SessionTranscriptReadScope): Promise<number> {
+    const target = await access.resolveTarget(scope);
+    return (await readSnapshotIfPresent(target, resolveVisibleHistoryEventCount)) ?? 0;
+  }
+
   /** Reads display messages asynchronously through the reader seam. */
   async function readSessionMessagesAsync(
     scope: SessionTranscriptReadScope,
-    opts: ReadSessionMessagesAsyncOptions & { readOnly?: boolean },
+    opts: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
   ): Promise<unknown[]> {
     return (await readSessionMessagesWithSourceAsync(scope, opts)).messages;
   }
@@ -158,7 +180,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
   /** Reads display messages with source metadata through the reader seam. */
   async function readSessionMessagesWithSourceAsync(
     scope: SessionTranscriptReadScope,
-    opts: ReadSessionMessagesAsyncOptions & { readOnly?: boolean },
+    opts: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
   ): Promise<ReadSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
     const messages = await access.readSnapshot(
@@ -172,7 +194,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       opts,
     );
     if (messages.length === 0 && opts.allowResetArchiveFallback === true) {
-      return await archivedTranscriptReader(target).read({ ...opts, resetArchiveOnly: true });
+      return await archivedTranscriptReader(target).read(opts);
     }
     return {
       messages,
@@ -187,7 +209,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     opts?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean },
   ): Promise<ReadSessionMessageByIdResult> {
     const target = await access.resolveTarget(scope);
-    const foundEvent = await access.readSnapshot(target, (projection) =>
+    const foundEvent = await readSnapshotIfPresent(target, (projection) =>
       readSessionTranscriptHistoryEventByIdFromProjection(projection, messageId, opts),
     );
     if (foundEvent) {
@@ -206,10 +228,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       };
     }
     if (opts?.allowResetArchiveFallback === true && !opts.currentOnly) {
-      return await archivedTranscriptReader(target).readById(messageId, {
-        ...opts,
-        resetArchiveOnly: true,
-      });
+      return await archivedTranscriptReader(target).readById(messageId);
     }
     return { found: false, oversized: false };
   }
@@ -225,10 +244,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     );
     const messages = lookup.hasDisplayMessages
       ? projectSqliteHistoryEvents(lookup.events)
-      : await archivedTranscriptReader(target).readMessageCandidatesById(messageId, {
-          allowResetArchiveFallback: true,
-          resetArchiveOnly: true,
-        });
+      : await archivedTranscriptReader(target).readMessageCandidatesById(messageId);
     return messages.filter(
       (message) => asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id === messageId,
     );
@@ -237,7 +253,9 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
   /** Reads recent messages with total-count metadata asynchronously through the reader seam. */
   async function readRecentSessionMessagesWithStatsAsync(
     scope: SessionTranscriptReadScope,
-    opts: ReadRecentSessionMessagesOptions & TranscriptReadWindowOptions & { readOnly?: boolean },
+    opts: ReadRecentSessionMessagesOptions &
+      TranscriptReadWindowOptions &
+      SessionTranscriptReadOptions,
   ): Promise<ReadRecentSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
     const { activeLeafEntryId, deltaCursor, displaySource, readWindow, messages, totalMessages } =
@@ -247,10 +265,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
         opts,
       );
     if (totalMessages === 0 && messages.length === 0 && opts.allowResetArchiveFallback === true) {
-      return await archivedTranscriptReader(target).readRecentWithStats({
-        ...opts,
-        resetArchiveOnly: true,
-      });
+      return await archivedTranscriptReader(target).readRecentWithStats(opts);
     }
     return {
       ...(activeLeafEntryId !== undefined ? { activeLeafEntryId } : {}),
@@ -267,15 +282,14 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
   /** Reads one offset page with total-count metadata through the reader seam. */
   async function readSessionMessagesPageWithStatsAsync(
     scope: SessionTranscriptReadScope,
-    opts: TranscriptReadWindowOptions & {
-      offset: number;
-      maxMessages: number;
-      beforeSeq?: number;
-      recentAtHead?: TranscriptRecentReadLimits;
-      maxBytes?: number;
-      allowResetArchiveFallback?: boolean;
-      readOnly?: boolean;
-    },
+    opts: TranscriptReadWindowOptions &
+      SessionTranscriptReadOptions & {
+        offset: number;
+        maxMessages: number;
+        beforeSeq?: number;
+        recentAtHead?: TranscriptRecentReadLimits;
+        maxBytes?: number;
+      },
   ): Promise<ReadRecentSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
     const page = await access.readSnapshot(
@@ -284,7 +298,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       opts,
     );
     if (page.totalMessages === 0 && opts.allowResetArchiveFallback === true) {
-      return await archivedTranscriptReader(target).readPage({ ...opts, resetArchiveOnly: true });
+      return await archivedTranscriptReader(target).readPage(opts);
     }
     return {
       ...(Object.hasOwn(page, "activeLeafEntryId")
@@ -304,7 +318,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
   /** Reads one message-id-anchored page from a single transcript snapshot. */
   async function readSessionMessagesAroundIdWithStatsAsync(
     scope: SessionTranscriptReadScope,
-    opts: TranscriptAnchorPageOptions & { allowResetArchiveFallback?: boolean; readOnly?: boolean },
+    opts: TranscriptAnchorPageOptions & SessionTranscriptReadOptions,
   ): Promise<ReadSessionMessagesAroundIdResult> {
     const target = await access.resolveTarget(scope);
     const sessionFile =
@@ -325,7 +339,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
           sessionFile,
           sessionId: target.sessionId,
           storePath: target.storePath,
-        }).readAroundId({ ...opts, resetArchiveOnly: true });
+        }).readAroundId(opts);
       }
       return {
         found: false,
@@ -355,6 +369,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
   }
 
   return {
+    readSessionMessageCountAsync,
     readSessionMessagesAsync,
     readSessionMessagesWithSourceAsync,
     readSessionMessageByIdAsync,

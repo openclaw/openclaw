@@ -6,6 +6,100 @@ read_when:
   - You are triaging a nightly, scheduled, or maintenance workflow
 ---
 
+## Hourly main CI
+
+Full `main` CI runs hourly instead of on every push. `Main CI Hourly`
+(`ci-hourly.yml`) requests a full `CI` run at minute 23 of each hour. GitHub pins
+the child workflow and its checkout to the same main SHA at dispatch, even if
+main advanced after the scheduler event. It requests `validation_tier=main`,
+`release_gate=false`, `release_scope=full`, and `include_android=true`. It does
+not diff only the last commit: Node, native platforms, docs, QA Smoke, browser
+process proofs, and the published-updater survivor all run against that revision.
+Node tests use the existing compact main inventory and runtime policy.
+
+Full Release Validation and ordinary manual CI retain `validation_tier=full`
+by default. They additionally run the release-only tooling/runtime/UI tests,
+minimum-Node compatibility, iOS screenshots, native Release builds, Android
+packaging, and all six Docker seed scenarios. Hourly iOS keeps its full
+`ios-build (tests)` simulator phase and Swift lint; Android keeps phone/Wear
+tests and lint. The hourly Docker survivor uses the existing main smoke package, retaining runtime, assets, public
+SDK declarations, and tarball integrity checks without the release-only
+declaration build. Runner routing, timeouts, and concurrency limits are unchanged.
+
+The dispatcher summary names the child `CI hourly-main-<run>-<attempt>` run.
+**A successful dispatcher is not a passing CI result**; inspect the child CI
+run and its `openclaw/ci-gate` job. Hourly CI children share one non-canceling
+concurrency slot with a coalesced pending tip. Ordinary manual/release CI stays
+independent, and subsequent security-only pushes cannot cancel hourly work.
+The hourly dispatcher defers during `OPENCLAW_RELEASE_PRIORITY_RUN`; its
+manual action remains available, like ordinary manual CI.
+
+The standalone Docs, Node Runtime Conformance, Plugin Init Scaffold Validation,
+and Sandbox Common Smoke workflows also run hourly at minute 23, retaining
+their existing PR scopes. Plugin NPM Release runs its nonpublishing metadata
+and unpublished-package pack preview hourly; schedules cannot enter its
+manual-only approval or publication jobs. Vitest Cache Warm runs at minute 17
+of every hour, retaining its manual and repository-dispatch recovery paths.
+The warmer is independent; its completion before CI is not guaranteed.
+
+### Restore per-push CI
+
+Set the **repository Actions variable** `OPENCLAW_CI_ON_PUSH` to `true` under
+**Settings → Secrets and variables → Actions → Variables**. This restores the
+previous path-filtered full main-push admission in CI, the standalone checks,
+plugin artifact preview, and cache warming. GitHub string comparisons are
+case-insensitive; use the documented lowercase `true`. Unset, empty, `false`,
+and other values keep hourly-only full main CI. Delete the variable or set it
+to `false` to return to the default. Hourly runs remain enabled either way.
+No secret, commit, or protection-setting change is required.
+
+For an immediate complete CI run, choose **Main CI Hourly → Run workflow →
+main**, or run:
+
+```bash
+gh workflow run ci-hourly.yml --ref main
+```
+
+The individual standalone workflows can also be run manually. Direct `CI`
+dispatches and release-validation children retain their existing inputs and
+behavior; set `include_android=true` when requesting complete platform coverage.
+To measure hourly coverage on a development branch, dispatch `ci.yml` on that
+branch with `validation_tier=main` and `include_android=true`. The main tier
+requires the workflow and checkout to share one revision; it cannot qualify a
+frozen release target or replace an exact-head PR release gate.
+
+### What stays on pushes
+
+CodeQL retains all seven main-push security categories. CI retains
+`security-fast` (committed private keys, changed-workflow security auditing,
+and production dependency auditing) on its existing non-docs push scope.
+Default main pushes also run the baseline-growth, assertion-safety, and new
+protocol-method metadata guards there against the exact push `before` SHA,
+so hourly manual CI's main-against-itself comparison cannot lose these checks;
+Workflow Sanity retains its existing push scope. The full CI aggregate job is
+skipped on default main pushes, **not** on runnable PRs or full manual runs.
+Existing release-priority deferral still applies to CodeQL and Workflow Sanity.
+PR required-check names and security-review enforcement are unchanged.
+
+Publishing and its prerequisite checks stay event-driven: docs mirror and
+website installer synchronization, runner-image publication, locale-generation
+PRs, release closeout, and ClawSweeper activity forwarding are unchanged.
+Docs Agent now verifies the exact successful full-CI attempt before admitting
+its write job: opted-in main pushes and hourly full-CI children qualify, while
+security-only pushes do not. Its hourly/current-main guard remains in place.
+Security Review still handles PR and manual CI completion. Release/tag and PR-only workflows
+retain their existing triggers; this change adds no merge-queue support where
+none existed and changes no repository rulesets.
+
+GitHub cron is best-effort on the default branch, not a one-hour latency SLA:
+runs may be delayed or dropped under load, and public-repository schedules can
+be disabled after inactivity. These workflows deliberately recheck unchanged
+SHAs rather than introducing a separate last-success ledger. A failure can be
+retried at the next hourly opportunity, and manual dispatch remains available.
+If full CI takes longer than an hour, the current run finishes while GitHub
+coalesces pending hourly children. No measured cost savings or strict completion
+interval is claimed.
+
 ## OpenClaw Performance
 
 `OpenClaw Performance` is the product/runtime performance workflow. It runs daily on `main` and can be dispatched manually:
@@ -57,6 +151,32 @@ failure or timeout after verified cleanup permits recovery; owner setup, census,
 cleanup failure, and cancellation stop before fallback, retry, replay, or success.
 Full Release Validation continues to disable the publisher entirely and retains
 performance evidence only as workflow artifacts.
+
+### Gateway concurrency benchmark
+
+The manual `gateway-concurrency` mode measures a busy isolated Gateway and retains
+its results as Actions artifacts:
+
+```bash
+gh workflow run openclaw-performance.yml --ref main \
+  -f mode=gateway-concurrency -f live_openai_candidate=true
+```
+
+One job builds the selected source once, runs the mock provider, then optionally
+runs OpenAI with a real key. Each run seeds 1,000 sessions across 32 agents and
+completes 96 turns alongside session updates, history reads, subscriptions, and
+64 probe rounds. Dreaming is disabled; normal indexing, recaps, and the database
+idle retention policy remain unchanged. The live run denies tools and caps model
+output at 128 tokens. Results include load-phase main-thread and Worker CPU
+profiles. The two providers are different workloads, not a before/after speed
+comparison.
+
+Live execution requires the default-branch workflow and the tested SHA to equal
+the workflow SHA. A requested live run fails if that condition or
+`OPENAI_API_KEY` is missing. Omit `live_openai_candidate` for mock-only evidence.
+This mode runs no Kova lanes, source-probe jobs, or report publication, and is not
+selected by the daily schedule. See [Gateway concurrency](/reference/test/performance#benchmarks)
+for local invocation and result interpretation.
 
 ### Vitest paired benchmark
 
@@ -198,14 +318,36 @@ Quality stays separate from security so quality findings can be scheduled, measu
 
 ## Maintenance workflows
 
+### PR CI Sweeper
+
+`PR CI Sweeper` checks recent pull requests hourly at minute 7. It repairs missing
+`pull_request` CI and GitHub `startup_failure` runs through a bounded close/reopen
+cycle, warning when it starts infrastructure recovery. Drafts, recently updated
+or conflicted PRs, and PRs with auto-merge enabled remain unchanged. Attached
+queued, running, failed, or canceled CI prevents recovery: cancellation does not
+prove a provider failure or that tests never executed, so the sweeper never
+automatically re-executes those workflows.
+
 ### Comment automation
 
 Comment jobs reject known no-ops before acquiring a hosted runner. Maintainer
 Command Reactions skips comments without `/` only when using its default command
 list; any nonempty `MAINTAINER_COMMAND_REACTIONS` override retains the full matcher,
 including commands without slashes. Auto response skips Bot-authored issue
-comments that Barnacle already ignores. Other issue and PR events retain their
-existing admission rules, including meaningful automation-authored updates.
+comments that Barnacle already ignores and targets whose author association
+already exempts them. Its edit admission retains title, body, and PR-base changes.
+PR context checks omit the policy's known bot and privileged-author exemptions.
+Labeler retains title/base PR edits and skips issue edits that leave the title
+unchanged. These decisions happen before checkout and runner allocation.
+
+Auto response, Labeler, PR context checks, and ClawSweeper acquire concurrency
+slots only after job admission. Skipped events cannot replace useful pending
+work. Labeler uses separate groups for each PR and issue, with manual backfills
+serialized separately; PR context checks cancel superseded checks on the same PR.
+ClawSweeper retains its existing per-item cancellation rules and all label/comment
+intake, skipping only explicitly empty metadata edits. Security Review omits PR
+prose-only edits while retaining base/permission changes, head changes, and
+approval revocations; its per-head review serialization remains non-canceling.
 
 ### Dependency Audit
 
@@ -261,7 +403,9 @@ site renderer or cross-page link validation.
 
 ### Docs Agent
 
-The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping existing docs aligned with recently landed changes. It has no pure schedule: a successful non-bot push CI run on `main` can trigger it, and manual dispatch can run it directly. Workflow-run invocations skip when `main` has moved on or when another eligible Docs Agent workflow-run invocation was created in the last hour. Canceled and skipped workflow conclusions are excluded from both hourly cadence and review-base selection; active runs with no conclusion still count. When admitted, the agent reviews the commit range from the previous eligible invocation's source SHA to current `main`.
+The `Docs Agent` workflow keeps existing docs aligned with recently landed changes. It has no pure schedule: an opted-in full main-push CI run or an hourly full-CI child can trigger it, and explicit non-bot manual dispatch retains its direct admission. A read-only job verifies the canonical CI workflow, exact completed run attempt, current main SHA, successful aggregate, and successful revision-confirmation step before the write-capable job is admitted. That producer step is absent/skipped for security-only pushes, failed full CI, and manual validation of another target or reduced scope. The hourly child may run as `github-actions[bot]`; ordinary bot pushes remain excluded.
+
+Only the admitted write job occupies the non-canceling docs concurrency slot, so a skipped push cannot displace pending hourly/manual work. Workflow-run invocations recheck main freshness and skip when another eligible Docs Agent invocation was created in the last hour. Canceled and skipped workflow conclusions are excluded from both hourly cadence and review-base selection; active runs with no conclusion still count. When admitted, the agent reviews the commit range from the previous eligible invocation's source SHA to current `main`.
 
 History eligibility tracks workflow attempts, not completed docs reviews: a gate-rejected attempt that finishes successfully remains eligible history.
 

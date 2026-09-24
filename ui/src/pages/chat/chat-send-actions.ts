@@ -1,24 +1,26 @@
-import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import {
   chatQueueMovableSegments,
+  compareChatQueueOrder,
   isMovableChatQueueItem,
   reorderChatQueueItems,
 } from "../../lib/chat/chat-queue-order.ts";
-import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
-import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { hasUiSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { loadChatBranches } from "./chat-history-branches.ts";
-import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
-import { loadChatHistory } from "./chat-history.ts";
+import {
+  isExpiredIncognitoSession,
+  isInitialChatHistoryUnavailable,
+} from "./chat-history-state.ts";
 import {
   flushStoredChatOutbox,
   resumeStoredChatOutboxes as resumeStoredChatOutboxesDrain,
   scheduleStoredChatOutboxDrain,
 } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import {
   admitQueuedMessageForSession,
   isVolatileQueuedMessage,
@@ -34,15 +36,8 @@ import {
   reconnectSafeQueuedSendState,
   setChatError,
 } from "./chat-send-queue-state.ts";
-import {
-  isActiveLeafChangedError,
-  requestChatSend,
-  resolveDisplayedLeafEntryId,
-} from "./chat-send-request.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import type { ChatHistoryHost } from "./chat-state-contract.ts";
 import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
-import { formatConnectError } from "./connect-error.ts";
 import {
   isQueuedMessageBeingEdited,
   QUEUED_MESSAGE_RETRY_CONFLICT_ERROR,
@@ -50,65 +45,16 @@ import {
   QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
 
-function applyChatSendError(
-  state: ChatHistoryHost,
-  err: unknown,
-  canApplyError: () => boolean,
-): string {
-  const error = isActiveLeafChangedError(err)
-    ? t("chat.sendErrors.activeLeafChanged")
-    : formatConnectError(err);
-  if (canApplyError()) {
-    setChatError(state, error);
-    if (isActiveLeafChangedError(err)) {
-      void Promise.all([loadChatHistory(state), loadChatBranches(state)]);
-    }
-  }
-  return error;
-}
+registerChatGoalsEnglish();
 
-export async function sendChatMessageWithGeneratedRunId(
-  state: ChatHistoryHost,
-  message: string,
-  attachments?: ChatAttachment[],
-  options: {
-    canApplyError?: () => boolean;
-    expectedLeafEntryId?: string | null;
-    mentions?: readonly HumanMention[];
-    queueMode?: QueueMode;
-    replyToId?: string;
-    runId?: string;
-  } = {},
-) {
-  const submitted = trimHumanMentions(message, options.mentions);
-  if (!state.client || !state.connected || (!submitted.text && !attachments?.length)) {
-    return null;
-  }
-  const canApplyError = options.canApplyError ?? (() => true);
-  if (canApplyError()) {
-    setChatError(state, null);
-  }
-  const runId = options.runId ?? generateUUID();
-  // Direct sends fail closed on the authoritative leaf; restored drains omit it.
-  const expectedLeafEntryId = resolveDisplayedLeafEntryId(state);
-  try {
-    return await requestChatSend(state, {
-      message: submitted.text,
-      mentions: submitted.mentions,
-      attachments,
-      runId,
-      ...(options.queueMode !== "steer" && options.expectedLeafEntryId !== undefined
-        ? { expectedLeafEntryId: options.expectedLeafEntryId }
-        : options.queueMode !== "steer" && expectedLeafEntryId !== undefined
-          ? { expectedLeafEntryId }
-          : {}),
-      ...(options.queueMode ? { queueMode: options.queueMode } : {}),
-      ...(options.replyToId ? { replyToId: options.replyToId } : {}),
-    });
-  } catch (err) {
-    const error = applyChatSendError(state, err, canApplyError);
-    return err instanceof GatewayRequestError ? { kind: "rejected" as const, error } : null;
-  }
+function hasUncertainChatDelivery(entry: ChatQueueItem): boolean {
+  return Boolean(
+    entry.sendRunId &&
+    !entry.localCommandName &&
+    (entry.sendState === "unconfirmed" ||
+      (entry.sendState === "held" &&
+        ((entry.sendAttempts ?? 0) > 0 || entry.sendRequestStartedAtMs !== undefined))),
+  );
 }
 
 const resetRetryState = (
@@ -116,8 +62,7 @@ const resetRetryState = (
   sendState: ChatQueueItem["sendState"],
 ): ChatQueueItem => {
   // An ID-less post-clear review barrier has no transport attempt to preserve.
-  const uncertain =
-    entry.sendState === "unconfirmed" && Boolean(entry.sendRunId) && !entry.localCommandName;
+  const uncertain = hasUncertainChatDelivery(entry);
   return {
     ...entry,
     // Local payload failure cannot erase an uncertain transport attempt. Keep its
@@ -136,7 +81,7 @@ const resetRetryState = (
 };
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string): Promise<void> {
-  if (isInitialChatHistoryUnavailable(host)) {
+  if (chatProviderReviewRow(host)?.providerReview || isInitialChatHistoryUnavailable(host)) {
     return;
   }
   if (readQueuedMessageById(host, id)?.intent) {
@@ -160,8 +105,6 @@ export const resumeStoredChatOutboxes = (host: ChatHost, event?: GatewayEventFra
 
 export const flushChatQueueForEvent = (host: ChatHost) =>
   flushStoredChatOutbox(host, chatOutboxDrainDependencies);
-
-export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
 
 /**
  * Moves a queued row to the target row's position in its own movable segment. A locked row
@@ -213,6 +156,15 @@ export function moveQueuedChatMessage(
   if (moves.length === 0) {
     return "noop";
   }
+  const movedById = new Map(moves.map((item) => [item.id, item]));
+  const segmentIds = new Set(segment!.map((item) => item.id));
+  const reordered = scope
+    .map((item) => movedById.get(item.id) ?? item)
+    .toSorted(compareChatQueueOrder);
+  // Expanding equal positions must not carry a row across a locked neighbor.
+  if (reordered.some((item, index) => !segmentIds.has(item.id) && scope[index]?.id !== item.id)) {
+    return "noop";
+  }
   const applied = updateQueuedMessagesForSession(
     host,
     moves.map((moved) => ({
@@ -232,14 +184,24 @@ export function moveQueuedChatMessage(
   return "moved";
 }
 
-export async function retryQueuedChatMessage(host: ChatHost, id: string) {
-  if (isInitialChatHistoryUnavailable(host)) {
+export async function retryQueuedChatMessage(
+  host: ChatHost,
+  id: string,
+  canDispatch?: () => boolean,
+) {
+  if (
+    chatProviderReviewRow(host)?.providerReview ||
+    isInitialChatHistoryUnavailable(host) ||
+    (canDispatch && !canDispatch())
+  ) {
     return;
   }
   const item = host.chatQueue.find((entry) => entry.id === id);
+  if (isExpiredIncognitoSession(host, item?.sessionKey ?? host.sessionKey)) {
+    return;
+  }
   const retriesFailedDelivery = item?.sendState === "failed" && !item.localCommandName;
-  const retriesUnconfirmed =
-    item?.sendState === "unconfirmed" && Boolean(item.sendRunId) && !item.localCommandName;
+  const retriesUnconfirmed = item !== undefined && hasUncertainChatDelivery(item);
   if (isQueuedMessageBeingEdited(host, id)) {
     setChatError(host, QUEUED_MESSAGE_RETRY_CONFLICT_ERROR);
     return;
@@ -267,7 +229,9 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
         wasVolatile &&
         !item.localCommandName &&
         item.sendRunId &&
-        (item.sendState === "failed" || item.sendState === "unconfirmed") &&
+        (item.sendState === "failed" ||
+          item.sendState === "unconfirmed" ||
+          item.sendState === "held") &&
         canSendVolatileQueueItem(host, item)
       ) {
         const retry = updateVolatileQueuedMessage(host, id, (entry) =>
@@ -280,6 +244,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
         await deliverChatQueueItem(host, retry, {
           routingSessionKey: retry.sessionKey ?? host.sessionKey,
           storageMode: "memory",
+          canDispatch,
         });
         return;
       }
@@ -309,6 +274,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     explicitAdmission
       ? {
           routingSessionKey: host.sessionKey,
+          canDispatch,
           ...(retriesFailedDelivery ? { allowActiveRunSend: true } : {}),
         }
       : undefined,

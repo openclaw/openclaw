@@ -110,6 +110,7 @@ type CliOptions = {
   heapProfDir?: string;
   installedCohort?: string;
   installedChild: boolean;
+  installedCpuDiagnostic: boolean;
   json: boolean;
   output?: string;
   runs: number;
@@ -123,7 +124,13 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
 const INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS = 30_000;
 const INCIDENT_COMBINED_READYZ_P95_MAX_MS = 60_000;
-const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json", "--installed-child"]);
+const BOOLEAN_FLAGS = new Set([
+  "--help",
+  "-h",
+  "--json",
+  "--installed-child",
+  "--installed-cpu-diagnostic",
+]);
 const VALUE_FLAGS = new Set([
   "--case",
   "--cpu-prof-dir",
@@ -365,8 +372,12 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   validateCliArgs(argv);
   const installedCohort = parseFlagValue(argv, "--installed-cohort");
   const installedChild = hasFlag(argv, "--installed-child");
+  const installedCpuDiagnostic = hasFlag(argv, "--installed-cpu-diagnostic");
   if (installedChild && !installedCohort) {
     throw new CliArgumentError("--installed-child requires --installed-cohort");
+  }
+  if (installedCpuDiagnostic && !installedCohort) {
+    throw new CliArgumentError("--installed-cpu-diagnostic requires --installed-cohort");
   }
   if (installedCohort) {
     for (const flag of [
@@ -393,6 +404,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     heapProfDir: parseFlagValue(argv, "--heap-prof-dir"),
     installedCohort,
     installedChild,
+    installedCpuDiagnostic,
     json: hasFlag(argv, "--json"),
     output: resolveOutputPath(parseFlagValue(argv, "--output")),
     runs: parsePositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs"),
@@ -421,6 +433,7 @@ Options:
   --cpu-prof-dir <dir> Write one V8 CPU profile per run
   --heap-prof-dir <dir> Write one V8 heap profile per run
   --installed-cohort <path> Measure one fresh installed startup and eight retained-state restarts
+  --installed-cpu-diagnostic Profile one established startup after an unprofiled fresh prime; requires --installed-cohort
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
@@ -1083,6 +1096,7 @@ async function main() {
       inputPath: options.installedCohort,
       outputPath: options.output!,
       child: options.installedChild,
+      diagnostic: options.installedCpuDiagnostic,
       argv,
     });
     return;

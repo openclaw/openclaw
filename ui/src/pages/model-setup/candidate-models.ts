@@ -12,6 +12,8 @@ type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type CandidateRowsProps = Parameters<typeof renderProviderIcon>[0] & {
   activation: ModelSetupActivationState;
   actionsDisabled: boolean;
+  detecting?: boolean;
+  embedded?: boolean;
   onActivateCandidate: (candidate: Candidate) => void;
 };
 
@@ -89,7 +91,7 @@ export function renderCandidateRows(
                   <button
                     type="button"
                     class=${`btn ${failure ? "" : "primary"}`}
-                    ?disabled=${props.actionsDisabled}
+                    ?disabled=${props.actionsDisabled || props.detecting}
                     @click=${() => props.onActivateCandidate(candidate)}
                   >
                     <span>
@@ -104,7 +106,11 @@ export function renderCandidateRows(
                                     ? "modelSetup.utility.useUtility"
                                     : "modelSetup.utility.useSetup",
                                 )
-                              : t("modelSetup.candidates.testAndUse")
+                              : t(
+                                  props.embedded
+                                    ? "modelSetup.discovery.useForAgent"
+                                    : "modelSetup.candidates.testAndUse",
+                                )
                       }
                     </span>
                   </button>

@@ -28,7 +28,7 @@ For any agent/surface handling untrusted content, deny these by default:
 }
 ```
 
-`commands.restart=false` disables `/restart` and external `SIGUSR1` restart requests. The `gateway` agent tool has no restart action.
+`commands.restart=false` disables `/restart` and external `SIGUSR2` restart requests. The `gateway` agent tool has no restart action.
 
 ## Cross-provider messaging
 

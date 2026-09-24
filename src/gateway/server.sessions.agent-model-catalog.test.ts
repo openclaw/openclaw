@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { preparePublishedModelRuntimeChoice } from "../agents/model-runtime-choice.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
@@ -8,6 +9,7 @@ import {
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
 import { writeSessionStore } from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
@@ -17,6 +19,22 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+
+// Prepared runtime eligibility is covered by the native choice owner tests.
+vi.mock("../agents/model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<typeof preparePublishedModelRuntimeChoice>(
+    async ({ runtimeId, preferredRuntimeId }) => ({
+      kind: "ready",
+      runtimeId: runtimeId ?? preferredRuntimeId ?? "fixture-harness",
+      validate: () => undefined,
+    }),
+  ),
+}));
+
+afterEach(async () => {
+  await disposeSessionReadContexts();
+  closeOpenClawStateDatabaseForTest();
+});
 
 const { createSelectedGlobalSessionStore } = setupGatewaySessionsHandlerTestHarness();
 
@@ -29,10 +47,6 @@ function createAgentModelCatalogLoader() {
     return { entries, routeVariants: entries };
   });
 }
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
 
 const mainRef = "main-provider/main-only";
 const workRef = "work-provider/work-only";

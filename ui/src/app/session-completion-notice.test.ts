@@ -19,6 +19,7 @@ function fixture(enabled = true) {
   const context = {
     basePath: "",
     gateway: {
+      connection: { gatewayUrl: "ws://gateway.example" },
       snapshot: { client, phase: "connected", selfUser: { id: "owner" }, hello: null },
       setSessionKey: vi.fn(),
     },

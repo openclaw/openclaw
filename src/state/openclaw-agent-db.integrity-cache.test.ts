@@ -12,6 +12,7 @@ import {
   withOpenClawAgentDatabaseAdmission,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
 
@@ -24,7 +25,7 @@ afterEach(async () => {
 });
 
 it.each(["sync", "async", "admitted"] as const)(
-  "checks once across writes and physical %s reopens, then checks again after lifecycle reset",
+  "checks once across writes and physical %s reopens, including after lifecycle reset",
   async (mode) => {
     const options = {
       agentId: "integrity-cache",
@@ -73,14 +74,24 @@ it.each(["sync", "async", "admitted"] as const)(
 
     closeOpenClawAgentDatabasesForTest();
     openOpenClawAgentDatabase(options);
-    expect(checks).toEqual([
-      "PRAGMA integrity_check;",
-      "PRAGMA foreign_key_check;",
-      "PRAGMA integrity_check;",
-      "PRAGMA foreign_key_check;",
-    ]);
+    expect(checks).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
   },
 );
+
+it("retains integrity verification until durable evidence is invalidated", () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-invalidation-") };
+  const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
+  expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+  closeOpenClawStateDatabaseForTest();
+  createUnsafeIndexDrift(databasePath);
+
+  expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
+  closeOpenClawAgentDatabasesForTest();
+  clearOpenClawAgentIntegrityVerification(databasePath, env);
+  expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+    /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+  );
+});
 
 it("does not lend remembered integrity to another file at the same path", () => {
   const options = {

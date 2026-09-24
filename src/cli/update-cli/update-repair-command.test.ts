@@ -150,6 +150,8 @@ describe("update repair ledger recovery", () => {
       recordUpdateRunStep(run.runId, { step: "driver:adopted", status: "completed" });
       if (legacy) {
         recordUpdateRunStep(run.runId, { step: "requested", status: "failed", detail });
+      } else {
+        recordUpdateRunStep(run.runId, { step: "installation-inspection", status: "in_progress" });
       }
       finishUpdateRun(run.runId, {
         status: legacy ? "failed" : "skipped",
@@ -284,7 +286,7 @@ describe("update repair ledger recovery", () => {
       const current = getUpdateRun(run.runId)!;
       const pending = updateRepairCommand({});
       await expect(pending).rejects.toThrow(
-        `Update ${run.runId} is still in progress (validating)`,
+        `Update ${run.runId} remains recorded as running (validating)`,
       );
       for (const detail of [
         `PID ${driver.pid}`,
@@ -293,7 +295,7 @@ describe("update repair ledger recovery", () => {
         `started ${new Date(run.createdAtMs).toISOString()}`,
         "age 3600s",
         `last activity ${new Date(current.updatedAtMs).toISOString()}`,
-        "stop that driver",
+        "stop it through its owning host",
         "openclaw update repair",
       ]) {
         await expect(pending).rejects.toThrow(detail);
@@ -310,7 +312,7 @@ describe("update repair ledger recovery", () => {
     });
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
 
-    await expect(updateRepairCommand({})).rejects.toThrow("still in progress");
+    await expect(updateRepairCommand({})).rejects.toThrow("remains recorded as running");
     expect(mocks.finalize).not.toHaveBeenCalled();
   });
 
@@ -413,8 +415,11 @@ describe("update repair ledger recovery", () => {
       const run = seedRun();
       finishUpdateRun(run.runId, { status: "failed", reason });
 
-      await updateRepairCommand({});
+      await updateRepairCommand({ json: true });
 
+      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ reconciledRuns: [run.runId] }),
+      );
       expect(getUpdateRun(run.runId)).toMatchObject({
         status: "failed",
         reason,
@@ -423,7 +428,9 @@ describe("update repair ledger recovery", () => {
         ]),
       });
       expect(mocks.finalize).not.toHaveBeenCalled();
-      expect(mocks.runtime.log).toHaveBeenCalledWith(expect.stringContaining("already reconciled"));
+      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining("already reconciled") }),
+      );
       expect(buildStatusUpdateRows(null)).toEqual([
         { Item: "Update run", Value: "ℹ️ OpenClaw abandoned update reconciled." },
       ]);
@@ -447,18 +454,28 @@ describe("update repair ledger recovery", () => {
     },
   );
 
-  it("runs full repair when an abandoned outcome is older than the recovery window", async () => {
-    const run = seedRun();
-    vi.mocked(Date.now).mockReturnValue(now - ABANDONED_UPDATE_RUN_MS - 10);
-    finishUpdateRun(run.runId, { status: "failed", reason: "abandoned" });
-    vi.mocked(Date.now).mockReturnValue(now);
-    const recorded = getUpdateRun(run.runId);
+  it.each([-1, 0, 1])(
+    "keeps the lightweight repair window separate from acknowledgment (%sms)",
+    async (offset) => {
+      const run = seedRun();
+      vi.mocked(Date.now).mockReturnValue(now - ABANDONED_UPDATE_RUN_MS - offset);
+      finishUpdateRun(run.runId, { status: "failed", reason: "abandoned" });
+      vi.mocked(Date.now).mockReturnValue(now);
+      const recorded = getUpdateRun(run.runId);
 
-    await updateRepairCommand({});
+      await updateRepairCommand({});
 
-    expect(mocks.finalize).toHaveBeenCalledWith({}, []);
-    expect(getUpdateRun(run.runId)).toEqual(recorded);
-  });
+      if (offset > 0) {
+        expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+        expect(getUpdateRun(run.runId)).toEqual(recorded);
+      } else {
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        expect(getUpdateRun(run.runId)?.steps).toContainEqual(
+          expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+        );
+      }
+    },
+  );
 
   it.each([
     { label: "recent request", ageMs: 60_000 },
@@ -468,7 +485,7 @@ describe("update repair ledger recovery", () => {
     const run = seedRun(fixture);
 
     await expect(updateRepairCommand({})).rejects.toThrow(
-      `Update ${run.runId} is still in progress (${run.phase});`,
+      `Update ${run.runId} remains recorded as running (${run.phase});`,
     );
 
     expect(getUpdateRun(run.runId)).toEqual(run);
@@ -482,7 +499,7 @@ describe("update repair ledger recovery", () => {
       return { healthz: 200, readyz: 200 };
     });
 
-    await expect(updateRepairCommand({})).rejects.toThrow("still in progress");
+    await expect(updateRepairCommand({})).rejects.toThrow("remains recorded as running");
 
     expect(getUpdateRun(run.runId)?.status).toBe("running");
     expect(mocks.finalize).not.toHaveBeenCalled();
@@ -585,7 +602,7 @@ describe("update repair ledger recovery", () => {
     });
 
     await expect(updateRepairCommand({})).rejects.toThrow(
-      "Stop the Gateway service through its owner",
+      /openclaw update repair.*openclaw gateway stop/,
     );
 
     expect(getUpdateRun(old.runId)).toEqual(old);

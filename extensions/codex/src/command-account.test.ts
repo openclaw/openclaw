@@ -165,6 +165,31 @@ describe("Codex account workspace identity", () => {
     }
   });
 
+  it("preserves deleted bound-profile failures without probing another subscription", async () => {
+    installProfiles(["openai:personal"], false);
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-deleted-profile", cwd: "/repo", authProfileId: "openai:deleted" },
+    );
+    const selectedError = 'Codex app-server auth profile "openai:deleted" was not found.';
+    const otherAccountRequests = accountRequests("operator@example.test");
+    const safeCodexControlRequest = vi.fn<AccountRequest>(
+      async (...args): ReturnType<AccountRequest> => {
+        if (args[3]?.authProfileId === "openai:deleted") {
+          return { ok: false, error: selectedError };
+        }
+        return await otherAccountRequests(...args);
+      },
+    );
+
+    const result = await createCodexCommand({
+      deps: createDeps({ safeCodexControlRequest }),
+    }).handler(createContext("account"));
+
+    expect(result.text).toBe(`Account: ${selectedError}\n\nRate limits: ${selectedError}`);
+    expect(otherAccountRequests).not.toHaveBeenCalled();
+  });
+
   it("does not mark any profile active when all explicit-order token credentials are expired", async () => {
     const now = Date.now();
     installStore({

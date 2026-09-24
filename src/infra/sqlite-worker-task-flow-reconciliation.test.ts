@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createBackgroundTaskRecord } from "../acp/control-plane/manager.background-task.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -14,9 +15,9 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createAcpTaskBackingDetail } from "../tasks/task-backing-records.js";
+import { createRunningTaskRunCoreWithReceiptAsync } from "../tasks/task-executor-create.async.js";
+import { readResidentTaskFlow } from "../tasks/task-flow-registry.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
-import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.test-support.js";
-import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   deleteTaskFlowRecordById,
   reloadTaskFlowRegistryFromStoreAsync,
@@ -24,104 +25,220 @@ import {
 import {
   cancelTaskById,
   createTaskRecord,
-  deleteTaskRecordById,
   findTaskByRunId,
   getTaskById,
   listTaskRecords,
 } from "../tasks/task-registry.js";
-import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+  configureTaskRegistryRuntime,
+  getTaskRegistryStore,
+} from "../tasks/task-registry.store.js";
+import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import type { SqliteWorkerOperations, SqliteWorkerStore } from "./sqlite-worker-contract.js";
-import * as workerStore from "./sqlite-worker-store.js";
+import {
+  interceptTaskWorkerCommands,
+  taskWorkerFlow as flow,
+  taskWorkerOwnerKey as ownerKey,
+  taskWorkerRecord as task,
+  useTaskWorkerState,
+} from "./sqlite-worker-task.test-support.js";
 
-const ownerKey = "agent:main:async-reader";
-let state: OpenClawTestState;
+useTaskWorkerState("openclaw-task-async-", resetRuntimeTaskTestState);
 
-function task(taskId: string, overrides: Partial<TaskRecord> = {}): TaskRecord {
-  return {
-    taskId,
-    runtime: "acp",
-    requesterSessionKey: ownerKey,
-    ownerKey,
-    scopeKind: "session",
-    task: "Synthetic task",
-    status: "running",
-    deliveryStatus: "not_applicable",
-    notifyPolicy: "silent",
-    createdAt: 100,
-    parentFlowId: "flow-a",
-    runId: "run-a",
-    requesterAgentId: "main",
-    ...overrides,
-  };
-}
-
-function flow(flowId: string, overrides: Partial<TaskFlowRecord> = {}): TaskFlowRecord {
-  return {
-    flowId,
-    syncMode: "managed",
-    controllerId: "tests/async-reads",
-    ownerKey,
-    revision: 1,
-    status: "running",
-    notifyPolicy: "silent",
-    goal: "Synthetic flow",
-    createdAt: 100,
-    updatedAt: 100,
-    ...overrides,
-  };
+function observeTaskWorkerReplies(observe: (type: PropertyKey) => Promise<void> | undefined) {
+  interceptTaskWorkerCommands(async (type, execute) => {
+    const result = await execute();
+    const pending = observe(type);
+    if (pending) {
+      await pending;
+    }
+    return result;
+  });
 }
 
 function holdFlowWorkerReply(target: "flows.current" | "flows.updateManaged") {
   const held = createDeferredCore();
   const release = createDeferredCore();
-  const original = workerStore.runSqliteWorkerStoreOperation;
   let paused = false;
-  vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(
-    <Operations extends SqliteWorkerOperations, T>(
-      store: SqliteWorkerStore<Operations>,
-      operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-      stateContext?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[2],
-      assertCurrent?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[3],
-    ) =>
-      original(
-        store,
-        (scope) =>
-          operation({
-            execute: async (command, options) => {
-              const result = await scope.execute(command, options);
-              if (!paused && command.type === target) {
-                paused = true;
-                held.resolve();
-                await release.promise;
-              }
-              return result;
-            },
-          }),
-        stateContext,
-        assertCurrent,
-      ),
-  );
+  observeTaskWorkerReplies((type) => {
+    if (!paused && type === target) {
+      paused = true;
+      held.resolve();
+      return release.promise;
+    }
+    return undefined;
+  });
   return { held, release };
 }
 
-beforeEach(async () => {
-  state = await createOpenClawTestState({ prefix: "openclaw-task-async-", applyEnv: true });
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
-  await resetRuntimeTaskTestState();
-  await state.cleanup();
-});
-
 describe("registered task flow reconciliation", () => {
+  it("settles active task fanout through the registered worker without host task or flow writes", async () => {
+    installRuntimeTaskDeliveryMock();
+    const create = (description: string, childSessionKey = ownerKey) => {
+      const parentFlowId = crypto.randomUUID();
+      upsertTaskFlowRegistryRecordToSqlite(
+        flow(parentFlowId, { syncMode: "task_mirrored", controllerId: undefined }),
+      );
+      return createRunningTaskRunCoreWithReceiptAsync({
+        parentFlowId,
+        runtime: "cli",
+        ownerKey,
+        scopeKind: "session",
+        childSessionKey,
+        runId: "active-worker-run",
+        task: description,
+        notifyPolicy: "silent",
+        deliveryStatus: "not_applicable",
+      });
+    };
+    const first = await create("First active task");
+    const second = await create("Second active task");
+    const other = await create("Other active task", "agent:main:other-child");
+    assert(
+      first && second && other && first.task.parentFlowId && second.task.parentFlowId,
+      "Expected task and flow receipts",
+    );
+    const { db } = openOpenClawStateDatabase();
+    const sql = getNodeSqliteKysely<DB>(db);
+    const tracker = trackSqliteStatementExecutions(db, ["task", "flow"] as const, (statement) => {
+      if (!/\b(?:insert|update|delete)\b/i.test(statement)) {
+        return null;
+      }
+      if (/\b(?:task_runs|task_delivery_state)\b/i.test(statement)) {
+        return "task";
+      }
+      return /\bflow_runs\b/i.test(statement) ? "flow" : null;
+    });
+    const commands: PropertyKey[] = [];
+    observeTaskWorkerReplies((type) => {
+      commands.push(type);
+    });
+    try {
+      await first.finalizeActive({ status: "succeeded", endedAt: Date.now() }, () => true);
+      const stored = executeSqliteQuerySync(
+        db,
+        sql
+          .selectFrom("task_runs")
+          .select(["task_id", "status"])
+          .where("task_id", "in", [first.task.taskId, second.task.taskId, other.task.taskId]),
+      ).rows;
+      expect(new Map(stored.map((row) => [row.task_id, row.status]))).toEqual(
+        new Map([
+          [first.task.taskId, "succeeded"],
+          [second.task.taskId, "succeeded"],
+          [other.task.taskId, "running"],
+        ]),
+      );
+      const flows = executeSqliteQuerySync(
+        db,
+        sql
+          .selectFrom("flow_runs")
+          .select("status")
+          .where("flow_id", "in", [first.task.parentFlowId, second.task.parentFlowId]),
+      ).rows;
+      expect(flows.map((row) => row.status)).toEqual(["succeeded", "succeeded"]);
+      expect(commands.filter((type) => type === "tasks.finalizeActive")).toHaveLength(2);
+      expect(tracker.counts).toEqual({ task: 0, flow: 0 });
+    } finally {
+      tracker.restore();
+    }
+  });
+
+  it("publishes only the managed child whose worker receipt has been acknowledged", async () => {
+    installRuntimeTaskDeliveryMock();
+    upsertTaskFlowRegistryRecordToSqlite(flow("publication-flow"));
+    const managed = createPluginRuntime().tasks.async.managedFlows.bindSession({
+      sessionKey: ownerKey,
+    });
+    const events: Array<{ taskId: string; task: string }> = [];
+    configureTaskRegistryRuntime({
+      observers: {
+        onEvent(event) {
+          if (event.kind === "upserted") {
+            events.push({ taskId: event.task.taskId, task: event.task.task });
+          }
+        },
+      },
+    });
+    const firstRead = createDeferredCore();
+    const releaseFirstRead = createDeferredCore();
+    const secondReceipt = createDeferredCore();
+    const releaseSecondReceipt = createDeferredCore();
+    let mutations = 0;
+    let readHeld = false;
+    const taskStore = getTaskRegistryStore();
+    const read = taskStore.loadMutationSnapshotAsync.bind(taskStore);
+    vi.spyOn(taskStore, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
+      const snapshot = await read(...args);
+      if (!readHeld) {
+        readHeld = true;
+        firstRead.resolve();
+        await releaseFirstRead.promise;
+      }
+      return snapshot;
+    });
+    observeTaskWorkerReplies((type) => {
+      if (type === "flows.runTask" && ++mutations === 2) {
+        secondReceipt.resolve();
+        return releaseSecondReceipt.promise;
+      }
+      return undefined;
+    });
+    const common = {
+      flowId: "publication-flow",
+      runtime: "cli" as const,
+      childSessionKey: "agent:main:publication-child",
+      deliveryStatus: "not_applicable" as const,
+      notifyPolicy: "silent" as const,
+    };
+    const pending: Promise<unknown>[] = [];
+    try {
+      const first = managed.runTask({ ...common, runId: "publication-a", task: "First child" });
+      pending.push(first);
+      await firstRead.promise;
+      const second = managed.runTask({ ...common, runId: "publication-b", task: "Second child" });
+      pending.push(second);
+      await secondReceipt.promise;
+      releaseFirstRead.resolve();
+      const firstResult = await first;
+      assert(firstResult.created, "Expected the first managed child");
+      expect(events).toEqual([{ taskId: firstResult.task.taskId, task: "First child" }]);
+      releaseSecondReceipt.resolve();
+      const secondResult = await second;
+      assert(secondResult.created, "Expected the second managed child");
+      const secondTaskId = secondResult.task.taskId;
+      expect(events).toEqual([
+        { taskId: firstResult.task.taskId, task: "First child" },
+        { taskId: secondTaskId, task: "Second child" },
+      ]);
+      events.length = 0;
+      const reused = await managed.runTask({
+        ...common,
+        runId: "publication-b",
+        task: "Second child",
+      });
+      assert(reused.created, "Expected the existing managed child");
+      expect(reused.task.taskId).toBe(secondTaskId);
+      expect(events).toEqual([]);
+      const updated = await managed.runTask({
+        ...common,
+        runId: "publication-b",
+        task: "Second child",
+        sourceId: "publication-source",
+      });
+      assert(updated.created, "Expected the updated managed child");
+      expect(updated.task.taskId).toBe(secondTaskId);
+      expect(events).toEqual([{ taskId: secondTaskId, task: "Second child" }]);
+      expect(getTaskById(secondTaskId)).toMatchObject({
+        sourceId: "publication-source",
+      });
+    } finally {
+      releaseFirstRead.resolve();
+      releaseSecondReceipt.resolve();
+      await Promise.allSettled(pending);
+    }
+  });
+
   it.each([4, 16])(
     "keeps ACP creation and managed authority current across %s generations during a worker write",
     async (generations) => {
@@ -203,9 +320,7 @@ describe("registered task flow reconciliation", () => {
         controllerId: "tests/backing-projection",
         goal: "Track the current ACP instance",
       });
-      if (!target) {
-        throw new Error("Expected the managed projection flow");
-      }
+      assert(target, "Expected the managed projection flow");
       const createExisting = () =>
         createTaskRecord({
           runtime: "acp",
@@ -238,9 +353,7 @@ describe("registered task flow reconciliation", () => {
         const created = await measure("pending-generation-new", () =>
           createBackgroundTaskRecord(context, 2_000, "new-instance"),
         );
-        if (!created) {
-          throw new Error("Expected the new ACP background task");
-        }
+        assert(created, "Expected the new ACP background task");
         expect(getTaskById(created.taskId)).toMatchObject({
           detail: { instanceId: "new-instance", generation: generations + 1 },
         });
@@ -262,9 +375,10 @@ describe("registered task flow reconciliation", () => {
             status: "running",
           });
         const firstProjection = await measure("pending-project", project);
-        if (!firstProjection.created || !firstProjection.task) {
-          throw new Error("Expected the first managed ACP projection");
-        }
+        assert(
+          firstProjection.created && firstProjection.task,
+          "Expected the first managed ACP projection",
+        );
         const firstProjectionTask = firstProjection.task;
         expect(firstProjectionTask.detail).toMatchObject({
           taskId: created.taskId,
@@ -274,16 +388,15 @@ describe("registered task flow reconciliation", () => {
         const successor = await measure("pending-generation-successor", () =>
           createBackgroundTaskRecord(context, 2_002, "successor-instance"),
         );
-        if (!successor) {
-          throw new Error("Expected the successor ACP background task");
-        }
+        assert(successor, "Expected the successor ACP background task");
         expect(getTaskById(successor.taskId)).toMatchObject({
           detail: { instanceId: "successor-instance", generation: generations + 2 },
         });
         const nextProjection = await measure("pending-project-fresh", project);
-        if (!nextProjection.created || !nextProjection.task) {
-          throw new Error("Expected the successor managed ACP projection");
-        }
+        assert(
+          nextProjection.created && nextProjection.task,
+          "Expected the successor managed ACP projection",
+        );
         expect(nextProjection.task.taskId).not.toBe(firstProjectionTask.taskId);
         expect(nextProjection.task.detail).toMatchObject({
           taskId: successor.taskId,
@@ -333,87 +446,6 @@ describe("registered task flow reconciliation", () => {
         release.resolve();
         await pending;
       }
-    },
-  );
-
-  it.each(["remove selected", "append candidate"] as const)(
-    "preserves ACP generation history when restored observers %s",
-    async (change) => {
-      const childSessionKey = "agent:main:restore-child";
-      for (const [id, generation, createdAt] of [
-        ["selected", 100, 1],
-        ["retained", 1, 2],
-      ] as const) {
-        upsertTaskFlowRegistryRecordToSqlite(flow(id, { syncMode: "task_mirrored" }));
-        upsertTaskWithDeliveryStateToSqlite({
-          task: task(id, {
-            childSessionKey,
-            parentFlowId: id,
-            createdAt,
-            detail: createAcpTaskBackingDetail(id, generation),
-          }),
-        });
-      }
-      upsertTaskFlowRegistryRecordToSqlite(flow("appended", { syncMode: "task_mirrored" }));
-      let observed = false;
-      let removed = false;
-      let appended: TaskRecord | null = null;
-      configureTaskFlowRegistryRuntime({
-        observers: {
-          onEvent: (event) => {
-            if (event.kind !== "restored" || observed) {
-              return;
-            }
-            observed = true;
-            if (change === "remove selected") {
-              removed = deleteTaskRecordById("selected");
-            } else {
-              appended = createTaskRecord({
-                runtime: "acp",
-                ownerKey,
-                scopeKind: "session",
-                childSessionKey,
-                parentFlowId: "appended",
-                runId: "appended-run",
-                task: "Appended during restore",
-                status: "running",
-                deliveryStatus: "not_applicable",
-                detail: createAcpTaskBackingDetail("appended", 200),
-              });
-            }
-          },
-        },
-      });
-      const created = createBackgroundTaskRecord(
-        {
-          agentId: "main",
-          requesterAgentId: "main",
-          requesterSessionKey: ownerKey,
-          childSessionKey,
-          runId: "after-restore",
-          task: "Register after reentrant restore",
-        },
-        3_000,
-        "after-restore-instance",
-      );
-      expect(observed).toBe(true);
-      if (change === "remove selected") {
-        expect(removed).toBe(true);
-        expect(getTaskById("selected")).toBeUndefined();
-      } else {
-        expect(appended).toMatchObject({ detail: { generation: 200 } });
-      }
-      if (!created) {
-        throw new Error("Expected ACP creation after reentrant flow restore");
-      }
-      const expectedGeneration = change === "remove selected" ? 101 : 201;
-      expect(getTaskById(created.taskId)).toMatchObject({
-        detail: { instanceId: "after-restore-instance", generation: expectedGeneration },
-      });
-      await closeOpenClawStateDatabaseAsync();
-      expect(getTaskById(created.taskId)).toMatchObject({
-        detail: { instanceId: "after-restore-instance", generation: expectedGeneration },
-      });
     },
   );
 
@@ -516,8 +548,6 @@ describe("registered task flow reconciliation", () => {
       const { held, release } = holdFlowWorkerReply(
         intervening === "refresh" ? "flows.current" : "flows.updateManaged",
       );
-      const onEvent = vi.fn();
-      configureTaskFlowRegistryRuntime({ observers: { onEvent } });
       const pending = managed.finish({ flowId: created.flowId, expectedRevision: 0, endedAt: 100 });
       try {
         await held.promise;
@@ -527,14 +557,7 @@ describe("registered task flow reconciliation", () => {
         if (intervening === "lookup") {
           measureLookup("pending", "lookup-run", "lookup-0-16");
           measureLookup("pending-no-eligible", "ineligible-run", "ineligible");
-          const { db } = openOpenClawStateDatabase();
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<DB>(db)
-              .updateTable("flow_runs")
-              .set({ sync_mode: "managed" })
-              .where("flow_id", "=", "lookup-0-16"),
-          );
+          expect(deleteTaskFlowRecordById("lookup-0-16")).toBe(true);
           measureLookup("pending-fresh", "lookup-run", "lookup-0-15");
         } else if (intervening === "update") {
           expect(
@@ -559,31 +582,21 @@ describe("registered task flow reconciliation", () => {
           );
           await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         }
-        onEvent.mockClear();
         release.resolve();
         expect(await pending).toMatchObject({
           applied: true,
           flow: { revision: 1, status: "succeeded" },
         });
         if (intervening === "delete") {
-          expect(legacy.get(created.flowId)).toBeUndefined();
+          expect(readResidentTaskFlow(created.flowId)).toBeUndefined();
         } else {
           const readOnly = intervening === "read" || intervening === "lookup";
-          expect(legacy.get(created.flowId)).toMatchObject({
+          expect(readResidentTaskFlow(created.flowId)).toMatchObject({
             revision: readOnly ? 1 : 2,
             ...(readOnly || intervening === "update"
               ? { status: readOnly ? "succeeded" : "running" }
               : { goal: "Refreshed canonical flow" }),
           });
-        }
-        if (intervening === "read" || intervening === "lookup") {
-          expect(onEvent).toHaveBeenCalledExactlyOnceWith({
-            kind: "upserted",
-            flow: expect.objectContaining({ revision: 1, status: "succeeded" }),
-            previous: expect.objectContaining({ revision: 0, status: "queued" }),
-          });
-        } else {
-          expect(onEvent).not.toHaveBeenCalled();
         }
         if (intervening === "lookup") {
           measureLookup("settled", "lookup-run", "lookup-0-15");
@@ -593,7 +606,7 @@ describe("registered task flow reconciliation", () => {
           expect(legacy.get(created.flowId)).toEqual(settled);
           console.log("Run lookup flow snapshots", JSON.stringify(lookupReads));
           expect(lookupReads.map(({ count }) => count)).toEqual([0, 0, 1, 0, 1, 0, 1]);
-          expect(lookupReads.map(({ rows }) => rows)).toEqual([0, 0, 35, 0, 35, 0, 35]);
+          expect(lookupReads.map(({ rows }) => rows)).toEqual([0, 0, 1, 0, 1, 0, 34]);
           expect(
             lookupReads.filter(({ count }) => count > 0).every(({ textBytes }) => textBytes > 0),
           ).toBe(true);

@@ -12,6 +12,7 @@ import type {
 const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "externalAuthProviders",
   "embeddingProviders",
+  "decisionProviders",
   "speechProviders",
   "realtimeTranscriptionProviders",
   "realtimeVoiceProviders",

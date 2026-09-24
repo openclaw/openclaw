@@ -79,14 +79,15 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       if (frozen) {
         return [];
       }
+      const entries = selectedKeysByAgentId
+        ? [...(selectedKeysByAgentId.get(agentId) ?? [])].flatMap((key) =>
+            // An empty canonical alias must not become an unscoped projection query.
+            key ? prepareSessionRowSelection(params.projection, { agentId }, { key }).entries : [],
+          )
+        : prepareSessionRowSelection(params.projection, { agentId }).entries;
       entriesByAgentId.set(
         agentId,
-        prepareSessionRowSelection(params.projection, { agentId })
-          .entries.filter(
-            ([sessionKey]) =>
-              !selectedKeysByAgentId || selectedKeysByAgentId.get(agentId)?.has(sessionKey),
-          )
-          .map(([sessionKey, entry]) => ({ sessionKey, entry })),
+        entries.map(([sessionKey, entry]) => ({ sessionKey, entry })),
       );
     }
     return entriesByAgentId.get(agentId) ?? [];

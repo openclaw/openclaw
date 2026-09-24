@@ -1,0 +1,52 @@
+{
+  "name": "@openclaw/onnx",
+  "version": "2026.9.6",
+  "description": "Local ONNX decision models for OpenClaw",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "@huggingface/tokenizers": "0.2.0",
+    "typebox": "1.3.32"
+  },
+  "optionalDependencies": {
+    "onnxruntime-node": "1.30.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/onnx",
+      "npmSpec": "@openclaw/onnx",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.9.6"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.6"
+    },
+    "build": {
+      "bundledDist": false,
+      "openclawVersion": "2026.9.6",
+      "workerEntries": [
+        "./src/inference.worker.ts"
+      ],
+      "staticAssets": [
+        {
+          "source": "scripts/export-gliclass-instruct.py",
+          "output": "scripts/export-gliclass-instruct.py"
+        }
+      ]
+    },
+    "release": {
+      "bundleRuntimeDependencies": false,
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

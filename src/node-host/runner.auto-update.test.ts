@@ -123,11 +123,13 @@ describe("node runner auto-update handoff", () => {
   beforeEach(() => {
     resetRunnerTestState();
     mocks.useFakeRuntime = true;
-    mocks.activeRuntime.tryPauseForUpdate.mockReset().mockReturnValue(true);
+    mocks.activeRuntime.tryPauseForUpdate.mockReset().mockResolvedValue(true);
     mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
       ready: true,
       aborted: false,
       elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
     });
     updateMocks.prepare.mockReset().mockResolvedValue(candidate);
     vi.stubEnv("OPENCLAW_STATE_DIR", temporary.make("node-runner-update-"));
@@ -167,6 +169,8 @@ describe("node runner auto-update handoff", () => {
       sharing: true,
       commands: ["fixture.list", "fixture.read"],
       forceWorkerRuns: true,
+      desktopSharingEnabled: true,
+      companion: true,
       endpointArgs: ["--host", "2001:db8::10", "--port", "8443"],
       optionArgs: [
         "--tls",
@@ -178,6 +182,9 @@ describe("node runner auto-update handoff", () => {
         "--commands",
         "fixture.list,fixture.read",
         "--session-host",
+        "--desktop-sharing",
+        "--auth-from-env",
+        "--parent-stdin",
       ],
     },
     {
@@ -186,8 +193,10 @@ describe("node runner auto-update handoff", () => {
       sharing: false,
       commands: undefined,
       forceWorkerRuns: false,
+      desktopSharingEnabled: false,
+      companion: false,
       endpointArgs: ["--host", "127.0.0.1", "--port", "18789"],
-      optionArgs: ["--no-tls", "--no-share-installed-apps"],
+      optionArgs: ["--no-tls", "--no-share-installed-apps", "--no-desktop-sharing"],
     },
   ])("restarts with effective options for $label without replaying pairing", async (entry) => {
     const effectiveConfig = {
@@ -199,13 +208,16 @@ describe("node runner auto-update handoff", () => {
       commands: entry.commands,
     };
     mocks.configureNodeHost.mockResolvedValueOnce(effectiveConfig);
-    mocks.activeRuntime.tryPauseForUpdate.mockReturnValueOnce(false);
+    mocks.activeRuntime.tryPauseForUpdate.mockResolvedValueOnce(false);
 
     await withRunningNodeHost(
       {
         gatewayBootstrapToken: "one-use-bootstrap-token",
         preferGatewayBootstrapToken: true,
         forceWorkerRuns: entry.forceWorkerRuns,
+        desktopSharingEnabled: entry.desktopSharingEnabled,
+        gatewayAuthFromEnv: entry.companion,
+        parentStdin: entry.companion,
         allCommands: entry.commands === undefined,
       },
       async () => {
@@ -247,13 +259,13 @@ describe("node runner auto-update handoff", () => {
           expect.any(Function),
         ),
       );
-      expect(mocks.capturedGatewayClients[0]?.stop).not.toHaveBeenCalled();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).not.toHaveBeenCalled();
       expect(mocks.activeRuntime.close).not.toHaveBeenCalled();
 
       process.emit("message", { type: "openclaw.node.restart-result", ok: true });
       await running;
 
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
       expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
       expect(mocks.activeRuntime.resumeAfterUpdate).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(0);
@@ -290,13 +302,13 @@ describe("node runner auto-update handoff", () => {
         stop();
         expect(process.listeners("SIGTERM")).toContain(onSigterm);
         expect(updateSignal?.aborted).toBe(true);
-        expect(mocks.capturedGatewayClients[0]?.stop).not.toHaveBeenCalled();
+        expect(mocks.capturedGatewayClients[0]?.stopAndWait).not.toHaveBeenCalled();
         expect(mocks.activeRuntime.close).not.toHaveBeenCalled();
 
         installing.resolve(candidate);
         await running;
 
-        expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+        expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
         expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
         expect(process.listeners("SIGTERM")).not.toContain(onSigterm);
         expect(mocks.activeRuntime.tryPauseForUpdate).not.toHaveBeenCalled();

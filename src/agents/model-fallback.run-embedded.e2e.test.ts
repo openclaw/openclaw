@@ -10,8 +10,17 @@ import { markFallbackCandidateSkipped } from "./fallback-skip-cache.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
 import {
+  CLOUDFLARE_502_ERROR_PAYLOAD,
+  type EmbeddedAttemptParams,
+  LONG_RATE_LIMIT_ERROR_MESSAGE,
+  makeFallbackSuccessAttempt,
   makeModelFallbackConfig,
+  NO_ENDPOINTS_FOUND_ERROR_MESSAGE,
+  NO_ERROR_DETAILS_MESSAGE,
+  OVERLOADED_ERROR_PAYLOAD,
+  RATE_LIMIT_ERROR_MESSAGE,
   readFallbackUsageStats,
+  REAL_TRANSPORT_PER_DAY_CAP_ERROR_MESSAGE,
   withModelFallbackWorkspace,
   writeFallbackAuthStore,
   writeFallbackMultiProfileAuthStore,
@@ -107,26 +116,6 @@ beforeEach(() => {
   computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
 });
-
-const OVERLOADED_ERROR_PAYLOAD =
-  '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
-const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
-const LONG_RATE_LIMIT_ERROR_MESSAGE = "429 Too Many Requests: subscription usage limit reached";
-const NO_ENDPOINTS_FOUND_ERROR_MESSAGE = "404 No endpoints found for deepseek/deepseek-r1:free.";
-// Captured verbatim from a real local HTTP 429 round-tripped through the real
-// OpenRouter transport (streamOpenAICompletions) carrying the exact body reported
-// in #147546 — not hand-typed. See test/plugins/openrouter-per-day-rate-limit.integration.test.ts
-// and src/agents/embedded-agent-runner/run/attempt-recovery.test.ts, which independently
-// verify a real HTTP round-trip produces this exact string.
-const REAL_TRANSPORT_PER_DAY_CAP_ERROR_MESSAGE =
-  "429 Rate limit exceeded: free-models-per-day-high-balance.";
-const NO_ERROR_DETAILS_MESSAGE = "Unknown error (no error details in response)";
-
-type EmbeddedAttemptParams = {
-  provider: string;
-  modelId?: string;
-  authProfileId?: string;
-};
 
 async function runEmbeddedFallback(params: {
   agentDir: string;
@@ -254,18 +243,6 @@ async function runEmbeddedEntryFallback(params: {
 
 function mockPrimaryOverloadedThenFallbackSuccess() {
   mockPrimaryErrorThenFallbackSuccess(OVERLOADED_ERROR_PAYLOAD);
-}
-
-function makeFallbackSuccessAttempt(): EmbeddedRunAttemptResult {
-  return makeEmbeddedRunnerAttempt({
-    assistantTexts: ["fallback ok"],
-    lastAssistant: buildEmbeddedRunnerAssistant({
-      provider: "groq",
-      model: "mock-2",
-      stopReason: "stop",
-      content: [{ type: "text", text: "fallback ok" }],
-    }),
-  });
 }
 
 function mockPrimaryFailureThenFallbackSuccess(
@@ -752,6 +729,63 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expectOpenAiThenGroqAttemptOrder({ primaryAttempts: 1 });
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back after an untyped 502 from the primary and records it as a server error", async () => {
+    await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeFallbackAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess(CLOUDFLARE_502_ERROR_PAYLOAD);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:untyped-5xx-cross-provider",
+        runId: "run:untyped-5xx-cross-provider",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("server_error");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expectOpenAiThenGroqAttemptOrder({ primaryAttempts: 4 });
+
+      // A provider-side outage must not cool down or charge a failure to the
+      // primary auth profile.
+      const usageStats = await readFallbackUsageStats(agentDir);
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
+    });
+  });
+
+  it("bounds profile rotation for an untyped 502 before reaching the fallback model", async () => {
+    await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeFallbackMultiProfileAuthStore(agentDir, { openAiProfileCount: 2 });
+      mockPrimaryErrorThenFallbackSuccess(CLOUDFLARE_502_ERROR_PAYLOAD);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:untyped-5xx-rotation",
+        runId: "run:untyped-5xx-rotation",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      // Measured identical with the classification change reverted, so
+      // reclassifying an untyped 5xx adds no profile attempt. The second profile
+      // is tried once, not retried, before the run moves to the fallback model.
+      expectAttemptOrder([
+        { provider: "openai", authProfileId: "openai:p1" },
+        { provider: "openai", authProfileId: "openai:p1" },
+        { provider: "openai", authProfileId: "openai:p1" },
+        { provider: "openai", authProfileId: "openai:p1" },
+        { provider: "openai", authProfileId: "openai:p2" },
+        { provider: "groq", authProfileId: "groq:p1" },
+      ]);
+      const rotationUsage = await readFallbackUsageStats(agentDir);
+      expect(rotationUsage["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(rotationUsage["openai:p2"]?.cooldownUntil).toBeUndefined();
     });
   });
 

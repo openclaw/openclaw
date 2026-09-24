@@ -1,25 +1,22 @@
 import { fork } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import {
+  UPDATE_RUN_DRIVER_LIMIT,
+  UPDATE_RUN_PHASES,
+} from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { sqliteMaintenanceEntrypoints } from "./sqlite-maintenance-runtime.test-support.js";
 import {
   createUpdateRun,
-  findActiveUpdateRun,
   finishUpdateRun,
   getUpdateRun,
-  getUpdateRunAsync,
   listUpdateRuns,
-  listUpdateRunsAsync,
   recordUpdateRunPhase,
   recordUpdateRunRepairAttempt,
   recordUpdateRunStep,
@@ -27,54 +24,272 @@ import {
 } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
-import { UpdateRunRecordSchema } from "./update-run-schema.js";
+import { parseUpdateAdmissionVerdict, UpdateRunRecordSchema } from "./update-run-schema.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
 const tempDirs = createTempDirTracker();
+const admissionRouting = {
+  requester: {
+    channel: "discord",
+    accountId: "primary",
+    senderId: "fixture-sender",
+    authorizationSource: "owner-allowlist",
+  },
+  sessionKey: "agent:main:discord:channel:fixture-channel",
+  deliveryContext: {
+    channel: "discord",
+    to: "channel:fixture-channel",
+    accountId: "primary",
+    threadId: "fixture-thread",
+  },
+  campaignId: "fixture-update-campaign",
+};
 
 function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-ledger-") } };
 }
 
-function snapshotDatabaseFiles(filename: string) {
-  const metadata = (pathname: string) => {
-    const stat = fs.lstatSync(pathname, { bigint: true });
-    return {
-      dev: stat.dev,
-      ino: stat.ino,
-      mode: stat.mode,
-      uid: stat.uid,
-      gid: stat.gid,
-      size: stat.size,
-      mtimeNs: stat.mtimeNs,
-      ctimeNs: stat.ctimeNs,
-    };
-  };
-  const directory = path.dirname(filename);
-  return {
-    directory: metadata(directory),
-    entries: fs.readdirSync(directory).toSorted(),
-    files: ["", "-wal", "-shm", "-journal"].map((suffix) => {
-      const pathname = `${filename}${suffix}`;
-      return fs.existsSync(pathname)
-        ? {
-            suffix,
-            metadata: metadata(pathname),
-            sha256: createHash("sha256").update(fs.readFileSync(pathname)).digest("hex"),
-          }
-        : { suffix, absent: true };
-    }),
-  };
-}
-
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
 describe("update run ledger", () => {
+  it.each(["candidate", "installed"] as const)(
+    "persists and reports %s admission through the existing origin metadata",
+    (owner) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const checks = [{ name: "config", status: "warn" as const, detail: "Missing custom path." }];
+      const admission =
+        owner === "candidate"
+          ? { owner, protocol: 1 as const, candidateVersion: "2026.9.5", checks }
+          : { owner, fallbackReason: "update-admission-unsupported-target" };
+      const candidateAdmission =
+        owner === "candidate"
+          ? {
+              protocol: 1 as const,
+              verdict: "admit" as const,
+              reasons: [],
+              warnings: [{ code: "missing-load-path", message: "Missing custom path." }],
+              facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
+            }
+          : undefined;
+      const saved = recordUpdateRunPhase(
+        run.runId,
+        "staging",
+        { origin: { admission, candidateAdmission } },
+        options,
+      );
+      expect(saved.admission).toEqual(admission);
+      const retained = getUpdateRun(run.runId, options)!;
+      expect(retained.admission).toEqual(admission);
+      expect(retained.origin.candidateAdmission).toEqual(candidateAdmission);
+      expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
+      const report = renderUpdateRunReport(retained).markdown;
+      expect(report).toContain(`Admission: ${owner}`);
+      expect(report).toContain(
+        owner === "candidate" ? "config: warn" : "update-admission-unsupported-target",
+      );
+      const database = openOpenClawStateDatabase(options);
+      const row = database.db
+        .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
+        .get(run.runId) as { origin_json: string };
+      expect(JSON.parse(row.origin_json).admission).toEqual(admission);
+    },
+  );
+
+  it("bounds and redacts candidate admission without corrupting its verdict or check statuses", () => {
+    const options = isolatedOptions();
+    const message =
+      `${options.env.OPENCLAW_STATE_DIR}/plugins/missing ` + "diagnostic ".repeat(100);
+    const checks = Array.from({ length: 32 }, (_, index) => ({
+      name: `check-${index}`,
+      status: "refuse" as const,
+      detail: message,
+    }));
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          ...admissionRouting,
+          admission: { owner: "candidate", protocol: 1, candidateVersion: "2026.9.5", checks },
+          candidateAdmission: {
+            protocol: 1,
+            verdict: "refuse",
+            reasons: checks.map((check) => ({ code: check.name, message, nextAction: message })),
+            warnings: [],
+            facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
+          },
+        },
+      },
+      options,
+    );
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.origin).toMatchObject(admissionRouting);
+    expect(retained.admission?.owner).toBe("candidate");
+    expect(retained.admission?.checks).toHaveLength(32);
+    expect(retained.admission?.checks?.every((check) => check.status === "refuse")).toBe(true);
+    expect(retained.admission?.checks?.map((check) => check.name)).toEqual(
+      checks.map((check) => check.name),
+    );
+    expect(retained.admission?.candidateVersion).toBe("2026.9.5");
+    expect(retained.origin.candidateAdmission?.verdict).toBe("refuse");
+    expect(retained.origin.candidateAdmission?.reasons).toHaveLength(32);
+    expect(retained.origin.candidateAdmission?.reasons.map((reason) => reason.code)).toEqual(
+      checks.map((check) => check.name),
+    );
+    expect(retained.origin.candidateAdmission?.facts.candidateVersion).toBe("2026.9.5");
+    expect(retained.origin.candidateAdmission?.facts.installedVersion).toBe("2026.9.4");
+    expect(JSON.stringify(retained)).not.toContain(options.env.OPENCLAW_STATE_DIR);
+    const database = openOpenClawStateDatabase(options);
+    const row = database.db
+      .prepare(
+        "SELECT length(CAST(origin_json AS BLOB)) AS bytes FROM update_runs WHERE run_id = ?",
+      )
+      .get(run.runId) as { bytes: number };
+    expect(row.bytes).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it("retains an accepted admission's identities beside maximum driver metadata and large warnings", () => {
+    const options = isolatedOptions();
+    const message = "diagnostic ".repeat(100);
+    const candidateVersion = `2026.9.5+${"v".repeat(70)}`;
+    const installedVersion = `2026.9.4+${"v".repeat(70)}`;
+    const checks = Array.from({ length: 4 }, (_, index) => ({
+      name: `check-${index}-${"x".repeat(115)}`,
+      status: "refuse" as const,
+      detail: message,
+    }));
+    const verdict = parseUpdateAdmissionVerdict({
+      protocol: 1,
+      verdict: "refuse",
+      reasons: checks.map(() => ({ code: "invalid-config", message, nextAction: message })),
+      warnings: Array.from({ length: 32 }, (_, index) => ({ code: `warning-${index}`, message })),
+      facts: { candidateVersion, installedVersion, checks },
+    });
+    expect(verdict).not.toBeNull();
+    const drivers = Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) => ({
+      host: "\0".repeat(255),
+      pid: Number.MAX_SAFE_INTEGER - index,
+      startIdentity: "9".repeat(128),
+    }));
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          driver: drivers[0],
+          previousDrivers: drivers.slice(1),
+          ...admissionRouting,
+          doctorHint: message,
+          nextAction: message,
+          admission: { owner: "candidate", protocol: 1, candidateVersion, checks },
+          candidateAdmission: verdict!,
+        },
+      },
+      options,
+    );
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.origin.driver).toEqual(drivers[0]);
+    expect(retained.origin.previousDrivers).toEqual(drivers.slice(1));
+    expect(retained.origin).toMatchObject(admissionRouting);
+    expect(retained.admission?.candidateVersion).toBe(candidateVersion);
+    expect(retained.admission?.checks?.map((check) => check.name)).toEqual(
+      checks.map((check) => check.name),
+    );
+    expect(retained.origin.candidateAdmission?.reasons.map((reason) => reason.code)).toEqual(
+      verdict!.reasons.map((reason) => reason.code),
+    );
+    expect(retained.origin.candidateAdmission?.facts).toMatchObject({
+      candidateVersion,
+      installedVersion,
+    });
+    expect(Buffer.byteLength(JSON.stringify(retained.origin))).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it("evicts irreducible admission diagnostics without refusing the ledger write", () => {
+    const options = isolatedOptions();
+    const checks = Array.from({ length: 32 }, (_, index) => ({
+      name: `check-${index}-${"x".repeat(1_000)}`,
+      status: "ok" as const,
+    }));
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          ...admissionRouting,
+          admission: { owner: "candidate", protocol: 1, candidateVersion: "2026.9.5", checks },
+        },
+      },
+      options,
+    );
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.origin).toEqual({});
+    expect(retained.admission).toBeUndefined();
+  });
+
+  it("keeps full-capacity recovery receipts exact while evicting admission and routing", () => {
+    const options = isolatedOptions();
+    const receipts = {
+      driver: { host: "fixture", pid: 42, startIdentity: "2" },
+      previousDrivers: [{ host: "fixture", pid: 41, startIdentity: "1" }],
+      updateRecoveryCapture: {
+        manifestSha256: "a".repeat(64),
+        configWrites: [
+          {
+            path: `${options.env.OPENCLAW_STATE_DIR}/private-config.json`,
+            beforeHash: "b".repeat(64),
+            afterHash: "c".repeat(64),
+            contiguous: false,
+          },
+        ],
+        warnings: [
+          {
+            kind: "undeclared-migration-resources" as const,
+            pluginId: "legacy",
+            message: "Private state is undeclared",
+          },
+        ],
+        status: "restore-failed" as const,
+      },
+    };
+    receipts.updateRecoveryCapture.warnings[0]!.message += "w".repeat(
+      16 * 1024 - Buffer.byteLength(JSON.stringify(receipts)),
+    );
+    const checks = [{ name: "config", status: "ok" as const }];
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          ...receipts,
+          ...admissionRouting,
+          admission: { owner: "candidate", protocol: 1, candidateVersion: "2026.9.5", checks },
+          candidateAdmission: {
+            protocol: 1,
+            verdict: "admit",
+            reasons: [],
+            warnings: [],
+            facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
+          },
+        },
+      },
+      options,
+    );
+    const database = openOpenClawStateDatabase(options);
+    const row = database.db
+      .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
+      .get(run.runId) as { origin_json: string };
+    expect(Buffer.byteLength(row.origin_json)).toBe(16 * 1024);
+    expect(row.origin_json).toBe(JSON.stringify(receipts));
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.origin).toStrictEqual(receipts);
+    expect(retained.admission).toBeUndefined();
+    expect(listUpdateRuns({}, options)[0]?.admission).toBeUndefined();
+  });
+
   it.each(["selected", "refused", "unavailable"] as const)(
     "retains and reports snapshot capacity evidence (%s)",
     (outcome) => {
@@ -274,176 +489,6 @@ describe("update run ledger", () => {
     },
   );
 
-  it("keeps reads non-creating and adds the table on first write without changing the older schema", () => {
-    const options = isolatedOptions();
-    const runId = randomUUID();
-    const filename = resolveOpenClawStateSqlitePath(options.env);
-    expect(getUpdateRun(runId, options)).toBeUndefined();
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    expect(findActiveUpdateRun(options)).toBeUndefined();
-    expect(fs.existsSync(filename)).toBe(false);
-    expect(fs.readdirSync(options.env.OPENCLAW_STATE_DIR)).toEqual([]);
-
-    const initial = openOpenClawStateDatabase(options);
-    const hasLedger = () =>
-      initial.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get();
-    expect(hasLedger()).toBeUndefined();
-    const version = initial.db.prepare("PRAGMA user_version").get();
-    const metadata = initial.db.prepare("SELECT * FROM schema_meta").all();
-    const previousSchema = initial.db
-      .prepare(
-        "SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*' ORDER BY rowid",
-      )
-      .all()
-      .map((row) => row.sql)
-      .join(";\n");
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    expect(hasLedger()).toBeUndefined();
-    expect(() => recordUpdateRunPhase(runId, "staging", {}, options)).toThrow(
-      "missing table update_runs",
-    );
-    expect(hasLedger()).toBeUndefined();
-
-    const created = createUpdateRun({ runId, trigger: "cli" }, options);
-    expect(created).toMatchObject({ runId, phase: "requested", status: "running" });
-    closeOpenClawStateDatabaseForTest();
-    const olderReader = new DatabaseSync(filename);
-    try {
-      assertSqliteSchemaContains(olderReader, filename, previousSchema);
-      olderReader.prepare("UPDATE schema_meta SET updated_at = updated_at").run();
-      expect(olderReader.prepare("PRAGMA user_version").get()).toEqual(version);
-      expect(olderReader.prepare("SELECT * FROM schema_meta").all()).toEqual(metadata);
-    } finally {
-      olderReader.close();
-    }
-    expect(getUpdateRun(runId, options)).toEqual(created);
-    expect(createUpdateRun({ runId, trigger: "api" }, options)).toEqual(created);
-    expect(listUpdateRuns({}, options)).toEqual([created]);
-  });
-
-  it.each(
-    (["get", "list", "active", "get-async", "list-async"] as const).flatMap((reader) =>
-      [false, true].map((retainedWal) => ({ reader, retainedWal })),
-    ),
-  )(
-    "keeps cold $reader reads artifact-preserving with retained WAL=$retainedWal",
-    async ({ reader, retainedWal }) => {
-      const sourceOptions = isolatedOptions();
-      const created = createUpdateRun({ trigger: "cli" }, sourceOptions);
-      const sourcePath = resolveOpenClawStateSqlitePath(sourceOptions.env);
-      let options = sourceOptions;
-      let expected = created;
-      if (retainedWal) {
-        const { db } = openOpenClawStateDatabase(sourceOptions);
-        db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-        expected = recordUpdateRunPhase(created.runId, "staging", {}, sourceOptions);
-        options = isolatedOptions();
-        const filename = resolveOpenClawStateSqlitePath(options.env);
-        fs.mkdirSync(path.dirname(filename), { recursive: true });
-        // Capture committed WAL bytes while the only producer is idle, then close
-        // it before observing the copy. Omitting WAL must not return stale history.
-        fs.copyFileSync(sourcePath, filename);
-        fs.copyFileSync(`${sourcePath}-wal`, `${filename}-wal`);
-        const mainOnly = path.join(tempDirs.make("openclaw-update-main-only-"), "main.sqlite");
-        fs.copyFileSync(sourcePath, mainOnly);
-        const control = new DatabaseSync(mainOnly, { readOnly: true });
-        try {
-          expect(
-            control.prepare("SELECT phase FROM update_runs WHERE run_id = ?").get(created.runId),
-          ).toEqual({ phase: "requested" });
-        } finally {
-          control.close();
-        }
-      }
-      closeOpenClawStateDatabaseForTest();
-      const filename = resolveOpenClawStateSqlitePath(options.env);
-      expect(fs.existsSync(`${filename}-shm`)).toBe(false);
-      expect(fs.existsSync(`${filename}-wal`)).toBe(retainedWal);
-      const before = snapshotDatabaseFiles(filename);
-      const result =
-        reader === "get"
-          ? getUpdateRun(created.runId, options)
-          : reader === "list"
-            ? listUpdateRuns({}, options)
-            : reader === "get-async"
-              ? await getUpdateRunAsync(created.runId, options)
-              : reader === "list-async"
-                ? await listUpdateRunsAsync({}, options)
-                : findActiveUpdateRun(options);
-      expect(result).toEqual(reader === "list" || reader === "list-async" ? [expected] : expected);
-      expect(snapshotDatabaseFiles(filename)).toEqual(before);
-    },
-  );
-
-  it("reads rows persisted with the retired inferenceProbe verification fact", () => {
-    const options = isolatedOptions();
-    const run = createUpdateRun({ trigger: "cli" }, options);
-    recordUpdateRunVerification(run.runId, { serviceRunning: true }, options);
-    // Rows written before verification stopped recording inference keep the key;
-    // the non-strict record schema drops it instead of rejecting the run.
-    openOpenClawStateDatabase(options)
-      .db.prepare("UPDATE update_runs SET verification_json = ? WHERE run_id = ?")
-      .run(JSON.stringify({ serviceRunning: true, inferenceProbe: "passed" }), run.runId);
-
-    expect(getUpdateRun(run.runId, options)?.verification).toEqual({ serviceRunning: true });
-  });
-
-  it("leaves a cold store without the history table unchanged", async () => {
-    const options = isolatedOptions();
-    const { db } = openOpenClawStateDatabase(options);
-    expect(
-      db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get(),
-    ).toBeUndefined();
-    closeOpenClawStateDatabaseForTest();
-    const filename = resolveOpenClawStateSqlitePath(options.env);
-    const before = snapshotDatabaseFiles(filename);
-    expect(getUpdateRun(randomUUID(), options)).toBeUndefined();
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    expect(findActiveUpdateRun(options)).toBeUndefined();
-    expect(await getUpdateRunAsync(randomUUID(), options)).toBeUndefined();
-    expect(await listUpdateRunsAsync({}, options)).toEqual([]);
-    expect(snapshotDatabaseFiles(filename)).toEqual(before);
-  });
-
-  it("keeps the idle cached writer usable after history reads", () => {
-    const options = isolatedOptions();
-    const created = createUpdateRun({ trigger: "cli" }, options);
-    const { db } = openOpenClawStateDatabase(options);
-    const filename = resolveOpenClawStateSqlitePath(options.env);
-    const before = snapshotDatabaseFiles(filename);
-    expect(getUpdateRun(created.runId, options)).toEqual(created);
-    expect(listUpdateRuns({}, options)).toEqual([created]);
-    expect(findActiveUpdateRun(options)).toEqual(created);
-    expect(snapshotDatabaseFiles(filename)).toEqual(before);
-    expect(db.isOpen).toBe(true);
-    expect(recordUpdateRunPhase(created.runId, "staging", {}, options).phase).toBe("staging");
-  });
-
-  it("reads committed history without consuming the cached writer's transaction", () => {
-    const options = isolatedOptions();
-    const created = createUpdateRun({ trigger: "cli" }, options);
-    const { db } = openOpenClawStateDatabase(options);
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      db.prepare("UPDATE update_runs SET phase = 'staging' WHERE run_id = ?").run(created.runId);
-      expect(getUpdateRun(created.runId, options)).toEqual(created);
-      expect(listUpdateRuns({}, options)).toEqual([created]);
-      expect(findActiveUpdateRun(options)).toEqual(created);
-      expect(db.isTransaction).toBe(true);
-      expect(
-        db.prepare("SELECT phase FROM update_runs WHERE run_id = ?").get(created.runId),
-      ).toEqual({
-        phase: "staging",
-      });
-      db.exec("COMMIT");
-    } finally {
-      if (db.isTransaction) {
-        db.exec("ROLLBACK");
-      }
-    }
-    expect(getUpdateRun(created.runId, options)?.phase).toBe("staging");
-  });
-
   it("keeps phase order and merges repeated steps while preserving terminal outcomes and later boot facts", () => {
     const options = isolatedOptions();
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -462,6 +507,17 @@ describe("update run ledger", () => {
       { step: "fetch", status: "in_progress", startedAtMs: 2_100 },
       options,
     );
+    for (const exitCode of [1, 0]) {
+      for (const receipt of updateRunStepsFromResultStep({
+        name: "fetch",
+        exitCode,
+        ...(exitCode
+          ? { failureFacts: [{ check: "fetch", code: "EACCES", message: "Permission denied" }] }
+          : {}),
+      })) {
+        recordUpdateRunStep(run.runId, receipt, options);
+      }
+    }
     clock.mockReturnValue(3_000);
     recordUpdateRunPhase(
       run.runId,
@@ -481,7 +537,7 @@ describe("update run ledger", () => {
     expect(current?.steps).toEqual([
       { step: "requested", status: "completed", startedAtMs: 1_000, endedAtMs: 2_000 },
       { step: "staging", status: "completed", startedAtMs: 2_000, endedAtMs: 3_000 },
-      { step: "fetch", status: "completed", startedAtMs: 2_100, endedAtMs: 2_900 },
+      { step: "fetch", status: "completed", exitCode: 0, startedAtMs: 2_100, endedAtMs: 2_900 },
       { step: "validating", status: "in_progress", startedAtMs: 3_000 },
     ]);
     clock.mockReturnValue(4_000);
@@ -619,28 +675,6 @@ describe("update run ledger", () => {
     expect(recordUpdateRunPhase(run.runId, "verifying", {}, options).phase).toBe("verifying");
   });
 
-  it("lists newest runs deterministically and excludes terminal runs from active discovery", () => {
-    const options = isolatedOptions();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const oldest = createUpdateRun({ trigger: "cli" }, options);
-    clock.mockReturnValue(2_000);
-    const tied = [
-      createUpdateRun({ trigger: "api" }, options),
-      createUpdateRun({ trigger: "campaign" }, options),
-    ].toSorted((left, right) => right.runId.localeCompare(left.runId));
-    expect(listUpdateRuns({ limit: 2 }, options).map((run) => run.runId)).toEqual(
-      tied.map((run) => run.runId),
-    );
-    expect(findActiveUpdateRun(options)).toEqual(tied[0]);
-    for (const run of tied) {
-      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, options);
-    }
-    expect(listUpdateRuns({ active: true }, options)).toEqual([oldest]);
-    finishUpdateRun(oldest.runId, { status: "succeeded" }, options);
-    expect(findActiveUpdateRun(options)).toBeUndefined();
-    expect(listUpdateRuns({}, options)).toHaveLength(3);
-  });
-
   it.each([
     { name: "step count", count: 130, detail: undefined },
     { name: "diagnostic bytes", count: 30, detail: "diagnostic ".repeat(80) },
@@ -657,6 +691,8 @@ describe("update run ledger", () => {
         "previous generation restoration",
         "finalize:doctor",
         "finalize:future-phase",
+        // Candidate Doctor's predecessor-stop receipt: identity lives in the key.
+        "finalize:predecessor-stop:1758600000000:1000:631:0123456789abcdef",
         "post-update verification",
       ];
       for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
@@ -888,16 +924,13 @@ describe("update run ledger", () => {
     const run = createUpdateRun({ trigger: "cli" }, options);
     const database = openOpenClawStateDatabase(options);
     expect(database.db.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+    const writerUrl = resolveRuntimeWorkerUrl(sqliteMaintenanceEntrypoints.updateLedger);
     const children = ["cli", "gateway"].map((role) => {
-      const child = fork(
-        new URL("./update-run-ledger.process.test-support.ts", import.meta.url),
-        [run.runId, role],
-        {
-          execArgv: ["--import", "tsx"],
-          env: { ...process.env, ...options.env },
-          stdio: ["ignore", "pipe", "pipe", "ipc"],
-        },
-      );
+      const child = fork(writerUrl, [run.runId, role], {
+        execArgv: resolveRuntimeWorkerArgv(writerUrl).slice(0, -1),
+        env: { ...process.env, ...options.env },
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+      });
       let output = "";
       child.stdout?.on("data", (chunk) => {
         output += chunk;

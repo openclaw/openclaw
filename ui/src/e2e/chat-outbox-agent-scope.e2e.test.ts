@@ -132,12 +132,8 @@ suite.define(() => {
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       timeoutStage = "go offline";
       await gateway.setOnline(false);
-      timeoutStage = "wait for offline warning";
-      await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
-        .waitFor({ timeout: 10_000 });
+      timeoutStage = "wait for offline composer";
+      await page.locator(".agent-chat__input--offline").waitFor({ timeout: 10_000 });
 
       const prompt = "deliver the work outbox independently";
       timeoutStage = "fill composer";
@@ -171,9 +167,7 @@ suite.define(() => {
       await gateway.setOnline(true);
       timeoutStage = "wait for online composer";
       await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
+        .locator(".agent-chat__input--offline")
         .waitFor({ state: "detached", timeout: 10_000 });
       timeoutStage = "wait for transcript readiness";
       await expect

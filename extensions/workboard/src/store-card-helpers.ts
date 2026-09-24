@@ -17,6 +17,8 @@ import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
   MAX_CARD_EVENTS,
+  MAX_WORKER_CONTEXT_PARENTS,
+  MAX_WORKER_CONTEXT_RECENT_CARDS,
   READY_STRANDED_MS,
   RUNNING_HEARTBEAT_STALE_MS,
 } from "./store-constants.js";
@@ -566,7 +568,7 @@ export function buildWorkerContext(
   const parentResults = cardParentIds(card)
     .map((parentId) => cardsById.get(parentId))
     .filter((parent): parent is WorkboardCard => parent !== undefined && parent.status === "done")
-    .slice(-6);
+    .slice(-MAX_WORKER_CONTEXT_PARENTS);
   appendWorkerContextSection(
     lines,
     "Parent results",
@@ -585,7 +587,7 @@ export function buildWorkerContext(
               entry.status === "done",
           )
           .toSorted((a, b) => b.updatedAt - a.updatedAt)
-          .slice(0, 5)
+          .slice(0, MAX_WORKER_CONTEXT_RECENT_CARDS)
       : [];
   appendWorkerContextSection(
     lines,

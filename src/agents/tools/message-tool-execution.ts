@@ -232,7 +232,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const schema = addSourceReplyFinalControl(baseSchema);
   const description = options?.sourceReplyOnly
     ? "Send a message to the current source conversation. Supports actions: send."
-    : `${buildMessageToolDescription(actions)}${currentChannelIsInternal ? ' When the user asks whether you can perform an action or install a capability, use action="send" with clawhub={query:"capability"} to check official plugins and skills and present installation cards. Omit channel and target. Installed capabilities show their current status; the card opens the listing inside Control UI.' : ""}`;
+    : buildMessageToolDescription(actions);
   const sandboxRoot = options?.sandboxRoot?.trim();
   const sandboxWorkspaceMediaAccess =
     sandboxRoot && options?.sandboxFsBridge && options.sandboxWorkspaceMediaReadAllowed === true
@@ -326,7 +326,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           }),
         );
       }
-      // `final` is a Codex app-server-only source-delivery control. It must
+      // `final` is a host-owned source-reply completion control. It must
       // not be dispatched to a provider or participate in idempotency.
       const requestedSourceReplyFinal =
         typeof params.final === "boolean" ? params.final : undefined;
@@ -369,7 +369,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         ),
         hasScheduledAuthority: Boolean(messageActionAuthorization.scheduled),
       });
-      decisions.runBoundary(() =>
+      await decisions.runBoundaryAsync(() =>
         validateExplicitMessageAccountSelection({
           cfg: rawConfig,
           accountId: requestedAccountId,
@@ -405,7 +405,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action === "broadcast" &&
         (!requestedBroadcastChannel || requestedBroadcastChannel === "all") &&
         requestedAccountId !== undefined;
-      const explicitAccountId = decisions.runBoundary(() =>
+      const explicitAccountId = await decisions.runBoundaryAsync(() =>
         validateExplicitMessageAccountSelection({
           cfg: rawConfig,
           channel: unscopedExplicitBroadcast ? undefined : scope.channel,
@@ -415,7 +415,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       );
       const broadcastAccountPlan =
         unscopedExplicitBroadcast && explicitAccountId
-          ? resolveMessageBroadcastAccountPlan({
+          ? await resolveMessageBroadcastAccountPlan({
               cfg: rawConfig,
               accountId: explicitAccountId,
             })
@@ -665,6 +665,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             sessionKey: options?.agentSessionKey,
             toolContext,
             deliveredPayload: result.payload,
+            sourceReplyFinal: requestedSourceReplyFinal,
             replyToIsExplicit: Boolean(readToolStringParam(actionParams, "replyTo")),
           };
           const currentSourceReply =
@@ -727,7 +728,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           }
           const response = toolResult ?? jsonResult(result.payload);
-          const notice = result.kind === "send" ? result.normalization?.notice : undefined;
+          const notice =
+            result.kind === "send" && !result.dryRun ? result.normalization?.notice : undefined;
           return embeddedMessageDelivery.attachEmbeddedMessageDeliveryFact(
             notice
               ? { ...response, content: [...response.content, { type: "text", text: notice }] }

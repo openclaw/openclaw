@@ -28,7 +28,10 @@ export type LogbookOperations = {
   unbatchedActiveFrames: Operation<{ limit: number }, Pick<LogbookFrame, "id" | "capturedAtMs">[]>;
   countUnbatchedActiveFrames: Operation<undefined, number>;
   frameById: Operation<{ id: number }, LogbookFrame | null>;
-  framesInRange: Operation<{ startMs: number; endMs: number }, LogbookFrame[]>;
+  framesInRange: Operation<
+    { startMs: number; endMs: number },
+    Pick<LogbookFrame, "id" | "capturedAtMs" | "idle">[]
+  >;
   createBatch: Operation<LogbookBatchInput, number>;
   setBatchStatus: Operation<
     { batchId: number; status: LogbookBatchStatus; error?: string; model?: string },

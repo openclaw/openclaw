@@ -1,8 +1,9 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Browser, BrowserContext, Page } from "playwright-core";
-import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   assertCdpEndpointAllowed,
@@ -13,6 +14,8 @@ import {
   stripCdpUrlCredentials,
 } from "./cdp.helpers.js";
 import { getChromeWebSocketEndpoint } from "./chrome.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
+import type { BrowserEngineId } from "./engines/types.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import type { RelayOperationReference } from "./extension-relay/owner-client.js";
 import {
@@ -36,7 +39,11 @@ import {
   type PendingBrowserConnection,
   type PlaywrightConnectionRetirement,
 } from "./pw-session-contracts.js";
-import { pageTargetInfo } from "./pw-session-page-target.js";
+import {
+  isConnectionScopedTargetId,
+  markConnectionScopedBrowser,
+  pageTargetInfo,
+} from "./pw-session-page-target.js";
 import {
   bindRoleRefsTarget,
   ensurePageState,
@@ -154,7 +161,7 @@ export function clearBlockedPageRef(cdpUrl: string, page: Page): void {
   blockedPageRefsByCdpUrl.get(normalizeCdpUrl(cdpUrl))?.delete(page);
 }
 
-export function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser | null {
+function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser | null {
   const normalized = normalizeCdpUrl(cdpUrl);
   const cur = cachedByCdpUrl.get(normalized);
   cachedByCdpUrl.delete(normalized);
@@ -175,7 +182,7 @@ export function takeCachedPlaywrightBrowserConnection(cdpUrl: string): Connected
 }
 
 /** Raised when a page target has been quarantined after policy denial. */
-export class BlockedBrowserTargetError extends Error {
+class BlockedBrowserTargetError extends Error {
   constructor() {
     super("Browser target is unavailable after SSRF policy blocked its navigation.");
     this.name = "BlockedBrowserTargetError";
@@ -196,9 +203,7 @@ function releaseClosingPlaywrightConnection(connection: ConnectedBrowser): void 
   }
 }
 
-export async function closeTrackedPlaywrightConnection(
-  connection: ConnectedBrowser,
-): Promise<void> {
+async function closeTrackedPlaywrightConnection(connection: ConnectedBrowser): Promise<void> {
   const existing = closeConnectionPromises.get(connection);
   if (existing) {
     return await existing;
@@ -342,6 +347,28 @@ export function evictStalePlaywrightBrowserConnection(
   }
 }
 
+/** Close a captured ephemeral browser without retiring a same-URL successor. */
+export async function closeConnectionScopedPageBrowser(
+  cdpUrl: string,
+  browser: Browser,
+): Promise<void> {
+  const current = cachedByCdpUrl.get(normalizeCdpUrl(cdpUrl));
+  if (current?.browser === browser) {
+    clearBlockedTargetsForCdpUrl(cdpUrl);
+    clearBlockedPageRefsForCdpUrl(cdpUrl);
+    const owned = takeCachedPlaywrightBrowserConnection(cdpUrl);
+    if (owned) {
+      await withPlaywrightCloseTimeout(closeTrackedPlaywrightConnection(owned));
+    }
+    return;
+  }
+  // The obsolete handle is already disconnected or owned by its retirement.
+  // Never look up and close the current adapter by endpoint alone here.
+  if (browser.isConnected()) {
+    await withPlaywrightCloseTimeout(browser.close());
+  }
+}
+
 function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
   const prefix = `${normalizeCdpUrl(cdpUrl)}::`;
   for (const key of blockedTargetsByCdpUrl) {
@@ -351,8 +378,6 @@ function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
   }
   return false;
 }
-
-/** Raised when a page target has been quarantined after policy denial. */
 
 function observeContext(context: BrowserContext) {
   if (observedContexts.has(context)) {
@@ -388,6 +413,7 @@ export async function connectBrowser(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
   relayReference?: RelayOperationReference,
+  engine?: BrowserEngineId,
 ): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   const relay = getBorrowedRelayCdpAccess(normalized);
@@ -401,11 +427,18 @@ export async function connectBrowser(
   }
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
+    if (engine && (cached.engine ?? "chromium") !== engine) {
+      throw new Error("Browser engine changed; stop this profile before connecting again.");
+    }
     return cached;
   }
   // Run SSRF policy check only on cache miss so transient DNS failures
   // do not break active sessions that already hold a live CDP connection.
   const configuredPin = await assertCdpEndpointAllowed(normalized, ssrfPolicy);
+  const connectedDuringPolicyCheck = cachedByCdpUrl.get(normalized);
+  if (connectedDuringPolicyCheck) {
+    return connectedDuringPolicyCheck;
+  }
   const connecting = connectingByCdpUrl.get(normalized);
   if (connecting) {
     return await connecting.promise;
@@ -467,6 +500,7 @@ export async function connectBrowser(
                 headers,
                 lookup,
                 resolveWebSocketUrl,
+                ...(engine ? { engine } : {}),
               });
             }),
           );
@@ -497,7 +531,10 @@ export async function connectBrowser(
             cachedByCdpUrl.delete(normalized);
           }
         };
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
+        if (resolveBrowserEngine(engine).descriptor.sessionScope === "connection") {
+          markConnectionScopedBrowser(browser);
+        }
+        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected, engine };
         cachedByCdpUrl.set(normalized, connected);
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
@@ -546,13 +583,21 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
 }> {
   const accessible: Array<{ page: Page; targetId: string | null }> = [];
   let blockedCount = 0;
-  for (const page of opts.pages) {
+  const candidates = await Promise.all(
+    opts.pages.map(async (page) => {
+      if (isBlockedPageRef(opts.cdpUrl, page)) {
+        return { page, targetId: null };
+      }
+      ensurePageState(page);
+      const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
+      return { page, targetId };
+    }),
+  );
+  for (const { page, targetId } of candidates) {
     if (isBlockedPageRef(opts.cdpUrl, page)) {
       blockedCount += 1;
       continue;
     }
-    ensurePageState(page);
-    const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
     // Fail closed when we cannot resolve a target id while this session has
     // quarantined targets; otherwise a blocked tab can become selectable.
     if (!targetId) {
@@ -618,17 +663,25 @@ export async function getPageForTargetId(opts: {
   ssrfPolicy?: SsrFPolicy;
   relayReference?: RelayOperationReference;
 }): Promise<Page> {
-  const reusedCachedBrowser = hasCachedPlaywrightBrowserConnection(opts.cdpUrl);
+  const cachedBrowser = cachedByCdpUrl.get(normalizeCdpUrl(opts.cdpUrl))?.browser;
+  if (isConnectionScopedTargetId(opts.targetId) && !cachedBrowser) {
+    throw new Error(
+      "Browser session was lost. Open a new page and take a new snapshot; previous targets and refs are invalid.",
+    );
+  }
   try {
     return await getPageForTargetIdOnce(opts);
   } catch (err) {
-    if (!isRecoverableStalePageSelectionError(err, reusedCachedBrowser)) {
+    if (
+      isConnectionScopedTargetId(opts.targetId) ||
+      !isRecoverableStalePageSelectionError(err, Boolean(cachedBrowser))
+    ) {
       throw err;
     }
     if (opts.relayReference) {
       await closeRelayOperationConnection(opts.relayReference);
     } else {
-      retirePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
+      evictStalePlaywrightBrowserConnection(opts.cdpUrl, cachedBrowser);
     }
     return await getPageForTargetIdOnce(opts);
   }

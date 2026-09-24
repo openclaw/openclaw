@@ -3,11 +3,14 @@
  * Parses OpenAI-style patch envelopes and applies add/update/delete/move hunks
  * through guarded host or sandbox filesystem operations.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
 import { createAbortError } from "../infra/abort-signal.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
+import {
+  type ApplyPatchContainmentSource,
+  withApplyPatchContainmentHint,
+} from "./apply-patch-containment-hint.js";
 import {
   type ApplyPatchFileOptions,
   createPatchTarget,
@@ -15,7 +18,7 @@ import {
   resolvePatchFileOps,
   type SandboxApplyPatchConfig,
 } from "./apply-patch-file-ops.js";
-import { resolveApplyPatchInputPath } from "./apply-patch-paths.js";
+import { resolveApplyPatchInputPath, toDisplayPath } from "./apply-patch-paths.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import {
@@ -24,7 +27,7 @@ import {
   resolveSandboxPathMapping,
 } from "./path-policy.js";
 import type { AgentTool } from "./runtime/index.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
+import { assertSandboxPath, markHostRootEscape } from "./sandbox-paths.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import {
   resolveFileMutationQueueKey,
@@ -125,6 +128,7 @@ export function createApplyPatchTool(
     root?: string;
     sandbox?: SandboxApplyPatchConfig;
     workspaceOnly?: boolean;
+    containmentSource?: ApplyPatchContainmentSource;
     abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   } = {},
@@ -153,14 +157,22 @@ export function createApplyPatchTool(
         throw createAbortError("Aborted");
       }
 
-      const result = await applyPatch(input, {
-        cwd,
-        root,
-        sandbox,
-        workspaceOnly,
-        memoryWriteProvenance: options.memoryWriteProvenance,
-        signal: executionSignal,
-      });
+      let result: Awaited<ReturnType<typeof applyPatch>>;
+      try {
+        result = await applyPatch(input, {
+          cwd,
+          root,
+          sandbox,
+          workspaceOnly,
+          memoryWriteProvenance: options.memoryWriteProvenance,
+          signal: executionSignal,
+        });
+      } catch (error) {
+        throw withApplyPatchContainmentHint(
+          error,
+          workspaceOnly ? options.containmentSource : undefined,
+        );
+      }
 
       // A no-op patch is not terminal — the model may still be mid-task and
       // needs a continuation, not an ended turn.
@@ -212,7 +224,6 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
         async () => {
           const target = await targetResolution;
           const fileOps = await getFileOps();
-          await assertPatchParentPath(hunk.path, patchOptions);
           await ensureDir(target.resolved, fileOps);
           await createPatchTarget({
             target,
@@ -264,7 +275,6 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
         const applied = await applyUpdateHunk(target.resolved, hunk.chunks, fileOps);
 
         if (hunk.movePath && moveTarget) {
-          await assertPatchParentPath(hunk.movePath, patchOptions);
           await ensureDir(moveTarget.resolved, fileOps);
           // Container aliases can name the same file; reuse the physical identity
           // already held by the mutation queue instead of comparing spellings.
@@ -378,56 +388,7 @@ async function ensureDir(filePath: string, ops: PatchFileOps) {
   if (!parent || parent === ".") {
     return;
   }
-  await ops.mkdirp(parent);
-}
-
-async function assertPatchParentPath(rawFilePath: string, options: ApplyPatchOptions) {
-  if (options.workspaceOnly === false || options.sandbox) {
-    return;
-  }
-  const filePath = preserveAtPrefixedRelativePath(rawFilePath, options.cwd);
-  const parent = path.dirname(filePath);
-  if (!parent || parent === ".") {
-    return;
-  }
-  const checked = await assertSandboxPath({
-    filePath: parent,
-    cwd: options.cwd,
-    root: options.root ?? options.cwd,
-  });
-  await assertNoExistingParentAliases({
-    parentPath: checked.resolved,
-    rootPath: options.root ?? options.cwd,
-  });
-}
-
-async function assertNoExistingParentAliases(params: { parentPath: string; rootPath: string }) {
-  const rootPath = path.resolve(params.rootPath);
-  const parentPath = path.resolve(params.parentPath);
-  const relative = path.relative(rootPath, parentPath);
-  if (!relative || relative === "" || relativePathEscapesRoot(relative)) {
-    return;
-  }
-
-  let current = rootPath;
-  for (const segment of relative.split(path.sep)) {
-    if (!segment) {
-      continue;
-    }
-    current = path.join(current, segment);
-    const stat = await fs.lstat(current).catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return null;
-      }
-      throw error;
-    });
-    if (!stat) {
-      return;
-    }
-    if (stat.isSymbolicLink()) {
-      throw new Error(`Path alias under sandbox root: ${path.relative(rootPath, current)}`);
-    }
-  }
+  await ops.mkdirp?.(parent);
 }
 
 async function resolvePatchPath(
@@ -450,7 +411,9 @@ async function resolvePatchPath(
         resolved.containerPath,
       );
       if (!legacyBridge && !workspaceMapping) {
-        throw new Error(`Path escapes sandbox root (${options.sandbox.root}): ${filePath}`);
+        throw markHostRootEscape(
+          new Error(`Path escapes sandbox root (${options.sandbox.root}): ${filePath}`),
+        );
       }
       if (resolved.hostPath) {
         // Descriptor-less SDK bridges retain their published host-root admission.
@@ -500,26 +463,6 @@ async function resolvePatchPath(
     queueKey: await resolveFileMutationQueueKey(resolved),
     display: toDisplayPath(resolved, options.cwd),
   };
-}
-
-function toDisplayPath(resolved: string, cwd: string): string {
-  const relative = path.relative(cwd, resolved);
-  if (!relative || relative === "") {
-    return path.basename(resolved);
-  }
-  if (relativePathEscapesRoot(relative)) {
-    return resolved;
-  }
-  return relative;
-}
-
-function relativePathEscapesRoot(relativePath: string): boolean {
-  return (
-    relativePath === ".." ||
-    relativePath.startsWith("../") ||
-    relativePath.startsWith("..\\") ||
-    path.isAbsolute(relativePath)
-  );
 }
 
 function parsePatchText(input: string): { hunks: Hunk[]; patch: string } {

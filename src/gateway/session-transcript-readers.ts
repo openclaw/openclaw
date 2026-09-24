@@ -6,8 +6,12 @@ import {
 } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { readSessionTranscriptHistoryEventCount } from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
+import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
 import {
   resolveTranscriptReadTarget,
@@ -33,12 +37,69 @@ const sessionTranscriptReader = createSessionTranscriptReader({
 export const {
   readSessionMessagesAsync,
   readSessionMessagesWithSourceAsync,
-  readSessionMessageByIdAsync,
-  readSessionMessagesMatchingIdAsync,
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesPageWithStatsAsync,
   readSessionMessagesAroundIdWithStatsAsync,
 } = sessionTranscriptReader;
+
+function usesProcessHeldTranscript(scope: SessionTranscriptReadScope): boolean {
+  // Incognito SQLite belongs to this process and cannot be reopened in a worker.
+  return Boolean(
+    isIncognitoSessionKey(scope.sessionKey) ||
+    (scope.storePath &&
+      isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
+        agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+        env: scope.env,
+      })),
+  );
+}
+
+function captureHistoryReadScope(scope: SessionTranscriptReadScope): SessionTranscriptReadScope {
+  const target = bindSessionTranscriptStoreScope(scope);
+  return {
+    agentId: target.agentId,
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    storePath: target.storePath,
+    sessionEntry: target.sessionEntry ? { sessionId: target.sessionEntry.sessionId } : undefined,
+    env: captureSessionTranscriptStorageEnvironment(target.env ?? process.env),
+  };
+}
+
+export async function readSessionMessageByIdAsync(
+  scope: SessionTranscriptReadScope,
+  messageId: string,
+  options?: Parameters<typeof sessionTranscriptReader.readSessionMessageByIdAsync>[2],
+) {
+  const target = captureHistoryReadScope(scope);
+  if (usesProcessHeldTranscript(target)) {
+    return sessionTranscriptReader.readSessionMessageByIdAsync(target, messageId, options);
+  }
+  const capturedOptions = options ? { ...options } : undefined;
+  const { readSessionHistoryPageInWorker } =
+    await import("../config/sessions/session-history-worker-runtime.js");
+  return readSessionHistoryPageInWorker({
+    kind: "message-by-id",
+    params: { target, messageId, options: capturedOptions },
+  });
+}
+
+/** Keep exact membership and its full-history validation in the admitted history worker. */
+export async function readSessionMessagesMatchingIdAsync(
+  scope: SessionTranscriptReadScope,
+  messageId: string,
+): Promise<unknown[]> {
+  const target = captureHistoryReadScope(scope);
+  if (usesProcessHeldTranscript(target)) {
+    return sessionTranscriptReader.readSessionMessagesMatchingIdAsync(target, messageId);
+  }
+  const { readSessionHistoryPageInWorker } =
+    await import("../config/sessions/session-history-worker-runtime.js");
+  return readSessionHistoryPageInWorker({
+    kind: "message-lookup",
+    params: { target, messageId },
+  });
+}
 
 /** Visits raw message payloads within the SQLite read snapshot. */
 export async function visitSessionMessagesAsync(
@@ -63,12 +124,16 @@ export async function visitSessionMessagesAsync(
 export async function readSessionMessageCountAsync(
   scope: SessionTranscriptReadScope,
 ): Promise<number> {
-  const target = await resolveTranscriptReadTarget(scope);
-  const transcriptScope = toTranscriptReadScope(target);
-  const readCount = () =>
-    readRestoredSessionTranscript(transcriptScope, () =>
-      readSessionTranscriptHistoryEventCount(transcriptScope),
-    );
+  const target = captureHistoryReadScope(scope);
+  const inProcess = usesProcessHeldTranscript(target);
+  const readCount = async () => {
+    if (inProcess) {
+      return sessionTranscriptReader.readSessionMessageCountAsync(target);
+    }
+    const { readSessionHistoryPageInWorker } =
+      await import("../config/sessions/session-history-worker-runtime.js");
+    return readSessionHistoryPageInWorker({ kind: "message-count", params: { target } });
+  };
   try {
     return await readCount();
   } catch (error) {
@@ -77,7 +142,7 @@ export async function readSessionMessageCountAsync(
     }
     // The failed read already scheduled the rebuild; wait before assigning
     // a sequence so a concurrent send cannot fail or reuse a stale count.
-    await waitForSessionTranscriptProjection(transcriptScope);
+    await waitForSessionTranscriptProjection(target);
     return await readCount();
   }
 }

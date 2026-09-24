@@ -115,8 +115,11 @@ it("observes another SQLite connection after warm reads and database reopen", as
 
 it("binds fresh upsert fields and preserves every scoped and generic list shape", async () => {
   await withOpenClawTestState({ label: "binding-query-scopes" }, async () => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
     const a = binding("z-generic", "a", true);
     const b = binding("a-adapter", "a");
+    b.conversation.parentConversationId = "parent";
     const c = binding("other-generic", "b", true);
     const unrelated = {
       ...binding("different-target", "a"),
@@ -134,21 +137,31 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
 
     const { db } = openOpenClawStateDatabase();
     const sql = getNodeSqliteKysely<Pick<DB, "current_conversation_bindings">>(db);
-    const readColumns = () =>
+    const readColumns = (bindingId = b.bindingId) =>
       executeSqliteQuerySync(
         db,
         sql
           .selectFrom("current_conversation_bindings")
-          .select([
-            "target_session_key",
-            "target_kind",
-            "status",
-            "bound_at",
-            "expires_at",
-            "metadata_json",
-          ])
-          .where("binding_id", "=", b.bindingId),
+          .selectAll()
+          .where("binding_id", "=", bindingId),
       ).rows[0];
+    expect(readColumns(a.bindingId)).toEqual({
+      binding_key: "demo\u241fa\u241f\u241fz-generic",
+      binding_id: a.bindingId,
+      target_session_key: "agent:main:bound",
+      channel: "demo",
+      account_id: "a",
+      conversation_kind: "current",
+      parent_conversation_id: null,
+      conversation_id: "z-generic",
+      target_kind: "session",
+      status: "active",
+      bound_at: 1,
+      expires_at: null,
+      metadata_json: null,
+      record_json: JSON.stringify(a),
+      updated_at: now,
+    });
     const changed: SessionBindingRecord = {
       ...b,
       targetSessionKey: "agent:other:retargeted",
@@ -160,12 +173,21 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
     };
     writeBinding(changed);
     expect(readColumns()).toEqual({
+      binding_key: "demo\u241fa\u241fparent\u241fa-adapter",
+      binding_id: "fixture:a-adapter",
       target_session_key: "agent:other:retargeted",
+      channel: "demo",
+      account_id: "a",
+      conversation_kind: "current",
+      parent_conversation_id: "parent",
+      conversation_id: "a-adapter",
       target_kind: "subagent",
       status: "ending",
       bound_at: 2,
       expires_at: changed.expiresAt,
       metadata_json: '{"version":"fresh"}',
+      record_json: JSON.stringify(changed),
+      updated_at: now,
     });
     expect(listCurrentConversationBindingRecordsBySession(b.targetSessionKey, scoped)).toEqual([a]);
     expect(
@@ -174,12 +196,21 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
     expect(resolveCurrentConversationBindingRecord(b.conversation)).toEqual(changed);
     writeBinding(b);
     expect(readColumns()).toEqual({
+      binding_key: "demo\u241fa\u241fparent\u241fa-adapter",
+      binding_id: "fixture:a-adapter",
       target_session_key: "agent:main:bound",
+      channel: "demo",
+      account_id: "a",
+      conversation_kind: "current",
+      parent_conversation_id: "parent",
+      conversation_id: "a-adapter",
       target_kind: "session",
       status: "active",
       bound_at: 1,
       expires_at: null,
       metadata_json: null,
+      record_json: JSON.stringify(b),
+      updated_at: now,
     });
     expect(resolveCurrentConversationBindingRecord(b.conversation)).toEqual(b);
 
@@ -192,5 +223,35 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
       deleteCurrentConversationBindingRecordsBySession(a.targetSessionKey, undefined, false),
     ).toEqual([b, c]);
     expect(resolveCurrentConversationBindingRecord(unrelated.conversation)).toEqual(unrelated);
+  });
+});
+
+it("preserves the committed row when a metadata update cannot be serialized", async () => {
+  await withOpenClawTestState({ label: "binding-query-serialization-failure" }, async () => {
+    const original = binding("cyclic-metadata");
+    writeBinding(original);
+    const { db } = openOpenClawStateDatabase();
+    const sql = getNodeSqliteKysely<Pick<DB, "current_conversation_bindings">>(db);
+    const readRow = () =>
+      executeSqliteQuerySync(
+        db,
+        sql
+          .selectFrom("current_conversation_bindings")
+          .selectAll()
+          .where("binding_id", "=", original.bindingId),
+      ).rows[0];
+    const before = readRow();
+    expect(before).toBeDefined();
+    const metadata: Record<string, unknown> = {};
+    metadata.self = metadata;
+    expect(() =>
+      updateCurrentConversationBindingRecord(original.conversation, () => ({
+        ...original,
+        targetSessionKey: "agent:other:rejected",
+        metadata,
+      })),
+    ).toThrow(TypeError);
+    expect(readRow()).toEqual(before);
+    expect(resolveCurrentConversationBindingRecord(original.conversation)).toEqual(original);
   });
 });

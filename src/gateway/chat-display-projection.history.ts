@@ -63,10 +63,17 @@ export function isSubagentCoordinationHistoryInput(
 /** Keep coordination in the model transcript while projecting only human-facing outcomes. */
 export function createSubagentCoordinationHistoryProjection(
   resolver?: SubagentCoordinationDisplayResolver,
+  state: {
+    hiddenInputKeys: { add: (key: string) => unknown; has: (key: string) => boolean };
+    visibleInputKeys: { add: (key: string) => unknown; has: (key: string) => boolean };
+    visibleSteerRunIds: { add: (key: string) => unknown; has: (key: string) => boolean };
+  } = {
+    hiddenInputKeys: new Set<string>(),
+    visibleInputKeys: new Set<string>(),
+    visibleSteerRunIds: new Set<string>(),
+  },
 ) {
-  const hiddenInputKeys = new Set<string>();
-  const visibleInputKeys = new Set<string>();
-  const visibleSteerRunIds = new Set<string>();
+  const { hiddenInputKeys, visibleInputKeys, visibleSteerRunIds } = state;
   return (messages: unknown[]): unknown[] => {
     resolver?.assertCurrent?.();
     const projected = messages.map((message) => {
@@ -414,7 +421,7 @@ function openclawAssistantModel(message: Record<string, unknown>): string | unde
     : undefined;
 }
 
-export function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
+function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
   const text = extractProjectedText(message.content ?? message.text).trim();
   return text ? text : undefined;
 }
@@ -575,10 +582,7 @@ function stripPromptPrefixFromContent(content: unknown, strip: (text: string) =>
   });
 }
 
-function resolveForwardedSenderSession(
-  message: Record<string, unknown>,
-  resolveCronJobName: (jobId: string) => string | undefined,
-): { sessionKey?: string; agentId?: string; label?: string } | undefined {
+function readForwardedSender(message: Record<string, unknown>) {
   // Only structured provenance identifies the sender; prompt headers are display text.
   const provenance = normalizeInputProvenance(message.provenance);
   const sourceSessionKey = provenance?.sourceSessionKey;
@@ -587,6 +591,14 @@ function resolveForwardedSenderSession(
   const jobId = isCronRunMessage(message)
     ? provenance?.jobId
     : parsed?.rest.match(/^cron:([^:]+):run:[^:]+$/u)?.[1];
+  return { sourceSessionKey, agentId, jobId };
+}
+
+function resolveForwardedSenderSession(
+  message: Record<string, unknown>,
+  resolveCronJobName: (jobId: string) => string | undefined,
+): { sessionKey?: string; agentId?: string; label?: string } | undefined {
+  const { sourceSessionKey, agentId, jobId } = readForwardedSender(message);
   const label = jobId ? (resolveCronJobName(jobId) ?? "Automation") : undefined;
   return sourceSessionKey
     ? { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}), ...(label ? { label } : {}) }
@@ -595,12 +607,23 @@ function resolveForwardedSenderSession(
 
 export function projectForwardedMessages(
   messages: Array<Record<string, unknown>>,
-  resolveCronJobName: (jobId: string) => string | undefined = createCronJobNameResolver(),
+  resolveCronJobName?: (jobId: string) => string | undefined,
 ): Array<Record<string, unknown>> {
+  const resolve =
+    resolveCronJobName ??
+    createCronJobNameResolver(
+      messages.flatMap((message) => {
+        if (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message)) {
+          return [];
+        }
+        const jobId = readForwardedSender(message).jobId;
+        return jobId ? [jobId] : [];
+      }),
+    );
   const names = new Map<string, string | undefined>();
   const resolveName = (jobId: string) => {
     if (!names.has(jobId)) {
-      names.set(jobId, resolveCronJobName(jobId));
+      names.set(jobId, resolve(jobId));
     }
     return names.get(jobId);
   };

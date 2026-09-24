@@ -36,7 +36,7 @@ export function hasResolvedThinkingCatalogEntry(params: {
   );
 }
 
-/** Native runtimes refresh their own observations; host turns cannot borrow native-only facts. */
+/** Native runtimes resolve their own observations; host turns cannot borrow native-only facts. */
 export function needsThinkHydration(
   catalog: readonly ThinkingCatalogEntry[] | undefined,
   provider: string,

@@ -1,5 +1,4 @@
 // Memory Core tests cover manager.watcher config plugin behavior.
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -27,105 +26,9 @@ const {
   watchMock,
   nativeWatchMock,
   nativeWatchMockFailingDir,
-} = vi.hoisted(() => {
-  // Symbols are also declared at module top-level (CHOKIDAR_FACTORY_KEY,
-  // NATIVE_FACTORY_KEY) but vi.hoisted runs before those declarations
-  // execute, so we resolve the same Symbol.for keys inline here.
-  const chokidarKey = Symbol.for("openclaw.test.memoryWatchFactory");
-  const nativeKey = Symbol.for("openclaw.test.memoryNativeWatchFactory");
-  type ChokidarEvent = "add" | "change" | "unlink" | "unlinkDir" | "error" | "ready";
-  type ChokidarCallback = (...args: unknown[]) => void;
-  function createMockChokidarWatcher() {
-    const handlers = new Map<ChokidarEvent, ChokidarCallback[]>();
-    const onceHandlers = new Map<ChokidarEvent, ChokidarCallback[]>();
-    const watcher = {
-      watchedEntries: {} as Record<string, string[]>,
-      on: vi.fn((event: ChokidarEvent, callback: ChokidarCallback) => {
-        handlers.set(event, [...(handlers.get(event) ?? []), callback]);
-        return watcher;
-      }),
-      once: vi.fn((event: ChokidarEvent, callback: ChokidarCallback) => {
-        onceHandlers.set(event, [...(onceHandlers.get(event) ?? []), callback]);
-        return watcher;
-      }),
-      add: vi.fn((_path: string | string[]) => watcher),
-      close: vi.fn(async () => undefined),
-      getWatched: vi.fn(() => watcher.watchedEntries),
-      emit: (event: ChokidarEvent, ...args: unknown[]) => {
-        for (const callback of handlers.get(event) ?? []) {
-          callback(...args);
-        }
-        const callbacks = onceHandlers.get(event) ?? [];
-        onceHandlers.delete(event);
-        for (const callback of callbacks) {
-          callback(...args);
-        }
-      },
-    };
-    return watcher;
-  }
-
-  type NativeEvent = "error";
-  type NativeCallback = (eventType: string, filename: string | null) => void;
-  type NativeErrorCallback = (err: Error) => void;
-  function createMockNativeWatcher(
-    dir: string,
-    options: { recursive?: boolean },
-    listener: NativeCallback,
-  ) {
-    const errorHandlers: NativeErrorCallback[] = [];
-    const watcher = {
-      dir,
-      options,
-      recursive: options.recursive === true,
-      listener,
-      on: vi.fn((event: NativeEvent, callback: NativeErrorCallback) => {
-        if (event === "error") {
-          errorHandlers.push(callback);
-        }
-        return watcher;
-      }),
-      close: vi.fn(() => undefined),
-      emit: (eventType: string, filename: string | null) => {
-        listener(eventType, filename);
-      },
-      emitError: (err: Error) => {
-        for (const handler of errorHandlers) {
-          handler(err);
-        }
-      },
-    };
-    return watcher;
-  }
-
-  const chokidarWatchers: Array<ReturnType<typeof createMockChokidarWatcher>> = [];
-  const nativeWatchers: Array<ReturnType<typeof createMockNativeWatcher>> = [];
-  const failingDir = { current: null as string | null };
-
-  const result = {
-    createdChokidarWatchers: chokidarWatchers,
-    createdNativeWatchers: nativeWatchers,
-    memoryLoggerWarn: vi.fn(),
-    watchMock: vi.fn(() => {
-      const watcher = createMockChokidarWatcher();
-      chokidarWatchers.push(watcher);
-      return watcher;
-    }),
-    nativeWatchMock: vi.fn(
-      (dir: string, options: { recursive?: boolean }, listener: NativeCallback) => {
-        if (failingDir.current && dir === failingDir.current) {
-          throw new Error("simulated native fs.watch creation failure");
-        }
-        const watcher = createMockNativeWatcher(dir, options, listener);
-        nativeWatchers.push(watcher);
-        return watcher;
-      },
-    ),
-    nativeWatchMockFailingDir: failingDir,
-  };
-  (globalThis as Record<PropertyKey, unknown>)[chokidarKey] = result.watchMock;
-  (globalThis as Record<PropertyKey, unknown>)[nativeKey] = result.nativeWatchMock;
-  return result;
+} = await vi.hoisted(async () => {
+  const { createMemoryWatcherTestFactories } = await import("./watcher-test-support.js");
+  return createMemoryWatcherTestFactories();
 });
 
 const CHOKIDAR_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
@@ -168,9 +71,11 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { MemoryFileWatcher } from "./file-watcher.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
+import { advanceWatchSync } from "./watcher-test-support.js";
 
 describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
@@ -357,12 +262,12 @@ describe("memory watcher config", () => {
       vi.useFakeTimers();
       const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
-      extraWatcher?.emit("change", path.join("drafts", "skip.md"));
+      await extraWatcher?.emit("change", path.join("drafts", "skip.md"));
       await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
       expect(syncSpy).not.toHaveBeenCalled();
 
-      extraWatcher?.emit("change", path.join(directory, "keep.md"));
-      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      await extraWatcher?.emit("change", path.join(directory, "keep.md"));
+      await advanceWatchSync(syncSpy);
       expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
     },
   );
@@ -432,7 +337,7 @@ describe("memory watcher config", () => {
       const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
       createdChokidarWatchers[0]?.emit(event);
-      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      await advanceWatchSync(syncSpy);
 
       expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
     },
@@ -451,8 +356,8 @@ describe("memory watcher config", () => {
       const memoryWatcher = createdNativeWatchers.find(
         (w) => w.dir === path.join(workspaceDir, "memory"),
       );
-      memoryWatcher?.emit(eventType, "notes.md");
-      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      await memoryWatcher?.emit(eventType, "notes.md");
+      await advanceWatchSync(syncSpy);
 
       expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
     },
@@ -471,8 +376,8 @@ describe("memory watcher config", () => {
     );
     // Node docs warn that filename may be null on some platforms; conservative
     // dirty must still be scheduled.
-    memoryWatcher?.emit("rename", null as unknown as string);
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    await memoryWatcher?.emit("rename", null as unknown as string);
+    await advanceWatchSync(syncSpy);
 
     expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
   });
@@ -527,7 +432,7 @@ describe("memory watcher config", () => {
     );
 
     memoryWatcher?.emitError(new Error("watcher error: ENOSPC"));
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    await advanceWatchSync(syncSpy);
 
     expect(memoryLoggerWarn).toHaveBeenCalledWith(
       expect.stringContaining("memory native watcher error"),
@@ -543,7 +448,7 @@ describe("memory watcher config", () => {
     // continues to schedule sync.
     syncSpy.mockClear();
     existingChokidar?.emit("change");
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    await advanceWatchSync(syncSpy);
     expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
   });
 
@@ -631,8 +536,8 @@ describe("memory watcher config", () => {
     const { dir, main, sync } = await setupParentWatchLifecycle("linux");
     const newDir = path.join(dir, "new-topic");
     await fs.mkdir(newDir);
-    main.emit("rename", "new-topic");
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    await main.emit("rename", "new-topic");
+    await advanceWatchSync(sync);
 
     expect(sync).toHaveBeenCalledWith({ reason: "watch" });
     expect(
@@ -663,7 +568,7 @@ describe("memory watcher config", () => {
       }
 
       const memoryWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir);
-      memoryWatcher?.emit("rename", "topic");
+      await memoryWatcher?.emit("rename", "topic");
 
       expect(nestedWatcher!.close).toHaveBeenCalled();
       expect(childWatcher!.close).toHaveBeenCalled();
@@ -699,11 +604,11 @@ describe("memory watcher config", () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const dir = path.join(workspaceDir, "memory");
-    const originalReaddir = fsSync.readdirSync.bind(fsSync);
-    const readdirSpy = vi.spyOn(fsSync, "readdirSync");
-    readdirSpy.mockImplementation((...args: Parameters<typeof fsSync.readdirSync>) => {
+    const originalReaddir = fs.readdir.bind(fs);
+    const readdirSpy = vi.spyOn(fs, "readdir");
+    readdirSpy.mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
       if (String(args[0]) === dir) {
-        fsSync.renameSync(dir, path.join(workspaceDir, "previous-memory"));
+        await fs.rename(dir, path.join(workspaceDir, "previous-memory"));
       }
       return originalReaddir(...args);
     });
@@ -717,7 +622,7 @@ describe("memory watcher config", () => {
       expect(watchMock).toHaveBeenCalledTimes(1);
       const sync = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
       // ignoreInitial fallback cannot replace the broad sync lost with native coverage.
-      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      await advanceWatchSync(sync);
       expect(sync).toHaveBeenCalledExactlyOnceWith({ reason: "watch" });
     } finally {
       readdirSpy.mockRestore();
@@ -732,17 +637,17 @@ describe("memory watcher config", () => {
       const dir = path.join(workspaceDir, "memory");
       const nestedDir = path.join(dir, "racy-topic");
       await fs.mkdir(path.join(nestedDir, "survivor"), { recursive: true });
-      const originalLstat = fsSync.lstatSync.bind(fsSync);
-      const lstatSpy = vi.spyOn(fsSync, "lstatSync");
-      lstatSpy.mockImplementation((...args: Parameters<typeof fsSync.lstatSync>) => {
+      const originalLstat = fs.lstat.bind(fs);
+      const lstatSpy = vi.spyOn(fs, "lstat");
+      lstatSpy.mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
         if (String(args[0]) === nestedDir && (code === "ENOENT" || code === "EACCES")) {
           throw Object.assign(new Error(`subtree lstat ${code}`), { code });
         }
         return originalLstat(...args);
       });
-      const originalReaddir = fsSync.readdirSync.bind(fsSync);
-      const readdirSpy = vi.spyOn(fsSync, "readdirSync");
-      readdirSpy.mockImplementation((...args: Parameters<typeof fsSync.readdirSync>) => {
+      const originalReaddir = fs.readdir.bind(fs);
+      const readdirSpy = vi.spyOn(fs, "readdir");
+      readdirSpy.mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
         if (String(args[0]) === nestedDir && code === "CHILD_STAT_MISSING") {
           throw Object.assign(new Error("DT_UNKNOWN child disappeared"), { code: "ENOENT" });
         }
@@ -750,8 +655,8 @@ describe("memory watcher config", () => {
           throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
         }
         if (String(args[0]) === nestedDir && code === "ROOT_REPLACED") {
-          fsSync.renameSync(dir, path.join(workspaceDir, "previous-memory"));
-          fsSync.mkdirSync(dir);
+          await fs.rename(dir, path.join(workspaceDir, "previous-memory"));
+          await fs.mkdir(dir);
         }
         return originalReaddir(...args);
       });
@@ -775,7 +680,7 @@ describe("memory watcher config", () => {
         vi.useFakeTimers();
         const sync = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
         createdChokidarWatchers[0]?.emit("change");
-        await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+        await advanceWatchSync(sync);
         expect(sync).toHaveBeenCalledWith({ reason: "watch" });
       } finally {
         lstatSpy.mockRestore();
@@ -799,9 +704,16 @@ describe("memory watcher config", () => {
     const memoryWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir);
     expect(memoryWatcher).toBeDefined();
 
-    // Pretend chokidar was never set up by clearing the manager.watcher slot,
-    // then trigger the native error; the fallback must spin up a new chokidar.
-    (manager as unknown as { watcher: unknown }).watcher = null;
+    // Clear the filesystem owner's slot to exercise native fallback without
+    // an existing Chokidar watcher.
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+    const fileWatcher: unknown = Reflect.get(manager, "fileWatcher");
+    if (!(fileWatcher instanceof MemoryFileWatcher)) {
+      throw new Error("filesystem watcher missing");
+    }
+    Reflect.set(fileWatcher, "watcher", null);
     const chokidarCallsBefore = watchMock.mock.calls.length;
 
     memoryWatcher?.emitError(new Error("watcher error: ENOSPC"));
@@ -817,7 +729,7 @@ describe("memory watcher config", () => {
   it("treats null parent-watcher filename as an unknown event and re-checks the inode", async () => {
     const { main, parent, sync } = await setupParentWatchLifecycle("darwin");
     const nativeCallsBefore = nativeWatchMock.mock.calls.length;
-    parent.emit("rename", null);
+    await parent.emit("rename", null);
     await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
 
     // The unchanged inode must not trigger teardown or a broad sync.
@@ -844,7 +756,7 @@ describe("memory watcher config", () => {
   it("ignores parent-directory events for unrelated basenames", async () => {
     const { main, parent, sync } = await setupParentWatchLifecycle("darwin");
     const nativeCallsBefore = nativeWatchMock.mock.calls.length;
-    parent.emit("rename", "unrelated-sibling-dir");
+    await parent.emit("rename", "unrelated-sibling-dir");
     await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
 
     expect(main.close).not.toHaveBeenCalled();
@@ -874,7 +786,7 @@ describe("memory watcher config", () => {
       await fs.rename(dir, path.join(workspaceDir, "previous-memory"));
       await fs.mkdir(dir);
 
-      parent.emit("rename", filename);
+      await parent.emit("rename", filename);
 
       expect(main.close).toHaveBeenCalledTimes(1);
       expect(parent.close).toHaveBeenCalledTimes(1);
@@ -882,13 +794,13 @@ describe("memory watcher config", () => {
       expect(replacements).toHaveLength(2);
       expect(replacements[1]?.recursive).toBe(platform !== "linux");
       expect(createdChokidarWatchers[0]?.add).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      await advanceWatchSync(sync);
       expect(sync).toHaveBeenCalledWith({ reason: "watch" });
 
       sync.mockClear();
       await fs.writeFile(path.join(dir, "fresh.md"), "fresh memory");
-      replacements[1]?.emit("change", "fresh.md");
-      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      await replacements[1]?.emit("change", "fresh.md");
+      await advanceWatchSync(sync);
       expect(sync).toHaveBeenCalledWith({ reason: "watch" });
     });
 
@@ -914,7 +826,7 @@ describe("memory watcher config", () => {
         );
         await fs.rename(dir, path.join(workspaceDir, "previous-memory"));
         if (failure === "retained-parent-replaced") {
-          parent.emit("rename", "memory");
+          await parent.emit("rename", "memory");
           expect(parent.close).not.toHaveBeenCalled();
         }
         if (parentReplaced) {
@@ -923,10 +835,10 @@ describe("memory watcher config", () => {
         } else if (failure !== "missing") {
           await fs.mkdir(dir);
         }
-        const originalStat = fsSync.statSync.bind(fsSync);
+        const originalStat = fs.stat.bind(fs);
         let rootStats = 0;
-        const statSpy = vi.spyOn(fsSync, "statSync");
-        statSpy.mockImplementation((...args: Parameters<typeof fsSync.statSync>) => {
+        const statSpy = vi.spyOn(fs, "stat");
+        statSpy.mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
           if (String(args[0]) === dir && failure === "stat-failure") {
             throw Object.assign(new Error("root stat failed"), { code: "EACCES" });
           }
@@ -940,17 +852,17 @@ describe("memory watcher config", () => {
         if (failure === "creation-failure") {
           nativeWatchMockFailingDir.current = dir;
         }
-        const originalLstat = fsSync.lstatSync.bind(fsSync);
-        const lstatSpy = vi.spyOn(fsSync, "lstatSync");
-        lstatSpy.mockImplementation((...args: Parameters<typeof fsSync.lstatSync>) => {
+        const originalLstat = fs.lstat.bind(fs);
+        const lstatSpy = vi.spyOn(fs, "lstat");
+        lstatSpy.mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
           if (String(args[0]) === dir && failure === "subtree-race") {
-            fsSync.renameSync(dir, path.join(workspaceDir, "raced-memory"));
+            await fs.rename(dir, path.join(workspaceDir, "raced-memory"));
           }
           return originalLstat(...args);
         });
 
         try {
-          parent.emit(
+          await parent.emit(
             "rename",
             failure === "retained-parent-replaced" ? path.basename(parentDir) : "memory",
           );
@@ -965,7 +877,7 @@ describe("memory watcher config", () => {
         for (const root of roots) {
           expect(root.close).toHaveBeenCalledTimes(1);
         }
-        await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+        await advanceWatchSync(sync);
         expect(sync).toHaveBeenCalledWith({ reason: "watch" });
         sync.mockClear();
         if (failure === "creation-failure" || failure === "stat-failure" || parentReplaced) {
@@ -976,15 +888,15 @@ describe("memory watcher config", () => {
           expect(parent.close).not.toHaveBeenCalled();
           expect(createdChokidarWatchers[0]?.add).not.toHaveBeenCalled();
           main.emitError(new Error("stale closed main"));
-          main.emit("rename", null);
+          await main.emit("rename", null);
           await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
           expect(sync).not.toHaveBeenCalled();
           if (failure === "missing" || failure === "subtree-race") {
-            parent.emit("rename", null);
+            await parent.emit("rename", null);
             expect(main.close).toHaveBeenCalledTimes(1);
             await fs.mkdir(dir);
           }
-          parent.emit("rename", "memory");
+          await parent.emit("rename", "memory");
           expect(parent.close).toHaveBeenCalledTimes(1);
           expect(main.close).toHaveBeenCalledTimes(1);
           expect(createdChokidarWatchers[0]?.add).not.toHaveBeenCalled();
@@ -992,7 +904,7 @@ describe("memory watcher config", () => {
             roots.length + 1,
           );
         }
-        await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+        await advanceWatchSync(sync);
         expect(sync).toHaveBeenCalledExactlyOnceWith({ reason: "watch" });
       },
     );
@@ -1004,7 +916,7 @@ describe("memory watcher config", () => {
           await setupParentWatchLifecycle(platform);
         if (missing) {
           await fs.rename(dir, path.join(workspaceDir, "previous-memory"));
-          parent.emit("rename", "memory");
+          await parent.emit("rename", "memory");
         }
         parent.emitError(new Error("parent unavailable"));
         expect(parent.close).toHaveBeenCalledTimes(1);
@@ -1014,12 +926,12 @@ describe("memory watcher config", () => {
           createdChokidarWatchers[0]?.emit("change");
         } else {
           expect(createdChokidarWatchers[0]?.add).not.toHaveBeenCalled();
-          main.emit("change", "notes.md");
+          await main.emit("change", "notes.md");
         }
         expect(memoryLoggerWarn).toHaveBeenCalledWith(
           `memory ${platform === "linux" ? "Linux" : "native"} parent watcher error on ${workspaceDir}: parent unavailable`,
         );
-        await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+        await advanceWatchSync(sync);
         expect(sync).toHaveBeenCalledWith({ reason: "watch" });
         await activeManager.close();
         expect(main.close).toHaveBeenCalledTimes(1);
@@ -1047,8 +959,8 @@ describe("memory watcher config", () => {
         const sync = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
         expect(main?.close).not.toHaveBeenCalled();
-        main?.emit("change", "notes.md");
-        await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+        await main?.emit("change", "notes.md");
+        await advanceWatchSync(sync);
 
         expect(sync).toHaveBeenCalledWith({ reason: "watch" });
         expect(createdChokidarWatchers[0]?.add).not.toHaveBeenCalled();
@@ -1065,14 +977,14 @@ describe("memory watcher config", () => {
           await setupParentWatchLifecycle(platform);
         await fs.rename(dir, path.join(workspaceDir, "previous-memory"));
         if (missing) {
-          parent.emit("rename", "memory");
+          await parent.emit("rename", "memory");
         }
         await activeManager.close();
         const nativeCalls = nativeWatchMock.mock.calls.length;
         const chokidarCalls = watchMock.mock.calls.length;
         await fs.mkdir(dir);
 
-        parent.emit("rename", "memory");
+        await parent.emit("rename", "memory");
         main.emitError(new Error("late native error"));
         await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
 
@@ -1100,13 +1012,18 @@ describe("memory watcher config", () => {
     // resolves to notes.md and confirm settle behavior still applies before
     // the sync is scheduled.
     const extraWatcher = createdNativeWatchers.find((w) => w.dir === extraDir);
-    extraWatcher?.emit("change", "notes.md");
+    await extraWatcher?.emit("change", "notes.md");
     await fs.writeFile(notesPath, "hello updated");
 
     await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    const fileWatcher: unknown = Reflect.get(activeManager, "fileWatcher");
+    if (!(fileWatcher instanceof MemoryFileWatcher)) {
+      throw new Error("filesystem watcher missing");
+    }
+    await Reflect.get(fileWatcher, "settling");
     expect(syncSpy).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    await advanceWatchSync(syncSpy);
     expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
     // Recorded path should match the resolved absolute path under extraDir.
     const recordedStats = (initialStats as unknown as { isDirectory: () => boolean }).isDirectory();

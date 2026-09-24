@@ -22,7 +22,10 @@ function fixture(result: Record<string, unknown> | Promise<Record<string, unknow
   const client = { request: vi.fn(async () => result) };
   const backgroundSessionCompleted = vi.fn();
   const context = {
-    gateway: { snapshot: { client, phase: "connected", selfUser: { id: "owner" }, hello: null } },
+    gateway: {
+      connection: { gatewayUrl: "ws://gateway.example" },
+      snapshot: { client, phase: "connected", selfUser: { id: "owner" }, hello: null },
+    },
     inAppNotifications: { snapshot: { enabled: true } },
     sessions: { state: { result: { sessions: [] } } },
     nativeNotifications: { backgroundSessionCompleted },

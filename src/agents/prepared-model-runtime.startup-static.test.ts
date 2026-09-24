@@ -1,4 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../config/types.models.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  getPluginCache,
+  getPluginCacheRetention,
+  retirePluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -77,39 +86,41 @@ const mocks = vi.hoisted(() => {
     >(() => null),
     loadAgentRuntimePluginRegistryHandle: vi.fn(),
     loadStaticCatalog: vi.fn(async () => []),
-    prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({
-      providers: [
-        {
-          id: "openai",
-          label: "OpenAI",
-          auth: [],
-          resolveSyntheticAuth,
-        },
-      ],
-      entries: [
-        {
-          provider: { id: "openai", label: "OpenAI", auth: [] },
-          result: {
-            provider: {
-              baseUrl: "https://api.openai.com/v1",
-              api: "openai-responses",
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "GPT-5.5",
-                  reasoning: true,
-                  thinkingLevelMap: { off: null, max: "max" },
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128_000,
-                  maxTokens: 8_192,
-                },
-              ],
-            },
+    prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => {
+      const providerConfig: ModelProviderConfig = {
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-responses",
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            reasoning: true,
+            thinkingLevelMap: { off: null, max: "max" },
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 8_192,
           },
-        },
-      ],
-    })),
+        ],
+      };
+      return {
+        providers: [
+          {
+            id: "openai",
+            label: "OpenAI",
+            auth: [],
+            resolveSyntheticAuth,
+          },
+        ],
+        entries: [
+          {
+            provider: { id: "openai", label: "OpenAI", auth: [] },
+            result: { provider: providerConfig },
+            providerConfigs: { openai: providerConfig },
+          },
+        ],
+      };
+    }),
     resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
     resolveSyntheticAuth,
     mutationListener: undefined as
@@ -152,7 +163,6 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
         modelCatalog: catalog,
         runtimeModels: new Map(),
         providerExpiries: new Map(),
-        configuredProviderModelIds: new Map(),
         configuredRuntimeModels: agentFacts.configuredRuntimeModels,
       };
     },
@@ -251,8 +261,25 @@ const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
 const { resolveThinkingProfile } = await import("../auto-reply/thinking.js");
 
+async function withScopedCatalogCache<T>(read: () => Promise<T>): Promise<T> {
+  const cache = createPluginCache();
+  bindPluginMetadataSnapshotCache(mocks.metadataSnapshot, cache);
+  try {
+    const result = await withPluginCache(cache, read);
+    expect(getPluginCacheRetention(cache)).toBeUndefined();
+    expect((await retirePluginCache(cache)).failures).toEqual([]);
+    return result;
+  } finally {
+    // Failed regression assertions must release leaked generations before retiring their cache.
+    await resetPreparedModelRuntimeSnapshotsForTest();
+    await retirePluginCache(cache);
+    bindPluginMetadataSnapshotCache(mocks.metadataSnapshot, getPluginCache());
+  }
+}
+
 beforeEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
+  bindPluginMetadataSnapshotCache(mocks.metadataSnapshot, getPluginCache());
   mocks.loadAgentRuntimePluginRegistryHandle
     .mockReset()
     .mockImplementation(() => createEmptyPluginRegistry());
@@ -281,7 +308,10 @@ describe("prepared model runtime Gateway catalog mode", () => {
         levels: [{ id: "off" }, { id: "low", label: "on" }],
         defaultLevel: "low",
       },
-      expectedLevels: [{ id: "low", label: "on" }],
+      expectedLevels: [
+        { id: "low", label: "on" },
+        { id: "ultra", label: "ultra" },
+      ],
     },
   ] as const)(
     "publishes $name policy with model caps for lightweight configured and full catalog reads",
@@ -385,17 +415,19 @@ describe("prepared model runtime Gateway catalog mode", () => {
       const prepare = live
         ? prepareScopedReadOnlyLiveModelCatalog
         : prepareScopedReadOnlyModelCatalog;
-      const catalog = await prepare(
-        {
-          config: {
-            agents: { defaults: { model: "openai/gpt-5.5" } },
-            models: { mode },
+      const catalog = await withScopedCatalogCache(() =>
+        prepare(
+          {
+            config: {
+              agents: { defaults: { model: "openai/gpt-5.5" } },
+              models: { mode },
+            },
+            agentDir: "/tmp/prepared-scoped-static-projection",
+            env: {},
+            readOnly: true,
           },
-          agentDir: "/tmp/prepared-scoped-static-projection",
-          env: {},
-          readOnly: true,
-        },
-        ["openai"],
+          ["openai"],
+        ),
       );
       expect(catalog.staticEntries).toEqual(
         mode === "replace"
@@ -412,6 +444,27 @@ describe("prepared model runtime Gateway catalog mode", () => {
       expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     },
   );
+
+  it.each([false, true])("releases a failed scoped catalog generation (live=%s)", async (live) => {
+    const failure = new Error("catalog materialization failed");
+    mocks.buildPreparedModelCatalogSnapshot.mockRejectedValueOnce(failure);
+    const prepare = live
+      ? prepareScopedReadOnlyLiveModelCatalog
+      : prepareScopedReadOnlyModelCatalog;
+    await withScopedCatalogCache(async () => {
+      await expect(
+        prepare(
+          {
+            config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+            agentDir: "/tmp/prepared-scoped-failure",
+            env: {},
+            readOnly: true,
+          },
+          ["openai"],
+        ),
+      ).rejects.toBe(failure);
+    });
+  });
 
   it("imports and materializes only configured and auth-candidate providers", async () => {
     const config = {

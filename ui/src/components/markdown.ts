@@ -9,13 +9,16 @@ import { parseGitHubLinkTarget } from "./github-link-target.ts";
 import { createAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
 import { renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { isHostLocalMarkdownFileHref } from "./markdown-file-links.ts";
+import { markdownGitHubAliasSignature } from "./markdown-github-repositories.ts";
 import {
   prepareMarkdownHumanMentions,
   restoreMarkdownHumanMentions,
 } from "./markdown-human-mentions.ts";
+import type { MarkdownJson } from "./markdown-json.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { stripProgressCardRawContentBlocks } from "./markdown-raw-content.ts";
 import {
+  MARKDOWN_PARSE_LIMIT,
   normalizeMarkdownRenderOptions,
   type MarkdownRenderEnv,
   type MarkdownRenderOptions,
@@ -103,7 +106,6 @@ const progressSanitizeOptions = {
 
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
-const MARKDOWN_PARSE_LIMIT = 40_000;
 // Covers several message-heavy sessions during rapid switching. Only inputs
 // up to 50k characters enter this 500-entry LRU, keeping memory bounded.
 const MARKDOWN_CACHE_LIMIT = 500;
@@ -328,6 +330,10 @@ const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs-language-pack"],
 ];
 const markdownCache = new Map<string, string>();
+const STREAMING_INPUT_CACHE_LIMIT = 8;
+const STREAMING_INPUT_CACHE_MAX_CHARS = MARKDOWN_CHAR_LIMIT;
+type StreamingInputCacheEntry = { source: string; normalized: string };
+const streamingInputCache = new Map<string, StreamingInputCacheEntry>();
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -348,6 +354,42 @@ function setCachedMarkdown(key: string, value: string) {
   if (oldest) {
     markdownCache.delete(oldest);
   }
+}
+
+function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
+  const source = stripUnsupportedCitationControlMarkers(markdownLocal);
+  if (!streamKey) {
+    return normalizeMarkdownLineBreaks(source);
+  }
+
+  const cached = streamingInputCache.get(streamKey);
+  if (cached && source.startsWith(cached.source)) {
+    const appended = source.slice(cached.source.length);
+    const normalizedAppend = normalizeMarkdownLineBreaks(appended);
+    const normalized =
+      cached.source.endsWith("\r") && appended.startsWith("\n")
+        ? `${cached.normalized.slice(0, -1)}${normalizedAppend}`
+        : `${cached.normalized}${normalizedAppend}`;
+    streamingInputCache.delete(streamKey);
+    if (source.length <= STREAMING_INPUT_CACHE_MAX_CHARS) {
+      streamingInputCache.set(streamKey, { source, normalized });
+    }
+    return normalized;
+  }
+
+  const normalized = normalizeMarkdownLineBreaks(source);
+  streamingInputCache.delete(streamKey);
+  if (source.length <= STREAMING_INPUT_CACHE_MAX_CHARS) {
+    streamingInputCache.set(streamKey, { source, normalized });
+  }
+  while (streamingInputCache.size > STREAMING_INPUT_CACHE_LIMIT) {
+    const oldest = streamingInputCache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    streamingInputCache.delete(oldest);
+  }
+  return normalized;
 }
 
 function isControlUiRoutePath(pathname: string): boolean {
@@ -580,6 +622,20 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
   return DOMPurify.sanitize(rendered, activeSanitizeOptions);
 }
 
+// Bare JSON bypasses Markdown normalization, which can alter literal Unicode separators.
+// Both inputs still use the same code-block renderer and sanitizer boundary.
+export function toSanitizedJsonHtml(json: MarkdownJson, options: MarkdownRenderOptions): string {
+  installHooks();
+  return DOMPurify.sanitize(
+    // HTML parsing normalizes literal CRs; character references survive both
+    // sanitizer parsing and the final unsafeHTML commit without changing Raw.
+    renderMarkdownCodeBlock(json.text, "json", normalizeMarkdownRenderOptions(options), {
+      json,
+    }).replaceAll("\r", "&#13;"),
+    sanitizeOptions,
+  ).replaceAll("\r", "&#13;");
+}
+
 export function toSanitizedMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
@@ -603,7 +659,7 @@ export function toSanitizedMarkdownHtml(
   if (renderInput.length > MARKDOWN_CACHE_MAX_CHARS) {
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${JSON.stringify(renderOptions.githubRepo ? [renderOptions.githubRepo.owner, renderOptions.githubRepo.repo] : null)}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${JSON.stringify(renderOptions.humanMentionTokens)}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${JSON.stringify(renderOptions.githubRepo ? [renderOptions.githubRepo.owner, renderOptions.githubRepo.repo] : null)}\0${markdownGitHubAliasSignature(renderOptions.githubRepositories, renderOptions.githubRepo)}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${JSON.stringify(renderOptions.humanMentionTokens)}\0${renderInput}`;
   const cached = getCachedMarkdown(cacheKey);
   if (cached !== null) {
     return cached;
@@ -631,9 +687,7 @@ export function toStreamingMarkdownParts(
   if (renderOptions.humanMentions.length) {
     return [toSanitizedMarkdownHtml(markdownLocal, options), ""];
   }
-  const rawInput = normalizeMarkdownLineBreaks(
-    stripUnsupportedCitationControlMarkers(markdownLocal),
-  );
+  const rawInput = normalizeStreamingMarkdownInput(markdownLocal, streamKey);
   if (isMarkdownBlockArtText(rawInput)) {
     return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
   }

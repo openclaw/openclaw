@@ -1,4 +1,3 @@
-// Matrix plugin module implements crypto facade behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { ensureMatrixCryptoRuntime } from "../deps.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
@@ -60,15 +59,6 @@ export function createMatrixCryptoFacade(deps: {
   ) => Promise<Buffer>;
 }) {
   return {
-    updateSyncData: async (
-      _toDeviceMessages: unknown,
-      _otkCounts: unknown,
-      _unusedFallbackKeyAlgs: unknown,
-      _changedDeviceLists: unknown,
-      _leftDeviceLists: unknown,
-    ) => {
-      // compatibility no-op
-    },
     isRoomEncrypted: deps.isRoomEncrypted,
     requestOwnUserVerification: async () => {
       const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;

@@ -9,6 +9,7 @@ import * as databaseIdentity from "../../state/openclaw-agent-db-identity.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as retainedSessionReads from "../session-utils-read-lifetime.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 
 type DispatchRequest = {
   authorization: string | undefined;
@@ -17,6 +18,7 @@ type DispatchRequest = {
 };
 
 async function withDispatchLifecycle(
+  signal: AbortSignal,
   run: (fixture: {
     client: Awaited<ReturnType<typeof startGatewayWithClient>>["client"];
     requests: DispatchRequest[];
@@ -213,6 +215,13 @@ async function withDispatchLifecycle(
       return started;
     };
     let active = await start();
+    const readModels = (refresh = false, view: "all" | "default" = "all") =>
+      active.client.request<ModelsListResult>("models.list", {
+        agentId: "main",
+        provider: "opencode",
+        view,
+        refresh,
+      });
     await run({
       get client() {
         return active.client;
@@ -242,12 +251,14 @@ async function withDispatchLifecycle(
         active = await start();
       },
       list: (refresh = false, view = "all") =>
-        active.client.request<ModelsListResult>("models.list", {
-          agentId: "main",
-          provider: "opencode",
-          view,
-          refresh,
-        }),
+        refresh
+          ? waitForCatalogPublication({
+              signal,
+              start: () => readModels(true, view),
+              read: () => readModels(false, view),
+              ready: (result) => !result.pendingProviders?.length,
+            })
+          : readModels(false, view),
       send: async (model, name) => {
         const session = await active.client.request<{ key: string }>("sessions.create", {
           agentId: "main",
@@ -309,13 +320,14 @@ async function withDispatchLifecycle(
   }
 }
 
-it.each([
+it.for([
   { scenario: "held discovery control", patchOtherSession: false },
   { scenario: "another session label changes", patchOtherSession: true },
 ])(
   "models.list keeps the selected session catalog when $scenario",
-  async ({ patchOtherSession }) => {
-    await withDispatchLifecycle(async (fixture) => {
+  { timeout: 180_000 },
+  async ({ patchOtherSession }, { signal }) => {
+    await withDispatchLifecycle(signal, async (fixture) => {
       const expectedIds = [
         "account-a-only",
         ...Array.from({ length: 64 }, (_, index) => `account-a-extra-${index}`),
@@ -414,11 +426,12 @@ it.each([
       }
     });
   },
-  180_000,
 );
 
-it("models.list retains executable rows on failed refresh and replaces them after Gateway restart", async () => {
-  await withDispatchLifecycle(async (fixture) => {
+it("models.list retains executable rows on failed refresh and replaces them after Gateway restart", async ({
+  signal,
+}) => {
+  await withDispatchLifecycle(signal, async (fixture) => {
     const discovered = await fixture.list(true);
     expect(discovered.models).toContainEqual(
       expect.objectContaining({ provider: "opencode", id: "account-a-only", available: true }),
@@ -462,14 +475,16 @@ it("models.list retains executable rows on failed refresh and replaces them afte
     });
     await expect(fixture.send("account-a-only", "withdrawn-after-restart")).resolves.toMatchObject({
       status: "error",
-      error: expect.stringContaining("The configured model is unavailable from the provider"),
+      error: expect.stringContaining("The selected model is unavailable from the provider"),
     });
     expect(fixture.requests).toHaveLength(3);
   });
 }, 180_000);
 
-it("models.authRefresh revokes old executable rows before discovery and config.patch applies current policy and transport", async () => {
-  await withDispatchLifecycle(async (fixture) => {
+it("models.authRefresh revokes old executable rows before discovery and config.patch applies current policy and transport", async ({
+  signal,
+}) => {
+  await withDispatchLifecycle(signal, async (fixture) => {
     await fixture.list(true);
     await expect(fixture.send("account-a-only", "before-replacement")).resolves.toMatchObject({
       status: "ok",
@@ -486,7 +501,7 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
       );
       await expect(fixture.send("account-a-only", "during-replacement")).resolves.toMatchObject({
         status: "error",
-        error: expect.stringContaining("The configured model is unavailable from the provider"),
+        error: expect.stringContaining("The selected model is unavailable from the provider"),
       });
       expect(fixture.requests).toHaveLength(1);
     } finally {

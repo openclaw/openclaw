@@ -1,4 +1,3 @@
-// Msteams plugin module implements download behavior.
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -25,7 +24,6 @@ import {
   type MSTeamsAttachmentResolveFn,
   normalizeContentType,
   resolveMSTeamsMediaKind,
-  resolveMediaSsrfPolicy,
   resolveAttachmentFetchPolicy,
   resolveRequestUrl,
   safeFetchWithPolicy,
@@ -313,7 +311,6 @@ export async function downloadMSTeamsAttachments(params: {
     authAllowHosts: params.authAllowHosts,
   });
   const allowHosts = policy.allowHosts;
-  const ssrfPolicy = resolveMediaSsrfPolicy(allowHosts);
 
   const candidates: DownloadCandidate[] = list
     .filter(isAdvertisedFileAttachment)
@@ -420,10 +417,8 @@ export async function downloadMSTeamsAttachments(params: {
         contentTypeHint: candidate.contentTypeHint,
         kind: candidate.mediaKind,
         preserveFilenames: params.preserveFilenames,
-        ssrfPolicy,
         // `fetchImpl` below owns Teams auth fallback and enforces the
         // attachment fetch policy through `safeFetchWithPolicy`.
-        useDirectFetch: true,
         fetchImpl: (input, init) =>
           fetchWithAuthFallback({
             url: resolveRequestUrl(input),

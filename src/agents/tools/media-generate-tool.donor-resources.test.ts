@@ -23,7 +23,10 @@ import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configu
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
-import { retainPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
+import {
+  retainPreparedPluginGeneration,
+  retainPreparedPluginRegistry,
+} from "../prepared-model-runtime.plugin-lifetime.js";
 import {
   closeEphemeralPreparedModelRuntimeResources,
   PreparedModelRuntimeBuildResources,
@@ -181,7 +184,7 @@ module.exports = { id: '${id}', register(api) {
         }
         setActivePluginRegistry(donor.registry);
         const donorCurrent = capturePluginLifecycleAuthority(donor.registry);
-        const construction = new PreparedModelRuntimeBuildResources();
+        const construction = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
         let releasePublication: ReturnType<typeof retainPreparedPluginGeneration> | undefined;
         let releasingOwners: Promise<PromiseSettledResult<void>[]> | undefined;
         let closeDonor: Promise<void> | undefined;
@@ -198,7 +201,11 @@ module.exports = { id: '${id}', register(api) {
               },
             ],
             "static",
-            { includeCredentialProviders: false, registryResources: construction },
+            {
+              includeCredentialProviders: false,
+              registryResources: construction,
+              loadRuntimeRegistry: construction.load.bind(construction),
+            },
           );
           if (mode === "rollback") {
             const source = getPluginRegistryInspectionResources(
@@ -232,11 +239,18 @@ module.exports = { id: '${id}', register(api) {
             prepared.pluginGeneration,
             catalog,
             {
+              initialAuth: {
+                authStore: facts.authStore,
+                authModes: {},
+                providerAuthLabels: new Map(),
+              },
               isCurrent: () => true,
               withRefreshStatus: (value) => value,
               readFullModelCatalog: () => catalog.modelCatalog,
+              refreshExpiredModelCatalog: () => {},
               readPublishedModels: () => undefined,
               loadFullModelCatalog: async () => catalog.modelCatalog,
+              loadNativeModelCatalog: async () => catalog.modelCatalog,
               loadAuth: async () => {
                 throw new Error("No model auth in this fixture");
               },

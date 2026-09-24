@@ -49,3 +49,21 @@ export function createCommitGuard(key: string, assertCurrent: (() => void) | und
     }
   };
 }
+
+/** Every detached preparation must revalidate its exact owners at the synchronous commit. */
+export function assertSessionPatchCommitAllowed(params: {
+  personalModelSelection?: { assertCurrent: () => void };
+  guards: Iterable<() => ErrorShape | undefined>;
+  archiveTransitions: Iterable<{ assertCommitAllowed: () => void }>;
+}): void {
+  params.personalModelSelection?.assertCurrent();
+  for (const guard of params.guards) {
+    const error = guard();
+    if (error) {
+      throw new SessionMutationAuthorizationChangedError(error);
+    }
+  }
+  for (const transition of params.archiveTransitions) {
+    transition.assertCommitAllowed();
+  }
+}

@@ -12,14 +12,14 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
   const entered = createDeferred();
   const release = createDeferred();
   const bridgeCalls: Promise<void>[] = [];
-  const cleanups: Array<() => void> = [];
+  const cleanups: Array<() => Promise<void>> = [];
   const lookup =
     vi.fn<
       typeof import("./subagents/registry/subagent-registry.js").getSwarmRunByLaunchReplayKey
     >();
   const initialize = vi.fn();
-  const readCollectors =
-    vi.fn<typeof import("./subagents/registry/subagent-registry.js").getSubagentRunsByRunIds>();
+  const prepareCollectors =
+    vi.fn<typeof import("./subagents/registry/subagent-registry.js").prepareSubagentRunsByRunIds>();
   const wait = vi.fn<typeof import("./tools/agents-wait-tool.js").waitForCollectorCompletion>();
   const subscribe =
     vi.fn<
@@ -39,7 +39,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
   vi.doMock("./subagents/registry/subagent-registry.js", () => ({
     getSwarmRunByLaunchReplayKey: lookup,
     initSubagentRegistry: initialize,
-    getSubagentRunsByRunIds: readCollectors,
+    prepareSubagentRunsByRunIds: prepareCollectors,
   }));
   vi.doMock("./tools/agents-wait-tool.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("./tools/agents-wait-tool.js")>();
@@ -109,17 +109,6 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       queuedLaunch: { request: {}, timeoutMs: 1, schedulerGroupKey: "group", maxConcurrent: 1 },
     };
     lookup.mockReturnValue(reservation);
-    readCollectors.mockReturnValue({
-      entries: new Map([
-        [
-          "collector",
-          {
-            ...reservation,
-            collectorCompletion: { status: "done", structured: { answer: 42 } },
-          },
-        ],
-      ]),
-    });
 
     function createRun() {
       const catalogRef = createToolSearchCatalogRef();
@@ -141,8 +130,8 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       };
       applyCodeModeCatalog({ ...ctx, tools: [...createCodeModeTools(ctx), spawnTool] });
       const owner = createCodeModeRunOwner(ctx, resolveCodeModeConfig(config));
-      cleanups.push(() => {
-        owner.close();
+      cleanups.push(async () => {
+        await owner.close();
         clearToolSearchCatalog(ctx);
       });
       const limits = resolveCodeModeConfig(config);
@@ -194,7 +183,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     await entered.promise;
     for (const { kind, run, pending } of closedRuns) {
       if (kind === "owner") {
-        run.owner.close(new Error("owner closed"));
+        await run.owner.close(new Error("owner closed"));
       } else if (kind === "catalog") {
         clearToolSearchCatalog(run.ctx);
       } else if (kind === "disabled") {
@@ -234,18 +223,20 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     expect(initialize).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
     expect(wait).not.toHaveBeenCalled();
-    expect(readCollectors).not.toHaveBeenCalled();
+    expect(prepareCollectors).not.toHaveBeenCalled();
     expect(subscribe).not.toHaveBeenCalled();
     expect(emit).toHaveBeenCalledExactlyOnceWith({
       sessionKey: "agent:main:main",
       reason: "swarm-note",
+      scope: "runtime",
       swarmGroupId: "swarm:agent:main:main:run-swarm",
       kind: "log",
       text: "Still live",
     });
   } finally {
-    cleanups.forEach((cleanup) => cleanup());
+    const closing = cleanups.map((cleanup) => cleanup());
     release.resolve();
+    await Promise.all(closing);
     await Promise.allSettled(bridgeCalls);
     vi.restoreAllMocks();
     vi.doUnmock("./code-mode-swarm.runtime.js");

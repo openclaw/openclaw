@@ -1,5 +1,6 @@
 // Binds plugin conversations to stable channel and agent identifiers.
 import crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
@@ -30,7 +31,6 @@ import {
   hasPersistentApproval,
   withPluginBindingApprovalOperation,
   pluginBindingGlobalState,
-  type PluginBindingApprovalEntry,
 } from "./conversation-binding-state.js";
 import type {
   PluginConversationBinding,
@@ -95,10 +95,7 @@ function normalizeConversation(params: PluginBindingConversation): PluginBinding
 }
 
 function normalizeBindingData(data: unknown): Record<string, unknown> | undefined {
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    return undefined;
-  }
-  return { ...(data as Record<string, unknown>) };
+  return isRecord(data) ? { ...data } : undefined;
 }
 
 function toConversationRef(params: PluginBindingConversation): ConversationRef {
@@ -205,11 +202,6 @@ function buildApprovalInteractiveReply(
   };
 }
 
-function createApprovalRequestId(): string {
-  // Keep approval ids compact so Telegram callback_data stays under its 64-byte limit.
-  return crypto.randomBytes(9).toString("base64url");
-}
-
 function buildBindingMetadata(params: {
   pluginId: string;
   pluginName?: string;
@@ -296,23 +288,6 @@ function resolveOwnedPluginConversationBinding(params: {
   return withConversationBindingContext(state.binding, params.conversation);
 }
 
-function buildApprovalEntryFromRequest(
-  request: Pick<
-    PendingPluginBindingRequest,
-    "pluginRoot" | "pluginId" | "pluginName" | "conversation"
-  >,
-  approvedAt = Date.now(),
-): PluginBindingApprovalEntry {
-  return {
-    pluginRoot: request.pluginRoot,
-    pluginId: request.pluginId,
-    pluginName: request.pluginName,
-    channel: request.conversation.channel,
-    accountId: request.conversation.accountId,
-    approvedAt,
-  };
-}
-
 export async function bindConversationNow(params: {
   identity: PluginBindingIdentity;
   conversation: PluginBindingConversation;
@@ -321,7 +296,9 @@ export async function bindConversationNow(params: {
   detachHint?: string;
   data?: Record<string, unknown>;
   bindingAttemptId?: string;
+  assertCurrent?: () => void;
 }): Promise<PluginConversationBinding> {
+  const assertCurrent = params.assertCurrent;
   const ref = toConversationRef(params.conversation);
   const targetSessionKey =
     normalizeOptionalString(params.targetSessionKey) ??
@@ -336,6 +313,7 @@ export async function bindConversationNow(params: {
     targetKind: "session",
     conversation: ref,
     placement: "current",
+    ...(assertCurrent ? { assertCurrent } : {}),
     metadata: buildBindingMetadata({
       pluginId: params.identity.pluginId,
       pluginName: params.identity.pluginName,
@@ -423,13 +401,6 @@ export function markPluginBindingFallbackNoticeShown(
   );
 }
 
-function buildPendingReply(request: PendingPluginBindingRequest): ReplyPayload {
-  return {
-    text: buildApprovalMessage(request),
-    interactive: buildApprovalInteractiveReply(request.id),
-  };
-}
-
 function decodeCustomIdValue(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -500,7 +471,9 @@ export async function requestPluginConversationBinding(params: {
   conversation: PluginBindingConversation;
   requestedBySenderId?: string;
   binding: PluginConversationBindingRequestParams | undefined;
+  assertCurrent?: () => void;
 }): Promise<PluginConversationBindingRequestResult> {
+  const assertCallerCurrent = params.assertCurrent;
   const requestParams = {
     ...params,
     binding: params.binding
@@ -508,6 +481,11 @@ export async function requestPluginConversationBinding(params: {
       : undefined,
   };
   return await withPluginBindingApprovalOperation(async (assertCurrent) => {
+    const assertBindingCurrent = () => {
+      assertCurrent();
+      assertCallerCurrent?.();
+    };
+    assertBindingCurrent();
     const conversation = normalizeConversation(requestParams.conversation);
     let state = resolvePluginConversationBindingState(conversation);
     const initialConflict = pluginBindingOwnershipConflict(state, requestParams.pluginRoot);
@@ -521,7 +499,7 @@ export async function requestPluginConversationBinding(params: {
           channel: state.ref.channel,
           accountId: state.ref.accountId,
         });
-    assertCurrent();
+    assertBindingCurrent();
     if (!state.binding) {
       state = resolvePluginConversationBindingState(conversation);
       const conflict = pluginBindingOwnershipConflict(state, requestParams.pluginRoot);
@@ -544,6 +522,7 @@ export async function requestPluginConversationBinding(params: {
         summary: requestParams.binding?.summary,
         detachHint: requestParams.binding?.detachHint,
         data: requestParams.binding?.data,
+        ...(assertCallerCurrent ? { assertCurrent: assertBindingCurrent } : {}),
       });
       logPluginBindingLifecycleEvent({
         event: state.binding ? "auto-refresh" : "auto-approved",
@@ -554,7 +533,8 @@ export async function requestPluginConversationBinding(params: {
     }
 
     const request: PendingPluginBindingRequest = {
-      id: createApprovalRequestId(),
+      // Keep approval ids compact so Telegram callback_data stays under its 64-byte limit.
+      id: crypto.randomBytes(9).toString("base64url"),
       pluginId: requestParams.pluginId,
       pluginName: requestParams.pluginName,
       pluginRoot: requestParams.pluginRoot,
@@ -564,6 +544,7 @@ export async function requestPluginConversationBinding(params: {
       detachHint: normalizeOptionalString(requestParams.binding?.detachHint),
       data: normalizeBindingData(requestParams.binding?.data),
     };
+    assertBindingCurrent();
     addPendingPluginBindingRequest(request);
     logPluginBindingLifecycleEvent({
       event: "requested",
@@ -573,7 +554,10 @@ export async function requestPluginConversationBinding(params: {
     return {
       status: "pending",
       approvalId: request.id,
-      reply: buildPendingReply(request),
+      reply: {
+        text: buildApprovalMessage(request),
+        interactive: buildApprovalInteractiveReply(request.id),
+      },
     };
   });
 }
@@ -631,7 +615,14 @@ export async function resolvePluginConversationBindingApproval(params: {
       return { status: "denied", request };
     }
     if (resolution.decision === "allow-always") {
-      await addPersistentApproval(buildApprovalEntryFromRequest(request));
+      await addPersistentApproval({
+        pluginRoot: request.pluginRoot,
+        pluginId: request.pluginId,
+        pluginName: request.pluginName,
+        channel: request.conversation.channel,
+        accountId: request.conversation.accountId,
+        approvedAt: Date.now(),
+      });
       assertCurrent();
       const conflict = pluginBindingOwnershipConflict(
         resolvePluginConversationBindingState(request.conversation),
@@ -669,12 +660,9 @@ export async function resolvePluginConversationBindingApproval(params: {
   });
 }
 
-function dispatchPluginConversationBindingResolved(params: {
-  status: "approved" | "denied";
-  binding?: PluginConversationBinding;
-  decision: PluginConversationBindingResolutionDecision;
-  request: PendingPluginBindingRequest;
-}): void {
+function dispatchPluginConversationBindingResolved(
+  params: PluginConversationBindingResolvedEvent & { request: PendingPluginBindingRequest },
+): void {
   // Keep platform interaction acks fast even if the plugin does slow post-bind work.
   queueMicrotask(() => {
     void notifyPluginConversationBindingResolved(params).catch((error: unknown) => {
@@ -683,12 +671,9 @@ function dispatchPluginConversationBindingResolved(params: {
   });
 }
 
-async function notifyPluginConversationBindingResolved(params: {
-  status: "approved" | "denied";
-  binding?: PluginConversationBinding;
-  decision: PluginConversationBindingResolutionDecision;
-  request: PendingPluginBindingRequest;
-}): Promise<void> {
+async function notifyPluginConversationBindingResolved(
+  params: PluginConversationBindingResolvedEvent & { request: PendingPluginBindingRequest },
+): Promise<void> {
   const registrations = getActivePluginRegistry()?.conversationBindingResolvedHandlers ?? [];
   for (const registration of registrations) {
     if (registration.pluginId !== params.request.pluginId) {

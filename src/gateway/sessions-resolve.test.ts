@@ -5,6 +5,9 @@ import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as facadeRuntime from "../plugin-sdk/facade-runtime.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -64,6 +67,7 @@ const resolveSessionKeyFromResolveParams = (
               ...target,
               entry: store[key],
               readSourceEntry: (parentKey: string) => store[parentKey],
+              resolveSourceKey: (parentKey: string) => parentKey,
             },
           ]),
         ),
@@ -100,6 +104,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
   };
 
   beforeEach(() => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
     storePath = path.join(tempDirs.make("sessions-resolve-"), "sessions.json");
     selectedStore = undefined;
     projections = new Map();
@@ -538,6 +543,10 @@ describe("resolveSessionKeyFromResolveParams", () => {
   it.each(["!Room:example.org", "!room:example.org"])(
     "preserves opaque reference key casing: %s",
     (room) => {
+      const bundledFallback = vi
+        .spyOn(facadeRuntime, "tryLoadActivatedBundledPluginPublicSurfaceModuleSync")
+        .mockReturnValue(null);
+      onTestFinished(() => bundledFallback.mockRestore());
       const key = "agent:main:matrix:channel:!Room:example.org";
       setFixtureStore({
         storePath,
@@ -559,6 +568,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
           ? { ok: true, key, agentId: "main", displayName: "Room" }
           : { ok: true, missing: true },
       );
+      expect(bundledFallback).not.toHaveBeenCalled();
     },
   );
 

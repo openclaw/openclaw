@@ -1,17 +1,11 @@
-// Feishu plugin module implements monitor.state behavior.
 import * as http from "node:http";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import {
-  resolveFeishuWebhookAnomalyDefaults,
-  resolveFeishuWebhookRateLimitDefaults,
-} from "./monitor-defaults.js";
-import {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
-  type RuntimeEnv,
-  WEBHOOK_ANOMALY_COUNTER_DEFAULTS as WEBHOOK_ANOMALY_COUNTER_DEFAULTS_FROM_SDK,
-  WEBHOOK_RATE_LIMIT_DEFAULTS as WEBHOOK_RATE_LIMIT_DEFAULTS_FROM_SDK,
-} from "./monitor-state-runtime-api.js";
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-ingress";
+import type { RuntimeEnv } from "../runtime-api.js";
 
 export const wsClients = new Map<string, Lark.WSClient>();
 export const httpServers = new Map<string, http.Server>();
@@ -26,28 +20,9 @@ export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const FEISHU_HTTP_SERVER_CLOSE_TIMEOUT_MS = 5_000;
 
-type BotIdentitySnapshot = {
-  revision: number;
-};
+export const feishuWebhookRateLimiter = createFixedWindowRateLimiter(WEBHOOK_RATE_LIMIT_DEFAULTS);
 
-const feishuWebhookRateLimitDefaults = resolveFeishuWebhookRateLimitDefaults(
-  WEBHOOK_RATE_LIMIT_DEFAULTS_FROM_SDK,
-);
-const feishuWebhookAnomalyDefaults = resolveFeishuWebhookAnomalyDefaults(
-  WEBHOOK_ANOMALY_COUNTER_DEFAULTS_FROM_SDK,
-);
-
-export const feishuWebhookRateLimiter = createFixedWindowRateLimiter({
-  windowMs: feishuWebhookRateLimitDefaults.windowMs,
-  maxRequests: feishuWebhookRateLimitDefaults.maxRequests,
-  maxTrackedKeys: feishuWebhookRateLimitDefaults.maxTrackedKeys,
-});
-
-const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
-  maxTrackedKeys: feishuWebhookAnomalyDefaults.maxTrackedKeys,
-  ttlMs: feishuWebhookAnomalyDefaults.ttlMs,
-  logEvery: feishuWebhookAnomalyDefaults.logEvery,
-});
+const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker();
 
 function readBotIdentityRevision(accountId: string): number {
   return botIdentityRevisions.get(accountId) ?? 0;
@@ -55,22 +30,6 @@ function readBotIdentityRevision(accountId: string): number {
 
 function bumpBotIdentityRevision(accountId: string): void {
   botIdentityRevisions.set(accountId, readBotIdentityRevision(accountId) + 1);
-}
-
-function captureBotIdentitySnapshot(accountId: string): BotIdentitySnapshot {
-  return { revision: readBotIdentityRevision(accountId) };
-}
-
-function clearFeishuBotIdentityStateIfUnchanged(
-  accountId: string,
-  snapshot: BotIdentitySnapshot,
-): void {
-  if (readBotIdentityRevision(accountId) !== snapshot.revision) {
-    return;
-  }
-  botOpenIds.delete(accountId);
-  botNames.delete(accountId);
-  bumpBotIdentityRevision(accountId);
 }
 
 export function setFeishuBotIdentityState(
@@ -134,13 +93,15 @@ export async function closeTrackedFeishuHttpServer(
   accountId: string,
   server: http.Server,
 ): Promise<void> {
-  const identitySnapshot = captureBotIdentitySnapshot(accountId);
+  const identityRevision = readBotIdentityRevision(accountId);
   try {
     await closeFeishuHttpServer(server);
   } finally {
     if (httpServers.get(accountId) === server) {
       httpServers.delete(accountId);
-      clearFeishuBotIdentityStateIfUnchanged(accountId, identitySnapshot);
+      if (readBotIdentityRevision(accountId) === identityRevision) {
+        clearFeishuBotIdentityState(accountId);
+      }
     }
   }
 }

@@ -1,5 +1,6 @@
 import {
   embeddedAgentLog,
+  formatErrorMessage,
   runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -17,6 +18,7 @@ import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
+import { getCodexInferenceThreadQualification } from "./inference-routing.js";
 import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
@@ -26,24 +28,30 @@ import {
   type CodexNativePreToolUseFailure,
   type CodexNativeHookRelay,
 } from "./native-hook-relay.js";
+import {
+  CodexNativeProcessAuthority,
+  hasCodexNativeBackgroundProcesses,
+} from "./native-process-authority.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
+import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
 import {
   releaseCodexSandboxExecServerEnvironment,
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
-import {
-  matchesCodexNativeSubagentSubmissionBinding,
-  type CodexAppServerThreadBinding,
-} from "./session-binding-record.js";
+import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-record.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   createIsolatedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
+import type {
+  CodexStartOrResumeThreadParams,
+  CodexThreadFinalConfigPatchDecision,
+} from "./thread-lifecycle-types.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
 import {
   isSameCodexAppServerThreadOwner,
@@ -68,6 +76,28 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     nativeHookRelayEvents,
   } = connection;
   const { toolBridge } = attemptTools;
+  const modelAdmissionSource = runtime.nativeToolSurfaceEnabled
+    ? params.hostCapabilities.retainSourceAuthority?.()
+    : undefined;
+  let nativeModelAdmission: CodexStartOrResumeThreadParams["nativeModelAdmission"];
+  try {
+    nativeModelAdmission = modelAdmissionSource
+      ? modelAdmissionSource.modelPolicyRequired !== false
+        ? "required"
+        : options.nativeHookRelay?.enabled === false
+          ? "disabled"
+          : "optional"
+      : undefined;
+  } finally {
+    modelAdmissionSource?.release();
+  }
+  let nativeProcessAuthorityReleased = false;
+  const releaseNativeProcessAuthority = () => {
+    if (!nativeProcessAuthorityReleased) {
+      nativeProcessAuthorityReleased = true;
+      nativeProcessAuthority?.release();
+    }
+  };
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveCwd,
@@ -289,28 +319,43 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             ),
         }
       : undefined;
-    state.nativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register({
-      client: state.client,
-      parentThreadId,
-      requesterSessionKey: params.sessionKey,
-      taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
-      historyOwner,
-      submissionStore,
-      agentId: sessionAgentId,
-      retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
-      retainParentThread: (protectedThreadId) =>
-        protectCodexAppServerLiveThread(state.client, protectedThreadId),
-      claimDirectChild: (childThreadId) => state.nativeHookRelay?.claimDirectChild(childThreadId),
-      rejectPendingDirectChild: (childThreadId, reason) =>
-        state.nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
-      ...(params.sessionKey && params.agentHarnessTaskRuntimeScope
-        ? {
-            onDirectChildAccepted: () => {
-              state.runtimeContinuationStarted = true;
-            },
-          }
-        : {}),
-    });
+    const retainModelSource = params.hostCapabilities.retainSourceAuthority;
+    const modelSource = retainModelSource?.();
+    try {
+      const configurationQualification = getCodexInferenceThreadQualification(
+        state.client,
+        parentThreadId,
+      );
+      state.nativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register({
+        client: state.client,
+        parentThreadId,
+        ...(retainModelSource ? { modelSource } : {}),
+        configurationQualification,
+        unqualifiedModelExecution: modelSource && !configurationQualification ? true : undefined,
+        onUnqualifiedModelCancelled: connection.abortExplicitly,
+        requesterSessionKey: params.sessionKey,
+        taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+        historyOwner,
+        submissionStore,
+        agentId: sessionAgentId,
+        retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
+        retainParentThread: (protectedThreadId) =>
+          protectCodexAppServerLiveThread(state.client, protectedThreadId),
+        claimDirectChild: (childThreadId) => state.nativeHookRelay?.claimDirectChild(childThreadId),
+        rejectPendingDirectChild: (childThreadId, reason) =>
+          state.nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
+        ...(params.sessionKey && params.agentHarnessTaskRuntimeScope
+          ? {
+              onDirectChildAccepted: () => {
+                state.runtimeContinuationStarted = true;
+              },
+            }
+          : {}),
+      });
+    } catch (error) {
+      modelSource?.release();
+      throw error;
+    }
   };
   const releaseCurrentRoute = async () => {
     state.releaseInferenceContext?.();
@@ -344,8 +389,12 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         if (!state.turnStartAttempted) {
           runAbortController.signal.throwIfAborted();
         }
-        params.hostCapabilities.assertActive();
-        connection.assertCurrent();
+        // Retaining the existing subscription is cleanup custody for concrete
+        // background work; revoking this foreground source cannot evict a peer.
+        if (!hasCodexNativeBackgroundProcesses(client, thread.threadId)) {
+          params.hostCapabilities.assertActive();
+          connection.assertCurrent();
+        }
         thread.liveThreadOwnership?.assertCurrent();
       } catch {
         return false;
@@ -431,6 +480,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await relay?.drain();
     });
     await runCleanupStep("codex-pre-turn-sandbox-release", releaseSandboxExecEnvironment);
+    await runCleanupStep("codex-pre-turn-source-release", releaseNativeProcessAuthority);
     await runCleanupStep("codex-pre-turn-trajectory-flush", () => trajectoryRecorder?.flush());
     await runCleanupStep(
       "codex-pre-turn-shared-client-release",
@@ -444,12 +494,20 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   const requesterChannel = params.messageChannel ?? params.messageProvider;
   const requester = buildCodexHookRequester(params);
   const buildNativeHookRelayFinalConfigPatch = async (
-    decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
+    decision: CodexThreadFinalConfigPatchDecision,
   ) => {
     const previousRelay = state.nativeHookRelay;
     previousRelay?.unregister();
     await previousRelay?.drain();
     connection.assertCurrent();
+    const requiresProcessAdmission = nativeProcessAuthority && runtime.nativeToolSurfaceEnabled;
+    const requiresModelAdmission =
+      nativeModelAdmission !== undefined && decision.nativeModelInputTools !== undefined;
+    const requiresExecutionAdmission = requiresProcessAdmission || requiresModelAdmission;
+    const relayEvents =
+      requiresExecutionAdmission && !nativeHookRelayEvents.includes("pre_tool_use")
+        ? [...nativeHookRelayEvents, "pre_tool_use" as const]
+        : nativeHookRelayEvents;
     if (params.pluginHarnessToolPolicyRestricted === true) {
       state.nativeHookRelay = undefined;
       return {
@@ -458,14 +516,16 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       };
     }
     state.nativeHookRelay = createCodexNativeHookRelay({
-      options: options.nativeHookRelay,
+      options: requiresExecutionAdmission
+        ? { ...options.nativeHookRelay, enabled: true }
+        : options.nativeHookRelay,
       generation:
         decision.action === "resume" ? decision.binding.nativeHookRelayGeneration : undefined,
       generationMismatchGraceMs:
         decision.action === "resume" && !decision.binding.nativeHookRelayGeneration
           ? CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS
           : undefined,
-      events: nativeHookRelayEvents,
+      events: relayEvents,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: contextSessionKey,
@@ -489,6 +549,18 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
       hostCapabilities: params.hostCapabilities,
+      nativeProcessAuthority: requiresProcessAdmission
+        ? { owner: nativeProcessAuthority, client: () => state.client }
+        : undefined,
+      nativeModelAdmission: requiresModelAdmission
+        ? {
+            client: () => state.client,
+            threadId: () => state.thread?.threadId,
+            tools: decision.nativeModelInputTools,
+            readQualification: (threadId) =>
+              getCodexInferenceThreadQualification(state.client, threadId),
+          }
+        : undefined,
       assertCurrent: connection.assertCurrent,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
@@ -507,7 +579,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       configPatch: state.nativeHookRelay
         ? buildCodexNativeHookRelayConfig({
             relay: state.nativeHookRelay,
-            events: nativeHookRelayEvents,
+            events: relayEvents,
             hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           })
         : options.nativeHookRelay?.enabled === false
@@ -516,12 +588,30 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       nativeHookRelayGeneration: state.nativeHookRelay?.generation,
     };
   };
+  const nativeProcessAuthority =
+    sandbox?.enabled && sandbox.backend && params.hostCapabilities.retainSourceAuthority
+      ? new CodexNativeProcessAuthority(params.hostCapabilities, (error) => {
+          const message = formatErrorMessage(error);
+          embeddedAgentLog.warn("codex native background work remains unsettled", {
+            runId: params.runId,
+            sessionId: params.sessionId,
+            error: message,
+          });
+          void emitCodexAppServerEvent(params, {
+            stream: "codex_app_server.lifecycle",
+            data: { phase: "background_cleanup_failed", error: message },
+          });
+        })
+      : undefined;
   return {
     prompt,
     trajectoryRecorder,
     state,
     projectorRef,
     pendingNativePreToolUseFailures,
+    nativeModelAdmission,
+    nativeProcessAuthority,
+    releaseNativeProcessAuthority,
     markTrajectoryEndRecorded: () => {
       state.trajectoryEndRecorded = true;
     },

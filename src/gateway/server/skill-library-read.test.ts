@@ -32,6 +32,7 @@ import {
   loadTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -49,10 +50,11 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { setTestEnvValue } from "../../test-utils/env.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "../device-auth.js";
 import { startGatewayServer } from "../server.js";
-import { getGatewayE2ePortBlock } from "../test-helpers.e2e.js";
+import { startClaimedGateway } from "../test-helpers.listener.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
 
 type Frame = {
@@ -351,8 +353,11 @@ describe("Gateway pinned manual library read", () => {
             const aliceProfile = ensureProfileForEmail("alice@example.test");
             const bobProfile = ensureProfileForEmail("bob@example.test");
             expect(aliceProfile.id).not.toBe(bobProfile.id);
-            const port = await getGatewayE2ePortBlock();
-            gateway = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
+            const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+            const { port } = portClaim;
+            gateway = await startClaimedGateway(portClaim, () =>
+              startGatewayServer(port, { bind: "loopback", controlUiEnabled: false }),
+            );
             await gateway.startupSettled;
             const alice = await connectProfile(
               port,
@@ -522,16 +527,36 @@ describe("Gateway pinned manual library read", () => {
               console.info("Prepared compaction normal-read R1 instruction proof", instructions);
               return;
             }
+            await rpc(alice, "sessions.subscribe", {});
             const started = (await rpc(alice, "chat.send", {
               sessionKey,
               message: `/skill ${saved.entry.name} Read the pinned instructions and supporting files.`,
               idempotencyKey: randomUUID(),
             })) as { runId: string; status: string };
             expect(started.status).toBe("started");
+            // Session settlement publishes after releasing the live run context. A completed
+            // run must remain visible to its current session owner, but not another profile.
+            const settled = getAgentRunContext(started.runId)
+              ? waitForFrame(
+                  alice,
+                  (frame) =>
+                    frame.event === "sessions.changed" &&
+                    getAgentRunContext(started.runId) === undefined,
+                )
+              : Promise.resolve();
+            const [immediate, settlement] = await Promise.allSettled([
+              rpc(alice, "agent.wait", { runId: started.runId, timeoutMs: 40_000 }),
+              settled,
+            ]);
+            expect(settlement.status).toBe("fulfilled");
             const completed = await rpc(alice, "agent.wait", {
               runId: started.runId,
               timeoutMs: 40_000,
             });
+            expect(immediate).toEqual({ status: "fulfilled", value: completed });
+            await expect(
+              rpc(bob, "agent.wait", { runId: started.runId, timeoutMs: 40_000 }),
+            ).rejects.toThrow(/agent run was not found/);
             expect(
               completed,
               JSON.stringify({

@@ -1,7 +1,9 @@
 /**
  * CDP page-session preparation and committed-navigation observation.
  */
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { createHash } from "node:crypto";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
+import type { CdpProtocolSend } from "./cdp-ax.js";
 import { assertCdpEndpointAllowed, type CdpSendFn, withCdpSocket } from "./cdp.helpers.js";
 
 /** HTTP and WebSocket timeout options for CDP actions that need discovery. */
@@ -20,15 +22,24 @@ type CdpGetFrameTreeSend = (
   sessionId?: string,
 ) => Promise<unknown>;
 
-type CdpFrameTreeResult = {
-  frameTree?: {
-    frame?: {
-      loaderId?: unknown;
-      unreachableUrl?: unknown;
-      url?: unknown;
-      urlFragment?: unknown;
-    };
+type CdpFrameTree = {
+  frame?: {
+    id?: unknown;
+    loaderId?: unknown;
+    unreachableUrl?: unknown;
+    url?: unknown;
+    urlFragment?: unknown;
   };
+  childFrames?: CdpFrameTree[];
+};
+
+type CdpFrameTreeResult = {
+  frameTree?: CdpFrameTree;
+};
+
+export type CdpDocumentIdentities = {
+  mainFrame?: string;
+  frameTree?: string;
 };
 
 function readCommittedFrameUrl(
@@ -48,16 +59,39 @@ function readCommittedFrameUrl(
   return url ? `${url}${fragment}` : undefined;
 }
 
-/** Read the browser-owned loader identity for the committed main-frame document. */
-export async function readCdpMainFrameDocumentIdentity(
+/** Read committed document identities together so snapshot facts share one browser observation. */
+export async function readCdpDocumentIdentities(
   send: CdpGetFrameTreeSend,
   sessionId?: string,
-): Promise<string | undefined> {
-  const frameTree = (await send("Page.getFrameTree", undefined, sessionId).catch(
+): Promise<CdpDocumentIdentities> {
+  const result = (await send("Page.getFrameTree", undefined, sessionId).catch(
     () => null,
   )) as CdpFrameTreeResult | null;
-  const loaderId = frameTree?.frameTree?.frame?.loaderId;
-  return typeof loaderId === "string" && loaderId.trim() ? `cdp:${loaderId.trim()}` : undefined;
+  const root = result?.frameTree;
+  const loaderId = root?.frame?.loaderId;
+  const identities: CdpDocumentIdentities = {
+    mainFrame:
+      typeof loaderId === "string" && loaderId.trim() ? `cdp:${loaderId.trim()}` : undefined,
+  };
+  const pending = root ? [root] : [];
+  const documents: [string, string][] = [];
+  while (pending.length) {
+    const node = pending.pop()!;
+    const id = node.frame?.id;
+    const loader = node.frame?.loaderId;
+    if (typeof id !== "string" || !id.trim() || typeof loader !== "string" || !loader.trim()) {
+      return identities;
+    }
+    documents.push([id.trim(), loader.trim()]);
+    for (const child of node.childFrames ?? []) {
+      pending.push(child);
+    }
+  }
+  if (documents.length) {
+    documents.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+    identities.frameTree = `cdp-tree:${createHash("sha256").update(JSON.stringify(documents)).digest("hex")}`;
+  }
+  return identities;
 }
 
 async function waitForCdpNavigationResult(
@@ -104,7 +138,10 @@ async function waitForCdpNavigationResult(
 }
 
 /** Enable the page domains shared by target preparation and page operations. */
-export async function prepareCdpPageSession(send: CdpSendFn, sessionId?: string): Promise<void> {
+export async function prepareCdpPageSession(
+  send: CdpProtocolSend,
+  sessionId?: string,
+): Promise<void> {
   await Promise.all([
     send("Page.enable", undefined, sessionId).catch(() => {}),
     send("Runtime.enable", undefined, sessionId).catch(() => {}),

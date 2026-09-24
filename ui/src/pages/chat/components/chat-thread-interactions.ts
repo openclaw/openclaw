@@ -2,6 +2,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type {
   AgentsListResult,
@@ -12,7 +13,7 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
@@ -37,7 +38,7 @@ import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
-import type { AsyncQuestionDraft } from "./chat-async-question.ts";
+import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
@@ -62,7 +63,14 @@ registerChatMessageMetadataEnglish();
 
 export type ChatThreadState = {
   asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
+  asyncQuestionSessions?: Map<
+    string,
+    import("./chat-async-question-draft.ts").AsyncQuestionDraftSession
+  >;
+  asyncQuestionRevision: number;
   asyncQuestionScope?: string;
+  asyncQuestionGeneration?: number;
+  asyncQuestionPresentation?: AsyncQuestionPresentation;
   turnRecapWatch: TurnRecapWatch | null;
   searchOpen: boolean;
   searchQuery: string;
@@ -73,7 +81,12 @@ export type ChatThreadState = {
   transcriptRenderContext: {
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
-    onAsyncQuestionSubmit?: (message: string) => Promise<boolean>;
+    onAsyncQuestionDiscard?: (item: ChatQueueItem) => void;
+    onAsyncQuestionSubmit?: (
+      message: string,
+      itemId?: string,
+      sourceMessageId?: string,
+    ) => Promise<boolean>;
   };
 };
 
@@ -86,6 +99,7 @@ type ReplyMessageAccess = {
 };
 
 export type ChatThreadProps = ChatSendStatusActions & {
+  branding?: ThemeBranding;
   compactionStatus?: CompactionStatus | null;
   paneId: string;
   /** Routing for peer sender names in a shared session. */
@@ -124,7 +138,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   startupLabel?: string;
   waitingApproval?: boolean;
   questionPrompts?: readonly QuestionPrompt[];
-  onAsyncQuestionSubmit?: (message: string) => Promise<boolean>;
+  asyncQuestions?: AsyncQuestionPresentation;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
@@ -154,13 +168,13 @@ export type ChatThreadProps = ChatSendStatusActions & {
   fetchLinkFavicon?: LinkFaviconFetcher;
   pluginToolIcons?: PluginToolIcons;
   githubRepo?: MarkdownRenderOptions["githubRepo"];
+  githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  typingActors?: readonly { id: string; label: string; preview?: string }[];
+  typingActors?: readonly { id: string; label: string; preview?: string; paused?: boolean }[];
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
-  onOpenSessionCheckpoints?: () => void | Promise<void>;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   onAssistantAttachmentLoaded?: () => void;
@@ -199,6 +213,7 @@ type TranscriptInteractionProps = Pick<
 function createTranscriptState(): ChatThreadState {
   return {
     asyncQuestionDrafts: new Map(),
+    asyncQuestionRevision: 0,
     turnRecapWatch: null,
     searchOpen: false,
     searchQuery: "",
@@ -263,6 +278,15 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
 
 export function resetThreadPresentation(paneId?: string, owner?: ParentNode) {
   dismissThreadPortals(paneId, owner);
+  const retiring = paneId ? [transcriptStates.get(paneId)] : transcriptStates.values();
+  for (const state of retiring) {
+    if (state) {
+      // Retire captured card callbacks before removing the pane lookup. Already
+      // captured writes may finish, but late send completions cannot invent new edits.
+      state.asyncQuestionGeneration = (state.asyncQuestionGeneration ?? 0) + 1;
+      state.asyncQuestionDrafts = new Map();
+    }
+  }
   if (paneId) {
     transcriptStates.delete(paneId);
     resetChatThreadState(paneId);
@@ -281,7 +305,22 @@ export function renderTranscriptSearch(
     return nothing;
   }
   return html`
-    <div class="agent-chat__search-bar">
+    <div
+      class="agent-chat__search-bar"
+      @keydown=${(event: KeyboardEvent) => {
+        if (
+          event.key !== "Escape" ||
+          event.defaultPrevented ||
+          event.isComposing ||
+          event.keyCode === 229
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        closeTranscriptSearch(state, requestUpdate);
+      }}
+    >
       ${icons.search}
       <input
         type="text"

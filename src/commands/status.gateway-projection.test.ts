@@ -1,7 +1,8 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
 import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { scanStatusJsonFast } from "./status.scan.fast-json.js";
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   localSummary: vi.fn(),
   callGateway: vi.fn(),
   probeGateway: vi.fn(),
+  waitForGatewayDiagnosticReadiness: vi.fn(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -45,9 +47,14 @@ vi.mock("./status.update.js", () => ({
 vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
 }));
+vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: mocks.waitForGatewayDiagnosticReadiness,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(performance, "now").mockReturnValue(0);
+  mocks.waitForGatewayDiagnosticReadiness.mockReset();
   mocks.fullConfigReads = 0;
   mocks.probeGateway.mockResolvedValue({
     ok: true,
@@ -63,13 +70,19 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 it.each([
-  { withProjection: false, remote: false },
-  { withProjection: true, remote: false },
-  { withProjection: true, remote: true },
+  { withProjection: false, remote: false, readinessElapsedMs: 0, withChannelSummary: false },
+  { withProjection: true, remote: false, readinessElapsedMs: 0, withChannelSummary: false },
+  { withProjection: true, remote: true, readinessElapsedMs: 0, withChannelSummary: false },
+  { withProjection: true, remote: false, readinessElapsedMs: 22_000, withChannelSummary: false },
+  { withProjection: true, remote: false, readinessElapsedMs: 0, withChannelSummary: true },
 ])(
-  "serves online fleet JSON without local discovery ($withProjection, remote: $remote)",
-  async ({ withProjection, remote }) => {
+  "serves online fleet JSON without local discovery ($withProjection, remote: $remote, startup: $readinessElapsedMs, channels: $withChannelSummary)",
+  async ({ withProjection, remote, readinessElapsedMs, withChannelSummary }) => {
     await withOpenClawTestState(
       { layout: "split", prefix: "status-gateway-projection-" },
       async (state) => {
@@ -104,7 +117,7 @@ it.each([
               }
             : {}),
           heartbeat: { defaultAgentId: "alpha", agents: [] },
-          channelSummary: [],
+          channelSummary: withChannelSummary ? ["Telegram: configured"] : [],
           queuedSystemEvents: [],
           tasks: createEmptyTaskRegistrySummary(),
           taskAudit: createEmptyTaskAuditSummary(),
@@ -136,10 +149,22 @@ it.each([
           sessions: { ...summary.sessions, count: 99 },
         });
 
-        const result = await scanStatusJsonFast(
-          {},
-          { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        );
+        const clock = vi.spyOn(performance, "now");
+        if (readinessElapsedMs) {
+          mocks.waitForGatewayDiagnosticReadiness.mockImplementationOnce(async () => {
+            clock.mockReturnValue(readinessElapsedMs);
+            return { healthy: true, elapsedMs: readinessElapsedMs, waitOutcome: "healthy" };
+          });
+          mocks.probeGateway.mockImplementationOnce(async () => {
+            clock.mockReturnValue(readinessElapsedMs + 1000);
+            return { ok: true, connectLatencyMs: 1, error: null, status: null, presence: [] };
+          });
+        }
+        const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        });
 
         expect(mocks.fullConfigReads).toBe(0);
         expect(mocks.localAgents).not.toHaveBeenCalled();
@@ -152,17 +177,54 @@ it.each([
         expect(result.agentStatus.ownership).toBe(withProjection ? "explicit" : null);
         expect(result.cfg.update?.channel).toBe(withProjection && !remote ? "beta" : undefined);
         expect(result.agentStatus.agents[0]?.name).toBe(withProjection ? "Alpha" : undefined);
-        expect(result.collection?.notCollected.length).toBeGreaterThan(0);
+        expect(
+          result.collection?.notCollected.filter((entry) =>
+            entry.fields.includes("channelSummary"),
+          ),
+        ).toEqual(
+          withChannelSummary ? [] : [expect.objectContaining({ fields: ["channelSummary"] })],
+        );
         expect(mocks.callGateway).toHaveBeenCalledWith(
           expect.objectContaining({
             method: "status",
             params: { includeChannelSummary: false, includeCliProjection: true },
+            timeoutMs: readinessElapsedMs ? 37_000 : 60_000,
           }),
         );
       },
     );
   },
 );
+
+it("marks channelSummary uncollected when Gateway status projection fails", async () => {
+  await withOpenClawTestState(
+    { layout: "split", prefix: "status-gateway-projection-failed-" },
+    async (state) => {
+      await state.writeConfig({
+        gateway: { mode: "local", auth: { mode: "none" } },
+        plugins: { enabled: false },
+      });
+      mocks.callGateway.mockRejectedValue(new Error("status rpc failed"));
+
+      const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      });
+
+      expect(result.gatewayReachable).toBe(true);
+      expect(result.summary.channelSummary).toEqual([]);
+      expect(
+        result.collection?.notCollected.filter((entry) => entry.fields.includes("channelSummary")),
+      ).toEqual([
+        expect.objectContaining({
+          fields: expect.arrayContaining(["sessions"]),
+          reason: "status rpc failed",
+        }),
+      ]);
+    },
+  );
+});
 
 it("keeps offline config diagnostics and local collection", async () => {
   await withOpenClawTestState(
@@ -190,13 +252,18 @@ it("keeps offline config diagnostics and local collection", async () => {
       mocks.localAgents.mockResolvedValue({ agentStatus: local, sessionStores: undefined });
       mocks.localSummary.mockResolvedValue({ sessions: { count: 4 }, heartbeat: { agents: [] } });
 
-      const result = await scanStatusJsonFast({}, { log: vi.fn(), error: vi.fn(), exit: vi.fn() });
+      const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      });
 
       expect(mocks.fullConfigReads).toBe(1);
       expect(mocks.localAgents).toHaveBeenCalledOnce();
       expect(mocks.localSummary).toHaveBeenCalledOnce();
       expect(result.agentStatus).toEqual(local);
       expect(result.gatewayReachable).toBe(false);
+      expect(mocks.waitForGatewayDiagnosticReadiness).toHaveBeenCalledOnce();
       expect(result.collection).toBeUndefined();
       expect(result.configDiagnostics?.issues).toEqual(
         expect.arrayContaining([

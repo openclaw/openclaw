@@ -136,6 +136,7 @@ suite.define(() => {
           type: "file",
           mimeType: outboxPayloadFile.mimeType,
           fileName: outboxPayloadFile.name,
+          origin: "file",
           content: outboxPayloadFile.buffer.toString("base64"),
         },
       ]);

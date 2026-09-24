@@ -22,17 +22,19 @@ import {
   createPluginRuntimeCapabilityLease,
   type PluginRuntimeCapabilityLease,
 } from "./capability-lease.js";
-import { subscribePluginSessionsChanged } from "./gateway-events.js";
-import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
+import { createPluginServiceGatewayEvents } from "./gateway-events.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
+import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
+import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
 import { createPluginServiceHealthReporter } from "./service-health.js";
+import { createPluginServiceNodeInvoker } from "./service-nodes.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
 
@@ -104,6 +106,7 @@ type OwnedPluginService = {
   cleanupErrors: unknown[];
   cleanupReporting?: Promise<unknown>;
   stopRequested: boolean;
+  stopNodeInvocations?: () => void;
   health: NonNullable<OpenClawPluginServiceContext["serviceHealth"]>;
   lease: PluginRuntimeCapabilityLease;
 };
@@ -255,6 +258,7 @@ async function startPreparedPluginServices({
     beforeStop?: Promise<unknown>,
   ) => {
     entry.stopRequested = true;
+    entry.stopNodeInvocations?.();
     const recordFailure = (error: unknown) => {
       if (!failures) {
         return;
@@ -416,6 +420,7 @@ async function startPreparedPluginServices({
         for (const entry of selected) {
           entry.reloading = reloading;
           entry.stopRequested = true;
+          entry.stopNodeInvocations?.();
         }
         const failures: unknown[] = [];
         try {
@@ -460,6 +465,7 @@ async function startPreparedPluginServices({
       );
       for (const entry of selected) {
         entry.stopRequested = true;
+        entry.stopNodeInvocations?.();
       }
       const strict = options?.strict === true;
       const deadline = strict ? options.deadlineAtMs : undefined;
@@ -492,40 +498,26 @@ async function startPreparedPluginServices({
       instance ? instance.runCleanup(run) : runPluginCleanup(service, run);
     const traceName = `sidecars.plugin-services.${encodeStartupTraceSegment(entry.pluginId)}.${encodeStartupTraceSegment(entry.id)}`;
     const lease = createPluginRuntimeCapabilityLease("plugin service");
-    const pluginId = entry.pluginId;
-    const broadcast = broadcastPluginEvent;
-    // The broadcaster owns delivery and sessions.changed scheduling. Without it,
-    // omit this capability so plugins can detect absence and choose their fallback.
-    const gatewayEvents: OpenClawPluginServiceContext["gatewayEvents"] = broadcast
-      ? {
-          emit: (event, payload: PluginJsonValue, opts) => {
-            lease.assertActive("gateway event emitter");
-            if (!/^[a-z][a-z0-9_-]*$/u.test(event)) {
-              throw new Error(`invalid plugin gateway event name: ${event}`);
-            }
-            if (!isPluginJsonValue(payload)) {
-              throw new Error("plugin gateway event payload must be bounded JSON");
-            }
-            if (
-              opts?.scope !== "operator.read" &&
-              opts?.scope !== "operator.write" &&
-              opts?.scope !== "operator.admin"
-            ) {
-              throw new Error("plugin gateway event scope must be an operator scope");
-            }
-            broadcast(`plugin.${pluginId}.${event}`, payload, opts.scope);
-          },
-          onSessionsChanged: (handler) => {
-            lease.assertActive("gateway event subscriber");
-            return lease.retain(subscribePluginSessionsChanged(handler));
-          },
-        }
-      : undefined;
+    const gatewayEvents = createPluginServiceGatewayEvents({
+      pluginId: entry.pluginId,
+      broadcast: broadcastPluginEvent,
+      lease,
+    });
     const { health, revoke } = createPluginServiceHealthReporter(entry);
     lease.retain(revoke);
+    const runtime = getPluginRegistryRuntime(registry);
     const getCron = getCronService
       ? createPluginServiceCronGetter({
           getCron: getCronService,
+          lease,
+          isStopping: () => ownedService.owner.closed || ownedService.stopRequested,
+          resolveGatewayContext: runtime ? getGatewayContextResolver(runtime) : undefined,
+        })
+      : undefined;
+    const nodeInvoker = record
+      ? createPluginServiceNodeInvoker({
+          registry,
+          record,
           lease,
           isStopping: () => ownedService.owner.closed || ownedService.stopRequested,
         })
@@ -587,6 +579,9 @@ async function startPreparedPluginServices({
       },
       serviceHealth: health,
       ...(getCron ? { getCron } : {}),
+      ...(nodeInvoker
+        ? { invokeNode: nodeInvoker.invoke, openNodeDuplex: nodeInvoker.openDuplex }
+        : {}),
       ...(gatewayEvents ? { gatewayEvents } : {}),
       ...(startupTrace
         ? {
@@ -616,6 +611,7 @@ async function startPreparedPluginServices({
       registration: entry,
       registry,
       stopRequested: false,
+      stopNodeInvocations: nodeInvoker?.stop,
       diagnosticsExporter: serviceContext.internalDiagnostics !== undefined,
       stop: service.stop
         ? () =>

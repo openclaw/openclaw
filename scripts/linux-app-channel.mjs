@@ -313,6 +313,9 @@ class GitHub {
         "--disable",
         "--fail",
         "--location",
+        // Revalidate cached redirects and bytes after replacing mutable manifests.
+        "--header",
+        "Cache-Control: no-cache",
         "--silent",
         "--show-error",
         "--proto",
@@ -729,13 +732,18 @@ function mirror(github, publicKey, target) {
 function finalizeCore(github, options) {
   const version = options.tag.slice(1);
   const parsed = parseReleaseVersion(version);
+  const train = parsed && classifyReleaseTrain(parsed);
   assert(
     parsed &&
       parsed.version === version &&
-      ["stable", "alpha", "beta"].includes(classifyReleaseTrain(parsed)),
+      ["stable", "alpha", "beta", "extended-stable"].includes(train),
     "Unsupported core GitHub release train",
   );
   assert(["true", "false"].includes(options.latest), "Expected explicit core latest intent");
+  assert(
+    train !== "extended-stable" || options.latest === "false",
+    "Extended-stable releases cannot become core latest",
+  );
   const prerelease = parsed.channel !== "stable";
   assert(!prerelease || options.latest === "false", "Prereleases cannot become core latest");
   github.authorize();

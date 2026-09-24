@@ -14,7 +14,10 @@ import {
   readSessionEntryCount,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-store.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import {
+  projectSessionEntryLifecycleMutation,
+  readReferencedSessionIds,
+} from "./session-accessor.sqlite-lifecycle-state.js";
 import { readSessionMaintenanceCapCandidates } from "./session-accessor.sqlite-maintenance-candidates.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -330,6 +333,135 @@ describe("SQLite exclusion survivor semantics", () => {
 });
 
 describe("SQLite candidate reference reads", () => {
+  it("bounds reference rows when planning removal among 5,000 unrelated entries", async () => {
+    const database = openDatabase();
+    const removedKey = "agent:main:removed";
+    const entry = { sessionId: "removed", updatedAt: 1, previousSessionId: "shared" };
+    database.db.exec("BEGIN");
+    try {
+      for (let index = 0; index < 5_000; index += 1) {
+        insertEntry(database, `agent:main:unrelated-${index}`, `unrelated-${index}`);
+      }
+      insertEntry(database, removedKey, entry.sessionId, JSON.stringify(entry));
+      insertEntry(database, "agent:main:survivor", "shared");
+      database.db.exec("UPDATE session_nodes SET entry_valid = 1");
+      database.db.exec("COMMIT");
+    } catch (error) {
+      database.db.exec("ROLLBACK");
+      throw error;
+    }
+    // Admit the fixture before measuring the hot lifecycle planning path.
+    readSessionEntryStore(database);
+    const fullReferences = readReferencedSessionIds(database, new Set([removedKey]));
+    const keys = trackMaterializedKeys(database);
+    const startedAt = performance.now();
+    const result = await projectSessionEntryLifecycleMutation(
+      { agentId: database.agentId, path: database.path },
+      {
+        archiveDirectory: path.dirname(database.path),
+        removals: [{ sessionKey: removedKey, expectedEntry: entry }],
+        upserts: [],
+      },
+    );
+    console.log({ lifecycleReferenceRows: keys.length, planningMs: performance.now() - startedAt });
+    expect(result.removals).toHaveLength(1);
+    expect(result.deletePlans.map((plan) => plan.sessionId)).toEqual(
+      [entry.sessionId, entry.previousSessionId].filter((id) => !fullReferences.has(id)),
+    );
+    expect(result.deletePlans.map((plan) => plan.sessionId)).toEqual(["removed"]);
+    expect(keys.length).toBeLessThan(50);
+  });
+
+  it("preserves surviving and same-call references to generations absent from the removed entry", async () => {
+    const database = openDatabase();
+    const removedKey = "agent:main:removed";
+    insertEntry(database, removedKey, "removed");
+    insertEntry(database, "agent:main:survivor", "retained-history");
+    database.db.exec("UPDATE session_nodes SET entry_valid = 1");
+    const insertWindow = database.db.prepare(
+      "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
+    );
+    for (const id of ["retained-history", "upsert-history", "unreferenced-history"]) {
+      insertWindow.run(id, removedKey);
+    }
+    const result = await projectSessionEntryLifecycleMutation(
+      { agentId: database.agentId, path: database.path },
+      {
+        archiveDirectory: path.dirname(database.path),
+        removals: [{ sessionKey: removedKey, archiveRemovedTranscript: true }],
+        upserts: [
+          {
+            sessionKey: "agent:main:new-owner",
+            entry: { sessionId: "upsert-history", updatedAt: 2 },
+          },
+        ],
+      },
+    );
+    expect(result.deletePlans.map((plan) => plan.sessionId).toSorted()).toEqual([
+      "removed",
+      "unreferenced-history",
+    ]);
+  });
+
+  it.each(["current ", "current\0 ", "\u00a0current\ufeff"])(
+    "retains normalized current IDs for %j",
+    (current) => {
+      const database = openDatabase();
+      insertEntry(database, "owner", current);
+      expect(readReferencedSessionIds(database)).toEqual(new Set([current, current.trim()]));
+      expect(readReferencedSessionIds(database, undefined, [current.trim()])).toEqual(
+        new Set([current.trim()]),
+      );
+    },
+  );
+
+  it("extracts ordinary references without decoding entry JSON in JavaScript", () => {
+    const database = openDatabase();
+    const expected = new Set<string>();
+    for (let index = 0; index < 32; index += 1) {
+      const ids = [
+        `current-${index}`,
+        `previous-${index}`,
+        `family-${index}`,
+        `checkpoint-${index}`,
+        `pre-${index}`,
+        `post-${index}`,
+      ] as const;
+      for (const id of ids) {
+        expected.add(id);
+      }
+      insertEntry(
+        database,
+        `owner-${index}`,
+        ids[0],
+        JSON.stringify({
+          sessionId: ids[0],
+          updatedAt: 1,
+          previousSessionId: ` ${ids[1]} `,
+          usageFamilySessionIds: [ids[2]],
+          compactionCheckpoints: [
+            {
+              sessionId: ids[3],
+              preCompaction: { sessionId: ids[4] },
+              postCompaction: { sessionId: ids[5] },
+              unrelated: { nested: [{ sessionId: "not-a-reference" }] },
+            },
+          ],
+          skillsSnapshot: { prompt: "large saved prompt".repeat(1024), skills: [] },
+        }),
+      );
+    }
+    const parse = vi.spyOn(JSON, "parse");
+    expect(readReferencedSessionIds(database)).toEqual(expected);
+    expect(readReferencedSessionIds(database, undefined, [...expected, "missing"])).toEqual(
+      expected,
+    );
+    expect(readReferencedSessionIds(database, undefined, ["pre-0", "post-31", "missing"])).toEqual(
+      new Set(["pre-0", "post-31"]),
+    );
+    expect(parse).not.toHaveBeenCalled();
+  });
+
   it("does not materialize unrelated node metadata for one candidate", () => {
     const database = openDatabase();
     for (let index = 0; index < 32; index += 1) {
@@ -357,6 +489,15 @@ describe("SQLite candidate reference reads", () => {
     ["escaped key", '"previous\\u0053essionId":" candidate "'],
     ["duplicate key", '"previousSessionId":null,"previousSessionId":" candidate "'],
     ["usage family", '"usageFamilySessionIds":[" candidate "]'],
+    ["escaped surrogate", '"previousSessionId":"candidate","label":"\\ud800"'],
+    [
+      "duplicate identity",
+      '"sessionId":"wrong","sessionId":"current","previousSessionId":"candidate"',
+    ],
+    [
+      "duplicate checkpoint",
+      '"compactionCheckpoints":[{"sessionId":"wrong","sessionId":"candidate","preCompaction":{},"postCompaction":{}}]',
+    ],
     [
       "checkpoint",
       '"compactionCheckpoints":[{"sessionId":"candidate","preCompaction":{},"postCompaction":{}}]',

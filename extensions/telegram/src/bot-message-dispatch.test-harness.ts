@@ -1,16 +1,14 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Telegram tests cover bot message dispatch plugin behavior.
 import type { Bot } from "grammy";
 import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, beforeEach, describe, expect, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { withTelegramTestSettledReceipt } from "./bot-message-dispatch-receipt.test-support.js";
-import {
-  createSequencedTestDraftStream,
-  createTestDraftStream,
-} from "./draft-stream.test-helpers.js";
+import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
@@ -37,20 +35,6 @@ export async function emitToolStart(options: ReplyOptions, payload: ToolStart) {
   return await options?.onToolStart?.(payload);
 }
 
-export function requireInvocationOrder(
-  mock: { mock: { invocationCallOrder: number[] } },
-  index: number,
-  context: string,
-): number {
-  return expectDefined(mock.mock.invocationCallOrder[index], context);
-}
-
-type InboundDeliveryForTest =
-  import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">["delivery"];
-const observeInboundDeliveryHoisted = vi.hoisted(() =>
-  vi.fn<(delivery: InboundDeliveryForTest) => void>(),
-);
-
 const createTelegramDraftStreamHoisted = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcherHoisted = vi.hoisted(() =>
   vi.fn<(params: DispatchReplyWithBufferedBlockDispatcherArgs) => Promise<unknown>>(),
@@ -59,15 +43,9 @@ const deliverRepliesHoisted = vi.hoisted(() => vi.fn());
 const deliverInboundReplyWithMessageSendContextHoisted = vi.hoisted(() => vi.fn());
 const emitTelegramMessageSentHooksHoisted = vi.hoisted(() => vi.fn());
 const recordOutboundMessageForPromptContextHoisted = vi.hoisted(() => vi.fn());
-const createForumTopicTelegramHoisted = vi.hoisted(() => vi.fn());
-const deleteMessageTelegramHoisted = vi.hoisted(() => vi.fn());
-const editForumTopicTelegramHoisted = vi.hoisted(() => vi.fn());
 const editMessageTelegramHoisted = vi.hoisted(() => vi.fn());
 const editMessageReplyMarkupTelegramHoisted = vi.hoisted(() => vi.fn());
 const reactMessageTelegramHoisted = vi.hoisted(() => vi.fn());
-const sendMessageTelegramHoisted = vi.hoisted(() => vi.fn());
-const sendPollTelegramHoisted = vi.hoisted(() => vi.fn());
-const sendStickerTelegramHoisted = vi.hoisted(() => vi.fn());
 const loadConfigHoisted = vi.hoisted(() => vi.fn(() => ({})));
 const readChannelAllowFromStoreHoisted = vi.hoisted(() => vi.fn(async () => []));
 const upsertChannelPairingRequestHoisted = vi.hoisted(() =>
@@ -112,9 +90,9 @@ const appendAssistantMirrorMessageByIdentityHoisted = vi.hoisted(() =>
 const getSessionEntryHoisted = vi.hoisted(() => vi.fn());
 const loadSessionStoreHoisted = vi.hoisted(() => vi.fn());
 const readLatestAssistantTextByIdentityHoisted = vi.hoisted(() =>
-  vi.fn<() => Promise<{ id?: string; text: string; timestamp?: number } | undefined>>(
-    async () => undefined,
-  ),
+  vi.fn<
+    typeof import("openclaw/plugin-sdk/session-transcript-runtime").readLatestAssistantTextByIdentity
+  >(async () => undefined),
 );
 const resolveStorePathHoisted = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 const generateTopicLabelHoisted = vi.hoisted(() => vi.fn());
@@ -125,7 +103,6 @@ const loadModelCatalogHoisted = vi.hoisted(() => vi.fn(async () => ({})));
 const findModelInCatalogHoisted = vi.hoisted(() => vi.fn(() => null));
 const modelSupportsVisionHoisted = vi.hoisted(() => vi.fn(() => false));
 const resolveAgentDirHoisted = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
-const resolveAgentWorkspaceDirHoisted = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
 const resolveDefaultModelForAgentHoisted = vi.hoisted(() =>
   vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
 );
@@ -137,7 +114,6 @@ const resolveChunkModeHoisted = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMarkdownTableModeHoisted = vi.hoisted(() => vi.fn(() => "preserve"));
 const getGlobalHookRunnerHoisted = vi.hoisted(() => vi.fn());
 
-export const observeInboundDelivery = observeInboundDeliveryHoisted;
 export const createTelegramDraftStream = createTelegramDraftStreamHoisted;
 export const dispatchReplyWithBufferedBlockDispatcher =
   dispatchReplyWithBufferedBlockDispatcherHoisted;
@@ -145,41 +121,35 @@ export const deliverReplies = deliverRepliesHoisted;
 export const deliverInboundReplyWithMessageSendContext =
   deliverInboundReplyWithMessageSendContextHoisted;
 export const emitTelegramMessageSentHooks = emitTelegramMessageSentHooksHoisted;
-export const recordOutboundMessageForPromptContext = recordOutboundMessageForPromptContextHoisted;
-const createForumTopicTelegram = createForumTopicTelegramHoisted;
-const deleteMessageTelegram = deleteMessageTelegramHoisted;
-const editForumTopicTelegram = editForumTopicTelegramHoisted;
+const recordOutboundMessageForPromptContext = recordOutboundMessageForPromptContextHoisted;
 export const editMessageTelegram = editMessageTelegramHoisted;
 export const editMessageReplyMarkupTelegram = editMessageReplyMarkupTelegramHoisted;
 const reactMessageTelegram = reactMessageTelegramHoisted;
-export const sendMessageTelegram = sendMessageTelegramHoisted;
-const sendPollTelegram = sendPollTelegramHoisted;
-const sendStickerTelegram = sendStickerTelegramHoisted;
 const loadConfig = loadConfigHoisted;
 const readChannelAllowFromStore = readChannelAllowFromStoreHoisted;
 const upsertChannelPairingRequest = upsertChannelPairingRequestHoisted;
 const enqueueSystemEvent = enqueueSystemEventHoisted;
 const buildModelsProviderData = buildModelsProviderDataHoisted;
 const listSkillCommandsForAgents = listSkillCommandsForAgentsHoisted;
-export const createChannelMessageReplyPipeline = createChannelMessageReplyPipelineHoisted;
+const createChannelMessageReplyPipeline = createChannelMessageReplyPipelineHoisted;
 const wasSentByBot = wasSentByBotHoisted;
 export const appendAssistantMirrorMessageByIdentity = appendAssistantMirrorMessageByIdentityHoisted;
 const getSessionEntry = getSessionEntryHoisted;
 export const loadSessionStore = loadSessionStoreHoisted;
 export const readLatestAssistantTextByIdentity = readLatestAssistantTextByIdentityHoisted;
 const resolveStorePath = resolveStorePathHoisted;
-export const generateTopicLabel = generateTopicLabelHoisted;
-export const describeStickerImage = describeStickerImageHoisted;
+const generateTopicLabel = generateTopicLabelHoisted;
+const describeStickerImage = describeStickerImageHoisted;
 const loadModelCatalog = loadModelCatalogHoisted;
 const findModelInCatalog = findModelInCatalogHoisted;
 const modelSupportsVision = modelSupportsVisionHoisted;
 const resolveAgentDir = resolveAgentDirHoisted;
 const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
-export const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
+const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
 const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
 const resolveChunkMode = resolveChunkModeHoisted;
-export const resolveMarkdownTableMode = resolveMarkdownTableModeHoisted;
-export const getGlobalHookRunner = getGlobalHookRunnerHoisted;
+const resolveMarkdownTableMode = resolveMarkdownTableModeHoisted;
+const getGlobalHookRunner = getGlobalHookRunnerHoisted;
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream: createTelegramDraftStreamHoisted,
@@ -190,6 +160,11 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   return {
     ...actual,
     deliverInboundReplyWithMessageSendContext: deliverInboundReplyWithMessageSendContextHoisted,
+    deliverStructuredInboundReplyWithMessageSendContext: ({
+      plan,
+      ...params
+    }: Parameters<typeof actual.deliverStructuredInboundReplyWithMessageSendContext>[0]) =>
+      deliverInboundReplyWithMessageSendContextHoisted({ ...params, payload: plan.payload }),
   };
 });
 
@@ -232,7 +207,6 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
       }
       const delivery =
         resolved.delivery as unknown as import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">["delivery"];
-      observeInboundDeliveryHoisted(delivery);
       const testTurn = (params.raw as { turn: TestTurn }).turn;
       const result = await actual.runPreparedInboundReply({
         channel: resolved.channel,
@@ -260,6 +234,14 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
                 };
                 return delivery.deliverWithProviderMessageSending(payload, providerInfo);
               },
+              deliverPrepared: delivery.deliverPreparedWithProviderMessageSending
+                ? (plan, info) =>
+                    delivery.deliverPreparedWithProviderMessageSending!(plan, {
+                      ...info,
+                      onPlatformSendDispatch: async () => undefined,
+                      assertPlatformSendAuthorized: () => undefined,
+                    })
+                : undefined,
               onError: delivery.onError,
             },
             toolsAllow: resolved.toolsAllow,
@@ -288,25 +270,20 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies: deliverRepliesHoisted,
+  deliverStructuredReplies: deliverRepliesHoisted,
   emitTelegramMessageSentHooks: emitTelegramMessageSentHooksHoisted,
 }));
 
 vi.mock("./bot/delivery.replies.js", () => ({
   deliverReplies: deliverRepliesHoisted,
-  emitTelegramMessageSentHooks: emitTelegramMessageSentHooksHoisted,
+  deliverStructuredReplies: deliverRepliesHoisted,
 }));
 
 vi.mock("./send.js", async () => ({
   buildInlineKeyboard: (await import("./inline-keyboard.js")).buildInlineKeyboard,
-  createForumTopicTelegram: createForumTopicTelegramHoisted,
-  deleteMessageTelegram: deleteMessageTelegramHoisted,
-  editForumTopicTelegram: editForumTopicTelegramHoisted,
   editMessageReplyMarkupTelegram: editMessageReplyMarkupTelegramHoisted,
   editMessageTelegram: editMessageTelegramHoisted,
   reactMessageTelegram: reactMessageTelegramHoisted,
-  sendMessageTelegram: sendMessageTelegramHoisted,
-  sendPollTelegram: sendPollTelegramHoisted,
-  sendStickerTelegram: sendStickerTelegramHoisted,
 }));
 
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
@@ -316,7 +293,6 @@ vi.mock("./bot-message-dispatch.runtime.js", () => ({
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode: resolveChunkModeHoisted,
   resolveMarkdownTableMode: resolveMarkdownTableModeHoisted,
-  resolveStorePath: resolveStorePathHoisted,
 }));
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
@@ -324,17 +300,12 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   loadPreparedModelCatalog: loadModelCatalogHoisted,
   modelSupportsVision: modelSupportsVisionHoisted,
   resolveAgentDir: resolveAgentDirHoisted,
-  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirHoisted,
   resolveDefaultModelForAgent: resolveDefaultModelForAgentHoisted,
   resolveHumanDelayConfig: resolveHumanDelayConfigHoisted,
 }));
 
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
-  getCachedSticker: () => null,
-  getCacheStats: () => ({ count: 0 }),
-  searchStickers: () => [],
-  getAllCachedStickers: () => [],
   describeStickerImage: describeStickerImageHoisted,
 }));
 
@@ -348,7 +319,7 @@ export const telegramDepsForTest: TelegramBotDeps = {
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
     upsertChannelPairingRequest as TelegramBotDeps["upsertChannelPairingRequest"],
-  enqueueSystemEvent: enqueueSystemEvent as TelegramBotDeps["enqueueSystemEvent"],
+  enqueueRoutedSystemEvent: enqueueSystemEvent as TelegramBotDeps["enqueueRoutedSystemEvent"],
   dispatchReplyWithBufferedBlockDispatcher:
     dispatchReplyWithBufferedBlockDispatcher as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
@@ -360,8 +331,9 @@ export const telegramDepsForTest: TelegramBotDeps = {
   createTelegramDraftStream:
     createTelegramDraftStream as TelegramBotDeps["createTelegramDraftStream"],
   deliverReplies: deliverReplies as TelegramBotDeps["deliverReplies"],
-  deliverInboundReplyWithMessageSendContext:
-    deliverInboundReplyWithMessageSendContext as TelegramBotDeps["deliverInboundReplyWithMessageSendContext"],
+  deliverStructuredReplies: deliverReplies,
+  deliverStructuredInboundReplyWithMessageSendContext: ({ plan, ...params }) =>
+    deliverInboundReplyWithMessageSendContext({ ...params, payload: plan.payload }),
   emitTelegramMessageSentHooks:
     emitTelegramMessageSentHooks as TelegramBotDeps["emitTelegramMessageSentHooks"],
   editMessageTelegram: editMessageTelegram as TelegramBotDeps["editMessageTelegram"],
@@ -370,125 +342,99 @@ export const telegramDepsForTest: TelegramBotDeps = {
 };
 
 export type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
-export const trailingFinalStatusText = "Post-final plugin status";
 
-async function loadTelegramDispatchForTests() {
-  ({ dispatchTelegramMessage } = await import("./bot-message-dispatch.js"));
-}
+let testState: OpenClawTestState;
 
-function resetTelegramDispatchTestState() {
+async function resetTelegramDispatchTestState() {
+  testState = await createOpenClawTestState({ label: "telegram-dispatch", layout: "state-only" });
   resetPluginStateStoreForTests({ closeDatabase: false });
   setTelegramPluginStateRuntimeForTests();
   resetTelegramReplyFenceForTests();
-  observeInboundDelivery.mockReset();
   createTelegramDraftStream.mockReset();
   dispatchReplyWithBufferedBlockDispatcher.mockReset();
-  deliverReplies.mockReset();
-  deliverInboundReplyWithMessageSendContext.mockReset();
   emitTelegramMessageSentHooks.mockReset();
   recordOutboundMessageForPromptContext.mockReset();
-  createForumTopicTelegram.mockReset();
-  deleteMessageTelegram.mockReset();
-  editForumTopicTelegram.mockReset();
-  editMessageTelegram.mockReset();
-  editMessageReplyMarkupTelegram.mockReset();
-  reactMessageTelegram.mockReset();
-  sendMessageTelegram.mockReset();
-  sendPollTelegram.mockReset();
-  sendStickerTelegram.mockReset();
   loadConfig.mockReset();
-  readChannelAllowFromStore.mockReset();
   upsertChannelPairingRequest.mockReset();
-  enqueueSystemEvent.mockReset();
   buildModelsProviderData.mockReset();
-  listSkillCommandsForAgents.mockReset();
   createChannelMessageReplyPipeline.mockReset();
-  wasSentByBot.mockReset();
   appendAssistantMirrorMessageByIdentity.mockReset();
   readLatestAssistantTextByIdentity.mockReset();
   getSessionEntry.mockReset();
-  loadSessionStore.mockReset();
-  resolveStorePath.mockReset();
-  generateTopicLabel.mockReset();
   getAgentScopedMediaLocalRoots.mockClear();
   resolveChunkMode.mockClear();
   resolveMarkdownTableMode.mockClear();
-  getGlobalHookRunner.mockReset();
-  describeStickerImage.mockReset();
-  loadModelCatalog.mockReset();
-  findModelInCatalog.mockReset();
-  modelSupportsVision.mockReset();
-  resolveAgentDir.mockReset();
   resolveDefaultModelForAgent.mockReset();
-  resolveHumanDelayConfig.mockReset();
   loadConfig.mockReturnValue({});
   dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
     queuedFinal: false,
     counts: { block: 0, final: 0, tool: 0 },
   });
-  deliverReplies.mockResolvedValue({ delivered: true });
-  deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+  deliverReplies
+    .mockReset()
+    .mockImplementation(
+      async (params: Parameters<NonNullable<TelegramBotDeps["deliverReplies"]>>[0]) => {
+        params.onMediaAccepted?.(
+          params.replies.flatMap((payload) => resolveSendableOutboundReplyParts(payload).mediaUrls),
+        );
+        return { delivered: true };
+      },
+    );
+  deliverInboundReplyWithMessageSendContext.mockReset().mockResolvedValue({
     status: "unsupported",
     reason: "missing_outbound_handler",
   });
   emitTelegramMessageSentHooks.mockResolvedValue(undefined);
   recordOutboundMessageForPromptContext.mockResolvedValue(true);
-  createForumTopicTelegram.mockResolvedValue({ message_thread_id: 777 });
-  deleteMessageTelegram.mockResolvedValue(true);
-  editForumTopicTelegram.mockResolvedValue(true);
-  editMessageTelegram.mockResolvedValue({ ok: true });
-  editMessageReplyMarkupTelegram.mockResolvedValue({ ok: true });
-  reactMessageTelegram.mockResolvedValue(true);
-  sendMessageTelegram.mockResolvedValue({ message_id: 1001 });
-  sendPollTelegram.mockResolvedValue({ message_id: 1001 });
-  sendStickerTelegram.mockResolvedValue({ message_id: 1001 });
-  readChannelAllowFromStore.mockResolvedValue([]);
+  editMessageTelegram.mockReset().mockResolvedValue({ ok: true });
+  editMessageReplyMarkupTelegram.mockReset().mockResolvedValue({ ok: true });
+  reactMessageTelegram.mockReset().mockResolvedValue(true);
+  readChannelAllowFromStore.mockReset().mockResolvedValue([]);
   upsertChannelPairingRequest.mockResolvedValue({
     code: "PAIRCODE",
     created: true,
   });
-  enqueueSystemEvent.mockResolvedValue(undefined);
-  listSkillCommandsForAgents.mockReturnValue([]);
+  enqueueSystemEvent.mockReset().mockResolvedValue(undefined);
+  listSkillCommandsForAgents.mockReset().mockReturnValue([]);
   createChannelMessageReplyPipeline.mockReturnValue({
     responsePrefix: undefined,
     responsePrefixContextProvider: () => ({ identityName: undefined }),
     resolveResponsePrefix: () => undefined,
     onModelSelected: () => undefined,
   });
-  wasSentByBot.mockReturnValue(false);
-  resolveStorePath.mockReturnValue("/tmp/sessions.json");
+  wasSentByBot.mockReset().mockReturnValue(false);
+  resolveStorePath.mockReset().mockReturnValue(testState.path("sessions.json"));
   readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
   appendAssistantMirrorMessageByIdentity.mockResolvedValue({
     ok: true,
     messageId: "m1",
   });
-  loadSessionStore.mockReturnValue({});
+  loadSessionStore.mockReset().mockReturnValue({});
   getSessionEntry.mockImplementation(
     ({ sessionKey }: { sessionKey: string }) =>
       (loadSessionStore() as Record<string, unknown>)[sessionKey],
   );
-  generateTopicLabel.mockResolvedValue("Topic label");
-  describeStickerImage.mockResolvedValue(null);
-  loadModelCatalog.mockResolvedValue({});
-  findModelInCatalog.mockReturnValue(null);
-  modelSupportsVision.mockReturnValue(false);
-  resolveAgentDir.mockReturnValue("/tmp/agent");
+  generateTopicLabel.mockReset().mockResolvedValue("Topic label");
+  describeStickerImage.mockReset().mockResolvedValue(null);
+  loadModelCatalog.mockReset().mockResolvedValue({});
+  findModelInCatalog.mockReset().mockReturnValue(null);
+  modelSupportsVision.mockReset().mockReturnValue(false);
+  resolveAgentDir.mockReset().mockReturnValue("/tmp/agent");
   resolveDefaultModelForAgent.mockReturnValue({
     provider: "openai",
     model: "gpt-test",
   });
-  resolveHumanDelayConfig.mockReturnValue(undefined);
-  getGlobalHookRunner.mockReturnValue(null);
+  resolveHumanDelayConfig.mockReset().mockReturnValue(undefined);
+  getGlobalHookRunner.mockReset().mockReturnValue(null);
 }
 
-function cleanupTelegramDispatchTestState() {
+async function cleanupTelegramDispatchTestState() {
   clearTelegramRuntime();
   resetPluginStateStoreForTests();
+  await testState.cleanup();
 }
 
-export const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
-export const createSequencedDraftStream = (startMessageId = 1001) =>
-  createSequencedTestDraftStream(startMessageId);
+const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
 
 export function setupDraftStreams(params?: {
   answerMessageId?: number;
@@ -511,7 +457,7 @@ export function mockDefaultSessionEntry(entry: Record<string, unknown> = { sessi
   });
 }
 
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
   }
@@ -522,7 +468,7 @@ export function expectRecordFields(record: unknown, expected: Record<string, unk
   return actual;
 }
 
-export function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
   const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`Expected mock call ${callIndex}`);
@@ -534,15 +480,7 @@ export function expectDraftStreamParams(expected: Record<string, unknown>) {
   return expectRecordFields(mockCallArg(createTelegramDraftStream), expected);
 }
 
-export function telegramProgressPreview(_plainText: string, html: string) {
-  return {
-    text: html.replaceAll("\n", "<br>"),
-    parseMode: "HTML" as const,
-    complete: true as const,
-  };
-}
-
-export function expectDeliverRepliesParams(expected: Record<string, unknown>, callIndex = 0) {
+function expectDeliverRepliesParams(expected: Record<string, unknown>, callIndex = 0) {
   return expectRecordFields(mockCallArg(deliverReplies, callIndex), expected);
 }
 
@@ -557,18 +495,6 @@ export function expectDeliveredReply(
     throw new Error("Expected delivered replies array");
   }
   return expectRecordFields(replies[index], expected);
-}
-
-export function allDeliveredReplyTexts(): string[] {
-  return deliverReplies.mock.calls.flatMap((call: unknown[]) =>
-    ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).map(
-      (reply) => reply.text ?? "",
-    ),
-  );
-}
-
-export function expectDispatchParams(expected: Record<string, unknown>) {
-  return expectRecordFields(mockCallArg(dispatchReplyWithBufferedBlockDispatcher), expected);
 }
 
 export function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {
@@ -588,7 +514,6 @@ export function createContext(overrides?: Partial<TelegramMessageContext>): Tele
     threadSpec: { id: 777, scope: "dm" },
     historyKey: undefined,
     historyLimit: 0,
-    groupHistories: new Map(),
     route: { agentId: "default", accountId: "default" },
     skillFilter: undefined,
     sendTyping: vi.fn(),
@@ -598,7 +523,8 @@ export function createContext(overrides?: Partial<TelegramMessageContext>): Tele
     reactionApi: null,
   } as unknown as TelegramMessageContext;
   base.turn = {
-    storePath: "/tmp/openclaw/telegram-sessions.json",
+    // Prepared turns also read pending-delivery state before entering the mocked producer.
+    storePath: testState.path("sessions.json"),
     recordInboundSession: vi.fn(async () => undefined),
     record: {
       onRecordError: vi.fn(),
@@ -634,7 +560,7 @@ export function createStatusReactionController() {
     setError: vi.fn(async () => {}),
     setDone: vi.fn(async () => {}),
     restoreInitial: vi.fn(async () => {}),
-  };
+  } satisfies NonNullable<TelegramMessageContext["statusReactionController"]>;
 }
 
 export function createDirectSessionPayload(): TelegramMessageContext["ctxPayload"] {
@@ -657,7 +583,7 @@ export function createBot(): Bot {
   } as unknown as Bot;
 }
 
-export function createRuntime(): Parameters<typeof dispatchTelegramMessage>[0]["runtime"] {
+function createRuntime(): Parameters<typeof dispatchTelegramMessage>[0]["runtime"] {
   return {
     log: vi.fn(),
     error: vi.fn(),
@@ -709,36 +635,12 @@ export function createReasoningStreamContext(): TelegramMessageContext {
   });
 }
 
-export function createReasoningDefaultContext(): TelegramMessageContext {
-  loadSessionStore.mockReturnValue({
-    s1: {},
-  });
-  return createContext({
-    ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
-    route: { agentId: "ops" } as unknown as TelegramMessageContext["route"],
-  });
-}
-
-export function createReasoningForumTopicContext(): TelegramMessageContext {
-  loadSessionStore.mockReturnValue({
-    s1: { reasoningLevel: "stream" },
-  });
-  return createContext({
-    ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
-    msg: {
-      chat: { id: -100123, type: "supergroup", is_forum: true },
-      message_id: 456,
-      message_thread_id: 88,
-    } as unknown as TelegramMessageContext["msg"],
-    chatId: -100123,
-    isGroup: true,
-    threadSpec: { id: 88, scope: "forum" },
-  });
-}
-
 export function describeTelegramDispatch(name: string, registerTests: () => void): void {
   describe(name, () => {
-    beforeAll(loadTelegramDispatchForTests);
+    beforeAll(async () => {
+      // Dependency factories capture mocks initialized by this harness before the runtime loads.
+      ({ dispatchTelegramMessage } = await import("./bot-message-dispatch.js"));
+    });
     beforeEach(resetTelegramDispatchTestState);
     afterEach(cleanupTelegramDispatchTestState);
     registerTests();

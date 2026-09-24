@@ -40,6 +40,13 @@ export type QueuedSessionRun = {
   promise: Promise<void>;
 };
 
+export function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    return undefined;
+  }
+  return String(Math.max(0, Math.ceil(timeoutMs / 1000)));
+}
+
 export function buildLocalQueuedPrompt(queue: NonNullable<LocalRunState["pendingQueue"]>): string {
   const summary = previewQueueSummaryPrompt({
     state: queue,

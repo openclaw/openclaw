@@ -3,8 +3,9 @@ import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registr
 import type { Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import { loadAuthProfileStoreForRuntime, resolveAuthProfileOrder } from "../auth-profiles.js";
+import { loadAuthProfileStoreForRuntimeAsync, resolveAuthProfileOrder } from "../auth-profiles.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
+import { AuthProfileRuntimeReadStaleError } from "../auth-profiles/runtime-persisted-rows.js";
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
@@ -158,7 +159,13 @@ export function resolveExplicitModelWithRegistry(params: {
       };
 }
 
-export function resolveDynamicModelAuthProfile(params: {
+type DynamicModelAuthProfile = {
+  authProfileId?: string;
+  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
+};
+
+export async function resolveDynamicModelAuthProfile(params: {
+  abortSignal?: AbortSignal;
   provider: string;
   modelId: string;
   cfg?: OpenClawConfig;
@@ -166,10 +173,8 @@ export function resolveDynamicModelAuthProfile(params: {
   authProfileId?: string;
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
   preferredProfile?: string;
-}): {
-  authProfileId?: string;
-  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
-} {
+}): Promise<DynamicModelAuthProfile> {
+  params.abortSignal?.throwIfAborted();
   const explicitProfileId = params.authProfileId?.trim() || undefined;
   // A prepared mode is authoritative; model discovery does not reselect its credentials.
   if (params.authProfileMode) {
@@ -178,7 +183,8 @@ export function resolveDynamicModelAuthProfile(params: {
       authProfileMode: params.authProfileMode,
     };
   }
-  const store = loadAuthProfileStoreForRuntime(params.agentDir, {
+  const agentDir = params.agentDir;
+  const readOptions = {
     readOnly: true,
     migrationProvider: params.provider,
     allowKeychainPrompt: false,
@@ -190,19 +196,34 @@ export function resolveDynamicModelAuthProfile(params: {
       profileId: explicitProfileId,
       preferredProfile: params.preferredProfile,
     }),
+  };
+  const readStore = () => {
+    params.abortSignal?.throwIfAborted();
+    return loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
+  };
+  const providers = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider: params.provider,
+    config: params.cfg,
   });
+  const store = await readStore().catch(async (error: unknown) => {
+    if (!(error instanceof AuthProfileRuntimeReadStaleError)) {
+      throw error;
+    }
+    // OAuth publication can overlap selection. The rejected reader has joined its cleanup.
+    await error.waitForSettlement?.(params.abortSignal);
+    return readStore();
+  });
+  params.abortSignal?.throwIfAborted();
   const profileId =
     explicitProfileId ??
-    listOpenAIAuthProfileProvidersForAgentRuntime({
-      provider: params.provider,
-      config: params.cfg,
-    }).flatMap((provider) =>
+    providers.flatMap((provider) =>
       resolveAuthProfileOrder({
         cfg: params.cfg,
         store,
         provider,
         preferredProfile: params.preferredProfile,
         forModel: params.modelId,
+        includePendingOAuthRefresh: true,
       }),
     )[0];
   if (!profileId) {
@@ -226,14 +247,17 @@ export function resolveDynamicModelAuthProfile(params: {
   };
 }
 
-function resolvePluginDynamicModelWithRegistry(
+async function resolvePluginDynamicModelWithRegistry(
   params: ResolveModelWithPreparedRegistryParams,
-): Model | undefined {
+): Promise<Model | undefined> {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
   const runtimeHooks = params.runtimeHooks ?? resolveRuntimeHooks();
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   let pluginDynamicModel = params.preparedDynamicModel;
   if (!pluginDynamicModel) {
+    const authProfile =
+      params.preparedAuthProfile ?? (await resolveDynamicModelAuthProfile(params));
+    params.assertCurrent?.();
     // Prepared models already consumed discovery inputs; only a sync hook needs them again.
     const agentHarnessPolicy = resolveAgentHarnessPolicy({ provider, modelId, config: cfg });
     const inferredAgentRuntimeId =
@@ -255,7 +279,7 @@ function resolvePluginDynamicModelWithRegistry(
         modelId,
         modelRegistry,
         providerConfig,
-        ...resolveDynamicModelAuthProfile(params),
+        ...authProfile,
       },
     }) as ProviderRuntimeModel | undefined;
   }
@@ -291,9 +315,10 @@ function resolvePluginDynamicModelWithRegistry(
   });
 }
 
-export function resolveRuntimePreferredSuppressedModel(
+export async function resolveRuntimePreferredSuppressedModel(
   params: ResolveModelWithPreparedRegistryParams,
-): Model | undefined {
+): Promise<Model | undefined> {
+  params.assertCurrent?.();
   const runtimeHooks = params.runtimeHooks ?? resolveRuntimeHooks();
   if (!shouldCompareProviderRuntimeResolvedModel({ ...params, runtimeHooks })) {
     return undefined;
@@ -368,6 +393,8 @@ export function normalizeProviderModelRef(params: {
 }
 
 type ResolveModelWithRegistryParams = {
+  abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   provider: string;
   modelId: string;
   modelRegistry: CoreModelRegistry;
@@ -384,13 +411,16 @@ type ResolveModelWithRegistryParams = {
 
 type ResolveModelWithPreparedRegistryParams = ResolveModelWithRegistryParams & {
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
+  // An empty result is prepared too; a dynamic-model miss must not read auth again.
+  preparedAuthProfile?: DynamicModelAuthProfile;
   preparedDynamicModel?: ProviderRuntimeModel;
   getStaticCatalogModel?: () => StaticCatalogFallbackModel | undefined;
 };
 
-export function resolveModelWithPreparedRegistry(
+export async function resolveModelWithPreparedRegistry(
   params: ResolveModelWithPreparedRegistryParams,
-): Model | undefined {
+): Promise<Model | undefined> {
+  params.assertCurrent?.();
   const runtimeHooks = params.runtimeHooks ?? resolveRuntimeHooks();
   const explicitModel = resolveExplicitModelWithRegistry(params);
   if (explicitModel?.kind === "unavailable") {
@@ -403,8 +433,10 @@ export function resolveModelWithPreparedRegistry(
     if (!shouldCompareProviderRuntimeResolvedModel({ ...params, runtimeHooks })) {
       return explicitModel.model;
     }
+    const pluginDynamicModel = await resolvePluginDynamicModelWithRegistry(params);
+    params.assertCurrent?.();
     return (
-      resolvePluginDynamicModelWithRegistry(params) ??
+      pluginDynamicModel ??
       (shouldDropRuntimePreferredExplicitMiss({
         provider: params.provider,
         modelId: params.modelId,
@@ -414,7 +446,8 @@ export function resolveModelWithPreparedRegistry(
         : explicitModel.model)
     );
   }
-  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(params);
+  const pluginDynamicModel = await resolvePluginDynamicModelWithRegistry(params);
+  params.assertCurrent?.();
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }
@@ -426,9 +459,9 @@ export function resolveModelWithPreparedRegistry(
       });
 }
 
-export function resolveModelWithRegistry(
+export async function resolveModelWithRegistry(
   params: ResolveModelWithRegistryParams,
-): Model | undefined {
+): Promise<Model | undefined> {
   const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
   const normalizedRef = normalizeProviderModelRef({ ...params, workspaceDir });
   let staticCatalogResolved = false;

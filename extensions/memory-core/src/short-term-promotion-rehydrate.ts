@@ -1,11 +1,13 @@
-import fs from "node:fs/promises";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { readWorkspaceText } from "./memory-workspace-files.js";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
-import { normalizeSnippet, SHORT_TERM_BASENAME_RE } from "./short-term-promotion-utils.js";
+import {
+  isGenericDailyHeading,
+  normalizeSnippet,
+  SHORT_TERM_BASENAME_RE,
+} from "./short-term-promotion-utils.js";
 
-const GENERIC_DAY_HEADING_RE =
-  /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
 
@@ -45,26 +47,12 @@ function normalizeDailyHeadingForPromotion(line: string): string | null {
   if (
     !normalized ||
     SHORT_TERM_BASENAME_RE.test(normalized) ||
-    isGenericDailyHeadingForPromotion(normalized)
+    MANAGED_DREAMING_HEADINGS.has(normalized.toLowerCase()) ||
+    isGenericDailyHeading(normalized)
   ) {
     return null;
   }
   return normalized;
-}
-
-function isGenericDailyHeadingForPromotion(heading: string): boolean {
-  const normalized = heading.trim().replace(/\s+/g, " ");
-  const lower = normalized.toLowerCase();
-  if (MANAGED_DREAMING_HEADINGS.has(lower)) {
-    return true;
-  }
-  if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
-    return true;
-  }
-  if (lower === "morning" || lower === "afternoon" || lower === "evening" || lower === "night") {
-    return true;
-  }
-  return GENERIC_DAY_HEADING_RE.test(normalized);
 }
 
 function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
@@ -309,7 +297,7 @@ export async function rehydratePromotionCandidate(
   for (const sourcePath of sourcePaths) {
     let rawSource: string;
     try {
-      rawSource = await fs.readFile(sourcePath, "utf-8");
+      rawSource = await readWorkspaceText(workspaceDir, sourcePath);
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
         continue;

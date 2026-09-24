@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as convergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
@@ -9,8 +10,8 @@ import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { readPersistedInstalledPluginIndexRowSync } from "../../plugins/installed-plugin-index-record-state.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../../plugins/installed-plugin-index-row.js";
 import { auditDeclaredOpenClawHostDependency } from "../../plugins/plugin-peer-link.js";
 import * as registryRefresh from "../../plugins/registry-refresh.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
@@ -23,8 +24,11 @@ import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
-import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import * as postCore from "./update-command-post-core.js";
+import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
+import * as postCoreResume from "./update-command-resume.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
@@ -32,7 +36,44 @@ const transport = vi.hoisted(() => ({ exec: vi.fn(), command: vi.fn() }));
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: transport.exec,
+  runUtf8CommandWithTimeout: async ([command, ...args]: string[], options: unknown) => ({
+    ...(await transport.exec(command, args, options)),
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  }),
   runCommandWithTimeout: transport.command,
+}));
+// Native Doctor delegation has real-child coverage. Keep this suite focused on
+// the real in-process plugin/config owners, with both Doctor transports inert.
+vi.mock("./update-command-doctor-child.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-doctor-child.js")>()),
+  inspectUpdateDoctorChildSupport: async () => true,
+  withUpdateDoctorChild: async (
+    params: Parameters<typeof import("./update-command-doctor-child.js").withUpdateDoctorChild>[0],
+    operation: Parameters<
+      typeof import("./update-command-doctor-child.js").withUpdateDoctorChild
+    >[1],
+  ) => {
+    params.context.executorFence.assertCurrent();
+    params.context.assertRequesterCurrent();
+    const result = await operation(async (_argv, options) => ({
+      ...(await transport.exec(
+        process.execPath,
+        [path.join(params.root, "dist", "entry.js"), "doctor"],
+        options,
+      )),
+      code: 0,
+      signal: null,
+      killed: false,
+      cleanup: "normal",
+      termination: "exit",
+    }));
+    params.context.assertRequesterCurrent();
+    params.context.executorFence.assertCurrent();
+    return result;
+  },
 }));
 
 afterEach(() => {
@@ -41,18 +82,27 @@ afterEach(() => {
 });
 
 describe("connected in-process plugin finalization authority", () => {
-  it.each([
-    "healthy",
-    "index-revoked",
-    "config-revoked",
-    "run-replaced",
-    "fence-replaced",
-    "cohort-revoked",
-    "cohort-run-replaced",
-    "cohort-fence-replaced",
-    "host-link-recovery",
-    "registry-revoked",
-  ] as const)("protects persistence and terminal behavior with %s", async (scenario) => {
+  const cases = [
+    ...(
+      [
+        "healthy",
+        "index-revoked",
+        "config-revoked",
+        "run-replaced",
+        "fence-replaced",
+        "cohort-revoked",
+        "cohort-run-replaced",
+        "cohort-fence-replaced",
+        "host-link-recovery",
+        "registry-revoked",
+      ] as const
+    ).map((scenario) => ({ scenario, candidateRuntime: false })),
+    ...(["healthy", "index-revoked", "run-replaced", "fence-replaced"] as const).map(
+      (scenario) => ({ scenario, candidateRuntime: true }),
+    ),
+  ];
+  it.each(cases)("$scenario (candidate=$candidateRuntime)", async (testCase) => {
+    const { scenario, candidateRuntime } = testCase;
     await withOpenClawTestState(
       {
         label: `plugin-caller-${scenario}`,
@@ -153,6 +203,8 @@ describe("connected in-process plugin finalization authority", () => {
         let completed: Awaited<ReturnType<typeof finishUpdate>> | undefined;
         const cohortScenario = scenario.startsWith("cohort-");
         const npmUpdates = vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins");
+        const phase = vi.spyOn(postCoreResume, "convergePostCoreUpdatePlugins");
+        const delegate = vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess");
         let convergenceReached = false;
         let recovering = false;
         let configAtRegistryRead: string | undefined;
@@ -295,7 +347,7 @@ describe("connected in-process plugin finalization authority", () => {
                 },
               );
               try {
-                completed = await finishUpdate(params);
+                completed = await finishUpdate(params, { candidateRuntime });
               } catch (cause) {
                 refused = cause;
                 // Refusal cannot rewrite history before terminal settlement. The later
@@ -365,7 +417,7 @@ describe("connected in-process plugin finalization authority", () => {
             reason: "update-executor-settlement-failed",
             steps: [
               {
-                name: "update executor settlement",
+                name: "update-executor-settlement",
                 exitCode: 1,
                 stderrTail: expect.stringContaining(
                   scenario.endsWith("run-replaced") || scenario.endsWith("fence-replaced")
@@ -381,6 +433,10 @@ describe("connected in-process plugin finalization authority", () => {
           });
           expect(transport.exec).not.toHaveBeenCalled();
           expect(error).not.toHaveBeenCalled();
+        }
+        if (candidateRuntime) {
+          expect(phase).toHaveBeenCalledOnce();
+          expect(delegate).not.toHaveBeenCalled();
         }
         if (cohortScenario) {
           expect(npmUpdates).not.toHaveBeenCalled();

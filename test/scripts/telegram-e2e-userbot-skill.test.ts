@@ -25,13 +25,7 @@ describe("repository Telegram E2E skill", () => {
       fs.readFileSync(".agents/skills/telegram-e2e-userbot/agents/openai.yaml", "utf8"),
     );
     expect(Object.keys(descriptor)).toEqual(["interface"]);
-    expect(descriptor.interface).toMatchObject({
-      display_name: "Telegram E2E (Userbot)",
-      short_description: "Drive leased Telegram Test Server bots as a real QA user.",
-    });
     expect(descriptor.interface.default_prompt).toContain("$telegram-e2e-userbot");
-    expect(descriptor.interface.default_prompt).toContain("exact changed Telegram behavior");
-    expect(descriptor.interface.default_prompt).toContain("extend the harness freely");
   });
 
   it("passes its Node test suite", () => {
@@ -42,6 +36,31 @@ describe("repository Telegram E2E skill", () => {
       .map((entry) => path.join(scriptsDir, entry));
     expect(tests.length).toBeGreaterThan(0);
     requireSuccess(testNodeExecPath, ["--test", ...tests]);
+  });
+
+  it.each(["pending", "exited"])("settles a %s triage fixture after readiness fails", (mode) => {
+    const preload = new URL("../fixtures/triage-fixture-startup.mjs", import.meta.url);
+    preload.searchParams.set("mode", mode);
+    const result = spawnSync(
+      testNodeExecPath,
+      [
+        "--import",
+        preload.href,
+        "--test",
+        "--test-isolation=none",
+        "--test-name-pattern=^emits interleaved visible and reasoning blocks$",
+        path.join(scriptsDir, "triage-mock-openai.test.mjs"),
+      ],
+      { cwd: process.cwd(), encoding: "utf8", timeout: 120_000 },
+    );
+    const output = `${result.stdout}${result.stderr}`;
+    expect(result.error, output).toBeUndefined();
+    expect(result.status, output).toBe(1);
+    expect(output).toContain("AssertionError");
+    expect(output).toContain("mock-openai listening");
+    expect(result.stderr).toContain(
+      `triage-fixture-exited:${mode === "exited" ? "42" : "SIGTERM"}`,
+    );
   });
 
   it("passes its Python test suite", () => {

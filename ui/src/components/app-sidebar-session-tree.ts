@@ -1,25 +1,23 @@
 import type { GatewaySessionRow } from "../api/types.ts";
-import { areUiSessionKeysEquivalent, isSubagentSessionKey } from "../lib/sessions/session-key.ts";
-import { resolveSidebarSessionParentKey } from "./app-sidebar-session-parent.ts";
 import {
+  isSubagentSessionKey,
+  normalizeDefaultMainSessionAliasForUi,
+  parseAgentSessionKey,
+} from "../lib/sessions/session-key.ts";
+import {
+  collectSidebarSessionChildKeys,
+  resolveSidebarSessionParentKey,
+} from "./app-sidebar-session-parent.ts";
+import {
+  SIDEBAR_SESSION_NO_ATTENTION,
   summarizeSidebarSessionAttention,
-  type SidebarKnownSessionAttention,
   type SidebarRecentSession,
   type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
 
-function attributeChildAttention(
-  attention: SidebarSessionAttention,
-  childLabel: string,
-): SidebarSessionAttention {
-  return attention.kind === "error" && attention.childLabel === undefined
-    ? { ...attention, childLabel }
-    : attention;
-}
-
 function summarizeChildren(
   children: readonly SidebarRecentSession[],
-  knownAttention: readonly SidebarSessionAttention[],
+  unloadedAttention: readonly SidebarSessionAttention[],
   onlySubagents = false,
 ) {
   const childAttention: SidebarSessionAttention[] = [];
@@ -33,9 +31,16 @@ function summarizeChildren(
       continue;
     }
     const descendants = onlySubagents ? child.subagentSummary : child;
+    const attention = onlySubagents
+      ? summarizeSidebarSessionAttention([
+          child.ownAttention ?? child.attention,
+          child.subagentSummary?.attention ?? SIDEBAR_SESSION_NO_ATTENTION,
+        ])
+      : child.attention;
     childAttention.push(
-      attributeChildAttention(child.ownAttention ?? child.attention, child.label),
-      ...(descendants?.childAttention ?? []),
+      attention.kind === "error" && attention.childLabel === undefined
+        ? { ...attention, childLabel: child.label }
+        : attention,
     );
     unreadChildCount += Number(child.unread) + (descendants?.unreadChildCount ?? 0);
     runningChildCount += (child.hasActiveRun ? 1 : 0) + (descendants?.runningChildCount ?? 0);
@@ -45,17 +50,12 @@ function summarizeChildren(
     queuedChildCount +=
       Number(child.hasActiveRun && child.status === "queued") +
       (descendants?.queuedChildCount ?? 0);
-    workspaceConflictCount += child.workspaceConflictCount ?? 0;
+    workspaceConflictCount += onlySubagents
+      ? (child.ownWorkspaceConflictCount ?? 0) + (descendants?.workspaceConflictCount ?? 0)
+      : (child.workspaceConflictCount ?? 0);
   }
-  childAttention.push(...knownAttention);
   return {
-    childAttention: [
-      ...new Map(
-        childAttention
-          .filter((value) => value.kind !== "none")
-          .map((value) => [JSON.stringify(value), value]),
-      ).values(),
-    ],
+    attention: summarizeSidebarSessionAttention([...childAttention, ...unloadedAttention]),
     unreadChildCount,
     runningChildCount,
     failedChildCount,
@@ -75,7 +75,8 @@ export function projectSessionTree(params: {
   mainSessionKeys?: ReadonlySet<string>;
   rowsByKey: ReadonlyMap<string, GatewaySessionRow>;
   loadingChildKeys: ReadonlySet<string>;
-  knownSessionAttention: readonly SidebarKnownSessionAttention[];
+  isChildSessionVisible?: (parentKey: string, childKey: string, row?: GatewaySessionRow) => boolean;
+  resolveAttention: (row: Pick<GatewaySessionRow, "key" | "agentId">) => SidebarSessionAttention;
   toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession;
 }): SidebarRecentSession[] {
   const {
@@ -83,43 +84,14 @@ export function projectSessionTree(params: {
     mainSessionKeys = new Set<string>(),
     rowsByKey,
     loadingChildKeys,
-    knownSessionAttention,
+    resolveAttention,
     toSidebarSession,
   } = params;
-  const childKeysByParent = new Map<string, string[]>();
+  const childKeysByParent = collectSidebarSessionChildKeys(rowsByKey, mainSessionKeys);
   const hasRootCategory = (row: GatewaySessionRow | undefined) =>
     typeof row?.category === "string" &&
     row.category.trim().length > 0 &&
     !isSubagentSessionKey(row.key);
-  const appendChild = (parentKey: string, childKey: string) => {
-    const keys = childKeysByParent.get(parentKey) ?? [];
-    if (!keys.includes(childKey)) {
-      keys.push(childKey);
-      childKeysByParent.set(parentKey, keys);
-    }
-  };
-  for (const row of rowsByKey.values()) {
-    for (const childKey of row.childSessions ?? []) {
-      const child = rowsByKey.get(childKey);
-      // Categories can place independent conversations at a section root;
-      // subagent activity always belongs to its navigation parent.
-      if (hasRootCategory(child)) {
-        continue;
-      }
-      const navigationParentKey = resolveSidebarSessionParentKey(child, mainSessionKeys, row.key);
-      // Runtime control and sidebar navigation can have different parents;
-      // known children belong to their explicit navigation parent only.
-      if (areUiSessionKeysEquivalent(navigationParentKey, row.key)) {
-        appendChild(row.key, childKey);
-      }
-    }
-  }
-  for (const row of rowsByKey.values()) {
-    const parentKey = resolveSidebarSessionParentKey(row, mainSessionKeys);
-    if (parentKey && !hasRootCategory(row)) {
-      appendChild(parentKey, row.key);
-    }
-  }
 
   const nestedKeys = new Set<string>();
   const build = (
@@ -127,7 +99,14 @@ export function projectSessionTree(params: {
     isChild: boolean,
     ancestors: Set<string>,
   ): SidebarRecentSession => {
-    const childSessionKeys = row.archived === true ? [] : (childKeysByParent.get(row.key) ?? []);
+    const childSessionKeys =
+      row.archived === true
+        ? []
+        : (childKeysByParent.get(normalizeDefaultMainSessionAliasForUi(row.key)) ?? []).filter(
+            (key) =>
+              !hasRootCategory(rowsByKey.get(key)) &&
+              (params.isChildSessionVisible?.(row.key, key, rowsByKey.get(key)) ?? true),
+          );
     const ownsAncestor = !ancestors.has(row.key);
     ancestors.add(row.key);
     const navigationChildKeys: string[] = [];
@@ -157,11 +136,15 @@ export function projectSessionTree(params: {
     }
     const projected = toSidebarSession(row, isChild);
     const unloadedChildKeys = childSessionKeys.filter((key) => !rowsByKey.has(key));
-    // Only direct unloaded children can match: parents carry their keys, but not grandchildren's.
-    // Grandchildren join the normal transitive fold after their branch is materialized.
-    const unloadedAttention = knownSessionAttention.filter((entry) =>
-      unloadedChildKeys.some((key) => areUiSessionKeysEquivalent(entry.sessionKey, key)),
-    );
+    // Parents expose only direct unloaded keys. Loaded descendants fold transitively;
+    // terminal outcomes still require child details.
+    const unloadedAttention = unloadedChildKeys.map((key) => ({
+      key,
+      attention: resolveAttention({
+        key,
+        agentId: parseAgentSessionKey(key)?.agentId ?? projected.agentId,
+      }),
+    }));
     const summary = summarizeChildren(
       descendants,
       unloadedAttention.map((entry) => entry.attention),
@@ -169,17 +152,11 @@ export function projectSessionTree(params: {
     const subagentSummary = summarizeChildren(
       descendants,
       unloadedAttention
-        .filter((entry) => isSubagentSessionKey(entry.sessionKey))
+        .filter((entry) => isSubagentSessionKey(entry.key))
         .map((entry) => entry.attention),
       true,
     );
-    // Unloaded terminal outcomes require the existing child-detail loader.
-    // Child attention is transitive just like live-run counts: a collapsed
-    // ancestor remains actionable even when the blocked descendant is hidden.
-    const attention = summarizeSidebarSessionAttention([
-      projected.attention,
-      ...summary.childAttention,
-    ]);
+    const attention = summarizeSidebarSessionAttention([projected.attention, summary.attention]);
     // Sum descendants before adding the parent's conflicts, then clamp once.
     const workspaceConflictCount = Math.min(
       Number.MAX_SAFE_INTEGER,
@@ -197,10 +174,12 @@ export function projectSessionTree(params: {
       ...projected,
       ...summary,
       ownAttention: projected.attention,
+      ownWorkspaceConflictCount: projected.workspaceConflictCount,
       subagentSummary,
       attention,
       childSessionKeys: navigationChildKeys,
-      childLoadParentKeys: navigationChildKeys.length > 0 ? [...childLoadParentKeys] : [],
+      // Hidden runs still need reads to discover their persistent descendants.
+      childLoadParentKeys: childSessionKeys.length > 0 ? [...childLoadParentKeys] : [],
       children,
       loadingChildren: [...childLoadParentKeys].some((key) => loadingChildKeys.has(key)),
       containsActiveDescendant: children.some(

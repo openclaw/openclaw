@@ -35,10 +35,10 @@ import { fileLogTransport } from "./logger-file-transport.js";
 import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import {
-  redactLogRecordForTransport,
   redactSecrets,
   redactSensitiveText,
   resolveFileLogRedactOptions,
+  serializeRedactedFileLogRecord,
 } from "./redact.js";
 import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
@@ -607,7 +607,7 @@ function buildLogger(): TsLogger<LogObj> {
         }
         const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
         const { fields, messageParts } = prepareFileLogRecord(logObj as TsLogRecord);
-        const record = redactLogRecordForTransport(
+        const line = serializeRedactedFileLogRecord(
           {
             ...logObj,
             _meta: withResolvedLogMetaHostname(
@@ -622,7 +622,6 @@ function buildLogger(): TsLogger<LogObj> {
             decodedOptions: resolveFileLogRedactOptions(),
           },
         );
-        const line = JSON.stringify(record);
         fileLogTransport.enqueue({
           file: activeFile,
           hostname: expectDefined(fields.hostname, "structured log hostname"),

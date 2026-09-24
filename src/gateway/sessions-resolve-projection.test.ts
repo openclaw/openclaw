@@ -26,7 +26,6 @@ import { createSessionRowProjection, type SessionRowProjection } from "./session
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 import { resolveSessionKeyFromResolveParams } from "./sessions-resolve.js";
-import { resolveWorkerSessionTarget } from "./worker-environments/session-target.js";
 
 const scope = { agentId: "main", sessionKey: "agent:main:target" };
 const entry = { sessionId: "target-id", updatedAt: 1, label: "original" };
@@ -321,8 +320,11 @@ describe("session resolution metadata", () => {
         );
         expect(read(siblingKey)?.sessionId).toBe("sibling");
         closeOpenClawAgentDatabasesForTest();
-        expect(read(scope.sessionKey)).toBeUndefined();
-        expect(read(siblingKey)).toBeUndefined();
+        for (const key of [scope.sessionKey, siblingKey]) {
+          expect(() => read(key)).toThrow(
+            expect.objectContaining({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" }),
+          );
+        }
       });
     },
   );
@@ -422,28 +424,6 @@ describe("gateway session lookups", () => {
         parse.mockRestore();
         resetResolvedSessionKeyForRunCacheForTest();
       }
-    });
-  });
-
-  it("preserves the worker target payload without decoding unrelated saved prompts", async () => {
-    await withOpenClawTestState({ label: "lookup-worker-projection" }, async () => {
-      setRuntimeConfigSnapshot(cfg);
-      seedStore();
-
-      const observed = measureSiblingDecodes(() => resolveWorkerSessionTarget(cfg, "target-id"));
-
-      // This lookup returns the raw canonical key, unlike the run-id lookup.
-      expect(observed.result?.sessionKey).toBe(scope.sessionKey);
-      expect(observed.result?.agentId).toBe("main");
-      expect(observed.result?.sessionId).toBe("target-id");
-
-      // The exact selected-entry read must retain the full payload this caller returns.
-      expect(observed.result?.sessionEntry.skillsSnapshot?.prompt).toBe(TARGET_PROMPT);
-
-      // Metadata discovery and the exact payload read must never decode sibling prompts.
-      expect(observed.decodes).toBe(0);
-
-      expect(resolveWorkerSessionTarget(cfg, "absent-session-id")).toBeUndefined();
     });
   });
 
