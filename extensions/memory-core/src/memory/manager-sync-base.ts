@@ -130,6 +130,14 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected sessionPendingFiles = new Set<string>();
   protected sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
 
+  protected memoryDatabaseReadTarget() {
+    return {
+      agentId: this.agentId,
+      databasePath: resolveUserPath(this.settings.store.databasePath),
+      ...(this.publishedDatabase.isShared ? { sharedDatabase: true } : {}),
+    };
+  }
+
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract computeProviderKey(): string;
   protected abstract resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[];

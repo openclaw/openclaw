@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { openExistingMemoryDatabaseReadOnlyFileAtPath } from "./manager-db.js";
 import {
   readMemoryRetrievalIndexState,
   readMemoryRecallData,
@@ -35,7 +36,7 @@ export type MemoryVectorWorkerQuery = Omit<
 >;
 export type MemorySearchWorkerInput =
   | { kind: "presence"; databasePath: string }
-  | ({ databasePath: string; agentId: string } & (
+  | ({ databasePath: string; agentId: string; sharedDatabase?: boolean } & (
       | { kind: "keyword"; query: MemoryKeywordWorkerQuery; includeIndexState?: boolean }
       | { kind: "vector"; query: MemoryVectorWorkerQuery }
       | { kind: "index-state" }
@@ -68,6 +69,22 @@ export type MemorySearchWorkerOutput =
 
 export type MemoryKeywordWorkerResult = Extract<MemorySearchWorkerOutput, { kind: "keyword" }>;
 
+function openMemorySearchDatabase(request: Extract<MemorySearchWorkerInput, { agentId: string }>) {
+  if (!request.sharedDatabase) {
+    return openOpenClawAgentDatabaseReadOnly({
+      agentId: request.agentId,
+      path: request.databasePath,
+    });
+  }
+  const opened = openExistingMemoryDatabaseReadOnlyFileAtPath(request.databasePath, false);
+  return opened.found
+    ? {
+        found: true as const,
+        database: { db: opened.db, close: opened.release },
+      }
+    : opened;
+}
+
 serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   // SAFETY: The paired runtime constructs the private request union.
   const request = input as MemorySearchWorkerInput;
@@ -76,19 +93,33 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     return { kind: "presence", present: inspectMemoryIndexPresenceInWorker(request.databasePath) };
   }
   if (request.kind === "recall-metadata") {
+    if (request.sharedDatabase) {
+      const opened = openMemorySearchDatabase(request);
+      if (!opened.found) {
+        throw new Error(`Memory search database unavailable: ${opened.reason}`);
+      }
+      try {
+        return {
+          kind: "recall-metadata",
+          ...readMemoryRecallData(opened.database.db, request),
+        };
+      } finally {
+        opened.database.close();
+      }
+    }
     const result = withOpenClawAgentDatabaseReadOnly(
       ({ db }) => readMemoryRecallData(db, request),
-      { agentId: request.agentId, path: request.databasePath },
+      {
+        agentId: request.agentId,
+        path: request.databasePath,
+      },
     );
     if (!result.found) {
       throw new Error(`Memory search database unavailable: ${result.reason}`);
     }
     return { kind: "recall-metadata", ...result.value };
   }
-  const opened = openOpenClawAgentDatabaseReadOnly({
-    agentId: request.agentId,
-    path: request.databasePath,
-  });
+  const opened = openMemorySearchDatabase(request);
   if (!opened.found) {
     if (
       opened.reason === "database-missing" &&

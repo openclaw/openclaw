@@ -4,6 +4,7 @@
 
 export { isPathInside } from "../../packages/memory-host-sdk/src/host/fs-utils.js";
 export {
+  listAgentIds,
   resolveAgentContextLimits,
   resolveAgentDir,
   resolveAgentWorkspaceDir,

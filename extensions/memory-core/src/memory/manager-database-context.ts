@@ -3,10 +3,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  resolveStateDir,
-  resolveUserPath,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   borrowOpenClawAgentDatabase,
@@ -38,9 +34,15 @@ import {
   readMemoryShadowIdentity,
   type MemoryShadowConnection,
 } from "./manager-shadow-task.js";
+import type { SharedMemoryDatabaseLease } from "./manager-shared-database.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
+
+export type MemoryDatabaseWriteOptions = Omit<
+  Parameters<typeof withOpenClawAgentDatabaseWrite>[0],
+  "path"
+> & { path: string };
 
 export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
@@ -57,18 +59,25 @@ export class MemoryIndexDatabase {
 
   static openPublished(params: {
     agentId: string;
-    writeOptions: Parameters<typeof withOpenClawAgentDatabaseWrite>[0] & { path: string };
+    writeOptions?: MemoryDatabaseWriteOptions;
+    sharedDatabase?: SharedMemoryDatabaseLease;
     readOnly: boolean;
     allowExtension: boolean;
     maintenanceSource?: MemoryIndexDatabase;
   }): MemoryIndexDatabase {
-    const connection = params.readOnly
-      ? openMemoryDatabaseReadOnlyAtPath(
-          params.writeOptions.path,
-          params.allowExtension,
-          params.agentId,
-        )
-      : borrowOpenClawAgentDatabase(params.writeOptions);
+    const sharedDatabase = params.sharedDatabase;
+    const connection = sharedDatabase
+      ? {
+          db: sharedDatabase.db,
+          release: () => sharedDatabase.release(),
+        }
+      : params.readOnly
+        ? openMemoryDatabaseReadOnlyAtPath(
+            params.writeOptions!.path,
+            params.allowExtension,
+            params.agentId,
+          )
+        : borrowOpenClawAgentDatabase(params.writeOptions!);
     if (params.maintenanceSource && connection.db !== params.maintenanceSource.db) {
       connection.release();
       throw new Error("Memory maintenance source connection changed");
@@ -78,6 +87,7 @@ export class MemoryIndexDatabase {
       connection.release,
       params.readOnly,
       params.writeOptions,
+      sharedDatabase,
     );
   }
 
@@ -115,16 +125,6 @@ export class MemoryIndexDatabase {
     }
   }
 
-  static captureWriteOptions(agentId: string, databasePath: string, source?: MemoryIndexDatabase) {
-    const env = { ...(source?.writeOptions?.env ?? process.env) };
-    env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-    return {
-      agentId,
-      path: source?.writeOptions?.path ?? resolveUserPath(databasePath),
-      env,
-    };
-  }
-
   readonly vector: {
     enabled: boolean;
     available: boolean | null;
@@ -147,11 +147,20 @@ export class MemoryIndexDatabase {
     readonly db: DatabaseSync,
     readonly release: () => void = () => closeMemoryDatabase(db),
     readonly readOnly = false,
-    readonly writeOptions?: Parameters<typeof withOpenClawAgentDatabaseWrite>[0],
+    readonly writeOptions?: MemoryDatabaseWriteOptions,
+    private readonly sharedDatabase?: SharedMemoryDatabaseLease,
   ) {}
 
   get isShadow(): boolean {
     return this.shadow !== undefined;
+  }
+
+  get isShared(): boolean {
+    return this.sharedDatabase !== undefined;
+  }
+
+  withSharedWrite<T>(write: () => T): Promise<T> | undefined {
+    return this.sharedDatabase?.withWrite(write);
   }
 
   assertShadowPath(): void {
@@ -232,8 +241,12 @@ export class MemoryIndexDatabase {
   > {
     this.publicationWorker ??= (async () => {
       const filename = this.shadow?.path ?? this.writeOptions?.path;
-      if (!filename || this.readOnly || this.closed) {
+      if ((!this.sharedDatabase && !filename) || this.readOnly || this.closed) {
         throw new Error("Memory publication requires its live file owner");
+      }
+      const databasePath = this.sharedDatabase?.path ?? filename;
+      if (!databasePath) {
+        throw new Error("Memory publication requires a database path");
       }
       const readPragma = (name: keyof MemoryPublicationConnection["pragmas"]): number => {
         const row = this.db.prepare("PRAGMA " + name).get();
@@ -254,10 +267,13 @@ export class MemoryIndexDatabase {
       const worker = {
         moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
         input: {
-          fileIdentity: this.shadow?.identity ?? readMemoryShadowIdentity(filename),
+          fileIdentity: this.shadow?.identity ?? readMemoryShadowIdentity(databasePath),
           pragmas,
         },
       };
+      if (this.sharedDatabase) {
+        return this.sharedDatabase.openPublicationWorker(worker);
+      }
       if (this.writeOptions) {
         return openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
           this.writeOptions,
@@ -267,7 +283,7 @@ export class MemoryIndexDatabase {
       }
       const store = await openSqliteWorkerStore<MemoryPublicationOperations>({
         ...worker,
-        databasePath: filename,
+        databasePath,
         existingOnly: true,
         admission: {
           identity: `file:${this.shadow!.identity.device}:${this.shadow!.identity.inode}`,
@@ -284,7 +300,7 @@ export class MemoryIndexDatabase {
       }
       return {
         run: <T>(operation: (scope: PublicationScope) => Promise<T>, assertCurrent: () => void) =>
-          runSqliteWorkerStoreWrite(store, operation, assertCurrent, [filename]),
+          runSqliteWorkerStoreWrite(store, operation, assertCurrent, [databasePath]),
         close: () => store.close(),
       };
     })().catch((error: unknown) => {
@@ -433,6 +449,7 @@ export class MemoryIndexDatabase {
       await worker.close();
       this.publicationWorker = undefined;
     }
+    await this.sharedDatabase?.drainWrites();
   }
 
   closeShadow(): Promise<void> {
@@ -481,9 +498,12 @@ export abstract class MemoryManagerDatabaseContext {
     };
     // A shadow index is private to its awaited rebuild; only the published
     // borrowed database shares the agent's reclamation/write admission owner.
-    return database.writeOptions
-      ? await withOpenClawAgentDatabaseWrite(database.writeOptions, run, database.db)
-      : await database.withPrivateAccess(run, { reentrant: true });
+    const sharedWrite = database.withSharedWrite(run);
+    return sharedWrite
+      ? await sharedWrite
+      : database.writeOptions
+        ? await withOpenClawAgentDatabaseWrite(database.writeOptions, run, database.db)
+        : await database.withPrivateAccess(run, { reentrant: true });
   }
 
   protected async withDatabaseRead<T>(read: () => T): Promise<T> {

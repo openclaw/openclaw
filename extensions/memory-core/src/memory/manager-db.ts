@@ -1,4 +1,4 @@
-import type { Dirent, Stats } from "node:fs";
+import { existsSync, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -240,6 +240,39 @@ function openUninitializedMemoryDatabase(allowExtension: boolean) {
     database.close();
     throw error;
   }
+}
+
+export type MemoryDatabaseReadOnlyFileOpenResult =
+  | { found: true; db: DatabaseSync; release: () => void }
+  | { found: false; reason: "database-missing" | "schema-missing" };
+
+/** Open a Memory Core-owned file without entering the generic agent database owner. */
+export function openExistingMemoryDatabaseReadOnlyFileAtPath(
+  dbPath: string,
+  allowExtension: boolean,
+): MemoryDatabaseReadOnlyFileOpenResult {
+  if (!existsSync(dbPath)) {
+    return { found: false, reason: "database-missing" };
+  }
+  const db = openNodeSqliteDatabase(dbPath, { allowExtension, readOnly: true });
+  try {
+    if (!tableExists(db, "main", MEMORY_INDEX_STATE_TABLE)) {
+      db.close();
+      return { found: false, reason: "schema-missing" };
+    }
+    db.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
+    return { found: true, db, release: () => db.close() };
+  } catch (error) {
+    if (db.isOpen) {
+      db.close();
+    }
+    throw error;
+  }
+}
+
+export function openMemoryDatabaseReadOnlyFileAtPath(dbPath: string, allowExtension: boolean) {
+  const opened = openExistingMemoryDatabaseReadOnlyFileAtPath(dbPath, allowExtension);
+  return opened.found ? opened : openUninitializedMemoryDatabase(allowExtension);
 }
 
 /** Open an existing memory index through the agent database query-only owner. */

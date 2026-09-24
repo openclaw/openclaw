@@ -32,7 +32,7 @@ const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
   maxPendingBytes: MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES,
 });
 
-type MemoryReadTarget = { databasePath: string; agentId: string };
+type MemoryReadTarget = { databasePath: string; agentId: string; sharedDatabase?: boolean };
 
 export async function runMemoryIndexState(target: MemoryReadTarget, signal?: AbortSignal) {
   ensureSqliteLibrarySelected();

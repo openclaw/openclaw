@@ -1,9 +1,6 @@
 // Memory Core plugin module owns keyword retrieval and ranking.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  createSubsystemLogger,
-  resolveUserPath,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   MEMORY_INDEX_FTS_TABLE,
@@ -138,13 +135,10 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     activeProjectKeys?: string[];
   }): Promise<MemorySearchResult[]> {
     return await this.withManagerOperation(async () => {
-      const result = await runMemoryCuratedCandidates(
-        {
-          agentId: this.agentId,
-          databasePath: resolveUserPath(this.settings.store.databasePath),
-        },
-        { ...query, checkProvenanceRepair: this.memorySourceProvenanceRepairPending },
-      );
+      const result = await runMemoryCuratedCandidates(this.memoryDatabaseReadTarget(), {
+        ...query,
+        checkProvenanceRepair: this.memorySourceProvenanceRepairPending,
+      });
       this.memorySourceProvenanceRepairPending = result.provenanceRepairPending;
       if (this.memorySourceProvenanceRepairPending) {
         // Automatic recall runs before the model. Keep repair admitted for teardown
@@ -272,14 +266,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     const sessionOnly = sourceFilterList?.length === 1 && sourceFilterList[0] === "sessions";
     const { rows: metadataById, sourceMtimes } = sessionOnly
       ? readMemoryRecallData(this.db, query)
-      : await runMemoryRecallMetadata(
-          {
-            agentId: this.agentId,
-            databasePath: resolveUserPath(this.settings.store.databasePath),
-          },
-          query,
-          signal,
-        );
+      : await runMemoryRecallMetadata(this.memoryDatabaseReadTarget(), query, signal);
     // The left-joined metadata reader omits only missing chunks. A forget may
     // delete one while the worker is reading its earlier snapshot.
     return results
@@ -337,7 +324,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     sourceFilterList: MemorySource[],
   ) {
     const result = await runMemoryKeywordSearch(
-      { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
+      this.memoryDatabaseReadTarget(),
       this.buildKeywordSearchQuery(query, limit, options, sourceFilterList),
       options.signal,
       true,
@@ -358,7 +345,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       return [];
     }
     const result = await runMemoryKeywordSearch(
-      { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
+      this.memoryDatabaseReadTarget(),
       this.buildKeywordSearchQuery(query, limit, options, sourceFilterList),
       options?.signal,
     );

@@ -662,10 +662,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       },
       runFallback: () =>
         runMemoryVectorFallback(
-          {
-            agentId: this.agentId,
-            databasePath: resolveUserPath(this.settings.store.databasePath),
-          },
+          this.memoryDatabaseReadTarget(),
           {
             providerModel: providerIdentity.model,
             providerModelAliases: providerIdentity.aliases,

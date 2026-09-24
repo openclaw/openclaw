@@ -10,7 +10,6 @@ import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-
 import {
   createSubsystemLogger,
   resolveAgentDir,
-  resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -494,10 +493,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected readRetrievalIndexState(signal?: AbortSignal): Promise<MemoryRetrievalIndexState> {
-    return runMemoryIndexState(
-      { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
-      signal,
-    );
+    return runMemoryIndexState(this.memoryDatabaseReadTarget(), signal);
   }
 
   protected refreshIndexIdentityDirty(params?: {
