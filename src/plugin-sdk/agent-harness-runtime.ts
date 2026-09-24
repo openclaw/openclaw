@@ -254,6 +254,7 @@ export {
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../agents/embedded-agent-messaging-extraction.js";
 export {
