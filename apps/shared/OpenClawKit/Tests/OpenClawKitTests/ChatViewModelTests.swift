@@ -9482,6 +9482,35 @@ struct ChatViewModelTests {
         }
     }
 
+    @Test(arguments: ["main", "agent:main:main"])
+    @MainActor
+    func `message invalidation recovers selected transcript`(eventSessionKey: String) async throws {
+        let recovered = chatTextMessage(role: "assistant", text: "Stored message recovered", timestamp: 1)
+        let (transport, vm) = await makeViewModel(
+            activeAgentId: "main",
+            historyResponses: [
+                historyPayload(canonicalKey: "agent:main:main", agentId: "main"),
+                historyPayload(
+                    messages: [recovered],
+                    canonicalKey: "agent:main:main",
+                    agentId: "main"),
+            ])
+        defer { vm.detachTransport() }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(vm.messages.isEmpty)
+
+        transport.emit(.sessionsChanged(.init(
+            sessionKey: eventSessionKey,
+            agentId: "main",
+            phase: "message")))
+
+        try await waitUntil("committed message recovers after invalidation") {
+            await MainActor.run {
+                vm.messages.contains { $0.content.contains { $0.text == "Stored message recovered" } }
+            }
+        }
+    }
+
     @Test @MainActor func `current session mutations refresh selected model availability`() async throws {
         let unavailable = modelChoice(
             id: "claude-opus-4-6",

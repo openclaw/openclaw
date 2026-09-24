@@ -152,7 +152,8 @@ extension OpenClawChatViewModel {
         let swarmEvent = self.observeSwarmEvent(change)
         let ownedSwarmActivityNote = swarmEvent && SelfContainedSwarmHelpers.isActivityNote(change)
 
-        if let phase = change.phase?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+        let phase = change.phase?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let phase,
            phase == "start" || phase == "end" || phase == "error"
         {
             self.handleLifecycleSessionChange(change, phase: phase)
@@ -195,6 +196,16 @@ extension OpenClawChatViewModel {
                 await self.refreshSessionBranches(confirmingBranchChange: true)
             }
             return
+        }
+        if phase == "message", let eventSessionKey,
+           self.matchesCurrentSessionKey(
+               incoming: eventSessionKey,
+               agentId: change.agentId,
+               current: self.sessionKey)
+        {
+            self.invalidateHistorySnapshots()
+            let context = self.beginHistoryRequest()
+            Task { await self.refreshHistoryAfterRun(historyRequest: context) }
         }
         guard change.reason == "patch" || change.reason == "command-metadata" else { return }
         self.requestSessionsRefresh()
