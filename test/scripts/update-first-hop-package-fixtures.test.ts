@@ -12,6 +12,7 @@ import {
   markFutureUpdateFixture,
   packFirstHopUpdateFixture,
   packFutureUpdateFixture,
+  packUnsupportedAdmissionFixture,
   removeLegacyUpdateCompatChunks,
 } from "../../scripts/e2e/lib/update-first-hop-package-fixtures.mjs";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
@@ -33,6 +34,7 @@ function makePackageFixture() {
     name: "openclaw",
     version: "2026.8.1",
     dependencies: { "@openclaw/ai": "2026.8.1" },
+    openclaw: { schemaVersions: { state: 1, agent: 1 }, updateAdmissionProtocol: 1 },
   });
   writeJson(path.join(root, "dist", "build-info.json"), {
     version: "2026.8.1",
@@ -54,30 +56,34 @@ function makePackageFixture() {
 }
 
 describe("first-hop package fixtures", () => {
-  it.each(["first-hop-tarball", "future-tarball", "negative-tarball", "future", "negative"])(
-    "keeps modern content inventories valid for %s",
-    async (method) => {
-      const root = tempDirs.make("openclaw-fixture-content-inventory-");
-      const packageRoot = path.join(root, "package");
-      fs.cpSync(makePackageFixture(), packageRoot, { recursive: true });
-      await writePackageDistInventory(packageRoot);
-      let transformedRoot = packageRoot;
-      const args = ["scripts/e2e/lib/update-first-hop-package-fixtures.mjs", method];
-      if (method.endsWith("-tarball")) {
-        const source = path.join(root, "source.tgz");
-        const output = path.join(root, "transformed.tgz");
-        execFileSync("tar", ["-czf", source, "-C", root, "package"]);
-        execFileSync(process.execPath, [...args, source, output]);
-        const extracted = path.join(root, "extracted");
-        fs.mkdirSync(extracted);
-        execFileSync("tar", ["-xzf", output, "-C", extracted]);
-        transformedRoot = path.join(extracted, "package");
-      } else {
-        execFileSync(process.execPath, [...args, packageRoot]);
-      }
-      expect(await collectPackageDistContentInventoryErrors(transformedRoot)).toEqual([]);
-    },
-  );
+  it.each([
+    "first-hop-tarball",
+    "future-tarball",
+    "negative-tarball",
+    "unsupported-admission-tarball",
+    "future",
+    "negative",
+  ])("keeps modern content inventories valid for %s", async (method) => {
+    const root = tempDirs.make("openclaw-fixture-content-inventory-");
+    const packageRoot = path.join(root, "package");
+    fs.cpSync(makePackageFixture(), packageRoot, { recursive: true });
+    await writePackageDistInventory(packageRoot);
+    let transformedRoot = packageRoot;
+    const args = ["scripts/e2e/lib/update-first-hop-package-fixtures.mjs", method];
+    if (method.endsWith("-tarball")) {
+      const source = path.join(root, "source.tgz");
+      const output = path.join(root, "transformed.tgz");
+      execFileSync("tar", ["-czf", source, "-C", root, "package"]);
+      execFileSync(process.execPath, [...args, source, output]);
+      const extracted = path.join(root, "extracted");
+      fs.mkdirSync(extracted);
+      execFileSync("tar", ["-xzf", output, "-C", extracted]);
+      transformedRoot = path.join(extracted, "package");
+    } else {
+      execFileSync(process.execPath, [...args, packageRoot]);
+    }
+    expect(await collectPackageDistContentInventoryErrors(transformedRoot)).toEqual([]);
+  });
 
   it("selects recorded baselines and verifies their bytes before choosing restart controls", () => {
     const root = makePackageFixture();
@@ -126,6 +132,13 @@ describe("first-hop package fixtures", () => {
     });
     expect(listFirstHopSourceVersions(root)).toEqual(
       Object.values(sources).map(({ version }) => version),
+    );
+    expect(listFirstHopSourceVersions(root, "2026.9.3, 2026.9.1")).toEqual([
+      "2026.9.1",
+      "2026.9.3",
+    ]);
+    expect(() => listFirstHopSourceVersions(root, "2026.9.2 2026.9.9")).toThrow(
+      "first-hop sources are not recorded in the candidate: 2026.9.9",
     );
     const inspect = ({ version, tarball }: ReturnType<typeof createSource>) =>
       inspectFirstHopSource(root, tarball, { version });
@@ -283,13 +296,15 @@ describe("first-hop package fixtures", () => {
       execFileSync("tar", ["-czf", candidate, "-C", root, "package"]);
       const original = fs.readFileSync(candidate);
       const receipts: ReturnType<typeof packFirstHopUpdateFixture>[] = [];
-      for (const sequence of [0, 1]) {
+      for (const sequence of [0, 1, 2]) {
         const output = path.join(root, `future-${sequence}.tgz`);
-        const input = sequence === 0 ? candidate : path.join(root, "future-0.tgz");
+        const input = sequence === 0 ? candidate : path.join(root, `future-${sequence - 1}.tgz`);
         const receipt =
           sequence === 0
             ? packFirstHopUpdateFixture(input, output, sequence)
-            : packFutureUpdateFixture(input, output, sequence);
+            : sequence === 1
+              ? packFutureUpdateFixture(input, output, sequence)
+              : packUnsupportedAdmissionFixture(input, output, sequence);
         const unpacked = path.join(root, `unpacked-${sequence}`);
         fs.mkdirSync(unpacked);
         execFileSync("tar", ["-xzf", output, "-C", unpacked]);
@@ -304,21 +319,27 @@ describe("first-hop package fixtures", () => {
         );
         expect(pkg.version).toBe(receipt.targetVersion);
         expect(pkg.dependencies).toEqual({ "@openclaw/ai": "2026.8.1" });
+        expect(pkg.openclaw).toEqual({
+          schemaVersions: { state: 1, agent: 1 },
+          ...(sequence === 2 ? {} : { updateAdmissionProtocol: 1 }),
+        });
         expect(
           execFileSync("tar", ["-xOf", output, "package/dist/index.js"], { encoding: "utf8" }),
         ).toBe("export {};\n");
-        expect(receipt.sourceVersion).toBe(sequence === 0 ? "2026.8.1" : FUTURE_FIXTURE_VERSION);
+        expect(receipt.sourceVersion).toBe(
+          sequence === 0 ? "2026.8.1" : `2026.9.99-first-hop.${sequence - 1}`,
+        );
         expect(receipt.members.changes.map((entry: { path: string }) => entry.path)).toEqual(
           [
             "dist/build-info.json",
             "package.json",
             ...(contentInventory ? ["dist/postinstall-content-inventory.json"] : []),
-            ...(sequence === 0
-              ? []
-              : [
+            ...(sequence === 1
+              ? [
                   "dist/postinstall-inventory.json",
                   ...LEGACY_UPDATE_COMPAT_CHUNKS.map((name) => `dist/${name}`),
-                ]),
+                ]
+              : []),
           ].toSorted((left, right) => left.localeCompare(right)),
         );
         const members = execFileSync("tar", ["-tzf", output], { encoding: "utf8" });
@@ -358,9 +379,11 @@ describe("first-hop package fixtures", () => {
       expect(receipts.map((receipt) => receipt.targetVersion)).toEqual([
         "2026.9.99-first-hop.0",
         "2026.9.99-first-hop.1",
+        "2026.9.99-first-hop.2",
       ]);
-      expect(new Set(receipts.map((receipt) => receipt.targetSha256)).size).toBe(2);
+      expect(new Set(receipts.map((receipt) => receipt.targetSha256)).size).toBe(3);
       expect(receipts[1]?.sourceSha256).toBe(receipts[0]?.targetSha256);
+      expect(receipts[2]?.sourceSha256).toBe(receipts[1]?.targetSha256);
       expect(fs.readFileSync(candidate)).toEqual(original);
       expect(() => packFutureUpdateFixture(candidate, candidate)).toThrow("new tarball path");
       expect(fs.readFileSync(candidate)).toEqual(original);

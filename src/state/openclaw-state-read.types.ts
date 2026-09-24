@@ -9,10 +9,13 @@ import type {
 import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { WorkspaceStateSnapshot } from "../agents/workspace-state-store.kernel.js";
+import type { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lease-owner.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import type {
   ExecutionIdentityInspectionQuery,
   ExecutionIdentityInspectionOutcome,
 } from "../audit/execution-identity-inspection.types.js";
+import type { ConfigSnapshotAuditRecord } from "../config/config-journal-snapshot.kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   CronRunRecoveryReadCommand,
@@ -42,6 +45,7 @@ import type {
   DevicePairingReadReply,
 } from "../infra/device-pairing-read.types.js";
 import type { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import type { OutboundDeliveryStorageEntry } from "../infra/outbound/delivery-queue-storage.types.js";
 import type {
   ConversationRef,
   SessionBindingRecord,
@@ -82,6 +86,7 @@ import type {
   UserChannelIdentityAuthorityFacts,
   UserChannelIdentityResult,
   CachedGitHubIdentity,
+  UserProfileGitHubAttributionRead,
   UserProfileDisplay,
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -101,6 +106,8 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
+  | { type: "config.snapshot.read" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
   | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
@@ -144,6 +151,7 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentity }
   | { type: "userProfiles.authority.resolve"; profileId: string }
   | { type: "userProfiles.githubIdentity.cached"; accountId: number; email: string }
+  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
   | {
@@ -162,8 +170,9 @@ export type OpenClawStateReadCommand =
   | { type: "updateRuns.get"; runId: string }
   | { type: "updateRuns.list"; input: UpdateRunListInput }
   | { type: "updateRuns.interruptedCandidate" }
+  | { type: "worktrees.cleanupState" }
   | { type: "fleet.list" }
-  | { type: "workerPlacements.changeSnapshot" }
+  | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "fleet.get"; tenantId: string }
   | { type: "nodeHost.config" }
   | {
@@ -190,6 +199,18 @@ export type OpenClawStateReadRequest = {
   command: OpenClawStateReadCommand | { type: "admit" };
 };
 export type OpenClawStateReadReply = (
+  | {
+      ok: true;
+      type: "deliveryQueue.outbound";
+      sourceAdmitted: true;
+      entries: OutboundDeliveryStorageEntry[];
+    }
+  | {
+      ok: true;
+      type: "config.snapshot.read";
+      sourceAdmitted: true;
+      snapshot: ConfigSnapshotAuditRecord | null;
+    }
   | {
       ok: true;
       type: "acpSessions.metadata";
@@ -369,6 +390,11 @@ export type OpenClawStateReadReply = (
       sourceAdmitted: true;
       identity: CachedGitHubIdentity | undefined;
     }
+  | ({
+      ok: true;
+      type: "userProfiles.githubAttribution.resolve";
+      sourceAdmitted: true;
+    } & UserProfileGitHubAttributionRead)
   | {
       ok: true;
       type: "audit.run.inspect";
@@ -399,6 +425,13 @@ export type OpenClawStateReadReply = (
       type: "updateRuns.interruptedCandidate";
       sourceAdmitted: true;
       run: ReturnType<typeof readInterruptedUpdateCandidate>;
+    }
+  | {
+      ok: true;
+      type: "worktrees.cleanupState";
+      sourceAdmitted: true;
+      records: ManagedWorktreeRecord[];
+      leases: ReturnType<typeof readWorktreeRunLeaseStateInDatabase>;
     }
   | { ok: true; type: "fleet.list"; sourceAdmitted: true; cells: FleetCellRecord[] }
   | {

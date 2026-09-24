@@ -12,12 +12,14 @@ import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
+import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-read.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { readSessionBackingFactsInDatabase } from "./session-backing-facts.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
+  assertCanonicalSqliteSessionRowsCurrent,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
@@ -148,6 +150,13 @@ export function readExactSessionEntriesWithLifecycle(
                       ),
                     }
                   : {}),
+                ...(request.includeParticipantRecords
+                  ? {
+                      participantRecords: Object.fromEntries(
+                        participantRecordsBySessionKey(database.db, request.sessionKeys),
+                      ),
+                    }
+                  : {}),
                 kind: "session-exact-entries" as const,
                 entries: selected.value,
                 lifecycleTimestamps: resolveSessionLifecycleTimestamps({
@@ -185,7 +194,7 @@ export function readSessionRowDatabaseFacts(
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
         withSqlitePostCommitPublications(database.db, () =>
           runSqliteDeferredTransactionSync(database.db, () => {
-            assertCanonicalSqliteSessionKeysCurrent(database);
+            assertCanonicalSqliteSessionRowsCurrent(database, request.sessionKeys);
             const selected = expectDefined(
               readExactSessionEntryCandidatesInDatabase(database, [request.sessionKeys], "list")[0],
               "session row facts read result",

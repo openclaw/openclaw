@@ -12,6 +12,7 @@ import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skele
 import { t } from "../../i18n/index.ts";
 import { registerBackgroundTasksEnglish } from "../../i18n/locales/en-background-tasks.ts";
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { formatKeyboardShortcutCombo } from "../../lib/keyboard-shortcut-catalog.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
@@ -77,6 +78,7 @@ type SidebarPanelDefinitionParams = {
   companionFocusRequest: (() => boolean) | undefined;
   onCompanionSubmit: (question: string | ChatSessionCompanionTurn) => void;
   onCompanionDraftChange: (draft: string) => void;
+  onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onCompanionVisibilityChange: (visible: boolean) => void;
   connected: boolean;
   onClearCompanion: () => void;
@@ -209,6 +211,8 @@ export function sidebarPanelDefinitions(
         .sendShortcut=${state?.settings.chatSendShortcut ?? "enter"}
         .onSubmit=${params.onCompanionSubmit}
         .onDraftChange=${params.onCompanionDraftChange}
+        .onAttachmentsChange=${params.onCompanionAttachmentsChange}
+        .attachmentLimits=${state?.hello?.policy?.attachments}
         .onVisibilityChange=${params.onCompanionVisibilityChange}
       ></openclaw-chat-session-rail>`
     : null;

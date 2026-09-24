@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
   getAgentRunLifecycleGeneration,
+  readAgentRunDelegatedAuthorityFailure,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
@@ -297,7 +298,10 @@ export function resolveAdmittedRunActiveAssertion(
       context.operationalRunInstance !== operationalRunInstance ||
       getAdmittedRunDelegatedAuthority(context) !== authority
     ) {
-      throw new Error("admitted run authority is no longer active");
+      throw new Error(
+        "admitted run authority is no longer active",
+        readAgentRunDelegatedAuthorityFailure(authority),
+      );
     }
   };
 }
@@ -449,18 +453,20 @@ export function prepareAgentRunAdmission(params: {
   }
   const assertOperatorCurrent = operatorAuthority?.assertCurrent;
   const releaseOperatorAuthority = operatorAuthority?.retain?.();
-  let sourceClosed = false;
+  let sourceFailure: Error | undefined;
   const assertSourceCurrent =
     (sourceAssertion || assertOperatorCurrent) &&
     (() => {
-      if (sourceClosed) {
-        throw new Error("source execution authority is no longer active");
+      if (sourceFailure) {
+        throw sourceFailure;
       }
       try {
         sourceAssertion?.();
         assertOperatorCurrent?.();
       } catch (error) {
-        sourceClosed = true;
+        sourceFailure = new Error("source execution authority is no longer active", {
+          cause: error,
+        });
         throw error;
       }
     });

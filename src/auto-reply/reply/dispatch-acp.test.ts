@@ -14,10 +14,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AcpSessionResolution } from "../../acp/control-plane/manager.types.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
-import {
-  emitAcpLifecycleEnd,
-  resolveAcpLifecycleEndFields,
-} from "../../agents/command/attempt-execution.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
@@ -175,19 +171,17 @@ vi.mock("./dispatch-acp-manager.runtime.js", async (importOriginal) => ({
   readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
 }));
 
-vi.mock("../../agents/command/attempt-execution.runtime.js", () => ({
-  createAcpToolLifecycleTracker: () => ({
-    active: new Map(),
-    terminalToolCallIds: new Set(),
-    saturated: false,
-  }),
-  emitAcpLifecycleStart: auditMocks.emitAcpLifecycleStart,
-  emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
-  emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
-  emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
-  resolveAcpLifecycleEndFields: (...args: Parameters<typeof resolveAcpLifecycleEndFields>) =>
-    resolveAcpLifecycleEndFields(...args),
-}));
+vi.mock("../../agents/command/acp-lifecycle.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/command/acp-lifecycle.js")>();
+  return {
+    createAcpToolLifecycleTracker: actual.createAcpToolLifecycleTracker,
+    emitAcpLifecycleStart: auditMocks.emitAcpLifecycleStart,
+    emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
+    emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
+    emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
+    resolveAcpLifecycleEndFields: actual.resolveAcpLifecycleEndFields,
+  };
+});
 
 vi.mock("../../acp/policy.js", () => ({
   resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
@@ -1645,6 +1639,9 @@ describe("tryDispatchAcpReplyCore", () => {
           input as Parameters<typeof actualTranscript.persistAcpDispatchTranscript>[0],
         );
       });
+      const { emitAcpLifecycleEnd } = await vi.importActual<
+        typeof import("../../agents/command/acp-lifecycle.js")
+      >("../../agents/command/acp-lifecycle.js");
       auditMocks.emitAcpLifecycleEnd.mockImplementationOnce(emitAcpLifecycleEnd);
       const preparedMessages: unknown[] = [];
       let dispatchedRun: ReplyDispatchRun | undefined;

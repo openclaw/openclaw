@@ -1,7 +1,7 @@
 import { symlink } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
+import { emitAcpLifecycleStart } from "../agents/command/acp-lifecycle.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";

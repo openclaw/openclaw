@@ -51,7 +51,7 @@ function reportMissingPlugin(id: string) {
 
 function isConfigSelectedShadowDiagnostic(entry: { level?: string; message?: string }): boolean {
   return (
-    entry.level === "warn" &&
+    (entry.level === "info" || entry.level === "warn") &&
     typeof entry.message === "string" &&
     entry.message.includes("duplicate plugin id resolved by explicit config-selected plugin")
   );
@@ -241,37 +241,6 @@ async function runPluginPolicyCommand(
       return defaultRuntime.exit(1);
     }
   });
-}
-
-export async function runPluginsReloadCommand(
-  ids: string[],
-  opts: { json?: boolean; acceptCapabilities?: boolean } = {},
-): Promise<void> {
-  const pluginIds = [...new Set(ids)];
-  const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
-  const gateway = await resolvePluginLifecycleGateway();
-  if (!gateway) {
-    throw new Error("The Gateway is not running. Start it before reloading a plugin.");
-  }
-  const consent = resolvePluginCapabilityConsentCliOptions({
-    ...opts,
-    action: "reload",
-    allowPrompt: !opts.json,
-  });
-  const result = await gateway<{ runtime: { generation: number }; warnings?: string[] }>(
-    "plugins.reload",
-    { plugins: pluginIds.map((pluginId) => ({ pluginId })) },
-    consent.onCapabilityConsent,
-  );
-  if (opts.json) {
-    return defaultRuntime.writeJson(result);
-  }
-  for (const warning of result.warnings ?? []) {
-    defaultRuntime.log(theme.warn(warning));
-  }
-  defaultRuntime.log(
-    `Reloaded ${pluginIds.length === 1 ? "plugin" : "plugins"} ${pluginIds.map((id) => `"${id}"`).join(", ")} (generation ${result.runtime.generation}).`,
-  );
 }
 
 export async function runPluginsInstallAction(

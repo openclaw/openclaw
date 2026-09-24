@@ -118,6 +118,8 @@ export function createFixture(
     "web-tree-sitter",
     "tree-sitter-bash",
     "tsx",
+    "esbuild",
+    "import-meta-resolve",
     ...(groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS ? ["pretty-ms"] : []),
   ]) {
     const target = path.join(root, "node_modules", name);
@@ -398,7 +400,9 @@ export function expectStagingClean(root: string) {
   expect(
     fs
       .readdirSync(path.join(root, ".artifacts"))
-      .filter((name) => name.startsWith("plugin-sdk-staging-")),
+      .filter(
+        (name) => name.startsWith("plugin-sdk-staging-") || name.startsWith("native-declarations-"),
+      ),
   ).toEqual([]);
   expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(false);
 }

@@ -15,6 +15,7 @@ function placementReadView() {
       rowContext: buildSessionListRowMetadataContext({ now: 1 }),
     },
     describe: () => undefined,
+    readSource: () => undefined,
     selectEntries: () => [],
     present: () => {
       throw new Error("Placement lifecycle does not present session rows");

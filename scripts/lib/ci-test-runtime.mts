@@ -31,9 +31,30 @@ export type CiTestRuntimeSelection = {
 export const BUN_UI_TEST_ENV = {
   BUN_JSC_thresholdForFTLOptimizeAfterWarmUp: "512000",
   BUN_JSC_thresholdForFTLOptimizeSoon: "8000",
+  // Avoid sweeping parked allocator threads between short UI update cycles.
+  MIMALLOC_PURGE_HOLES_MIN_INTERVAL: "1000",
 } as const;
 
 const bunCompatibleConfigs = new Set(["test/vitest/vitest.unit-fast-fake-timers.config.ts"]);
+// TypeScript's synchronous native API uses Node child-process pipe handles.
+// Keep these compiler assertions on Node, including those in mixed runtime suites.
+const nativeCompilerTestFiles = [
+  "src/agents/agent-bundle-mcp-requester-connect.import-boundary.test.ts",
+  "src/agents/agent-model-discovery.imports.test.ts",
+  "src/agents/code-mode.action-output.test.ts",
+  "src/agents/harness/native-hook-relay.imports.test.ts",
+  "src/cli/program/register.database.import-boundary.test.ts",
+  "src/plugin-sdk/provider-tools.test.ts",
+  "test/scripts/audit-control-ui-dead-css.test.ts",
+  "test/scripts/canvas-cli-import-closure.test.ts",
+  "test/scripts/check-session-accessor-boundary.test.ts",
+  "test/scripts/check-session-transcript-reader-boundary.test.ts",
+  "test/scripts/check-sqlite-transaction-boundary.test.ts",
+  "test/scripts/native-typescript.test.ts",
+  "test/scripts/nodes-cli-import-closure.test.ts",
+  "test/scripts/ts-topology.test.ts",
+  "test/test-helper-extension-import-boundary.test.ts",
+];
 // Bun fork 3ff0efc82217775e04094a1d4402d7c6932ecb24 failed or added skips in these files.
 // Keep every case on Node while the canonical inventories own all other membership.
 const runtimePartitions = new Map<
@@ -45,6 +66,7 @@ const runtimePartitions = new Map<
     {
       files: unitFastFiles,
       nodeRequired: new Set([
+        ...nativeCompilerTestFiles,
         "packages/markdown-core/src/render-aware-chunking.test.ts",
         "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
@@ -68,7 +90,7 @@ const runtimePartitions = new Map<
     "test/vitest/vitest.unit-fast-isolated.config.ts",
     {
       files: () => getUnitFastIsolatedTestFiles(),
-      nodeRequired: new Set(["src/proxy-capture/proxy-server.test.ts"]),
+      nodeRequired: new Set([...nativeCompilerTestFiles, "src/proxy-capture/proxy-server.test.ts"]),
     },
   ],
   [

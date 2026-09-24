@@ -171,23 +171,18 @@ export function resolveNativeModelThreadId(
     return undefined;
   }
   const candidate = candidates.entries().next().value;
-  const capture = (() => {
-    try {
-      return candidate?.[0].modelSource?.capture();
-    } catch {
+  let capture: ReturnType<NonNullable<ParentOwner["modelSource"]>["capture"]> | undefined;
+  try {
+    capture = candidate?.[0].modelSource?.capture();
+    if (!capture) {
       return undefined;
     }
-  })();
-  if (!capture) {
-    return undefined;
-  }
-  try {
     capture.assertCurrent();
     return candidate?.[1];
   } catch {
     return undefined;
   } finally {
-    capture.release();
+    capture?.release();
   }
 }
 

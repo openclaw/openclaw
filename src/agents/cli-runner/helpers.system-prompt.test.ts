@@ -2,8 +2,14 @@ import { Type } from "typebox";
 // Verifies CLI system-prompt construction without loading the full runner.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { buildCliAgentSystemPrompt } from "./helpers.js";
+import { prepareCliSystemPrompt } from "./prompt-context.js";
+
+vi.mock("../git-coauthor-prompt.js", () => ({
+  resolveSessionGitCoauthorPrompt: vi.fn(),
+}));
 
 vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
@@ -14,6 +20,32 @@ vi.mock("../../tts/tts-settings.js", () => ({
 describe("buildCliAgentSystemPrompt", () => {
   afterEach(() => {
     clearPluginCommands();
+    vi.mocked(resolveSessionGitCoauthorPrompt).mockReset();
+  });
+
+  it("prepares session credit before rendering the CLI system prompt", async () => {
+    const gitCoauthorPrompt =
+      "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+      "Co-authored-by: ada <20+ada@users.noreply.github.com>";
+    vi.mocked(resolveSessionGitCoauthorPrompt).mockResolvedValue(gitCoauthorPrompt);
+    const config = {};
+    const prompt = await prepareCliSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      config,
+      agentId: "main",
+      sessionKey: "agent:main:shared",
+      sessionId: "shared-session",
+      tools: [],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain(gitCoauthorPrompt);
+    expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
+      config,
+      agentId: "main",
+      sessionKey: "agent:main:shared",
+      sessionId: "shared-session",
+    });
   });
 
   it("includes the OpenClaw skills prompt in CLI system prompts", () => {

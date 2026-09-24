@@ -615,6 +615,7 @@ export const PluginRuntimeApplicationSchema = closedObject({
   generation: Type.Integer({ minimum: 0 }),
   pluginIds: Type.Array(NonEmptyString),
   sourceDigests: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+  selectedEntries: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
 });
 
 export const PluginsChangedEventSchema = closedObject({
@@ -661,7 +662,7 @@ export const PluginsReloadParamsSchema = closedObject({
 export const PluginsReloadResultSchema = closedObject({
   ok: Type.Literal(true),
   pluginIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: MAX_PLUGIN_RELOAD_TARGETS }),
-  restartRequired: Type.Literal(false),
+  restartRequired: Type.Boolean(),
   runtime: PluginRuntimeApplicationSchema,
   warnings: Type.Optional(Type.Array(Type.String())),
 });

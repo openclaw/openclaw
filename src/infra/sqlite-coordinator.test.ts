@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -54,16 +55,21 @@ const acquirePeer = `
 `;
 
 describe("data-free SQLite coordinator", () => {
-  it.each([false, true])(
-    "retries only unfinished native cleanup after a close error (physically closed: %s)",
-    (physicallyClosed) => {
+  it.each(
+    [false, true].flatMap((keepAlive) =>
+      [false, true].map((physicallyClosed) => ({ keepAlive, physicallyClosed })),
+    ),
+  )(
+    "retries only unfinished native cleanup after a close error (pooled: $keepAlive, physically closed: $physicallyClosed)",
+    ({ keepAlive, physicallyClosed }) => {
       const pathname = path.join(tempDirs.make("openclaw-coordinator-close-retry-"), "lock.sqlite");
-      const { result: coordinator, database } = captureCoordinatorDatabase(() =>
-        tryAcquireExclusiveSqliteCoordinator(pathname),
-      );
-      if (!coordinator) {
-        throw new Error("Fixture coordinator was not acquired");
+      if (keepAlive) {
+        fs.writeFileSync(pathname, "");
       }
+      const { result: coordinator, database } = captureCoordinatorDatabase(() =>
+        tryAcquireExclusiveSqliteCoordinator(pathname, { keepAlive }),
+      );
+      assert(coordinator, "Fixture coordinator was not acquired");
       const closeNative = database.close.bind(database);
       const close = vi.spyOn(database, "close").mockImplementationOnce(() => {
         if (physicallyClosed) {
@@ -72,20 +78,22 @@ describe("data-free SQLite coordinator", () => {
         throw new Error("Fixture native close failed");
       });
       const exec = vi.spyOn(database, "exec");
+      const release = () => coordinator.release(keepAlive ? { keepAlive: false } : undefined);
       try {
-        expect(() => coordinator.release()).toThrow("Fixture native close failed");
+        expect(release).toThrow("Fixture native close failed");
         expect(coordinator.closed).toBe(physicallyClosed);
         expect(database.isOpen).toBe(!physicallyClosed);
         expect(() => coordinator.release()).not.toThrow();
         expect(coordinator.closed).toBe(true);
+        expect(database.isOpen).toBe(false);
         expect(close).toHaveBeenCalledTimes(physicallyClosed ? 1 : 2);
         expect(exec).toHaveBeenCalledExactlyOnceWith("ROLLBACK");
-        coordinator.release();
+        release();
         expect(close).toHaveBeenCalledTimes(physicallyClosed ? 1 : 2);
       } finally {
         close.mockRestore();
         exec.mockRestore();
-        coordinator.release();
+        release();
       }
     },
   );

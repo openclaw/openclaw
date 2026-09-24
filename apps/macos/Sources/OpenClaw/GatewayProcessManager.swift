@@ -963,7 +963,7 @@ extension GatewayProcessManager {
                 }
                 let retryDelay = min(.milliseconds(300), max(.zero, clock.now.duration(to: deadline)))
                 if retryDelay > .zero {
-                    try? await clock.sleep(for: retryDelay)
+                    try? await clock.sleep(until: clock.now.advanced(by: retryDelay), tolerance: nil)
                 }
             }
         }

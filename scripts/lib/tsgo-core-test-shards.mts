@@ -219,17 +219,26 @@ export function findTsgoCoreTestShardViolations(params: {
   return violations;
 }
 
+/** Ambient declarations and compiler configuration retain the full graph check. */
+export function isChangedTsgoCoreTestInput(file: string): boolean {
+  return (
+    /^(?:src|ui|packages|test)\/.+\.[cm]?[jt]sx?$/u.test(file) &&
+    !/\.d\.[cm]?ts$/u.test(file) &&
+    !/^test\/.+\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file)
+  );
+}
+
 /** Select every consuming graph, not just the file's declared root partition. */
 export function selectChangedTsgoCoreTestShards(
   paths: readonly string[],
   graphs: readonly { config: string; roots: readonly string[]; files: readonly string[] }[],
 ): readonly { name: string; config: string }[] | undefined {
-  if (
-    paths.length === 0 ||
-    paths.some((file) => !/^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file))
-  ) {
+  if (paths.length === 0 || !paths.every(isChangedTsgoCoreTestInput)) {
     return undefined;
   }
+  const changedTestRoots = paths.filter((file) =>
+    /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file),
+  );
   const testConfigs = new Set<string>(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
   const testGraphs = graphs.filter((graph) => testConfigs.has(graph.config));
   if (
@@ -237,10 +246,14 @@ export function selectChangedTsgoCoreTestShards(
     TSGO_CORE_GRAPHS.some(
       (expected) => graphs.filter((graph) => graph.config === expected.config).length !== 1,
     ) ||
-    paths.some((file) => testGraphs.filter((graph) => graph.roots.includes(file)).length !== 1) ||
+    changedTestRoots.some(
+      (file) => testGraphs.filter((graph) => graph.roots.includes(file)).length !== 1,
+    ) ||
     paths.some((file) => !testGraphs.some((graph) => graph.files.includes(file))) ||
     graphs.some(
-      (graph) => !testConfigs.has(graph.config) && paths.some((file) => graph.files.includes(file)),
+      (graph) =>
+        !testConfigs.has(graph.config) &&
+        changedTestRoots.some((file) => graph.files.includes(file)),
     )
   ) {
     return undefined;

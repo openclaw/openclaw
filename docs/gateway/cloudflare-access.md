@@ -133,6 +133,10 @@ otherwise expects a non-loopback proxy.
 {
   gateway: {
     bind: "loopback",
+    publicOrigin: "https://gateway.example",
+    controlUi: {
+      allowedOrigins: ["https://gateway.example"],
+    },
     trustedProxies: ["127.0.0.1", "::1"],
     auth: {
       mode: "trusted-proxy",
@@ -151,6 +155,12 @@ verification. A local process that can connect to the Gateway can submit both he
 so do not treat this setting as a defense against untrusted local code. The security
 boundary is the locked-down loopback port plus Cloudflare Access and the tunnel being
 the only path for external traffic.
+
+Set both URL fields: `controlUi.allowedOrigins` permits the browser connection,
+while `publicOrigin` supplies external session links and the session-link
+instructions given to agents. A working browser connection does not imply that
+the agent knows its public hostname. For profile, role, GitHub, and operations
+setup, see [Deploy a team server](/gateway/team-server).
 
 ## Step 4: Decide how nodes and workers get in
 

@@ -25,6 +25,7 @@ export type ApplicationUpdateOverlaySnapshot = {
   updateStatusBanner: ApplicationStatusBanner | null;
   updateStatusCheckBanner: (ApplicationStatusBanner & { mode: "manual" | "completion" }) | null;
   recordedUpdateAttempt: RecordedUpdateAttempt | null;
+  diagnosableUpdateFailureId: string | null;
   reportableUpdateFailureId: string | null;
   updateFailureReportBusy: boolean;
   updateFailureReportNotice: UpdateFailureReportNotice | null;
@@ -50,6 +51,7 @@ export type ApplicationOverlays = {
   acknowledgeUpdateRun: () => void;
   runUpdate: (options?: { sessionKey?: string }) => Promise<void>;
   holdUpdate: () => Promise<boolean>;
+  diagnoseUpdateFailure: (attemptId: string) => void;
   reportUpdateFailure: (attemptId: string) => Promise<void>;
   decideApproval: (
     decision: ExecApprovalDecision,

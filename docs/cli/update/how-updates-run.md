@@ -33,9 +33,30 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 If the resolved registry package version equals the installed version without changing
 the selected channel or installation method, or the Git target SHA equals
-`HEAD`, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`. Runtime maintenance can therefore succeed without changing the Git revision. A same-version
+`HEAD` and the recorded build commit matches it, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`. Runtime maintenance can therefore succeed without changing the Git revision. A same-version
 explicit `--channel` or installation-method change finishes successfully.
 Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
+
+If a Git checkout advanced without rebuilding or its runtime has no recorded
+build commit, the matching source revision still needs an update. OpenClaw builds
+and validates a separate candidate, then stops the managed Gateway before
+replacing the runtime and restarting it. The new build records its commit, so
+the next update can finish as already current.
+`--no-restart` cannot replace runtime files used by a running Gateway in the same
+installation; the update leaves those files intact and reports the process and
+the stop/retry action.
+
+Source commands launched with `pnpm openclaw` also refuse an automatic rebuild
+while that installation's Gateway is running. Use the installed `openclaw update`
+or `node openclaw.mjs update` from the checkout to reach the updater's managed
+handoff without the source wrapper rebuilding first. Manual `pnpm build` remains
+an operator action: stop the Gateway before rebuilding its installation.
+
+This decision runs in the installed updater. An older updater that returns
+`already-current` with `runtime-verification-failed` cannot obtain the fix from a
+candidate it never builds. Stop the Gateway through its actual service manager,
+rebuild the checkout, and start the Gateway through that manager before retrying.
+Do not rebuild its installation while the old Gateway is still serving.
 
 Linux updates also refresh outdated OpenClaw-managed systemd policy when the core
 is already current or `--no-restart` is set. This policy-only refresh confirms
@@ -405,6 +426,14 @@ count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
 
+On Windows, Scheduled Task autostart stays suspended until the candidate finalizer
+activates the updated Gateway. After migration, the retained updater checks its
+live executor lease without reopening the newer state database. Plugin version
+drift remains a warning while the candidate completes activation. This handoff
+repair applies when the updated driver runs the next upgrade; it cannot change
+an already-running 2026.9.5 updater. If that older driver stops with recovery
+pending, use the installed version's `openclaw update repair`.
+
 When Doctor cannot acquire maintenance before repair writes begin, finalization
 restores any service it stopped and exits successfully with a recorded warning.
 This includes lock contention from unknown or non-serving processes. Doctor and
@@ -680,6 +709,13 @@ existing ten-second cleanup reserve and refuses any newly appearing owner.
 A different Gateway owner, lost update authority, or unresolved contention stops
 maintenance with recovery guidance. Ordinary Doctor commands and older update
 drivers without delegated Doctor authority retain their immediate refusal.
+
+An active Gateway suspension keeps installation changes under its host operation’s
+control. The installation watcher does not independently restart the Gateway
+while suspension is preparing, draining, or prepared. After resume or lease
+expiry, its next check reads the current installation again; a pointer restored
+during rollback does not leave a stale replacement verdict. Explicit stop and
+restart requests retain their existing behavior.
 
 Published 2026.9.5 Gateways do not have an installation-replacement watcher.
 Installing a newer candidate cannot add that behavior to the process already

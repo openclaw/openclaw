@@ -8,7 +8,10 @@ import {
 
 installPwToolsCoreTestHooks();
 const imageSize = vi.hoisted(() => ({ width: 1280, height: 720 }));
-vi.mock("../media/media-services.js", () => ({ getImageMetadata: async () => imageSize }));
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  getImageMetadata: async () => imageSize,
+}));
 beforeEach(() => {
   imageSize.width = 1280;
 });

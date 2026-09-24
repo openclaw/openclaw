@@ -153,7 +153,7 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        defaults: { workspace: home.workspaceDir, skipBootstrap: true },
+        defaults: { workspace: home.workspaceDir, skipBootstrap: true, utilityModel: "" },
         entries,
       },
       plugins: {

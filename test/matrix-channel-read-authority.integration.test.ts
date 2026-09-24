@@ -16,7 +16,7 @@ import { createMessageCliHelpers } from "../src/cli/program/message/helpers.js";
 import { registerMessageDiscordAdminCommands } from "../src/cli/program/message/register.discord-admin.js";
 import { messageCommand } from "../src/commands/message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,

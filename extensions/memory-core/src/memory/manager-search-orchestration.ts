@@ -579,8 +579,8 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           results: vectorResults,
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
-          sessionSourceMtimes: this.loadSessionSourceMtimes(vectorResults),
-          memorySourceMtimes: this.loadRemoteMemorySourceMtimes(vectorResults),
+          sessionSourceMtimes: this.loadSourceMtimes("sessions", vectorResults),
+          memorySourceMtimes: this.loadSourceMtimes("memory", vectorResults),
         });
         // Decay and importance can reverse the order returned by vector retrieval.
         const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
@@ -717,8 +717,8 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       activeProjectKeys: params.activeProjectKeys,
       workspaceDir: this.workspaceDir,
       // Vector enrichment runs last, so its facts win when a path occurs in both sets.
-      sessionSourceMtimes: this.loadSessionSourceMtimes([...params.keyword, ...params.vector]),
-      memorySourceMtimes: this.loadRemoteMemorySourceMtimes([...params.keyword, ...params.vector]),
+      sessionSourceMtimes: this.loadSourceMtimes("sessions", [...params.keyword, ...params.vector]),
+      memorySourceMtimes: this.loadSourceMtimes("memory", [...params.keyword, ...params.vector]),
     });
   }
 }

@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import { abortQueuedChatTurnById, type QueuedChatTurnEntry } from "../chat-queued-turns.js";
@@ -50,7 +51,6 @@ import { assertValidParams } from "./validation.js";
 type ChatAbortLifecycle = {
   onAuthorizedAfterQueuedAbort?: () => boolean;
   onDescendantsCancelled?: () => void;
-  excludeRunIds?: ReadonlySet<string>;
   cascadeDescendants?: true;
 };
 
@@ -180,7 +180,6 @@ export async function handleChatAbortRequestWithLifecycle(
       requester,
       assertCurrent,
       preserveSideRuns,
-      excludeRunIds: lifecycle.excludeRunIds,
       onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
       cascadeDescendants: lifecycle.cascadeDescendants,
     });
@@ -474,5 +473,24 @@ export async function handleChatAbortRequestWithLifecycle(
 }
 
 export async function handleChatAbortRequest(options: GatewayRequestHandlerOptions): Promise<void> {
-  await handleChatAbortRequestWithLifecycle(options);
+  try {
+    await handleChatAbortRequestWithLifecycle(options);
+  } catch (error) {
+    const contention = resolveStateContentionPresentation(error);
+    if (!contention) {
+      throw error;
+    }
+    // A session read can fail even though cancellation takes effect. Do not
+    // replay Stop or claim it had no effect; preserve uncertainty at the RPC boundary.
+    options.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        "The server is busy. Check this turn's status before trying Stop again.\n\n" +
+          "StateDatabaseCoordinatorContentionError: state-lifecycle acquisition remained busy. Stopping may already have taken effect.",
+        { details: { errorKind: contention.errorKind } },
+      ),
+    );
+  }
 }

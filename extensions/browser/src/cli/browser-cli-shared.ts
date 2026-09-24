@@ -137,19 +137,9 @@ function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, st
   return Object.keys(out).length ? out : undefined;
 }
 
-/** Parses a positive integer value for Browser CLI options. */
-export function parseBrowserPositiveIntegerValue(value: unknown): number | undefined {
-  return parseStrictPositiveInteger(value);
-}
-
-/** Parses a non-negative integer value for Browser CLI options. */
-export function parseBrowserNonNegativeIntegerValue(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
-}
-
 /** Parses and validates a required positive integer CLI option. */
 export function parseBrowserPositiveIntegerOption(raw: string, flag: string): number {
-  const parsed = parseBrowserPositiveIntegerValue(raw);
+  const parsed = parseStrictPositiveInteger(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a positive integer.`);
   }
@@ -158,7 +148,7 @@ export function parseBrowserPositiveIntegerOption(raw: string, flag: string): nu
 
 /** Parses and validates a required non-negative integer CLI option. */
 export function parseBrowserNonNegativeIntegerOption(raw: string, flag: string): number {
-  const parsed = parseBrowserNonNegativeIntegerValue(raw);
+  const parsed = parseStrictNonNegativeInteger(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a non-negative integer.`);
   }
