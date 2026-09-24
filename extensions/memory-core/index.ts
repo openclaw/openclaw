@@ -80,22 +80,6 @@ function createLazyMemoryTool(params: {
   };
 }
 
-function createLazyMemorySearchTool(options: MemoryToolOptions): AnyAgentTool | null {
-  return createLazyMemoryTool({
-    options,
-    contract: MEMORY_SEARCH_TOOL_CONTRACT,
-    load: (module, loadOptions) => module.createMemorySearchTool(loadOptions),
-  });
-}
-
-function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | null {
-  return createLazyMemoryTool({
-    options,
-    contract: MEMORY_GET_TOOL_CONTRACT,
-    load: (module, loadOptions) => module.createMemoryGetTool(loadOptions),
-  });
-}
-
 function createLazyStandingIntentTool(
   ctx: OpenClawPluginToolContext,
   reportUnavailable: (reason: string) => void,
@@ -268,13 +252,20 @@ export default definePluginEntry({
       },
     });
 
-    api.registerTool((ctx) => createLazyMemorySearchTool(resolveMemoryToolOptions(ctx, host)), {
-      names: ["memory_search"],
-    });
-
-    api.registerTool((ctx) => createLazyMemoryGetTool(resolveMemoryToolOptions(ctx, host)), {
-      names: ["memory_get"],
-    });
+    for (const contract of [MEMORY_SEARCH_TOOL_CONTRACT, MEMORY_GET_TOOL_CONTRACT]) {
+      api.registerTool(
+        (ctx) =>
+          createLazyMemoryTool({
+            options: resolveMemoryToolOptions(ctx, host),
+            contract,
+            load: (module, options) =>
+              contract.name === "memory_search"
+                ? module.createMemorySearchTool(options)
+                : module.createMemoryGetTool(options),
+          }),
+        { names: [contract.name] },
+      );
+    }
 
     api.registerTool(
       {
