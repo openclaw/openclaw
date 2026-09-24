@@ -1,4 +1,11 @@
-/** Appends normalized, unique environment-variable candidates to a keyed bucket. */
+/**
+ * Appends normalized, unique environment-variable candidates to a keyed bucket.
+ *
+ * `target` must be a prototype-less object: `ownerId` is plugin-controlled, and on an ordinary
+ * object a `__proto__`/`constructor` owner would resolve an inherited member instead of a bucket
+ * (assigning through `??=` there lands on `Object.prototype`, so the name is silently dropped, and
+ * `new Set(bucket)` throws). A null prototype keeps those ids as ordinary own keys.
+ */
 export function appendUniqueEnvVarCandidates(
   target: Record<string, string[]>,
   ownerId: string,
