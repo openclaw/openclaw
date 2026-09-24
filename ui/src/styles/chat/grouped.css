@@ -35,9 +35,9 @@
   display: grid;
   grid-template-columns: var(--chat-avatar-column) minmax(0, var(--chat-message-column-max));
   grid-template-rows: auto auto;
-  gap: 2px var(--chat-avatar-gap);
+  /* The footer offset owns bubble-to-footer space for grid and block groups alike. */
+  gap: 0 var(--chat-avatar-gap);
   justify-content: start;
-  padding-bottom: 0;
 }
 
 .chat-group.user.chat-group--with-footer {
@@ -54,9 +54,11 @@
   justify-content: start;
 }
 
+/* Top-aligned avatars span the message and footer rows, so a short message never
+   grows its row and the space above it stays the turn gap. */
 .chat-group.chat-group--with-footer > :is(.chat-avatar, .chat-avatar-slot) {
   grid-column: var(--chat-group-avatar-column);
-  grid-row: 1;
+  grid-row: 1 / span 2;
 }
 
 /* Preview chips are shorter than avatars; keep the avatar from enlarging the message row. */
@@ -74,8 +76,6 @@
 .chat-group.chat-group--with-footer > .chat-group-messages {
   grid-column: var(--chat-group-content-column);
   grid-row: 1;
-  /* A taller avatar may grow this row, but never the bubble-to-footer gap. */
-  align-self: end;
   max-width: none;
 }
 
@@ -108,16 +108,13 @@
   margin-block-start: calc(var(--chat-run-block-gap) - 2px);
 }
 
+/* Tool, activity and completed-work groups are blocks inside a turn, not turn
+   ends: no footer row, and the inline run-frame gap to the answer they precede. */
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
   padding-inline-start: var(--chat-avatar-gutter);
-}
-
-/* Tool groups have no footer; attach their activity to the following reply. */
-.chat-group.tool.chat-group--with-footer {
-  display: block;
-  padding-bottom: var(--chat-run-block-gap);
+  margin-block-end: var(--chat-run-block-gap);
 }
 
 .chat-group.tool.chat-group--with-footer > .chat-group-messages {
@@ -132,9 +129,9 @@
   justify-content: flex-start;
 }
 
-/* Footer at bottom of a message group (role + time). It stays in flow while
-   visually hidden so wrapped controls contribute to virtual-row measurement
-   instead of painting over the next message. */
+/* Footer at bottom of every group (role + time). The row keeps the same size
+   whether its content is visible, hidden or absent, so revealing it never moves
+   the next turn and every group ends the same distance above the turn gap. */
 .chat-group-footer {
   display: flex;
   align-self: start;
@@ -143,7 +140,8 @@
   align-items: flex-start;
   width: 100%;
   min-width: 0;
-  min-height: 24px;
+  min-height: var(--chat-footer-row);
+  margin-block-start: var(--chat-footer-offset);
   opacity: var(--chat-footer-disclosure-opacity, 0);
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
   transition: opacity 120ms ease-out;
@@ -758,11 +756,6 @@ img.chat-avatar {
     --chat-message-action-pointer-events: var(--chat-footer-disclosure-pointer-events, none);
   }
 
-  .chat-group-footer {
-    /* Keep the aligned visual row close to the bubble above the larger hit areas. */
-    margin-top: 3px;
-  }
-
   :where(.chat-thread) .chat-group {
     --chat-footer-disclosure-opacity: 0;
     --chat-footer-disclosure-pointer-events: none;
@@ -781,17 +774,6 @@ img.chat-avatar {
      changes the natural row height or moves the next turn. */
   .chat-group.user {
     --chat-footer-detail-position: static;
-  }
-
-  /* The 44px hit areas already extend below the 24px visual row. Do not stack
-     a second gap under that space; footers without touch controls keep it. */
-  .chat-thread
-    .chat-group:has(
-      > .chat-group-footer
-        .chat-group-footer-actions
-        :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)
-    ) {
-    --chat-turn-gap: 0px;
   }
 
   /* Keep assistant actions beside metadata; long names may shrink instead of
@@ -817,11 +799,10 @@ img.chat-avatar {
     justify-content: flex-end;
   }
 
-  /* Reserve the touch row without stretching the painted 24px buttons. */
-  :is(.chat-group-footer-actions, .chat-message-actions-row):has(
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)
-  ) {
-    min-height: 44px;
+  /* Inline rows between messages of one group reserve their own touch row;
+     the group footer row already has the touch-target size. */
+  .chat-message-actions-row:has(:is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)) {
+    min-height: var(--chat-touch-target);
     align-items: flex-start;
   }
 
@@ -840,21 +821,9 @@ img.chat-avatar {
     position: absolute;
     inset-block-start: 0;
     inset-inline-start: -10px;
-    width: 44px;
-    height: 44px;
+    width: var(--chat-touch-target);
+    height: var(--chat-touch-target);
     pointer-events: inherit;
-  }
-}
-
-@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  /* Reuse 4px of the 5px bubble-to-footer inset for the invisible tap area.
-     This tightens turns without shrinking targets or moving the painted buttons. */
-  .chat-group-footer-actions:has(:is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)) {
-    min-height: 40px;
-  }
-
-  .chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)::before {
-    inset-block-start: -4px;
   }
 }
 

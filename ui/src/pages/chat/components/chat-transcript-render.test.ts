@@ -670,7 +670,7 @@ describe("chat transcript rendering", () => {
     touchPointerUp(streamBubble);
     expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
     expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
-    expect(streamGroup.querySelector(".chat-group-footer")).toBeNull();
+    expect(streamGroup.querySelector(".chat-group-footer")?.childElementCount).toBe(0);
 
     touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
     expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);

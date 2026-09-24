@@ -44,6 +44,7 @@ import {
 } from "./chat-message-markdown.ts";
 import { renderChatSendStatus, type ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
+  emptyGroupFooter,
   renderStreamGroupParts,
   type StreamGroupOptions,
   type StreamGroupPart,
@@ -651,62 +652,64 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         }
       </div>
       ${
-        normalizedRole === "tool" || group.isStreaming || opts.activeContinuation
+        normalizedRole === "tool"
           ? nothing
-          : html`<div
-              class="chat-group-footer ${
-                normalizedRole === "user" &&
-                (visibleSources?.length ||
-                  isPeerGroup ||
-                  (showSenderName && avatarPlacement !== "footer"))
-                  ? "chat-group-footer--persistent-identity"
-                  : ""
-              }${sendStatus ? " chat-group-footer--send-status" : ""}"
-            >
-              ${isPeerGroup ? nothing : userFooterActions}
-              <div class="chat-group-footer__meta">
+          : group.isStreaming || opts.activeContinuation
+            ? emptyGroupFooter
+            : html`<div
+                class="chat-group-footer ${
+                  normalizedRole === "user" &&
+                  (visibleSources?.length ||
+                    isPeerGroup ||
+                    (showSenderName && avatarPlacement !== "footer"))
+                    ? "chat-group-footer--persistent-identity"
+                    : ""
+                }${sendStatus ? " chat-group-footer--send-status" : ""}"
+              >
+                ${isPeerGroup ? nothing : userFooterActions}
+                <div class="chat-group-footer__meta">
+                  ${
+                    normalizedRole === "user" && !sourceOnly && avatarPlacement === "footer"
+                      ? renderChatAuthorAvatar(group.sender)
+                      : nothing
+                  }
+                  ${
+                    !showSenderName
+                      ? nothing
+                      : renderPersonName(
+                          who,
+                          // Only other people's messages: your own name links nowhere useful.
+                          isPeerGroup && group.sender?.identity?.type === "profile"
+                            ? personActivityLink(group.sender.identity.id, opts.personActivity, who)
+                            : null,
+                          "chat-sender-name",
+                        )
+                  }
+                  ${
+                    visibleSources?.length
+                      ? html`<span class="chat-message-source"
+                          >${messageClientSourcesLabel(visibleSources)}</span
+                        >`
+                      : nothing
+                  }
+                  ${renderChatSendStatus(sendStatus, opts)}
+                  ${renderMessageMeta(group.timestamp, meta)}
+                </div>
                 ${
-                  normalizedRole === "user" && !sourceOnly && avatarPlacement === "footer"
-                    ? renderChatAuthorAvatar(group.sender)
-                    : nothing
+                  isPeerGroup
+                    ? userFooterActions
+                    : normalizedRole !== "user" && footerActionDetails
+                      ? html`
+                          <div
+                            class="chat-group-footer-actions"
+                            data-message-actions-for=${footerActionMessageKey ?? nothing}
+                          >
+                            ${renderMessageActionButtons(footerActionDetails, opts)}
+                          </div>
+                        `
+                      : nothing
                 }
-                ${
-                  !showSenderName
-                    ? nothing
-                    : renderPersonName(
-                        who,
-                        // Only other people's messages: your own name links nowhere useful.
-                        isPeerGroup && group.sender?.identity?.type === "profile"
-                          ? personActivityLink(group.sender.identity.id, opts.personActivity, who)
-                          : null,
-                        "chat-sender-name",
-                      )
-                }
-                ${
-                  visibleSources?.length
-                    ? html`<span class="chat-message-source"
-                        >${messageClientSourcesLabel(visibleSources)}</span
-                      >`
-                    : nothing
-                }
-                ${renderChatSendStatus(sendStatus, opts)}
-                ${renderMessageMeta(group.timestamp, meta)}
-              </div>
-              ${
-                isPeerGroup
-                  ? userFooterActions
-                  : normalizedRole !== "user" && footerActionDetails
-                    ? html`
-                        <div
-                          class="chat-group-footer-actions"
-                          data-message-actions-for=${footerActionMessageKey ?? nothing}
-                        >
-                          ${renderMessageActionButtons(footerActionDetails, opts)}
-                        </div>
-                      `
-                    : nothing
-              }
-            </div>`
+              </div>`
       }
     </div>
   `;

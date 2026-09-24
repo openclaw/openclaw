@@ -155,20 +155,25 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
         ${renderStreamGroupParts(parts, opts, "standalone")}
       </div>
       ${
-        footerStartedAt !== null && !active
-          ? html`
-              <div class="chat-group-footer">
-                <div class="chat-group-footer__meta">
-                  <span class="chat-sender-name">${name}</span>
-                  ${renderChatTimestamp(footerStartedAt)}
+        footerStartedAt === null
+          ? nothing
+          : active
+            ? emptyGroupFooter
+            : html`
+                <div class="chat-group-footer">
+                  <div class="chat-group-footer__meta">
+                    <span class="chat-sender-name">${name}</span>
+                    ${renderChatTimestamp(footerStartedAt)}
+                  </div>
                 </div>
-              </div>
-            `
-          : nothing
+              `
       }
     </div>
   `;
 }
+
+/** A streaming answer already ends its turn: reserve its footer row before the footer content exists. */
+export const emptyGroupFooter = html`<div class="chat-group-footer" aria-hidden="true"></div>`;
 
 /** Completed work keeps elapsed time and outcomes above the expandable narration. */
 export function renderWorkGroupSummary(

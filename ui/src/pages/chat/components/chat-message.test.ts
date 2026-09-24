@@ -439,17 +439,17 @@ function stubConfirmedActionGeometry(params: {
     offsetTop: params.viewport.top ?? 0,
     width: params.viewport.width,
   });
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
-    this: HTMLElement,
-  ) {
-    if (this.classList.contains("chat-group-rewind")) {
-      return domRect(params.trigger);
-    }
-    if (this.classList.contains("chat-confirm-popover")) {
-      return domRect(params.popover);
-    }
-    return domRect({});
-  });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      if (this.classList.contains("chat-group-rewind")) {
+        return domRect(params.trigger);
+      }
+      if (this.classList.contains("chat-confirm-popover")) {
+        return domRect(params.popover);
+      }
+      return domRect({});
+    },
+  );
 }
 
 function clickConfirmedActionIconPath(actionButton: HTMLButtonElement) {
@@ -1810,7 +1810,8 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
       "Working…",
     );
-    expect(container.querySelector(".chat-group-footer")).toBeNull();
+    // The footer row is reserved but empty until the turn settles.
+    expect(container.querySelector(".chat-group-footer")?.childElementCount).toBe(0);
 
     renderAssistantMessage(container, message, {
       turnRecap: { runtimeMs: 5_000, outputTokens: 42 },
@@ -1922,7 +1923,7 @@ describe("grouped chat rendering", () => {
     expect(group?.classList.contains("chat-group--working")).toBe(false);
     expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
-    expect(container.querySelector(".chat-group-footer")).toBeNull();
+    expect(container.querySelector(".chat-group-footer")?.childElementCount).toBe(0);
     expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
@@ -5294,11 +5295,11 @@ describe("grouped chat rendering", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
     const clickedDownloads: string[] = [];
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
-      this: HTMLAnchorElement,
-    ) {
-      clickedDownloads.push(this.download);
-    });
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        clickedDownloads.push(this.download);
+      });
     const container = document.body.appendChild(document.createElement("div"));
     renderAssistantMessage(
       container,
