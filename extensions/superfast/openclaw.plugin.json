@@ -1,0 +1,51 @@
+{
+  "id": "superfast",
+  "categories": ["agent-orchestration"],
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Superfast",
+  "description": "Shadow-mode System One decision gate that records a fast-path recommendation per turn without changing routing.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false
+      },
+      "endpoint": {
+        "type": "string",
+        "default": "http://localhost:8000/v1/systemone"
+      },
+      "model": {
+        "type": "string",
+        "default": "von-1.2.0"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 10,
+        "maximum": 5000,
+        "default": 150
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Superfast (shadow)",
+      "help": "Ask a small local System One decision server about each turn and log the route recommendation. Shadow mode only: routing is unchanged and the gate fails open when the backend is missing or unsure."
+    },
+    "endpoint": {
+      "label": "Decision endpoint",
+      "help": "Full URL of the System One decision server, e.g. http://localhost:8000/v1/systemone."
+    },
+    "model": {
+      "label": "Decision model",
+      "help": "Model id sent to the decision endpoint, e.g. von-1.2.0."
+    },
+    "timeoutMs": {
+      "label": "Decision timeout (ms)",
+      "help": "Hard timeout for a single decision call. On timeout the gate fails open (normal path)."
+    }
+  }
+}
