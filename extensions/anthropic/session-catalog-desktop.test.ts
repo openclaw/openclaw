@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { probeDesktopArchiveStatus } from "./session-catalog-desktop-probe.js";
 import { readDesktopOverlay } from "./session-catalog-desktop.js";
 import { createCatalogJsonReadBudget } from "./session-catalog-scan.js";
 import type { DirtyDirectoryWatch } from "./session-catalog-tree-watch.js";
@@ -166,6 +167,33 @@ describe("Claude Desktop overlay cache", () => {
     expect(overlay.archived.has("not-an-archive")).toBe(false);
     expect(overlay.activeSessionIds).toEqual(new Set(["not-an-archive"]));
     expect(overlay.skippedFiles).toBe(3);
+  });
+
+  it("stops a rejected Desktop probe at the shared recovery byte budget", async () => {
+    const directory = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude",
+      "claude-code-sessions",
+      "account",
+      "workspace",
+    );
+    const filePath = path.join(directory, "local_budgeted-probe.json");
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        cliSessionId: "budgeted-probe-session",
+        padding: "x".repeat(4096),
+        isArchived: false,
+      }),
+    );
+
+    const budget = createCatalogJsonReadBudget();
+    budget.remainingProbeBytes = 256;
+    await expect(probeDesktopArchiveStatus(filePath, vi.fn(), budget)).resolves.toBeUndefined();
+    expect(budget.remainingProbeBytes).toBe(0);
   });
 
   it("does not probe a non-regular Desktop metadata entry", async () => {

@@ -8,6 +8,10 @@ import {
   normalizeBoundedOptionalString as readBoundedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { DesktopSessionMetadata } from "./session-catalog-desktop.types.js";
+import {
+  reserveCatalogJsonProbeBytes,
+  type CatalogJsonReadBudget,
+} from "./session-catalog-scan.js";
 import { MAX_STRING_LENGTH, parseBoundedJsonNumberToken } from "./session-catalog-shared.js";
 
 // A JSON string token's encoded form can cost up to six raw characters per
@@ -17,6 +21,9 @@ import { MAX_STRING_LENGTH, parseBoundedJsonNumberToken } from "./session-catalo
 const MAX_PROBE_ENCODED_STRING_CHARS = MAX_STRING_LENGTH * 6;
 
 const DESKTOP_ARCHIVE_SCAN_CHUNK_BYTES = 16 * 1024;
+// The normal admission cap is 16 MiB. Allow a small bounded margin so a valid
+// record whose metadata follows a just-over-limit payload can still recover.
+const MAX_DESKTOP_ARCHIVE_PROBE_BYTES = 17 * 1024 * 1024;
 const MAX_DESKTOP_PR_HISTORY_CAPTURE_BYTES = 256 * 1024;
 const MAX_DESKTOP_PR_HISTORY_ENTRIES = 2_048;
 
@@ -414,6 +421,7 @@ function consumeDesktopArchiveProbeText(state: DesktopArchiveProbeState, text: s
 export async function probeDesktopArchiveStatus(
   filePath: string,
   onIoFailure: () => void,
+  budget?: CatalogJsonReadBudget,
 ): Promise<
   { cliSessionId: string; isArchived: boolean; metadata?: DesktopSessionMetadata } | undefined
 > {
@@ -424,17 +432,18 @@ export async function probeDesktopArchiveStatus(
     if (!stat.isFile() || stat.size <= 0) {
       return undefined;
     }
+    const scanLimit = Math.min(stat.size, MAX_DESKTOP_ARCHIVE_PROBE_BYTES);
     const buffer = Buffer.allocUnsafe(DESKTOP_ARCHIVE_SCAN_CHUNK_BYTES);
     const decoder = new TextDecoder();
     const probe = createDesktopArchiveProbeState();
     let offset = 0;
-    while (offset < stat.size) {
-      const { bytesRead } = await handle.read(
-        buffer,
-        0,
-        Math.min(buffer.length, stat.size - offset),
-        offset,
-      );
+    while (offset < scanLimit) {
+      const requestedBytes = Math.min(buffer.length, scanLimit - offset);
+      const readLimit = reserveCatalogJsonProbeBytes(budget, requestedBytes);
+      if (readLimit === 0) {
+        return undefined;
+      }
+      const { bytesRead } = await handle.read(buffer, 0, readLimit, offset);
       if (bytesRead === 0) {
         onIoFailure();
         return undefined;
@@ -442,11 +451,16 @@ export async function probeDesktopArchiveStatus(
       offset += bytesRead;
       consumeDesktopArchiveProbeText(
         probe,
-        decoder.decode(buffer.subarray(0, bytesRead), { stream: offset < stat.size }),
+        decoder.decode(buffer.subarray(0, bytesRead), { stream: offset < scanLimit }),
       );
       if (probe.isArchived && probe.cliSessionId) {
         return { cliSessionId: probe.cliSessionId, isArchived: true };
       }
+    }
+    // A capped read cannot certify an active row. Rejected input remains a
+    // partial catalog result; do not continue scanning its untrusted tail.
+    if (offset < stat.size) {
+      return undefined;
     }
     consumeDesktopArchiveProbeText(probe, decoder.decode());
     if (probe.prHistoryCapture) {

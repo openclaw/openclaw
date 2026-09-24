@@ -237,7 +237,7 @@ async function readDesktopMetadata(
           : undefined;
         if (budget && reservedBytes === undefined) {
           if (rejectionReason === "oversized" || rejectionReason === "budget") {
-            const archive = await probeDesktopArchiveStatus(filePath, markIoFailure);
+            const archive = await probeDesktopArchiveStatus(filePath, markIoFailure, budget);
             if (archive) {
               if (archive.isArchived) {
                 archived.add(archive.cliSessionId);
@@ -262,18 +262,16 @@ async function readDesktopMetadata(
         }
         const admittedFileIndex =
           reservedBytes === undefined ? undefined : admittedFileSizes.push(reservedBytes) - 1;
-        const raw = await readJsonFile(filePath, {
+        const metadata = await readJsonFile(filePath, {
           budget,
           onIoFailure: markIoFailure,
           onRejected: () => {
             lateRejectedFilePaths.add(filePath);
           },
+          project: parseDesktopMetadata,
+          cacheKey: "claude-desktop-session-metadata-v1",
           ...(reservedBytes !== undefined ? { reservedBytes } : {}),
         });
-        if (!isRecord(raw)) {
-          continue;
-        }
-        const metadata = parseDesktopMetadata(raw);
         if (!metadata) {
           continue;
         }
@@ -303,7 +301,7 @@ async function readDesktopMetadata(
   // A file can change after admission but before readJsonFile validates its descriptor. Recover
   // archive flags from those late rejections so a stale indexed CLI row cannot become visible.
   for (const filePath of lateRejectedFilePaths) {
-    const archive = await probeDesktopArchiveStatus(filePath, markIoFailure);
+    const archive = await probeDesktopArchiveStatus(filePath, markIoFailure, budget);
     if (!archive) {
       continue;
     }

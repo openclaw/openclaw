@@ -1,9 +1,18 @@
 import fs from "node:fs/promises";
 import { normalizeBoundedOptionalString as readBoundedString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { MAX_STRING_LENGTH } from "./session-catalog-desktop.js";
+import {
+  reserveCatalogJsonProbeBytes,
+  type CatalogJsonReadBudget,
+} from "./session-catalog-scan.js";
 import { parseBoundedJsonNumberToken } from "./session-catalog-shared.js";
 
 const SESSION_INDEX_PROBE_CHUNK_BYTES = 16 * 1024;
+const MAX_SESSION_INDEX_PROBE_DEPTH = 128;
+/** @internal Exported for focused boundary tests. */
+export const MAX_SESSION_INDEX_PROBE_BYTES = 4 * 1024 * 1024;
+/** @internal Exported for focused boundary tests. */
+export const MAX_SESSION_INDEX_PROBE_RECORDS = 10_000;
 
 // A JSON string token's encoded form can cost up to six raw characters per
 // decoded character ("\uXXXX"). Collect encoded tokens up to this bound so any
@@ -45,6 +54,8 @@ type RejectedSessionIndexEntry = {
 type RejectedSessionIndexProbe = {
   sidechainIds: Set<string>;
   entries: RejectedSessionIndexEntry[];
+  scannedBytes: number;
+  truncated: boolean;
 };
 
 type SessionIndexProbeFrame = {
@@ -75,16 +86,19 @@ function isTrackedStringKey(key: string | undefined): key is keyof typeof PROBE_
 export async function probeRejectedSessionIndex(
   filePath: string,
   onIoFailure: () => void,
+  budget?: CatalogJsonReadBudget,
 ): Promise<RejectedSessionIndexProbe> {
   const sidechainIds = new Set<string>();
   const entries: RejectedSessionIndexEntry[] = [];
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let offset = 0;
   try {
     handle = await fs.open(filePath, "r");
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size <= 0) {
-      return { sidechainIds, entries };
+      return { sidechainIds, entries, scannedBytes: 0, truncated: false };
     }
+    const scanLimit = Math.min(stat.size, MAX_SESSION_INDEX_PROBE_BYTES);
 
     const decoder = new TextDecoder();
     const stack: SessionIndexProbeFrame[] = [];
@@ -100,6 +114,9 @@ export async function probeRejectedSessionIndex(
     let capture: SessionIndexProbeCapture | undefined;
     let done = false;
     let invalid = false;
+    let capturedRecords = 0;
+    let recordLimitReached = false;
+    let byteLimitReached = false;
 
     const trackCapture = (character: string, structural: boolean): void => {
       const current = capture;
@@ -115,20 +132,34 @@ export async function probeRejectedSessionIndex(
         current.depth -= 1;
         if (current.depth === 0) {
           if (current.sessionId) {
-            if (current.isSidechain) {
-              sidechainIds.add(current.sessionId);
+            if (capturedRecords >= MAX_SESSION_INDEX_PROBE_RECORDS) {
+              recordLimitReached = true;
+              done = true;
             } else {
-              entries.push({
-                sessionId: current.sessionId,
-                ...(current.fullPath !== undefined ? { fullPath: current.fullPath } : {}),
-                ...(current.summary !== undefined ? { summary: current.summary } : {}),
-                ...(current.firstPrompt !== undefined ? { firstPrompt: current.firstPrompt } : {}),
-                ...(current.projectPath !== undefined ? { projectPath: current.projectPath } : {}),
-                ...(current.gitBranch !== undefined ? { gitBranch: current.gitBranch } : {}),
-                ...(current.created !== undefined ? { created: current.created } : {}),
-                ...(current.modified !== undefined ? { modified: current.modified } : {}),
-                ...(current.fileMtime !== undefined ? { fileMtime: current.fileMtime } : {}),
-              });
+              capturedRecords += 1;
+              if (current.isSidechain) {
+                sidechainIds.add(current.sessionId);
+              } else {
+                entries.push({
+                  sessionId: current.sessionId,
+                  ...(current.fullPath !== undefined ? { fullPath: current.fullPath } : {}),
+                  ...(current.summary !== undefined ? { summary: current.summary } : {}),
+                  ...(current.firstPrompt !== undefined
+                    ? { firstPrompt: current.firstPrompt }
+                    : {}),
+                  ...(current.projectPath !== undefined
+                    ? { projectPath: current.projectPath }
+                    : {}),
+                  ...(current.gitBranch !== undefined ? { gitBranch: current.gitBranch } : {}),
+                  ...(current.created !== undefined ? { created: current.created } : {}),
+                  ...(current.modified !== undefined ? { modified: current.modified } : {}),
+                  ...(current.fileMtime !== undefined ? { fileMtime: current.fileMtime } : {}),
+                });
+              }
+              if (capturedRecords >= MAX_SESSION_INDEX_PROBE_RECORDS) {
+                recordLimitReached = true;
+                done = true;
+              }
             }
           }
           capture = undefined;
@@ -288,6 +319,10 @@ export async function probeRejectedSessionIndex(
           continue;
         }
         if (character === "{" || character === "[") {
+          if (stack.length >= MAX_SESSION_INDEX_PROBE_DEPTH) {
+            invalid = true;
+            return;
+          }
           const parent = stack.at(-1);
           const isEntriesArray =
             character === "[" &&
@@ -369,31 +404,36 @@ export async function probeRejectedSessionIndex(
     };
 
     const buffer = Buffer.allocUnsafe(SESSION_INDEX_PROBE_CHUNK_BYTES);
-    let offset = 0;
-    while (offset < stat.size) {
+    while (offset < scanLimit) {
       if (done || invalid) {
         break;
       }
-      const { bytesRead } = await handle.read(
-        buffer,
-        0,
-        Math.min(buffer.length, stat.size - offset),
-        offset,
-      );
+      const requestedBytes = Math.min(buffer.length, scanLimit - offset);
+      const readLimit = reserveCatalogJsonProbeBytes(budget, requestedBytes);
+      if (readLimit === 0) {
+        byteLimitReached = true;
+        break;
+      }
+      const { bytesRead } = await handle.read(buffer, 0, readLimit, offset);
       if (bytesRead === 0) {
         onIoFailure();
-        return { sidechainIds, entries };
+        return { sidechainIds, entries, scannedBytes: offset, truncated: true };
       }
       offset += bytesRead;
-      consume(decoder.decode(buffer.subarray(0, bytesRead), { stream: offset < stat.size }));
+      consume(decoder.decode(buffer.subarray(0, bytesRead), { stream: offset < scanLimit }));
     }
-    if (!done && !invalid) {
+    if (!done && !invalid && scanLimit === stat.size) {
       consume(decoder.decode());
     }
-    return { sidechainIds, entries };
+    return {
+      sidechainIds,
+      entries,
+      scannedBytes: offset,
+      truncated: scanLimit < stat.size || recordLimitReached || invalid || byteLimitReached,
+    };
   } catch {
     onIoFailure();
-    return { sidechainIds, entries };
+    return { sidechainIds, entries, scannedBytes: offset, truncated: true };
   } finally {
     await handle?.close().catch(() => undefined);
   }

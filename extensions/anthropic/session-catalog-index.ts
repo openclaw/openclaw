@@ -111,12 +111,19 @@ export async function readIndexRecords(
     admissions.map(({ directory, filePath }) => [filePath, directory]),
   );
   const { results: rejectedIndexProbes } = await runTasksWithConcurrency({
-    tasks: [...rejectedIndexPaths, ...lateRejectedIndexPaths].map((filePath) => async () => ({
-      filePath,
-      probe: await probeRejectedSessionIndex(filePath, () => {
+    tasks: [...rejectedIndexPaths, ...lateRejectedIndexPaths].map((filePath) => async () => {
+      const probe = await probeRejectedSessionIndex(
+        filePath,
+        () => {
+          context.complete = false;
+        },
+        budget,
+      );
+      if (probe.truncated) {
         context.complete = false;
-      }),
-    })),
+      }
+      return { filePath, probe };
+    }),
     limit: CLAUDE_CATALOG_IO_CONCURRENCY,
     throwOnError: true,
   });

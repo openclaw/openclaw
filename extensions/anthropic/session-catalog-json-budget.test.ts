@@ -7,8 +7,13 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider as RegisteredSessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  MAX_SESSION_INDEX_PROBE_RECORDS,
+  probeRejectedSessionIndex,
+} from "./session-catalog-index-probe.js";
 import { registerClaudeSessionDiscovery } from "./session-catalog-registration.js";
 import {
+  createCatalogJsonReadBudget,
   MAX_CATALOG_JSON_CACHE_BYTES,
   MAX_CATALOG_JSON_FILE_BYTES,
   MAX_CATALOG_JSON_SCAN_BYTES,
@@ -819,6 +824,36 @@ describe("Claude session catalog JSON budget", () => {
     expect(readCalls).toBeGreaterThan(1);
   });
 
+  it("caches the bounded Desktop projection without retaining unused JSON fields", async () => {
+    const home = await createHome();
+    const desktopDir = path.join(home, "Library", "Application Support", "Claude");
+    const filePath = path.join(desktopDir, "local_compact-cache.json");
+    await fs.mkdir(desktopDir, { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        cliSessionId: "compact-cache-session",
+        title: "Compact row",
+        remoteMcpServersConfig: { unused: "x".repeat(256 * 1024) },
+      }),
+    );
+    const project = vi.fn((value: unknown) => {
+      if (!value || typeof value !== "object") {
+        return undefined;
+      }
+      const raw = value as { cliSessionId?: unknown; title?: unknown };
+      return { cliSessionId: raw.cliSessionId, title: raw.title };
+    });
+
+    const first = await readJsonFile(filePath, { project, cacheKey: "desktop-projection-test" });
+    const second = await readJsonFile(filePath, { project, cacheKey: "desktop-projection-test" });
+
+    expect(first).toEqual({ cliSessionId: "compact-cache-session", title: "Compact row" });
+    expect(second).toEqual(first);
+    expect(second).not.toHaveProperty("remoteMcpServersConfig");
+    expect(project).toHaveBeenCalledOnce();
+  });
+
   it("reports a partial catalog when a descriptor read ends before its reserved size", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");
@@ -851,5 +886,39 @@ describe("Claude session catalog JSON budget", () => {
     await expect(readJsonFile(filePath, { onIoFailure })).resolves.toBeUndefined();
     expect(readCalls).toBe(2);
     expect(onIoFailure).toHaveBeenCalledOnce();
+  });
+
+  it("bounds rejected CLI index recovery by bytes and captured records", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-bounded-probe");
+    const filePath = path.join(projectDir, "sessions-index.json");
+    await fs.mkdir(projectDir, { recursive: true });
+
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({ padding: "x".repeat(4096), entries: [{ sessionId: "after-budget" }] }),
+    );
+    const byteBudget = createCatalogJsonReadBudget();
+    byteBudget.remainingProbeBytes = 256;
+    const byteLimited = await probeRejectedSessionIndex(filePath, vi.fn(), byteBudget);
+    expect(byteLimited).toMatchObject({ scannedBytes: 256, truncated: true, entries: [] });
+    expect(byteBudget.remainingProbeBytes).toBe(0);
+
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        entries: Array.from({ length: MAX_SESSION_INDEX_PROBE_RECORDS + 10 }, (_, index) => ({
+          sessionId: `rejected-index-${index}`,
+          summary: "bounded recovery row",
+        })),
+      }),
+    );
+    const recordLimited = await probeRejectedSessionIndex(
+      filePath,
+      vi.fn(),
+      createCatalogJsonReadBudget(),
+    );
+    expect(recordLimited.entries).toHaveLength(MAX_SESSION_INDEX_PROBE_RECORDS);
+    expect(recordLimited.truncated).toBe(true);
   });
 });
