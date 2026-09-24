@@ -95,7 +95,7 @@ export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boo
   return true;
 }
 
-export function buildCronSchedule(form: CronFormState) {
+export function buildCronSchedule(form: CronFormState, previous?: CronJob["schedule"]) {
   if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
     if (!Number.isFinite(ms)) {
@@ -119,12 +119,14 @@ export function buildCronSchedule(form: CronFormState) {
   }
   const staggerAmount = form.staggerAmount.trim();
   if (!staggerAmount) {
-    // Omitted patch fields preserve the saved window, so clearing it must send the default.
+    // Same-expression updates preserve omitted windows; new defaults must stay unspecified.
+    const clearsSavedWindow =
+      previous?.kind === "cron" && previous.expr === expr && previous.staggerMs !== undefined;
     return {
       kind: "cron" as const,
       expr,
       tz: form.cronTz.trim() || undefined,
-      staggerMs: resolveDefaultCronStaggerMs(expr) ?? 0,
+      staggerMs: resolveDefaultCronStaggerMs(expr) ?? (clearsSavedWindow ? 0 : undefined),
     };
   }
   const staggerMs = parseCronDurationMs(staggerAmount, form.staggerUnit, true);
