@@ -12336,20 +12336,22 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         "persist-credentials": false,
         ref: "${{ github.workflow_sha }}",
         path: ".release-qa-tooling-trusted",
-        "sparse-checkout": "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts",
+        "sparse-checkout":
+          "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-messages.ts\nextensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts\n",
         "sparse-checkout-cone-mode": false,
       },
     });
     expect(installTooling.if).toBe(eligibilityCondition);
     expect(installTooling.run).toContain("trap 'rm -rf -- \"$trusted_checkout\"' EXIT");
     const installLines = (installTooling.run ?? "").split("\n").map((line) => line.trim());
-    const sourceArgument =
-      '"$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts" \\';
-    const sourceArgumentIndex = installLines.indexOf(sourceArgument);
-    expect(sourceArgumentIndex).toBeGreaterThanOrEqual(0);
-    expect(installLines[sourceArgumentIndex + 1]).toBe(
-      "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts",
-    );
+    for (const file of ["mock-anthropic-messages.ts", "mock-anthropic-wire.ts"]) {
+      const sourceArgument = `"$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/${file}" \\`;
+      const sourceArgumentIndex = installLines.indexOf(sourceArgument);
+      expect(sourceArgumentIndex).toBeGreaterThanOrEqual(0);
+      expect(installLines[sourceArgumentIndex + 1]).toBe(
+        `extensions/qa-lab/src/providers/mock-openai/${file}`,
+      );
+    }
     expect(installTooling.run).toContain('rm -rf -- "$trusted_checkout"');
     expect(stepNames.indexOf("Checkout selected ref")).toBeLessThan(
       stepNames.indexOf("Checkout trusted QA Anthropic mock tooling"),

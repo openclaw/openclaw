@@ -241,11 +241,13 @@ export function createGatewaySubagentRuntime(
               { resolveConfiguredAgentId },
               { resolveSimpleCompletionSelectionForAgent },
               { runIsolatedCompletion },
+              { runWithModelFallback },
               { finalizePluginLlmCompletion },
             ] = await Promise.all([
               import("../agents/agent-scope.js"),
               import("../agents/simple-completion-runtime.js"),
               import("../agents/isolated-completion.js"),
+              import("../agents/model-fallback-runner.js"),
               import("../plugins/runtime/runtime-llm.runtime.js"),
             ]);
             await execution.authorize();
@@ -254,6 +256,7 @@ export function createGatewaySubagentRuntime(
             const { policy } = authorizeModelOverride(params);
             const cfg = execution.context.getRuntimeConfig();
             const agentId = resolveConfiguredAgentId(cfg, params.agentId);
+            const explicitOverride = Boolean(params.model?.trim());
             const selection = resolveSimpleCompletionSelectionForAgent({
               cfg,
               agentId,
@@ -268,32 +271,52 @@ export function createGatewaySubagentRuntime(
               pluginId,
               selection.profileId,
             );
-            assertOperatorModelAllowed(execution.operatorAuthority, {
-              provider: selection.provider,
-              model: selection.modelId,
-            });
             const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000);
             const runSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
             // Hold capacity through runtime cleanup; a response-only abort race would
             // admit another completion while the previous model still unwinds.
-            const result = await execution.run(() =>
-              runIsolatedCompletion({
-                config: cfg,
+            const fallbackResult = await execution.run(() =>
+              runWithModelFallback({
+                cfg,
                 agentId,
                 provider: selection.provider,
                 model: selection.modelId,
-                authProfileId: selection.profileId,
                 operatorAuthority: execution.operatorAuthority,
-                systemPrompt: params.extraSystemPrompt ?? "",
-                prompt: params.message,
-                timeoutMs,
                 abortSignal: runSignal,
-                assertCurrent,
+                skipAuthProfileRuntime: true,
+                requestedRouteResolution: "resolved",
+                ...(explicitOverride ? { fallbacksOverride: [] } : {}),
+                run: async (provider, model) => {
+                  assertCurrent();
+                  signal.throwIfAborted();
+                  runSignal.throwIfAborted();
+                  const isSelectedPrimary =
+                    provider === selection.provider && model === selection.modelId;
+                  const result = await runIsolatedCompletion({
+                    config: cfg,
+                    agentId,
+                    provider,
+                    model,
+                    authProfileId: isSelectedPrimary ? selection.profileId : undefined,
+                    operatorAuthority: execution.operatorAuthority,
+                    systemPrompt: params.extraSystemPrompt ?? "",
+                    prompt: params.message,
+                    timeoutMs,
+                    abortSignal: runSignal,
+                    assertCurrent,
+                  });
+                  runSignal.throwIfAborted();
+                  assertCurrent();
+                  signal.throwIfAborted();
+                  assertOperatorModelAllowed(execution.operatorAuthority, result);
+                  return result;
+                },
               }),
             );
             runSignal.throwIfAborted();
             assertCurrent();
             signal.throwIfAborted();
+            const result = fallbackResult.result;
             assertOperatorModelAllowed(execution.operatorAuthority, result);
             finalizePluginLlmCompletion({
               cfg,
