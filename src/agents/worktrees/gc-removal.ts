@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withWorktreeAllocationLease } from "./allocation.js";
 import { hasMissingManagedWorktreeGitdir } from "./checkout-inspection.js";
@@ -9,7 +10,11 @@ import {
   getRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "./registry.js";
-import { WorktreeBranchMovedError, WorktreeRemovalLockError } from "./removal-errors.js";
+import {
+  isWorktreePermissionError,
+  WorktreeBranchMovedError,
+  WorktreeRemovalLockError,
+} from "./removal-errors.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
 
@@ -51,6 +56,16 @@ export function createWorktreeGcErrorHandler(context: {
     initialError: unknown,
     retiredOwner = false,
   ) => {
+    const retainUnreadable = (error: unknown) => {
+      if (!isWorktreePermissionError(error)) {
+        return false;
+      }
+      progress.protect(stage, record.id, "unreadable", `unreadable: ${formatErrorMessage(error)}`);
+      return true;
+    };
+    if (retainUnreadable(initialError)) {
+      return;
+    }
     let error = initialError;
     if (!(error instanceof WorktreeBranchMovedError)) {
       try {
@@ -100,6 +115,9 @@ export function createWorktreeGcErrorHandler(context: {
           return;
         }
       } catch (retirementError) {
+        if (retainUnreadable(retirementError)) {
+          return;
+        }
         // An unavailable repository or uncertain repair cannot authorize retirement.
         if (
           retirementError instanceof WorktreeRemovalLockError ||
