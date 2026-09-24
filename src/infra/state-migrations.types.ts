@@ -142,10 +142,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     sourcePath: string;
     hasLegacy: boolean;
   };
-  subagentRegistry: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
   rescuePending: LegacyRescuePendingDetection;
   channelPairing: LegacyChannelPairingStateDetection;
   warnings: string[];

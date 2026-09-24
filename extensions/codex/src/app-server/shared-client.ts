@@ -61,12 +61,13 @@ import {
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
-  closeRetiredSharedClientEntry,
   closeRetiredSharedClientEntryIfIdle,
   createCodexAppServerStartupLifetime,
   getCurrentSharedClientEntry,
   getSharedCodexAppServerClientState,
   retireSharedCodexAppServerClientIfCurrent,
+  retirePendingSharedClientEntryIfUnclaimed,
+  waitForUnclaimedSharedClientStartup,
   type CodexAppServerStartupLifetime,
   type SharedCodexAppServerClientEntry,
   type SharedCodexAppServerClientStartup,
@@ -104,6 +105,7 @@ type CodexAppServerClientStartupOptions = {
   config?: CodexAppServerClientOptions["config"];
   timeoutMs?: number;
   abandonSignal?: AbortSignal;
+  onStartingClient?: (starting: Promise<CodexAppServerClient>) => void;
   onStartedClient?: (client: CodexAppServerClient) => void;
   onInitializedClient?: () => void;
   assertCurrent?: () => void;
@@ -743,6 +745,7 @@ async function acquireSharedCodexAppServerClient(
     // Release first so only the final claimant can tear down stalled startup.
     releasePendingAcquire();
     retirePendingSharedClientEntryIfUnclaimed(entry);
+    await waitForUnclaimedSharedClientStartup(entry);
     throw error;
   } finally {
     cleanupAbandonSignal?.();
@@ -811,6 +814,9 @@ function createSharedCodexAppServerClientStartup(
     params.lifetime,
     startInitializedCodexAppServerClient({
       ...params,
+      onStartingClient: (starting) => {
+        params.entry.startupTransport = starting;
+      },
       onStartedClient: (startedClient) => {
         const state = getSharedCodexAppServerClientState();
         // Rejected candidates must never retain a reverse path to their replacement.
@@ -1031,18 +1037,19 @@ async function startInitializedCodexAppServerClient(
     let starting: Promise<CodexAppServerClient> | undefined;
     let client: CodexAppServerClient;
     try {
-      client = await waitForStartup(
-        () =>
-          (starting = CodexAppServerClient.start(startOptions, () => {
-            assertStartupCurrent();
-            resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
-          })),
-      );
+      client = await waitForStartup(() => {
+        starting = CodexAppServerClient.start(startOptions, () => {
+          assertStartupCurrent();
+          resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
+        });
+        params.onStartingClient?.(starting);
+        return starting;
+      });
     } catch (error) {
       // A timed-out registration may settle later; it cannot publish a live
       // client after the acquisition owner has already released its claim.
       if (starting) {
-        void ownCodexStartup(
+        await ownCodexStartup(
           params.lifetime,
           starting.then(
             (lateClient) => lateClient.closeAndWait(),
@@ -1164,7 +1171,7 @@ async function startInitializedCodexAppServerClient(
       return client;
     } finally {
       if (!ready) {
-        void ownCodexStartup(params.lifetime, client.closeAndWait());
+        await ownCodexStartup(params.lifetime, client.closeAndWait());
       }
     }
   }
@@ -1535,22 +1542,6 @@ function closeSharedClientEntryIfUnclaimed(entry: SharedCodexAppServerClientEntr
   state.clients.delete(entry.key);
   entry.client?.close();
   return Boolean(entry.client);
-}
-
-function retirePendingSharedClientEntryIfUnclaimed(entry: SharedCodexAppServerClientEntry): void {
-  if (entry.activeLeases > 0 || entry.pendingAcquires > 0) {
-    return;
-  }
-  entry.startupAbort?.abort(new Error("Codex app-server startup was abandoned"));
-  entry.closeWhenIdle = true;
-  const state = getSharedCodexAppServerClientState();
-  if (state.clients.get(entry.key) === entry) {
-    state.clients.delete(entry.key);
-  }
-  if (!entry.client) {
-    return;
-  }
-  closeRetiredSharedClientEntry(entry);
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

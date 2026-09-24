@@ -46,7 +46,8 @@ function shouldEnableOpenClawCompileCache(params: {
   installRoot: string;
 }): boolean {
   return (
-    !isNodeCompileCacheDisabled(params.env) && !isSourceCheckoutInstallRoot(params.installRoot)
+    !isNodeCompileCacheDisabled(params.env ?? process.env) &&
+    !isSourceCheckoutInstallRoot(params.installRoot)
   );
 }
 

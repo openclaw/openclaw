@@ -1,9 +1,11 @@
 // Covers gateway port availability and diagnostics behavior.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import net from "node:net";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { listenServer, withNativeSsConnection } from "./ports.test-support.js";
 import {
@@ -13,6 +15,7 @@ import {
 } from "./windows-install-roots.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -161,23 +164,32 @@ describe("ports helpers", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("prints an OpenClaw-specific hint when port details look like another OpenClaw instance", async () => {
-    const runtime = {
-      error: vi.fn(),
-      log: vi.fn(),
-      exit: vi.fn() as unknown as (code: number) => never,
-    };
+  it.each([
+    { details: "openclaw-gateway", openclaw: false },
+    { details: "node dist/index.js", openclaw: false },
+    { details: "node src/index.ts", openclaw: false },
+  ])(
+    "keeps port guidance independent of diagnostic text ($details)",
+    async ({ details, openclaw }) => {
+      const runtime = {
+        error: vi.fn(),
+        log: vi.fn(),
+        exit: vi.fn() as unknown as (code: number) => never,
+      };
 
-    await handlePortError(
-      new PortInUseError(18789, "node dist/index.js openclaw gateway"),
-      18789,
-      "gateway start",
-      runtime,
-    ).catch(() => {});
+      await handlePortError(
+        new PortInUseError(18789, details),
+        18789,
+        "gateway start",
+        runtime,
+      ).catch(() => {});
 
-    const messages = runtime.error.mock.calls.map((call) => stripAnsi(String(call[0] ?? "")));
-    expect(messages.join("\n")).toContain("another OpenClaw instance is already running");
-  });
+      const messages = runtime.error.mock.calls.map((call) => stripAnsi(String(call[0] ?? "")));
+      expect(messages.join("\n").includes("another OpenClaw instance is already running")).toBe(
+        openclaw,
+      );
+    },
+  );
 });
 
 describeUnix("inspectPortUsage", () => {
@@ -1002,12 +1014,16 @@ describe("inspectPortUsage on Windows", () => {
   });
 
   it("uses PowerShell process command lines to classify OpenClaw listeners", async () => {
+    const root = tempDirs.make("openclaw-port-listener-");
+    const script = path.join(root, "dist", "index.js");
+    mkdirSync(path.dirname(script), { recursive: true });
+    writeFileSync(script, "");
+    writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+    const commandLine = `"${process.execPath}" "${script}" gateway run`;
     mockWindowsCommands({
       netstat: commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"),
       tasklist: commandOutput('"node.exe","4242","Console","1","10,000 K"\r\n'),
-      powershell: commandOutput(
-        '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway run\r\n',
-      ),
+      powershell: commandOutput(`${commandLine}\r\n`),
     });
 
     const result = await inspectPortUsage(18789);
@@ -1015,10 +1031,8 @@ describe("inspectPortUsage on Windows", () => {
     expect(result.status).toBe("busy");
     expect(result.listeners).toHaveLength(1);
     expect(result.listeners[0]?.command).toBe("node.exe");
-    expect(result.listeners[0]?.commandLine).toContain("openclaw");
-    expect(result.hints.some((hint) => hint.includes("Gateway already running locally"))).toBe(
-      false,
-    );
+    expect(result.listeners[0]?.commandLine).toBe(commandLine);
+    expect(result.hints).toEqual([]);
   });
 
   it("reports localized Windows listener rows without requiring English state text", async () => {

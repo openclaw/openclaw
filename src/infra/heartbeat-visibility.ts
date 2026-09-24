@@ -27,21 +27,11 @@ export function resolveHeartbeatVisibility(params: {
 }): ResolvedHeartbeatVisibility {
   const { cfg, channel, accountId } = params;
 
-  // Webchat has no channel/account config branch, so only shared channel defaults apply.
-  if (channel === "webchat") {
-    const channelDefaults = cfg.channels?.defaults?.heartbeatVisibility;
-    return {
-      showOk: channelDefaults?.showOk ?? DEFAULT_VISIBILITY.showOk,
-      showAlerts: channelDefaults?.showAlerts ?? DEFAULT_VISIBILITY.showAlerts,
-      useIndicator: channelDefaults?.useIndicator ?? DEFAULT_VISIBILITY.useIndicator,
-    };
-  }
-
   // Layer 1: Global channel defaults
   const channelDefaults = cfg.channels?.defaults?.heartbeatVisibility;
 
-  // Layer 2: Per-channel config (at channel root level)
-  const channelCfg = cfg.channels?.[channel] as
+  // Webchat has no channel/account config branch, so only shared channel defaults apply.
+  const channelCfg = (channel === "webchat" ? undefined : cfg.channels?.[channel]) as
     | {
         heartbeatVisibility?: ChannelHeartbeatVisibilityConfig;
         accounts?: Record<string, { heartbeatVisibility?: ChannelHeartbeatVisibilityConfig }>;
@@ -50,9 +40,10 @@ export function resolveHeartbeatVisibility(params: {
   const perChannel = channelCfg?.heartbeatVisibility;
 
   // Layer 3: Per-account config (most specific)
-  const accountCfg = accountId
-    ? resolveChannelAccountEntry(channelCfg?.accounts, accountId, channel, (id) => id)
-    : undefined;
+  const accountCfg =
+    channel !== "webchat" && accountId
+      ? resolveChannelAccountEntry(channelCfg?.accounts, accountId, channel, (id) => id)
+      : undefined;
   const perAccount = accountCfg?.heartbeatVisibility;
 
   return {

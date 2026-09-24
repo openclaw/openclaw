@@ -118,6 +118,8 @@ export type ToolApprovalReview = {
   rationale?: string;
 };
 
+export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true };
+
 export type ChatQueueItem = {
   id: string;
   /** UI question associated with this input; delivery and retry stay outbox-owned. */

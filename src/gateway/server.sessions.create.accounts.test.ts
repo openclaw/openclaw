@@ -8,7 +8,6 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
@@ -30,9 +29,11 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 let gitWorkspaceTemplate: string;
-const { createSessionStoreDir } = setupSessionCreateTestHarness(async (makeTempDir) => {
-  gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
-});
+const { createSessionStoreDir, withSessionTestState } = setupSessionCreateTestHarness(
+  async (makeTempDir) => {
+    gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
+  },
+);
 
 async function createPersonalAccountSessionFixture() {
   const { storePath } = await createSessionStoreDir();
@@ -91,7 +92,7 @@ async function createPersonalAccountSessionFixture() {
 }
 
 test("session creation provenance cannot authorize a fresh personal account", async () => {
-  await withOpenClawTestState({ layout: "state-only" }, async () => {
+  await withSessionTestState({ layout: "state-only" }, async () => {
     const { storePath, owner, authProfileId, context } =
       await createPersonalAccountSessionFixture();
     const { createGatewaySession } = await import("./session-create-service.js");
@@ -124,7 +125,7 @@ test.each([
 ] as const)(
   "sessions.create preserves a personal $selection across adoption and a collaborator fork",
   async ({ selection, source }) => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
+    await withSessionTestState({ layout: "state-only" }, async () => {
       const { storePath, authProfileId, connectAccount, client, context } =
         await createPersonalAccountSessionFixture();
       const key = "agent:main:dashboard:personal-owner";
@@ -178,7 +179,7 @@ test.each([
 );
 
 test("sessions.create commits the personal default before dispatching its initial turn", async () => {
-  await withOpenClawTestState({ layout: "state-only" }, async () => {
+  await withSessionTestState({ layout: "state-only" }, async () => {
     const { storePath, authProfileId, client, context } =
       await createPersonalAccountSessionFixture();
     const key = "agent:main:dashboard:personal-default-initial-turn";
@@ -226,7 +227,7 @@ test.each([
 ] as const)(
   "sessions.create applies an admin-linked Arcee default only for the $endpoint",
   async ({ modelId, baseUrl, expectedPin, expectedSource }) => {
-    await withOpenClawTestState(
+    await withSessionTestState(
       { layout: "state-only", prefix: "session-arcee-linked-default-" },
       async (state) => {
         const { OpenClawSchema } = await import("../config/zod-schema.js");
@@ -470,7 +471,7 @@ test.each([
 );
 
 test("sessions.create does not donate a personal default to an unpinned adoption or fork", async () => {
-  await withOpenClawTestState({ layout: "state-only" }, async () => {
+  await withSessionTestState({ layout: "state-only" }, async () => {
     const { storePath, client, context } = await createPersonalAccountSessionFixture();
     const key = "agent:main:dashboard:unpinned-existing";
     const sessionId = "unpinned-existing-session";
@@ -510,7 +511,7 @@ test("sessions.create does not donate a personal default to an unpinned adoption
 test.each(["foreign admin", "unidentified admin", "synthetic owner"] as const)(
   "sessions.create rejects a fresh personal account from a %s before worktree naming",
   async (kind) => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    await withSessionTestState({ layout: "state-only" }, async (state) => {
       const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
       testState.agentConfig = { workspace };
       const { storePath, authProfileId, client, context } =
@@ -582,7 +583,7 @@ test.each([
 ] as const)(
   "sessions.create rejects a personal $selection when $loss while the model catalog is loading",
   async ({ loss, selection }) => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
+    await withSessionTestState({ layout: "state-only" }, async () => {
       const { storePath, authProfileId, client, clients, catalog, context } =
         await createPersonalAccountSessionFixture();
       const writer: GatewayOperatorRoleDefinition = {
@@ -635,7 +636,7 @@ test.each([
 );
 
 test("sessions.create names an adopted worktree with its committed account before selecting a new personal account", async () => {
-  await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+  await withSessionTestState({ layout: "state-only" }, async (state) => {
     const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
     testState.agentConfig = { workspace, model: { primary: "openai/gpt-5.6-sol" } };
     const {

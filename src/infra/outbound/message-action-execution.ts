@@ -562,14 +562,18 @@ export async function executeMessagePlugin(
   } = ctx;
   throwIfAborted(abortSignal);
   const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
+  const actionResult = {
+    kind: "action" as const,
+    channel,
+    action,
+    ...(ctx.resolvedTarget ? { to: ctx.resolvedTarget.to } : {}),
+    dryRun,
+  };
   if (dryRun) {
     return {
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "dry-run",
       payload: { ok: true, dryRun: true, channel, action },
-      dryRun: true,
     };
   }
 
@@ -608,12 +612,9 @@ export async function executeMessagePlugin(
   const gatewayPluginAction = await executeGatewayAction(ctx, {
     action,
     result: (payload) => ({
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "plugin",
       payload,
-      dryRun,
     }),
   });
   const replyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
@@ -648,12 +649,9 @@ export async function executeMessagePlugin(
     if (partialDelivery) {
       return await annotateSourceDelivery(
         {
-          kind: "action",
-          channel,
-          action,
+          ...actionResult,
           handledBy: "plugin",
           payload: partialDelivery,
-          dryRun,
         },
         ctx,
         replyToIsExplicit,
@@ -666,13 +664,10 @@ export async function executeMessagePlugin(
   }
   return await annotateSourceDelivery(
     {
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "plugin",
       payload: extractToolPayload(handled),
       toolResult: handled,
-      dryRun,
     },
     ctx,
     replyToIsExplicit,

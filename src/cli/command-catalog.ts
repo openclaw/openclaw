@@ -1,14 +1,8 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
-import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.types.js";
-
-export type {
-  CliCommandPluginLoadPolicy,
-  CliPluginRegistryScope,
-  CliNetworkProxyPolicy,
-  CliCommandPathPolicy,
-  CliCommandCatalogEntry,
-} from "./command-catalog.types.js";
+import { PASSIVE_STARTUP_POLICY } from "./command-catalog-policies.js";
+import type { CliCommandCatalogEntry } from "./command-catalog-types.js";
+import { updateCommandCatalog } from "./command-catalog-update.js";
 
 function hasCliOption(argv: readonly string[], name: string): boolean {
   for (const arg of argv.slice(2)) {
@@ -21,14 +15,6 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
   }
   return false;
 }
-
-// These commands own their state boundary; bootstrap must not observe or initialize it first.
-const PASSIVE_STARTUP_POLICY = {
-  configGuard: "skip",
-  loadPlugins: "never",
-  ensureCliPath: false,
-  networkProxy: "bypass",
-} satisfies Partial<CliCommandPathPolicy>;
 
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
@@ -508,18 +494,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["terminal"], policy: { networkProxy: "bypass" } },
   { commandPath: ["tui"], policy: { networkProxy: "bypass" } },
   { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },
-  {
-    commandPath: ["update", "cleanup"],
-    exact: true,
-    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
-  },
-  {
-    commandPath: ["update"],
-    policy: {
-      configGuard: "skip",
-      hideBanner: true,
-    },
-  },
+  ...updateCommandCatalog,
   {
     commandPath: ["config", "validate"],
     exact: true,

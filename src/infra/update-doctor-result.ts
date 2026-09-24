@@ -315,17 +315,10 @@ export async function writeUpdatePostInstallDoctorResult(params: {
   result: UpdatePostInstallDoctorResult;
 }): Promise<void> {
   const resultPath = resolveSafeUpdatePostInstallDoctorResultPath(params.resultPath);
-  const { warnings, failureFacts, ...result } = params.result;
-  const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
-  const facts = normalizeUpdateFailureFacts(failureFacts ?? []);
   // Advisory details can contain config-derived IDs; pre-existing paths must fail closed.
   await fs.writeFile(
     resultPath,
-    `${JSON.stringify({
-      ...result,
-      ...(normalizedWarnings.length ? { warnings: normalizedWarnings } : {}),
-      ...(facts.length ? { failureFacts: facts } : {}),
-    })}\n`,
+    `${JSON.stringify(normalizeUpdatePostInstallDoctorResult(params.result))}\n`,
     {
       encoding: "utf8",
       mode: 0o600,
@@ -356,10 +349,14 @@ export async function consumeUpdatePostInstallDoctorResult(
 
 function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDoctorResult | null {
   const parsed = UpdatePostInstallDoctorResultSchema.safeParse(value);
-  if (!parsed.success) {
-    return null;
-  }
-  const { warnings, failureFacts, ...result } = parsed.data;
+  return parsed.success ? normalizeUpdatePostInstallDoctorResult(parsed.data) : null;
+}
+
+function normalizeUpdatePostInstallDoctorResult({
+  warnings,
+  failureFacts,
+  ...result
+}: UpdatePostInstallDoctorResult): UpdatePostInstallDoctorResult {
   const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
   const facts = normalizeUpdateFailureFacts(failureFacts ?? []);
   return {

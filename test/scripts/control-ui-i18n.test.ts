@@ -37,6 +37,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerBackgroundTasksEnglish } from "../../ui/src/i18n/locales/en-background-tasks.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
+import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
@@ -322,7 +323,7 @@ describe("control-ui config hint source catalog", () => {
 });
 
 describe("control-ui-i18n generated ownership", () => {
-  it("includes lazy task and transcript copy and shared search labels in the generator catalog", () => {
+  it("includes lazy page copy and shared search labels in the generator catalog", () => {
     const result = spawnSync(
       testNodeExecPath,
       [
@@ -344,6 +345,7 @@ describe("control-ui-i18n generated ownership", () => {
     for (const fragment of [
       registerBackgroundTasksEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
+      registerLabsEnglish.catalog,
       registerSettingsEnglish.catalog,
       registerTranscriptsEnglish.catalog,
     ]) {

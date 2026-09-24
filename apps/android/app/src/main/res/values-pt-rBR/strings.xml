@@ -42,6 +42,7 @@
     <string name="native_01cfb797d96a35b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gesto de pinça"</string>
     <string name="native_024f9605eda4caf4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Omissões consecutivas"</string>
     <string name="native_027d7c7db6d8b3ef" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Esta pasta ainda não contém arquivos."</string>
+    <string name="native_02b62d5ca98d283e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 ferramenta falhou"</string>
     <string name="native_0303e18246708180" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Não conectado"</string>
     <string name="native_030cab223a806ad6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inspecione e gerencie o estado das Skills instaladas."</string>
     <string name="native_031a8f0f659df890" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Falhou"</string>
@@ -349,6 +350,7 @@
     <string name="native_2ed4c16262ebec9a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Reaprovação de recurso pendente"</string>
     <string name="native_2eed50c823a4024d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Revisar itens destacados"</string>
     <string name="native_2f15d1b39446c681" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Atualize-me"</string>
+    <string name="native_2f33918cba124c51" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s resultados de ferramentas desconhecidos"</string>
     <string name="native_2f70159f10aa6bf9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ocultar números de linha"</string>
     <string name="native_2f77668a9dfbf8d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mensagem"</string>
     <string name="native_2f9c977d4df31bfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ler contatos"</string>
@@ -615,6 +617,7 @@
     <string name="native_53972e864229c7cc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Execuções recentes"</string>
     <string name="native_53981ad2bcd1778c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Alinhe o código QR dentro do quadrado."</string>
     <string name="native_53a8b711770580bd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Não foi possível carregar as aprovações."</string>
+    <string name="native_53b213a6ba279ae9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 ferramenta com resultado desconhecido"</string>
     <string name="native_53b7230f9bf052b7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eu aprovei"</string>
     <string name="native_53c8ee5160e74bf2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Análise por IA, com intervenção humana quando necessário, para acesso adicional."</string>
     <string name="native_53dd551fe4010842" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conecte seu Gateway para carregar a disponibilidade dos provedores."</string>
@@ -844,6 +847,7 @@
     <string name="native_7234213a42c2635b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Abrir perfil"</string>
     <string name="native_7234d010e91c7bcf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inicie seu Gateway."</string>
     <string name="native_72361961ef893ce1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ajude-me a transformar este objetivo em uma lista de verificação prática: "</string>
+    <string name="native_724f0ba5bb7e2dc2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ferramentas falharam"</string>
     <string name="native_7296bfd468e09713" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Limpar pesquisa de sessões"</string>
     <string name="native_72e9a59f5a1d6289" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Porta"</string>
     <string name="native_733acde617084439" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Expandir diagrama"</string>
@@ -1402,8 +1406,8 @@
     <string name="native_c3812fc4acb861d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Remover"</string>
     <string name="native_c382566dbe2ea49f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s%% online"</string>
     <string name="native_c385951198c45d9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nenhum canal"</string>
-    <string name="native_c38a575f77e9b336" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversa por voz interrompida"</string>
     <string name="native_c3ac9576d94db14f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Use Atualizar chat para verificar a integridade do Gateway."</string>
+    <string name="native_c3af8bc58e9f1b08" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 ferramenta bloqueada"</string>
     <string name="native_c420c647b0dce05a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ações de rejeição e quarentena da Oficina de Skills"</string>
     <string name="native_c49240206db14522" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nós e dispositivos"</string>
     <string name="native_c49eef4499c7913b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Central de comandos local"</string>
@@ -1630,6 +1634,7 @@
     <string name="native_e0d1b68224bf0b31" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Atual"</string>
     <string name="native_e0eb2d0309a54f5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Subagente trabalhando"</string>
     <string name="native_e10435f6306b06d9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 conta"</string>
+    <string name="native_e1247fbcf3282d38" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ferramentas bloqueadas"</string>
     <string name="native_e159b06187d369a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pausado"</string>
     <string name="native_e18835ef2f6c8558" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Permitir acesso à câmera"</string>
     <string name="native_e1f641311f07fe31" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · Microfone: Pendente"</string>

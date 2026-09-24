@@ -303,6 +303,8 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       trustedGroup,
       profile: effective.profile,
       providerProfile: effective.providerProfile,
+      sources: effective.sources,
+      profiles: effective.profiles,
       gatewayConfigReadAllowed: effective.gatewayConfigReadAllowed,
       profilePolicy,
       providerProfilePolicy,

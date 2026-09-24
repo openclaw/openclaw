@@ -84,7 +84,13 @@ it("reports unreadable journal history without replacing it or silently clearing
   }
 });
 
-it.each(["default", "custom-unregistered", "external-registered", "canonical-custom-lost-state"])(
+it.each([
+  "default",
+  "custom-unregistered",
+  "external-registered",
+  "canonical-custom-lost-state",
+  "malformed-config",
+])(
   "reconstructs with a receipt and keeps %s stores held on the next Doctor pass",
   async (location) => {
     const stateDir = fs.realpathSync.native(tempDirs.make("doctor-journal-recovery-"));
@@ -110,7 +116,7 @@ it.each(["default", "custom-unregistered", "external-registered", "canonical-cus
       const custom = path.join(tempDirs.make("doctor-journal-custom-"), "history.main.sqlite");
       fs.renameSync(stores[0]!, custom);
       stores[0] = custom;
-      if (location === "custom-unregistered") {
+      if (location === "custom-unregistered" || location === "malformed-config") {
         db.exec("DELETE FROM agent_databases WHERE agent_id = 'main'");
         cfg.session = { store: path.join(path.dirname(custom), "history.json") };
       } else {
@@ -118,6 +124,7 @@ it.each(["default", "custom-unregistered", "external-registered", "canonical-cus
       }
     }
     const configPath = path.join(stateDir, "openclaw.json");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     if (!lostState) {
       fs.writeFileSync(configPath, JSON.stringify(cfg));
     }
@@ -128,7 +135,46 @@ it.each(["default", "custom-unregistered", "external-registered", "canonical-cus
       }
     }
     const bytes = stores.map((file) => fs.readFileSync(file));
-    const preflight = await prepareDoctorDatabasePreflight(lostState ? {} : { cfg });
+    if (location === "malformed-config") {
+      fs.writeFileSync(configPath, '{"session":');
+      const incomplete = await prepareDoctorDatabasePreflight();
+      const refused = await repairDoctorAgentDeletionJournal({
+        preflight: incomplete,
+        shouldRepair: true,
+        env,
+      });
+      expect(refused.changes).toEqual([]);
+      expect(refused.warnings.join("\n")).toContain(
+        "ownership configuration could not be verified",
+      );
+      const unchanged = new DatabaseSync(statePath, { readOnly: true });
+      try {
+        expect(
+          unchanged
+            .prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'")
+            .get(),
+        ).toBeUndefined();
+        expect(
+          unchanged
+            .prepare(
+              "SELECT * FROM migration_sources WHERE migration_kind = 'agent-deletion-journal-reconstruction'",
+            )
+            .all(),
+        ).toEqual([]);
+      } finally {
+        unchanged.close();
+      }
+      stores.forEach((file, index) => expect(fs.readFileSync(file)).toEqual(bytes[index]));
+      fs.writeFileSync(configPath, JSON.stringify(cfg));
+      const stale = await repairDoctorAgentDeletionJournal({
+        preflight: incomplete,
+        shouldRepair: true,
+        env,
+      });
+      expect(stale.changes).toEqual([]);
+      expect(stale.warnings.join("\n")).toContain("ownership configuration could not be verified");
+    }
+    const preflight = await prepareDoctorDatabasePreflight();
     const preview = await repairDoctorAgentDeletionJournal({ preflight, shouldRepair: false, env });
     expect(preview.changes).toEqual([]);
     expect(preview.warnings.join("\n")).toContain("deletion journal missing; 2 stores held back");
@@ -137,7 +183,7 @@ it.each(["default", "custom-unregistered", "external-registered", "canonical-cus
     expect(repaired.warnings.join("\n")).toMatch(/agents add '?main'?/);
     expect(repaired.warnings.join("\n")).toContain("--non-interactive");
     closeOpenClawStateDatabaseForTest();
-    const next = await prepareDoctorDatabasePreflight(lostState ? {} : { cfg });
+    const next = await prepareDoctorDatabasePreflight();
     expect(next.agentDatabaseMigrationDiscovery?.discovery.targets).toEqual([]);
     expect(next.pendingMigrations?.filter((entry) => entry.kind === "agent") ?? []).toEqual([]);
     expect(
@@ -286,7 +332,7 @@ it.each([
     const authPaths = [authPath];
     const aliasArtifacts: string[] = [];
     if (location === "hardlinked-owner") {
-      cfg.agents = { entries: { retired: {}, secondary: {} } };
+      cfg.agents = { ownership: "explicit", entries: { retired: {}, secondary: {} } };
       const secondDir = path.join(stateDir, "agents", "secondary", "agent");
       fs.mkdirSync(secondDir, { recursive: true });
       const secondDatabase = path.join(secondDir, "openclaw-agent.sqlite");
@@ -324,7 +370,9 @@ it.each([
       authPaths.push(secondAuth);
       aliasArtifacts.push(secondDatabase, secondAuth, secondCatalog, sidecar);
     }
-    fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify(cfg));
+    const configPath = path.join(stateDir, "openclaw.json");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    fs.writeFileSync(configPath, JSON.stringify(cfg));
     closeOpenClawStateDatabaseForTest();
     const statePath = resolveOpenClawStateSqlitePath(env);
     const database = new DatabaseSync(statePath);
@@ -334,7 +382,7 @@ it.each([
     const bytes = protectedPaths.map((file) => fs.readFileSync(file));
     const mainPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     expect(fs.existsSync(mainPath)).toBe(false);
-    const initial = await prepareDoctorDatabasePreflight({ cfg });
+    const initial = await prepareDoctorDatabasePreflight();
     const reconstruction = await repairDoctorAgentDeletionJournal({
       preflight: initial,
       shouldRepair: true,
@@ -378,7 +426,7 @@ it.each([
     };
     for (let pass = 0; pass < 2; pass += 1) {
       closeOpenClawStateDatabaseForTest();
-      const next = await prepareDoctorDatabasePreflight({ cfg });
+      const next = await prepareDoctorDatabasePreflight();
       expect(
         (await repairDoctorAgentDeletionJournal({ preflight: next, shouldRepair: true, env }))
           .changes,

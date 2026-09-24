@@ -122,7 +122,7 @@ describe("runCodexAppServerAttempt steering", () => {
         void applied.then(acknowledged);
         expect(revokeApprovals).toHaveBeenCalledOnce();
         if (!interruptFails) {
-          await waitForMethod("thread/backgroundTerminals/terminate", fastWait.timeout);
+          await waitForMethod("thread/backgroundTerminals/terminate");
           await new Promise<void>((resolve) => {
             setImmediate(resolve);
           });
@@ -733,13 +733,13 @@ describe("runCodexAppServerAttempt steering", () => {
   });
 
   it("passes session files through active Codex app-server registration for command lookup", async () => {
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const { requests, completeTurn } = createStartedThreadHarness();
     const params = createSteeringParams();
     activeRunRegistrationMocks.setActiveEmbeddedRun.mockClear();
     activeRunRegistrationMocks.clearActiveEmbeddedRun.mockClear();
 
     const run = runCodexAppServerAttempt(params);
-    await waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
 
     expect(activeRunRegistrationMocks.setActiveEmbeddedRun).toHaveBeenCalledWith(
       params.sessionId,

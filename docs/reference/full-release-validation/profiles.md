@@ -88,20 +88,20 @@ three provider shards, so it still fans out to all additional Docker gateway job
 Use `cross_os_suite_filter` with `rerun_group=cross-os` when one cross-OS lane
 failed. The filter accepts comma-separated OS ids, suite ids, or OS/suite pairs,
 for example `windows/packaged-upgrade`, `windows`, or `packaged-fresh`.
-All-group filters must retain `packaged-fresh`, `installer-fresh`, and
-`packaged-upgrade` on Linux (`ubuntu`), Windows, and macOS. All nine OS/suite
-pairs are required for `npm-stable-v1` and `npm-beta-v1`; a filter such as
-`ubuntu,macos` is rejected because it omits required Windows proof. Focused
-reruns remain focused evidence, not publication authorization. Cross-OS
-summaries include per-phase timings for packaged upgrade lanes, and long-running
-commands print heartbeat lines so a stuck update is visible before the job
-timeout.
+All-group runs must keep every OS/suite pair: `-f cross_os_suite_filter=ubuntu,windows,macos`
+or `packaged-fresh,installer-fresh,packaged-upgrade` are accepted, while any all-group
+filter that omits one of the nine Linux/Windows/macOS install and upgrade pairs is
+rejected before scheduling. Windows/macOS outcomes are recorded as advisory; the Linux
+pairs are required proof.
 
-Selected QA, source and package Telegram, live-provider, cross-OS, and performance
-failures block validation across beta, stable, full, and Tideclaw alpha profiles.
-Beta no-soak deferrals and reviewed version-specific omissions remain separate
-selection policies. Failed, skipped, or deferred attempts are never reported as
-passed. When
+Selected QA, source and package Telegram, live-provider, Windows/macOS cross-OS,
+and performance failures are recorded as advisory during validation (Release
+Decision `- Advisory:` entries and `::warning` annotations); Linux Gateway
+cross-OS lanes and the other required proofs block. Publishing a stable with a
+recorded advisory failure, or without soak and blocking performance evidence,
+requires the operator waivers described in RELEASING.md "Publication modes";
+without them the publisher gates fail closed. Skipped or deferred attempts are
+never reported as passed. When
 `live_suite_filter` explicitly requests a gated QA live lane such as Discord,
 WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo
 variable must be enabled; otherwise input capture fails instead of silently skipping the lane.

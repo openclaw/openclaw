@@ -20,6 +20,7 @@ const repositoryScriptEntries = [
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   "scripts/render-proof-video.mts!",
+  "scripts/ci-shard-timings-refresh.mts!",
   // tsdown builds this private macOS app worker protocol entry by path.
   "src/node-host/mac-worker-entry.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
@@ -135,6 +136,8 @@ const repositoryScriptEntries = [
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   "scripts/e2e/lib/upgrade-survivor/taskflow-restoration.mjs!",
+  // The first-hop shell executes the packaged admission entry probe by path.
+  "scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs!",
   "scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
@@ -380,6 +383,8 @@ const rootEntries = [
   "src/tasks/task-registry-control.runtime.ts!",
   // Reply dispatch and Gateway startup consume this namespace through loadGetReplyFromConfigRuntime.
   "src/auto-reply/reply/get-reply-from-config.runtime.ts!",
+  // Command attempts consume this namespace through runtime-loaders.ts's Promise.all preload.
+  "src/agents/command/attempt-execution.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",

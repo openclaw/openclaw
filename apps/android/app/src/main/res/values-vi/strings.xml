@@ -42,6 +42,7 @@
     <string name="native_01cfb797d96a35b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chụm ngón tay"</string>
     <string name="native_024f9605eda4caf4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Số lần bỏ qua liên tiếp"</string>
     <string name="native_027d7c7db6d8b3ef" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Thư mục này chưa có tệp nào."</string>
+    <string name="native_02b62d5ca98d283e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 công cụ thất bại"</string>
     <string name="native_0303e18246708180" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chưa kết nối"</string>
     <string name="native_030cab223a806ad6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kiểm tra và quản lý trạng thái kỹ năng đã cài đặt."</string>
     <string name="native_031a8f0f659df890" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Thất bại"</string>
@@ -349,6 +350,7 @@
     <string name="native_2ed4c16262ebec9a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Khả năng đang chờ phê duyệt lại"</string>
     <string name="native_2eed50c823a4024d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Xem xét các mục được đánh dấu"</string>
     <string name="native_2f15d1b39446c681" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tóm tắt cho tôi"</string>
+    <string name="native_2f33918cba124c51" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s công cụ chưa rõ kết quả"</string>
     <string name="native_2f70159f10aa6bf9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ẩn số dòng"</string>
     <string name="native_2f77668a9dfbf8d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tin nhắn"</string>
     <string name="native_2f9c977d4df31bfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đọc danh bạ"</string>
@@ -615,6 +617,7 @@
     <string name="native_53972e864229c7cc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Các lần chạy gần đây"</string>
     <string name="native_53981ad2bcd1778c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Căn mã QR vào trong hình vuông."</string>
     <string name="native_53a8b711770580bd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Không thể tải các yêu cầu phê duyệt."</string>
+    <string name="native_53b213a6ba279ae9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chưa rõ kết quả của 1 công cụ"</string>
     <string name="native_53b7230f9bf052b7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tôi đã phê duyệt"</string>
     <string name="native_53c8ee5160e74bf2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"AI xét duyệt quyền truy cập bổ sung, với con người hỗ trợ khi cần."</string>
     <string name="native_53dd551fe4010842" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kết nối với Gateway của bạn để tải trạng thái sẵn sàng của nhà cung cấp."</string>
@@ -844,6 +847,7 @@
     <string name="native_7234213a42c2635b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mở hồ sơ"</string>
     <string name="native_7234d010e91c7bcf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Khởi động Gateway của bạn."</string>
     <string name="native_72361961ef893ce1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Giúp tôi chuyển mục tiêu này thành danh sách việc cần làm thiết thực: "</string>
+    <string name="native_724f0ba5bb7e2dc2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s công cụ thất bại"</string>
     <string name="native_7296bfd468e09713" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Xóa tìm kiếm phiên"</string>
     <string name="native_72e9a59f5a1d6289" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cổng"</string>
     <string name="native_733acde617084439" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mở rộng sơ đồ"</string>
@@ -1402,8 +1406,8 @@
     <string name="native_c3812fc4acb861d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Xóa"</string>
     <string name="native_c382566dbe2ea49f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s%% trực tuyến"</string>
     <string name="native_c385951198c45d9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Không có kênh"</string>
-    <string name="native_c38a575f77e9b336" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Trò chuyện bằng giọng nói đã dừng"</string>
     <string name="native_c3ac9576d94db14f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dùng tính năng Làm mới trò chuyện để kiểm tra tình trạng Gateway."</string>
+    <string name="native_c3af8bc58e9f1b08" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 công cụ bị chặn"</string>
     <string name="native_c420c647b0dce05a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Các thao tác từ chối và cách ly trong Skill Workshop"</string>
     <string name="native_c49240206db14522" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Các nút &amp; Thiết bị"</string>
     <string name="native_c49eef4499c7913b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Trung tâm điều khiển cục bộ"</string>
@@ -1630,6 +1634,7 @@
     <string name="native_e0d1b68224bf0b31" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hiện tại"</string>
     <string name="native_e0eb2d0309a54f5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tác tử phụ đang làm việc"</string>
     <string name="native_e10435f6306b06d9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 tài khoản"</string>
+    <string name="native_e1247fbcf3282d38" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s công cụ bị chặn"</string>
     <string name="native_e159b06187d369a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đã tạm dừng"</string>
     <string name="native_e18835ef2f6c8558" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cho phép sử dụng camera"</string>
     <string name="native_e1f641311f07fe31" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · Micrô: Đang chờ"</string>
