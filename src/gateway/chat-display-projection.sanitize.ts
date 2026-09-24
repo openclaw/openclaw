@@ -214,40 +214,27 @@ export function sanitizeChatHistoryContentBlock(
     }
     truncated ||= content.some((item) => item.truncated);
   }
-  for (const field of ["text", "content"] as const) {
-    if (typeof entry[field] !== "string") {
+  for (const field of ["text", "content", "partialJson", "arguments", "thinking"] as const) {
+    if (
+      typeof entry[field] !== "string" ||
+      (preserveExactToolPayload && (field === "partialJson" || field === "arguments"))
+    ) {
       continue;
     }
-    const res = truncateChatHistoryText(entry[field], maxChars, preserveExactToolPayload);
+    const res = truncateChatHistoryText(
+      entry[field],
+      maxChars,
+      preserveExactToolPayload && (field === "text" || field === "content"),
+    );
     entry[field] = res.text;
     changed ||= res.truncated;
     truncated ||= res.truncated;
   }
-  if (typeof entry.partialJson === "string" && !preserveExactToolPayload) {
-    const res = truncateChatHistoryText(entry.partialJson, maxChars);
-    entry.partialJson = res.text;
-    changed ||= res.truncated;
-    truncated ||= res.truncated;
-  }
-  if (typeof entry.arguments === "string" && !preserveExactToolPayload) {
-    const res = truncateChatHistoryText(entry.arguments, maxChars);
-    entry.arguments = res.text;
-    changed ||= res.truncated;
-    truncated ||= res.truncated;
-  }
-  if (typeof entry.thinking === "string") {
-    const res = truncateChatHistoryText(entry.thinking, maxChars);
-    entry.thinking = res.text;
-    changed ||= res.truncated;
-    truncated ||= res.truncated;
-  }
-  if ("thinkingSignature" in entry) {
-    delete entry.thinkingSignature;
-    changed = true;
-  }
-  if ("openclawReasoningReplay" in entry) {
-    delete entry.openclawReasoningReplay;
-    changed = true;
+  for (const field of ["thinkingSignature", "openclawReasoningReplay"]) {
+    if (field in entry) {
+      delete entry[field];
+      changed = true;
+    }
   }
   const mediaChanged = projectChatHistoryMediaBlock(entry);
   const attachmentChanged = projectChatHistoryAttachmentBlock(entry);
@@ -481,51 +468,40 @@ export function sanitizeChatHistoryMessage(
     truncated ||= toolResultDetails?.truncated === true;
   }
 
-  if (entry.role !== "assistant") {
-    if ("usage" in entry) {
-      delete entry.usage;
-      changed = true;
+  for (const field of ["usage", "cost"] as const) {
+    if (!(field in entry)) {
+      continue;
     }
-    if ("cost" in entry) {
-      delete entry.cost;
-      changed = true;
+    const sanitized =
+      entry.role === "assistant"
+        ? sanitizeNumericMetadata(entry[field], field === "usage" ? USAGE_FIELDS : COST_FIELDS)
+        : undefined;
+    if (sanitized) {
+      entry[field] = sanitized;
+    } else {
+      delete entry[field];
     }
-  } else {
-    if ("usage" in entry) {
-      const sanitized = sanitizeNumericMetadata(entry.usage, USAGE_FIELDS);
-      if (sanitized) {
-        entry.usage = sanitized;
-      } else {
-        delete entry.usage;
-      }
-      changed = true;
-    }
-    if ("cost" in entry) {
-      const sanitized = sanitizeNumericMetadata(entry.cost, COST_FIELDS);
-      if (sanitized) {
-        entry.cost = sanitized;
-      } else {
-        delete entry.cost;
-      }
-      changed = true;
-    }
+    changed = true;
   }
 
   const stripAssistantControlTokens =
     role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
 
-  if (typeof entry.content === "string") {
+  const projectText = (text: string) => {
     const controlStripped = stripAssistantControlTokens
       ? stripAssistantMediaDirectivesForDisplay(
-          stripSuppressedControlReplyToken(entry.content),
+          stripSuppressedControlReplyToken(text),
           managedMedia.urls,
         )
-      : entry.content;
-    changed ||= controlStripped !== entry.content;
+      : text;
+    changed ||= controlStripped !== text;
     const res = truncateChatHistoryText(controlStripped, maxChars, preserveExactToolPayload);
-    entry.content = res.text;
     changed ||= res.truncated;
     truncated ||= res.truncated;
+    return res.text;
+  };
+  if (typeof entry.content === "string") {
+    entry.content = projectText(entry.content);
   } else if (Array.isArray(entry.content)) {
     const content = entry.content;
     const commentary = readRecord(entry.openclawStreamFallback)?.source === "segment";
@@ -594,17 +570,7 @@ export function sanitizeChatHistoryMessage(
   }
 
   if (typeof entry.text === "string") {
-    const controlStripped = stripAssistantControlTokens
-      ? stripAssistantMediaDirectivesForDisplay(
-          stripSuppressedControlReplyToken(entry.text),
-          managedMedia.urls,
-        )
-      : entry.text;
-    changed ||= controlStripped !== entry.text;
-    const res = truncateChatHistoryText(controlStripped, maxChars, preserveExactToolPayload);
-    entry.text = res.text;
-    changed ||= res.truncated;
-    truncated ||= res.truncated;
+    entry.text = projectText(entry.text);
   }
 
   if (truncated) {

@@ -6,14 +6,6 @@ import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { resolveCommandContextText } from "./context-text.js";
 
-function isResetCommandCandidate(text: string): boolean {
-  return /^\/(?:new|reset)(?:\s|$)/i.test(text);
-}
-
-function isAcpCommandCandidate(text: string): boolean {
-  return /^\/acp(?:\s|$)/i.test(text);
-}
-
 export function shouldBypassAcpDispatchForCommand(
   ctx: FinalizedRuntimeMsgContext,
   cfg: OpenClawConfig,
@@ -27,11 +19,7 @@ export function shouldBypassAcpDispatchForCommand(
     surface: ctx.Surface ?? ctx.Provider ?? "",
     commandSource: ctx.CommandSource,
   });
-  if (isResetCommandCandidate(candidate)) {
-    return true;
-  }
-
-  if (isAcpCommandCandidate(candidate)) {
+  if (/^\/(?:new|reset|acp)(?:\s|$)/i.test(candidate)) {
     return true;
   }
 

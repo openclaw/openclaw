@@ -1056,7 +1056,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(JSON.parse(result.stdout)).toEqual({
       importReads: 0,
       sourceReads: 0,
-      distOwners: ["test/vitest/vitest.boundary.config.ts", "test/vitest/vitest.tui-pty.config.ts"],
+      distOwners: [],
       selected: [
         "test/scripts/managed-child-process.test.ts",
         "test/scripts/test-projects.test.ts",
@@ -4512,9 +4512,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(selected).toHaveLength(96);
     vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(20_000);
     // Every selected file is now indivisible above the admission cap. Overflow
-    // must retain these 96 files plus two dist owners, never resurrect the full suite.
+    // must retain these 96 files without adding unrelated dist owners or the full suite.
     expect(() => createSelectedNodeTestShardBundles(selected, { runnerBackend: "github" })).toThrow(
-      "exceeds 90 jobs (98 planned)",
+      "exceeds 90 jobs (96 planned)",
     );
   });
 
@@ -4620,7 +4620,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       );
       const groups = plan.flatMap((job) => job.groups);
       expect(groups).toHaveLength(1);
-      expect(groups[0]!.configs).toEqual(shard.configs);
+      expect(groups[0]!.configs).toEqual([
+        owner === "agentic-cli"
+          ? "test/vitest/vitest.cli.config.ts"
+          : "test/vitest/vitest.gateway-client.config.ts",
+      ]);
       if (owner === "agentic-cli") {
         expect(groups[0]!.shard_name).toBe(owner);
       }
@@ -6123,7 +6127,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(owner.group.includePatterns).toEqual([file]);
       expect(owner.group.configs.toSorted()).toEqual([
         "test/vitest/vitest.gateway-database-workers.config.ts",
-        "test/vitest/vitest.gateway-server-isolated.config.ts",
       ]);
       expect(owner.group.pretestBuildMode).toBe(buildMode);
       expect(owner.shard.planConcurrency).toBe(1);
@@ -6281,22 +6284,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(owners[0]?.pretestBuildMode).toBe("runtime");
   });
 
-  it("retains the changed host plugin test when the store-alias diff forces fallback", () => {
-    expect(createChangedNodeTestShards(STORE_ALIAS_CHANGED_PATHS)).toBeNull();
+  it("retains the changed host plugin test in a global fallback beside store aliases", () => {
+    const target = "src/plugins/tools.optional.test.ts";
+    const changedPaths = [...STORE_ALIAS_CHANGED_PATHS, "tsconfig.json"];
+    const onFallback = vi.fn();
+    expect(createChangedNodeTestShards(changedPaths, { onFallback })).toBeNull();
+    expect(onFallback).toHaveBeenCalledWith("global execution or resolution input: tsconfig.json");
     const options = {
-      changedPaths: STORE_ALIAS_CHANGED_PATHS,
+      changedPaths,
       includeReleaseOnlyPluginShards: false,
     };
     const shards = [
       ...createNodeTestShards(options),
-      ...createChangedExtensionFallbackShards(STORE_ALIAS_CHANGED_PATHS),
+      ...createChangedExtensionFallbackShards(changedPaths),
     ];
     expect(shards.filter((shard) => shard.shardName === "agentic-plugins")).toEqual([
       {
         checkName: "checks-node-agentic-plugins",
         shardName: "agentic-plugins",
         configs: ["test/vitest/vitest.plugins.config.ts"],
-        includePatterns: ["src/plugins/tools.optional.test.ts"],
+        includePatterns: [target],
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
       },

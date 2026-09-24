@@ -24,6 +24,13 @@ type WorkerTurnToolStateIdentity = {
   claimId: string;
 };
 
+type WorkerSessionToolOperationIdentity = {
+  sourceSessionId: string;
+  sourceClaimId: string;
+  toolCallId: string;
+  requestDigest: string;
+};
+
 type WorkerSessionToolOperationWaiter = (error?: Error) => void;
 
 export const MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS = 4;
@@ -221,6 +228,33 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
       return false;
     }
   };
+  const settleWorkerSessionToolOperation = (
+    identity: WorkerSessionToolOperationIdentity,
+    outcome: { status: "succeeded" | "failed" | "unknown"; result_json?: string },
+  ): boolean => {
+    const settled = write((db) => {
+      const result = executeSqliteQuerySync(
+        db,
+        query(db)
+          .updateTable("worker_session_tool_operations")
+          .set({ ...outcome, updated_at_ms: now() })
+          .where("source_session_id", "=", identity.sourceSessionId)
+          .where("source_claim_id", "=", identity.sourceClaimId)
+          .where("tool_call_id", "=", identity.toolCallId)
+          .where("request_digest", "=", identity.requestDigest)
+          .where("gateway_instance_id", "=", instanceId)
+          .where("status", "=", "running"),
+      );
+      return result.numAffectedRows === 1n;
+    });
+    if (settled) {
+      signalWorkerSessionToolOperationChange(path, {
+        sessionId: identity.sourceSessionId,
+        claimId: identity.sourceClaimId,
+      });
+    }
+    return settled;
+  };
   return {
     authorizeWorkerTurnTools(claim: WorkerSessionTurnClaim, toolNames: readonly string[]): void {
       const normalized = [
@@ -397,13 +431,11 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
       });
     },
 
-    bindWorkerSessionToolOperationChild(params: {
-      sourceSessionId: string;
-      sourceClaimId: string;
-      toolCallId: string;
-      requestDigest: string;
-      childSessionKey: string;
-    }): boolean {
+    bindWorkerSessionToolOperationChild(
+      params: WorkerSessionToolOperationIdentity & {
+        childSessionKey: string;
+      },
+    ): boolean {
       return write((db) => {
         const result = executeSqliteQuerySync(
           db,
@@ -427,70 +459,20 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
       });
     },
 
-    completeWorkerSessionToolOperation(params: {
-      sourceSessionId: string;
-      sourceClaimId: string;
-      toolCallId: string;
-      requestDigest: string;
-      resultJson: string;
-      failed?: boolean;
-    }): boolean {
-      const completed = write((db) => {
-        const result = executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_session_tool_operations")
-            .set({
-              status: params.failed ? "failed" : "succeeded",
-              result_json: params.resultJson,
-              updated_at_ms: now(),
-            })
-            .where("source_session_id", "=", params.sourceSessionId)
-            .where("source_claim_id", "=", params.sourceClaimId)
-            .where("tool_call_id", "=", params.toolCallId)
-            .where("request_digest", "=", params.requestDigest)
-            .where("gateway_instance_id", "=", instanceId)
-            .where("status", "=", "running"),
-        );
-        return result.numAffectedRows === 1n;
+    completeWorkerSessionToolOperation(
+      params: WorkerSessionToolOperationIdentity & {
+        resultJson: string;
+        failed?: boolean;
+      },
+    ): boolean {
+      return settleWorkerSessionToolOperation(params, {
+        status: params.failed ? "failed" : "succeeded",
+        result_json: params.resultJson,
       });
-      if (completed) {
-        signalWorkerSessionToolOperationChange(path, {
-          sessionId: params.sourceSessionId,
-          claimId: params.sourceClaimId,
-        });
-      }
-      return completed;
     },
 
-    abandonWorkerSessionToolOperation(params: {
-      sourceSessionId: string;
-      sourceClaimId: string;
-      toolCallId: string;
-      requestDigest: string;
-    }): boolean {
-      const abandoned = write((db) => {
-        const result = executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_session_tool_operations")
-            .set({ status: "unknown", updated_at_ms: now() })
-            .where("source_session_id", "=", params.sourceSessionId)
-            .where("source_claim_id", "=", params.sourceClaimId)
-            .where("tool_call_id", "=", params.toolCallId)
-            .where("request_digest", "=", params.requestDigest)
-            .where("gateway_instance_id", "=", instanceId)
-            .where("status", "=", "running"),
-        );
-        return result.numAffectedRows === 1n;
-      });
-      if (abandoned) {
-        signalWorkerSessionToolOperationChange(path, {
-          sessionId: params.sourceSessionId,
-          claimId: params.sourceClaimId,
-        });
-      }
-      return abandoned;
+    abandonWorkerSessionToolOperation(params: WorkerSessionToolOperationIdentity): boolean {
+      return settleWorkerSessionToolOperation(params, { status: "unknown" });
     },
 
     recoverWorkerSessionToolOperationsAfterRestart(): number {

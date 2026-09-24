@@ -109,17 +109,15 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     };
     const entry = compactTarget.entry;
     const sessionId = entry?.sessionId;
-    if (!sessionId) {
+    const respondNotCompacted = (details: { ok?: boolean; kept?: number; reason?: string }) => {
       respond(
         true,
-        {
-          ok: true,
-          key: target.canonicalKey,
-          compacted: false,
-          reason: "no sessionId",
-        },
+        { ok: true, key: target.canonicalKey, compacted: false, ...details },
         undefined,
       );
+    };
+    if (!sessionId) {
+      respondNotCompacted({ reason: "no sessionId" });
       return;
     }
 
@@ -134,17 +132,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         { maxLines },
       );
       if (!trimPreflight.compacted) {
-        respond(
-          true,
-          {
-            ok: true,
-            key: target.canonicalKey,
-            compacted: false,
-            ...("kept" in trimPreflight
-              ? { kept: trimPreflight.kept }
-              : { reason: "no transcript" }),
-          },
-          undefined,
+        respondNotCompacted(
+          "kept" in trimPreflight ? { kept: trimPreflight.kept } : { reason: "no transcript" },
         );
         return;
       }
@@ -156,21 +145,25 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         storePath,
       });
       if (transcriptStats.eventCount === 0) {
-        respond(
-          true,
-          {
-            ok: true,
-            key: target.canonicalKey,
-            compacted: false,
-            reason: "no transcript",
-          },
-          undefined,
-        );
+        respondNotCompacted({ reason: "no transcript" });
         return;
       }
     }
 
     const lifecycleRevision = entry.lifecycleRevision;
+    const readCurrentEntry = () => {
+      const latest = loadAccessorSessionEntryForGatewayTarget({
+        key,
+        cfg,
+        agentId: requestedAgentId,
+      }).entry;
+      return latest &&
+        latest.sessionId === sessionId &&
+        latest.lifecycleRevision === lifecycleRevision &&
+        !resolveSessionWorkStartError(target.canonicalKey, latest)
+        ? latest
+        : undefined;
+    };
     const queueIdentities = [key, target.canonicalKey, compactTarget.primaryKey, sessionId];
     const lifecycleIdentities = [...queueIdentities, lifecycleRevision];
     let sessionStillCurrent = true;
@@ -183,17 +176,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         identities: lifecycleIdentities,
         kind: "compaction",
         prepare: async () => {
-          const latestEntry = loadAccessorSessionEntryForGatewayTarget({
-            key,
-            cfg,
-            agentId: requestedAgentId,
-          }).entry;
-          if (
-            !latestEntry ||
-            latestEntry.sessionId !== sessionId ||
-            latestEntry.lifecycleRevision !== lifecycleRevision ||
-            resolveSessionWorkStartError(target.canonicalKey, latestEntry)
-          ) {
+          const latestEntry = readCurrentEntry();
+          if (!latestEntry) {
             sessionStillCurrent = false;
             return;
           }
@@ -250,16 +234,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             return;
           }
           if (compactionNoopReason) {
-            respond(
-              true,
-              {
-                ok: false,
-                key: target.canonicalKey,
-                compacted: false,
-                reason: compactionNoopReason,
-              },
-              undefined,
-            );
+            respondNotCompacted({ ok: false, reason: compactionNoopReason });
             return;
           }
           if (blockedByQueuedWork) {
@@ -285,17 +260,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             return;
           }
 
-          const latestEntry = loadAccessorSessionEntryForGatewayTarget({
-            key,
-            cfg,
-            agentId: requestedAgentId,
-          }).entry;
-          if (
-            !latestEntry ||
-            latestEntry.sessionId !== sessionId ||
-            latestEntry.lifecycleRevision !== lifecycleRevision ||
-            resolveSessionWorkStartError(target.canonicalKey, latestEntry)
-          ) {
+          const latestEntry = readCurrentEntry();
+          if (!latestEntry) {
             respond(
               false,
               undefined,
@@ -357,16 +323,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             storePath,
           });
           if (transcriptStats.eventCount === 0) {
-            respond(
-              true,
-              {
-                ok: true,
-                key: target.canonicalKey,
-                compacted: false,
-                reason: "no transcript",
-              },
-              undefined,
-            );
+            respondNotCompacted({ reason: "no transcript" });
             return;
           }
           emitSessionOperation(context, {

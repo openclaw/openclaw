@@ -20,7 +20,11 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
-import { ChatAttachmentReadLifecycle, type ChatAttachmentRead } from "./chat-attachment-reads.ts";
+import {
+  ChatAttachmentReadLifecycle,
+  type ChatAttachmentRead,
+  type PendingChatAttachmentRead,
+} from "./chat-attachment-reads.ts";
 import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
 import { renderComposerPastedText } from "./chat-composer-pasted-text.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
@@ -166,7 +170,7 @@ export function chatAttachmentFromDataUrl(
 
 function readAttachmentFile(
   file: File,
-  entry: ChatAttachmentRead,
+  entry: PendingChatAttachmentRead,
   reads: ChatAttachmentReadLifecycle,
   props: ChatAttachmentControlsProps,
 ): void {
@@ -190,10 +194,10 @@ function readAttachmentFile(
         dataUrl: reader.result,
         file,
       });
-      const ready = [...currentAttachments(props), completedAttachment];
+      const ready = [...entry.destination.getAttachments(), completedAttachment];
       const readyIds = new Set(ready.map(({ id }) => id));
       // Publish only readable payloads, in admission order, before releasing send.
-      props.onAttachmentsChange?.(
+      entry.destination.onAttachmentsChange(
         reads
           .project(ready)
           .filter(({ attachment }) => readyIds.has(attachment.id))
@@ -205,7 +209,7 @@ function readAttachmentFile(
     } else {
       reads.fail(entry);
     }
-    props.onPendingReadsChange?.(-1);
+    entry.destination.onPendingReadsChange?.(-1);
   };
   const abort = () => {
     finish("aborted");
@@ -221,7 +225,7 @@ function readAttachmentFile(
       reads.updateProgress(entry, Math.min(1, Math.max(0, event.loaded / event.total)));
     }
   });
-  props.onPendingReadsChange?.(1);
+  entry.destination.onPendingReadsChange?.(1);
   try {
     reader.readAsDataURL(file);
   } catch {
@@ -251,7 +255,11 @@ export function appendChatAttachmentFiles(
   }
   const reads =
     props.attachmentReads ?? new ChatAttachmentReadLifecycle(() => props.onRequestUpdate?.());
-  const entries = reads.begin(files, currentAttachments(props));
+  const entries = reads.begin(files, currentAttachments(props), {
+    getAttachments: () => currentAttachments(props),
+    onAttachmentsChange: props.onAttachmentsChange,
+    onPendingReadsChange: props.onPendingReadsChange,
+  });
   entries.forEach((entry, index) => {
     const file = files[index];
     if (file) {

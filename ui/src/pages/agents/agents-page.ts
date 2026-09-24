@@ -123,8 +123,8 @@ class AgentsPage
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
   @state() agentFileContents: Record<string, string> = {};
-  @state() agentFileBaseHashes: Record<string, string> = {};
-  @state() agentFileHashes: Record<string, string> = {};
+  @state() agentFileBaseVersions: RetainedAgentFileDrafts["versions"] = {};
+  @state() agentFileVersions: RetainedAgentFileDrafts["versions"] = {};
   @state() agentFileConflict: string | null = null;
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
@@ -398,7 +398,7 @@ class AgentsPage
       if (retained && selectedId) {
         this.retainedFileDrafts.delete(selectedId);
         this.agentFileDrafts = retained.drafts;
-        this.agentFileHashes = retained.hashes;
+        this.agentFileVersions = retained.versions;
         this.agentFileActive = retained.active;
         this.agentFileConflict = retained.conflict;
         // Loaded bases stay empty: returning must read disk while retaining the draft's ancestry.
@@ -856,8 +856,8 @@ class AgentsPage
     this.agentFilesError = null;
     this.agentFileActive = null;
     this.agentFileContents = {};
-    this.agentFileBaseHashes = {};
-    this.agentFileHashes = {};
+    this.agentFileBaseVersions = {};
+    this.agentFileVersions = {};
     this.agentFileConflict = null;
     this.agentFileDrafts = {};
     this.agentFileWriteRevisions.clear();

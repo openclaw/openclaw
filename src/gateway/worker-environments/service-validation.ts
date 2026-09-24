@@ -71,14 +71,10 @@ export function requireProviderOperationTimeoutMs(
   return timeoutMs;
 }
 
-function isWorkerMachineOptions(value: unknown): value is readonly WorkerMachineOption[] {
-  return Value.Check(WorkerMachineOptionsSchema, value);
-}
-
 export function normalizeWorkerMachineOptions(
   value: unknown,
 ): readonly WorkerMachineOption[] | undefined {
-  if (!isWorkerMachineOptions(value)) {
+  if (!Value.Check(WorkerMachineOptionsSchema, value)) {
     return undefined;
   }
   const ids = new Set<string>();

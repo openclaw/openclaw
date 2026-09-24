@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   getTrackedWorkerCpuSources,
+  getTrackedWorkerLifecycleSnapshot,
   createCpuTrackedWorker,
   markWorkerRetirement,
   sampleTrackedWorkerMemory,
@@ -49,8 +50,11 @@ describe("worker CPU lifecycle", () => {
         direct.getHeapStatistics(),
         owned.getHeapStatistics(),
       ]);
-      vi.spyOn(direct, "getHeapStatistics").mockResolvedValue(directHeap);
-      vi.spyOn(owned, "getHeapStatistics").mockResolvedValue(ownedHeap);
+      const directHeapRead = vi.spyOn(direct, "getHeapStatistics").mockResolvedValue(directHeap);
+      const ownedHeapRead = vi.spyOn(owned, "getHeapStatistics").mockResolvedValue(ownedHeap);
+      expect(getTrackedWorkerLifecycleSnapshot().workerCount).toBe(initial.workerCount + 2);
+      expect(directHeapRead).not.toHaveBeenCalled();
+      expect(ownedHeapRead).not.toHaveBeenCalled();
       sampleTrackedWorkerMemory();
       await Promise.resolve();
       const memory = sampleTrackedWorkerMemory();
@@ -82,6 +86,7 @@ describe("worker CPU lifecycle", () => {
       // Some consumers clear listeners before native teardown; counters must still retire.
       direct.removeAllListeners();
       await Promise.all([direct.terminate(), owned.terminate()]);
+      expect(getTrackedWorkerLifecycleSnapshot().workerCount).toBe(initial.workerCount);
       const retired = sampleTrackedWorkerMemory();
       expect(retired).toEqual({ ...initial, workerLifecycle: retired.workerLifecycle });
       for (const [name, reason] of [

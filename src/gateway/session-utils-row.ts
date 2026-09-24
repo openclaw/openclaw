@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
@@ -62,7 +65,6 @@ import {
   deriveSessionTitle,
   prepareSessionTitleRead,
   resolveEstimatedSessionCostUsd,
-  resolvePositiveNumber,
   buildStoreChildSessionLinksWork,
   type SessionChildLink,
   resolveSessionChildOwners,
@@ -192,7 +194,7 @@ export function readSessionRowInputs(params: {
     modelContextWindow: contextWindowProfile.contextTokens,
     allowAsyncLoad: false,
   });
-  const resolvedModelContextTokens = resolvePositiveNumber(modelContext.contextTokens);
+  const resolvedModelContextTokens = asPositiveFiniteNumber(modelContext.contextTokens);
 
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
@@ -254,7 +256,7 @@ export function readSessionRowInputs(params: {
               contextWindowProfile.contextTokens,
             )
           : resolvedModelContextTokens,
-        authoredContextTokens: resolvePositiveNumber(modelContext.authoredContextTokens),
+        authoredContextTokens: asPositiveFiniteNumber(modelContext.authoredContextTokens),
       }),
       pluginExtensions,
       includeSwarmSummary: params.rowContext !== undefined,

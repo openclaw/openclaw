@@ -13,7 +13,10 @@ import {
 } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import type { SessionTranscriptRawDeltaLimits } from "../config/sessions/session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import {
+  SessionTranscriptProjectionUnavailableError,
+  SessionTranscriptStorageUnavailableError,
+} from "../config/sessions/session-transcript-projection-error.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
@@ -166,9 +169,7 @@ export function createReadonlySessionHistoryReader(target: PreparedSessionHistor
       target.database,
     );
     if (!result.found) {
-      throw new Error(
-        "Session transcript storage is unavailable; open the source gateway and retry.",
-      );
+      throw new SessionTranscriptStorageUnavailableError(result.reason);
     }
     if (result.value.kind === "unavailable") {
       throw new SessionTranscriptProjectionUnavailableError(target.transcript.sessionId);

@@ -123,6 +123,15 @@ configured remote workspace during registration so callers cannot fall back to
 local files before its service starts. Register its bridge when ready and release
 it when the service stops. Callers keep their existing document authorization.
 
+The bridge's optional `createFileExclusive` operation publishes a complete file
+only if its path does not exist, returning `"created"` or `"exists"`. It must use
+an atomic exclusive-create operation, never a separate existence check followed
+by an ordinary write. Workspace access forwards this capability with the same
+service-lifetime checks as other bridge operations. Providers that omit it still
+support their existing reads and writes, but `agents.files.set` with
+`expectedMissing: true` visibly refuses creation without changing the file. Update
+the provider, or create the file on its host and reload it before editing.
+
 `createWorkspaceBootstrapFilePolicy({ workspaceDir, config })` lets adapters
 restrict this bridge to native bootstrap documents and the configured
 `bootstrap-extra-files` patterns. Check `canList` for directory metadata,

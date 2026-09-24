@@ -152,22 +152,13 @@ function normalizePromptMediaPath(value: unknown): string | undefined {
       return undefined;
     }
   };
-  const decodeInboundMediaId = (id: string): string | undefined => {
+  const inboundMatch = /^media(?::\/\/|\/)inbound\/([^/\\]+)$/i.exec(mediaPath);
+  if (inboundMatch?.[1]) {
     try {
-      return decodeURIComponent(id);
+      return toInboundMediaPath(decodeURIComponent(inboundMatch[1]));
     } catch {
       return undefined;
     }
-  };
-  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
-  if (canonicalMatch?.[1]) {
-    const id = decodeInboundMediaId(canonicalMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
-  }
-  const relativeMatch = /^media\/inbound\/([^/\\]+)$/i.exec(mediaPath);
-  if (relativeMatch?.[1]) {
-    const id = decodeInboundMediaId(relativeMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
   }
   const normalized = mediaPath.replace(/\\/g, "/");
   if (!normalized.includes("/media/inbound/")) {
@@ -403,7 +394,7 @@ function buildLocationContextPayload(ctx: TemplateContext): Record<string, unkno
   return Object.values(payload).some((value) => value !== undefined) ? payload : undefined;
 }
 
-function buildInboundHistoryMediaPromptPayload(value: unknown): Array<Record<string, unknown>> {
+function readInboundHistoryMediaTypes(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -411,14 +402,8 @@ function buildInboundHistoryMediaPromptPayload(value: unknown): Array<Record<str
     if (!isRecord(entry)) {
       return [];
     }
-    const payload = {
-      kind: normalizePromptMetadataString(entry["kind"]),
-      content_type: normalizePromptMetadataString(entry["contentType"]),
-      message_id: normalizePromptMetadataString(entry["messageId"]),
-      has_local_path: normalizePromptMetadataString(entry["path"]) ? true : undefined,
-      has_url: normalizePromptMetadataString(entry["url"]) ? true : undefined,
-    };
-    return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
+    const contentType = normalizePromptMetadataString(entry["contentType"]);
+    return contentType ? [contentType] : [];
   });
 }
 
@@ -769,13 +754,7 @@ export function buildInboundUserContextPrefix(
 
   if (boundedHistory.length > 0 && !chatWindowCoversHistory) {
     const historyLines = boundedHistory.flatMap((entry) => {
-      const mediaTypes = [
-        ...new Set(
-          buildInboundHistoryMediaPromptPayload(entry.media)
-            .map((media) => media["content_type"])
-            .filter((value): value is string => typeof value === "string"),
-        ),
-      ];
+      const mediaTypes = [...new Set(readInboundHistoryMediaTypes(entry.media))];
       const line = formatChatWindowMessage(
         {
           message_id: entry.messageId,

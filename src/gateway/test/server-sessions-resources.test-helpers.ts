@@ -43,8 +43,8 @@ const getGatewayServerHarnessModule = createLazyRuntimeModule(
   () => import("../server.e2e-ws-harness.js"),
 );
 
-/** Deselect before disposal so topology publication cannot reopen a fixture store. */
-export async function releaseGatewaySessionStoreFixture(dir: string) {
+/** Join accepted work while retaining the selected store and its database workers. */
+export async function settleGatewaySessionStoreFixture(dir: string) {
   // Transcript observers outlive session admission; join before config changes can
   // reopen the store. This also runs in suite teardown, outside expect.poll's test context.
   await vi.waitFor(() => expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(0), {
@@ -76,6 +76,12 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
     // before unregistration invalidates their canonical admission.
     await projection.ensureMaterialized();
   }
+  return { root, ownsPath, projection };
+}
+
+/** Deselect before disposal so topology publication cannot reopen a fixture store. */
+export async function releaseGatewaySessionStoreFixture(dir: string) {
+  const { root, ownsPath, projection } = await settleGatewaySessionStoreFixture(dir);
   if (testState.sessionStorePath && ownsPath(testState.sessionStorePath)) {
     testState.sessionStorePath = undefined;
   }

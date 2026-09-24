@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   hashSkillProposalContent,
+  importLegacySkillProposal,
   readSkillProposalRecord as readSkillProposalRecordImpl,
 } from "../skills/workshop/store.js";
 import { SKILL_WORKSHOP_SCHEMA, type SkillProposalRecord } from "../skills/workshop/types.js";
@@ -50,6 +52,21 @@ export function createAppliedLegacyProposal(
     scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
     appliedAt: now,
   };
+}
+
+export async function seedAppliedLegacyProposal(
+  params: Parameters<typeof createAppliedLegacyProposal>[0] & {
+    env: NodeJS.ProcessEnv;
+    ownerAgentId: string;
+    targetContent: string;
+  },
+): Promise<ReturnType<typeof createAppliedLegacyProposal>> {
+  const { env, ownerAgentId, targetContent, ...proposal } = params;
+  const record = createAppliedLegacyProposal(proposal);
+  fs.mkdirSync(proposal.target.skillDir, { recursive: true });
+  fs.writeFileSync(record.target.skillFile, targetContent);
+  await importLegacySkillProposal({ record, ownerAgentId, store: { env } });
+  return record;
 }
 
 export async function expectWorkshopMigrationConverged(params: {

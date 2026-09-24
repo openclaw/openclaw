@@ -1,15 +1,123 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import OpenAI from "openai";
-import type {
-  AgentReasoningParam,
-  AgentSessionEvent,
-  AgentSessionItem,
-} from "openai/resources/beta/agents/agents";
+import type { AgentReasoningParam, AgentSessionEvent } from "openai/resources/beta/agents/agents";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { z } from "zod";
 
+const usageSchema = z.looseObject({
+  input_tokens: z.number(),
+  output_tokens: z.number(),
+  total_tokens: z.number().optional(),
+  input_tokens_details: z.looseObject({ cached_tokens: z.number() }).optional(),
+  output_tokens_details: z.looseObject({ reasoning_tokens: z.number() }).optional(),
+});
+const errorSchema = z.looseObject({
+  message: z.string(),
+  code: z.string().nullable().optional(),
+  type: z.string().optional(),
+  param: z.string().nullable().optional(),
+});
+const functionCallSchema = z.looseObject({
+  type: z.literal("function_call"),
+  turn_id: z.string().min(1),
+  call_id: z.string().min(1),
+  name: z.string().min(1),
+  arguments: z.unknown(),
+});
+const sessionSchema = z.looseObject({
+  id: z.string(),
+  status: z.enum(["idle", "in_progress", "requires_action", "failed"]),
+  error: z.string().nullable(),
+  usage: usageSchema.nullable().optional(),
+  environment: z.looseObject({ type: z.literal("openai_hosted"), id: z.string().min(1) }),
+  required_actions: z.array(
+    z.union([
+      functionCallSchema,
+      z.looseObject({ type: z.literal("environment_connection"), environment_id: z.string() }),
+    ]),
+  ),
+});
+const textPartSchema = z.looseObject({ type: z.string(), text: z.string().optional() });
+// Validate native correlation and projection fields while retaining complete payloads.
+const itemSchema = z.looseObject({
+  id: z.string(),
+  type: z.string(),
+  role: z.string().optional(),
+  phase: z.string().nullable().optional(),
+  status: z.string().nullable().optional(),
+  turn_id: z.string().optional(),
+  content: z.array(textPartSchema).optional(),
+  summary: z.array(textPartSchema).optional(),
+  command: z.string().optional(),
+  cwd: z.string().nullable().optional(),
+  duration_ms: z.number().nullable().optional(),
+  exit_code: z.number().nullable().optional(),
+  name: z.string().optional(),
+  call_id: z.string().optional(),
+  server_label: z.string().optional(),
+  arguments: z.unknown().optional(),
+  output: z.unknown().optional(),
+  error: z.unknown().optional(),
+  action: z
+    .looseObject({
+      type: z.string(),
+      query: z.string().nullable().optional(),
+      queries: z.array(z.string()).nullable().optional(),
+      url: z.string().nullable().optional(),
+      pattern: z.string().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
+});
+const eventSchema = z.looseObject({
+  type: z.string(),
+  event_id: z.string().optional(),
+  session_id: z.string().optional(),
+  turn_id: z.string().nullable().optional(),
+  item_id: z.string().optional(),
+  output_index: z.number().nullable().optional(),
+  content_index: z.number().optional(),
+  summary_index: z.number().optional(),
+  status: z.string().nullable().optional(),
+  delta: z.string().optional(),
+  text: z.string().optional(),
+  part: textPartSchema.optional(),
+  item: itemSchema.optional(),
+  usage: usageSchema.nullable().optional(),
+  session: sessionSchema.optional(),
+  environment: z
+    .looseObject({
+      id: z.string(),
+      type: z.string(),
+      status: z.string(),
+      error: errorSchema.nullable(),
+    })
+    .optional(),
+  turn: z
+    .looseObject({
+      id: z.string(),
+      subagent_id: z.string().nullable(),
+      session_id: z.string().optional(),
+      status: z.string().optional(),
+      agent_id: z.string().optional(),
+      created_at: z.number().optional(),
+      started_at: z.number().nullable().optional(),
+      completed_at: z.number().nullable().optional(),
+      error: errorSchema.nullable().optional(),
+      usage: usageSchema.nullable().optional(),
+    })
+    .optional(),
+  error: errorSchema.optional(),
+});
+export type AgentsApiEvent = z.infer<typeof eventSchema>;
+export type AgentsApiItem = z.infer<typeof itemSchema>;
+export type AgentsApiReasoning = {
+  effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
+  summary?: "concise" | "detailed" | "auto" | null;
+};
 /** The SDK owns the wire protocol; OpenClaw retains native session authority. */
 export class AgentsApiClient {
   private readonly sessions: OpenAI["beta"]["agents"]["sessions"];
@@ -54,13 +162,20 @@ export class AgentsApiClient {
     instructions: string,
     model: string,
     reasoningEffort?: AgentReasoningParam["effort"],
+    extras?: {
+      reasoning?: AgentsApiReasoning;
+    },
   ): Promise<string> {
     const session = await this.sessions.create(
       {
         agent: {
           model,
           instructions,
-          reasoning: reasoningEffort === undefined ? undefined : { effort: reasoningEffort },
+          reasoning: extras?.reasoning
+            ? { ...extras.reasoning, effort: reasoningEffort }
+            : reasoningEffort === undefined
+              ? undefined
+              : { effort: reasoningEffort },
           multi_agent: { enabled: false },
           tools: [{ type: "web_search", mode: "live" }],
         },
@@ -102,7 +217,7 @@ export class AgentsApiClient {
       stream.controller.abort();
       throw error;
     }
-    return observeEvents(stream, signal, this.assertCurrent);
+    return observeEvents(stream, signal, sessionId, this.assertCurrent);
   }
 
   async session(sessionId: string, signal: AbortSignal) {
@@ -178,12 +293,20 @@ export class AgentsApiClient {
     }
   }
 
-  async items(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentSessionItem[]> {
-    const items: AgentSessionItem[] = [];
+  async items(
+    sessionId: string,
+    turnId: string | undefined,
+    signal: AbortSignal,
+  ): Promise<AgentsApiItem[]> {
+    const items: AgentsApiItem[] = [];
     const pages = this.sessions.items.list(sessionId, { order: "asc", limit: 100 }, { signal });
     for await (const page of (await pages).iterPages()) {
       this.assertCurrent();
-      items.push(...page.data.filter((item) => item.turn_id === turnId));
+      items.push(
+        ...page.data
+          .filter((item) => turnId === undefined || item.turn_id === turnId)
+          .map((item) => itemSchema.parse(item)),
+      );
       if (page.has_more && !page.hasNextPage()) {
         throw new Error("Agents API items page has no continuation cursor");
       }
@@ -192,14 +315,48 @@ export class AgentsApiClient {
   }
 }
 
+/** Customer-safe native failure facts remain available to host result classification. */
+export class AgentsApiError extends Error {
+  readonly code: string | null | undefined;
+  readonly status: number | undefined;
+  readonly type: string | undefined;
+  readonly param: string | null | undefined;
+
+  constructor(
+    message: string,
+    details: {
+      code?: string | null;
+      status?: number;
+      type?: string;
+      param?: string | null;
+    } = {},
+  ) {
+    super(message);
+    this.name = "AgentsApiError";
+    this.code = details.code;
+    this.status = details.status;
+    this.type = details.type;
+    this.param = details.param;
+  }
+}
+
 async function* observeEvents(
   stream: AsyncIterable<AgentSessionEvent>,
   signal: AbortSignal,
+  sessionId: string,
   assertCurrent: () => void,
-) {
-  for await (const event of stream) {
+): AsyncGenerator<AgentsApiEvent> {
+  for await (const rawEvent of stream) {
     signal.throwIfAborted();
     assertCurrent();
+    const event = eventSchema.parse(rawEvent);
+    if (
+      (event.session_id && event.session_id !== sessionId) ||
+      (event.session && event.session.id !== sessionId) ||
+      (event.turn?.session_id && event.turn.session_id !== sessionId)
+    ) {
+      throw new Error("Agents API returned an event outside the requested session");
+    }
     yield event;
   }
   signal.throwIfAborted();

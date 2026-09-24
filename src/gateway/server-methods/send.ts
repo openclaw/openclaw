@@ -229,17 +229,7 @@ function resolveGatewayInflightRequest(params: {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   operation?: string;
   requestScope?: string;
-}):
-  | {
-      kind: "ready";
-      idem: string;
-      dedupeKey: string;
-      inflightMap: Map<string, Promise<InflightResult>>;
-    }
-  | {
-      kind: "handled";
-      done: Promise<void>;
-    } {
+}) {
   const idem = params.idempotencyKey;
   const authorityScope = resolveMessageOperationAuthorityScope(params);
   const requestScope = params.requestScope ? `:${params.requestScope}` : "";
@@ -644,38 +634,6 @@ async function resolveRequestedChannel(params: {
     }
   }
   return { cfg, sourceCfg, channel };
-}
-
-async function resolveInternalDeliveryChannel(
-  requestChannel: unknown,
-  context: GatewayRequestContext,
-  config?: OpenClawConfig,
-): Promise<
-  | {
-      kind: "ready";
-      cfg: OpenClawConfig;
-      sourceCfg: OpenClawConfig;
-      channel: string;
-    }
-  | {
-      kind: "failed";
-      result: InflightResult;
-    }
-> {
-  const resolvedChannel = await resolveRequestedChannel({
-    requestChannel,
-    unsupportedMessage: (input) => `unsupported channel: ${input}`,
-    context,
-    config,
-    rejectWebchatAsInternalOnly: true,
-  });
-  if ("error" in resolvedChannel) {
-    return {
-      kind: "failed",
-      result: { ok: false, error: resolvedChannel.error },
-    };
-  }
-  return { kind: "ready", ...resolvedChannel };
 }
 
 function resolveGatewayOutboundTarget(params: {
@@ -1098,10 +1056,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           );
           return completed;
         } catch (err) {
-          if (isChannelPartialDeliveryError(err)) {
-            return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
-          }
-          if (!authorize()) {
+          if (!isChannelPartialDeliveryError(err) && !authorize()) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
           return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
@@ -1160,14 +1115,15 @@ export const sendHandlers: GatewayRequestHandlers = {
       conflictMessage: "send account selections do not match",
       authorize: agentRuntimeAuthority.hasActive,
       resolveChannel: async (requestChannel) => {
-        const resolved = await resolveInternalDeliveryChannel(
+        const resolved = await resolveRequestedChannel({
           requestChannel,
+          unsupportedMessage: (input) => `unsupported channel: ${input}`,
           context,
-          messageActionConfig,
-        );
-        if (resolved.kind !== "ready") {
-          const result = resolved.result;
-          respond(result.ok, result.payload, result.error, result.meta);
+          config: messageActionConfig,
+          rejectWebchatAsInternalOnly: true,
+        });
+        if ("error" in resolved) {
+          respond(false, undefined, resolved.error, undefined);
           return undefined;
         }
         const { cfg, channel } = resolved;
@@ -1423,10 +1379,11 @@ export const sendHandlers: GatewayRequestHandlers = {
             channel,
           });
         } catch (err) {
-          if (isChannelPartialDeliveryError(err)) {
-            return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
-          }
-          if (hasAgentRuntimeAuthority && !agentRuntimeAuthority.hasActive()) {
+          if (
+            !isChannelPartialDeliveryError(err) &&
+            hasAgentRuntimeAuthority &&
+            !agentRuntimeAuthority.hasActive()
+          ) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
           return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
@@ -1553,10 +1510,11 @@ export const sendHandlers: GatewayRequestHandlers = {
           const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
           return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
         } catch (err) {
-          if (isChannelPartialDeliveryError(err)) {
-            return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
-          }
-          if (hasAgentRuntimeAuthority && !agentRuntimeAuthority.hasActive()) {
+          if (
+            !isChannelPartialDeliveryError(err) &&
+            hasAgentRuntimeAuthority &&
+            !agentRuntimeAuthority.hasActive()
+          ) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
           return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
