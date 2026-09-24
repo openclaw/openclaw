@@ -27,6 +27,7 @@ import {
   applySessionEntryCanonicalReplacements,
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
+import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
@@ -108,6 +109,14 @@ it.each([
       entry: projectSessionSharingEntry(original),
       membership: new Set(["member"]),
     });
+    const generation = await prepareSessionDeliveryGeneration({
+      agentId: "main",
+      storePath: database.path,
+      sessionKey,
+      sessionId: original.sessionId,
+      lifecycleRevision: original.lifecycleRevision,
+    });
+    generation.assertCurrent();
     const projection = createSessionMembershipProjection();
     projection.updateTargets([
       { ...options, storePath: database.path, ...readOpenClawAgentDatabaseIdentity(database) },
@@ -137,6 +146,9 @@ it.each([
     delivery.afterResult = () => {
       executions++;
       whileWaiting = sharing.readCurrent();
+      expect(generation.assertCurrent).toThrow(
+        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+      );
       if (boundary === "lost result") {
         throw failure;
       }
@@ -199,6 +211,17 @@ it.each([
           membership: new Set(["member"]),
         });
       }
+      if (reset) {
+        expect(generation.assertCurrent).toThrow(
+          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
+        );
+      } else if (boundary === "late writer") {
+        expect(generation.assertCurrent).toThrow(
+          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+        );
+      } else {
+        generation.assertCurrent();
+      }
       expect(mutations).toEqual(
         reset
           ? [
@@ -230,6 +253,7 @@ it.each([
       stopFacts();
       projection.dispose();
       sharing.release();
+      generation.release();
     }
   });
 });

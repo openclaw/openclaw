@@ -96,11 +96,18 @@ it.each(["inventory", "snapshot"] as const)(
     `,
     );
     const preload = path.join(root, "slow-source-copy.cjs");
+    const backups = path.join(root, "backups.jsonl");
     // Reproduce a busy family changing during raw copy without replacing SQLite or its worker.
     await fs.writeFile(
       preload,
       `
       const fs = require("node:fs");
+      const sqlite = require("node:sqlite");
+      const backup = sqlite.backup;
+      sqlite.backup = async function(source, destination, ...args) {
+        fs.appendFileSync(${JSON.stringify(backups)}, JSON.stringify({ destination }) + "\\n");
+        return backup(source, destination, ...args);
+      };
       const opened = new Map();
       const open = fs.openSync, read = fs.readSync, close = fs.closeSync;
       const sources = new Set(${JSON.stringify([shared, agent])});
@@ -155,6 +162,7 @@ it.each(["inventory", "snapshot"] as const)(
         databaseInventory: [...inventory.databases.keys()],
       };
     }
+    await fs.writeFile(backups, "");
     const writing = runCommandBuffered([process.execPath, writer], {
       timeoutMs: 30_000,
       killGraceMs: 500,
@@ -168,6 +176,10 @@ it.each(["inventory", "snapshot"] as const)(
       const before = await readWriterGeneration(progress);
       const result = await runWorker({ mode, ...admission });
       expect(result.code, result.stderr.toString()).toBe(0);
+      // One fresh materialization per source; verification consumes that private image.
+      expect((await fs.readFile(backups, "utf8")).split("\n").filter(Boolean)).toHaveLength(
+        mode === "snapshot" ? 2 : 1,
+      );
       const observedAfter = await readWriterGeneration(progress);
       expect(observedAfter).toBeGreaterThan(before);
       // A committed generation can precede its watermark; join the writer before bounding copies.
