@@ -76,15 +76,18 @@ suite.define(() => {
       await expectBrowser(owners).toHaveAccessibleName("Owners: Ada Lovelace Byron");
       await owners.focus();
       await page.keyboard.press("Tab");
-      const automation = menu.getByRole("checkbox", { name: "Automation", exact: true });
+      const automation = menu.getByRole("switch", {
+        name: "Show automation sessions",
+        exact: true,
+      });
       await expectBrowser(automation).toBeFocused();
       await page.keyboard.press("Space");
-      await expectBrowser(automation).toHaveAttribute("aria-checked", "true");
+      await expectBrowser(automation).toBeChecked();
       await page.keyboard.press("Tab");
-      const system = menu.getByRole("checkbox", { name: "System", exact: true });
+      const system = menu.getByRole("switch", { name: "Show system sessions", exact: true });
       await expectBrowser(system).toBeFocused();
       await page.keyboard.press("Space");
-      await expectBrowser(system).toHaveAttribute("aria-checked", "true");
+      await expectBrowser(system).toBeChecked();
       await page.keyboard.press("Tab");
       const grouping = menu.locator("#sidebar-sessions-group");
       await expectBrowser(grouping).toBeFocused();
@@ -93,16 +96,18 @@ suite.define(() => {
       await page.keyboard.press("Enter");
       await expectBrowser(grouping).toHaveAccessibleName("Group by: Project");
       await page.keyboard.press("Tab");
-      await expectBrowser(menu.getByRole("radio", { name: "Created", exact: true })).toBeFocused();
-      await page.keyboard.press("Tab");
       await expectBrowser(
-        menu.getByRole("radio", { name: "When filtering", exact: true }),
+        menu.getByRole("button", { name: "Sort by: Created", exact: true }),
       ).toBeFocused();
       await page.keyboard.press("Tab");
-      const preview = menu.getByRole("checkbox", { name: "Show message preview", exact: true });
+      await expectBrowser(
+        menu.getByRole("button", { name: "Hide empty groups: When filtering", exact: true }),
+      ).toBeFocused();
+      await page.keyboard.press("Tab");
+      const preview = menu.getByRole("switch", { name: "Show message preview", exact: true });
       await expectBrowser(preview).toBeFocused();
       await page.keyboard.press("Space");
-      await expectBrowser(preview).toHaveAttribute("aria-checked", "true");
+      await expectBrowser(preview).toBeChecked();
       await page.keyboard.press("Escape");
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(trigger).toBeFocused();
@@ -111,7 +116,7 @@ suite.define(() => {
       await expectBrowser(owners).toHaveAccessibleName("Owners: Ada Lovelace Byron");
       await page.keyboard.press("Shift+Tab");
       await expectBrowser(menu.getByRole("button", { name: "Reset", exact: true })).toBeFocused();
-      await menu.getByRole("link", { name: "Session sources…", exact: true }).focus();
+      await menu.getByRole("link", { name: "Session sources", exact: true }).focus();
       await page.keyboard.press("Tab");
       await expectBrowser(menu).toHaveCount(0);
     } finally {

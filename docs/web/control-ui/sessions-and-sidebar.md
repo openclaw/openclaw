@@ -136,8 +136,11 @@ controls grouping, sorting, message previews, and empty groups. Choices take
 effect immediately. The filter button shows how many filter categories differ
 from the default; **Reset** clears those filters while preserving your display
 preferences. Tab moves between rows; Left and Right choose within a segmented
-control. **Owners** and **Group by** open pickers; Owners supports searching the
-people list. Escape closes an open picker first, then the popover and returns
+status control. **Owners** opens a searchable picker with owner avatars.
+**Group by**, **Sort by**, and **Hide empty groups** show their current choices
+and open submenus. Right opens a submenu and Left closes it (reversed in RTL);
+Up and Down move between choices, and Enter selects. Automation, system sessions,
+and message previews use consistent on/off toggles. Escape closes an open picker first, then the popover and returns
 focus to the filter button. **Session sources** opens its Settings destination. In **Show all agents**
 mode, Display omits grouping and empty-group controls because the sidebar always
 groups by agent.
@@ -234,7 +237,7 @@ Session previews are hidden by default for compact, single-line rows. Enable **S
 
 This is a personal display preference, stored in this browser separately for each signed-in user and Gateway. It does not change another person’s view, group membership, order, or session access, and it is not synced across devices. Connections without an identified user keep a separate browser-only choice. An existing on/off browser choice is adopted once by the first resolved viewer: on becomes **Always**, while off becomes **When filtering**. Later viewers do not inherit that migrated choice.
 
-Changing or clearing a filter never changes the saved preference. Populated groups stay visible even when collapsed, and hidden custom groups remain available in **Move to group**. Choose **Never** to recover their headers as drag targets. Catalog sections and empty agent groups in team mode retain their existing behavior. On narrow screens, the three choices open in the same menu with a **Back** action instead of a flyout.
+Changing or clearing a filter never changes the saved preference. Populated groups stay visible even when collapsed, and hidden custom groups remain available in **Move to group**. Choose **Never** to recover their headers as drag targets. Catalog sections and empty agent groups in team mode retain their existing behavior. On narrow screens, the choices stay in a viewport-constrained submenu. Escape returns focus to the setting without closing the filter panel.
 
 Native CLI catalogs appear only when they contain sessions matching the current owner filter. Empty catalogs stay hidden even when discovery fails or the CLI can start new sessions. Catalogs load on connection. When the Gateway advertises catalog change events, catalogs refresh on those events with paced bursts and a ten-minute safety refresh. Otherwise, visible tabs refresh catalogs every 30 seconds. Returning to a hidden tab also refreshes its catalog. If more pages remain, discovery follows their cursors until a matching session appears, the catalog is exhausted, or a host reports an error, without repeating the first-page request. Discovery preserves its progress and pauses while the browser tab is hidden. A later refresh checks the first page for new sessions and restarts completed empty scans so older sessions that become visible are still discovered. Expanded catalogs preserve their loaded pages across refreshes. Populated catalogs remain visible when another host fails, with discovery details in their status indicator. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section. Native CLI starts remain available from **New session**.
 

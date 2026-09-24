@@ -278,3 +278,40 @@ openclaw-select-picker {
 .picker-select__group-options .picker-select__option {
   padding-inline-start: 32px;
 }
+
+/* A single-choice submenu keeps the setting and current choice on one row. */
+.picker-select--submenu .picker-select__trigger {
+  padding-inline: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.picker-select--submenu .picker-select__trigger:hover {
+  background: var(--bg-hover);
+}
+
+.picker-select--submenu .picker-select__name {
+  flex: 1 0 auto;
+}
+
+.picker-select--submenu .picker-select__copy {
+  margin-inline-start: auto;
+  color: var(--muted);
+}
+
+.picker-select--submenu .picker-select__label {
+  font-weight: var(--wa-font-weight-normal);
+}
+
+.picker-select--submenu .picker-select__chevron {
+  margin-inline-start: 0;
+}
+
+.picker-select--submenu .picker-select__menu {
+  min-width: min(220px, calc(100vw - 24px));
+}
+
+.picker-select--submenu:dir(rtl) .picker-select__chevron svg {
+  transform: rotate(180deg);
+}

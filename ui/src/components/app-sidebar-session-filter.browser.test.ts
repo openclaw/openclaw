@@ -115,6 +115,11 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         .element(page.getByRole("option", { name: "Ada (You)", exact: true }))
         .toBeVisible();
       await expect.element(page.getByRole("option", { name: "Bob", exact: true })).toBeVisible();
+      expect(
+        sidebar.querySelectorAll(
+          ".picker-select__option .picker-select__leading openclaw-viewer-avatar",
+        ),
+      ).toHaveLength(2);
       await userEvent.keyboard("{Escape}");
       await expect
         .element(page.getByRole("button", { name: "Owners: All owners", exact: true }))
@@ -122,33 +127,57 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expectFits();
       await userEvent.tab();
       await expect
-        .element(page.getByRole("checkbox", { name: "Automation", exact: true }))
+        .element(page.getByRole("switch", { name: "Show automation sessions", exact: true }))
         .toHaveFocus();
       await userEvent.tab();
       await expect
-        .element(page.getByRole("checkbox", { name: "System", exact: true }))
+        .element(page.getByRole("switch", { name: "Show system sessions", exact: true }))
         .toHaveFocus();
       await userEvent.tab();
+      await expect
+        .element(page.getByRole("button", { name: "Group by: Custom groups", exact: true }))
+        .toHaveFocus();
+      await userEvent.keyboard(direction === "rtl" ? "{ArrowLeft}" : "{ArrowRight}");
+      const choices = sidebar.querySelector<HTMLElement>(
+        '[role="listbox"][aria-label="Group by"]',
+      )!;
+      await expect.element(choices).toBeVisible();
+      await expect
+        .poll(() => {
+          const bounds = choices.getBoundingClientRect();
+          return (
+            bounds.left >= 0 &&
+            bounds.right <= innerWidth &&
+            bounds.top >= 0 &&
+            bounds.bottom <= innerHeight
+          );
+        })
+        .toBe(true);
+      await userEvent.keyboard(direction === "rtl" ? "{ArrowRight}" : "{ArrowLeft}");
       await expect
         .element(page.getByRole("button", { name: "Group by: Custom groups", exact: true }))
         .toHaveFocus();
       await userEvent.keyboard("{Enter}{ArrowDown}{Enter}");
       await expect.poll(loadStoredSidebarSessionsGrouping).toBe("project");
       await userEvent.tab();
-      await expect.element(page.getByRole("radio", { name: "Created", exact: true })).toHaveFocus();
-      await userEvent.keyboard("{ArrowRight}");
+      await expect
+        .element(page.getByRole("button", { name: "Sort by: Created", exact: true }))
+        .toHaveFocus();
+      await userEvent.keyboard("{Enter}{ArrowDown}{Enter}");
       await expect.poll(loadStoredSidebarSessionSortMode).toBe("updated");
       await userEvent.tab();
       await expect
-        .element(page.getByRole("radio", { name: "When filtering", exact: true }))
+        .element(
+          page.getByRole("button", { name: "Hide empty groups: When filtering", exact: true }),
+        )
         .toHaveFocus();
       await userEvent.tab();
       await expect
-        .element(page.getByRole("checkbox", { name: "Show message preview", exact: true }))
+        .element(page.getByRole("switch", { name: "Show message preview", exact: true }))
         .toHaveFocus();
       await userEvent.tab();
       await expect
-        .element(page.getByRole("link", { name: "Session sources…", exact: true }))
+        .element(page.getByRole("link", { name: "Session sources", exact: true }))
         .toHaveFocus();
       await userEvent.keyboard("{Escape}");
       await expect.element(trigger).toHaveFocus();
@@ -189,20 +218,27 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       ["Owners", "people", loadStoredSidebarSessionSortMode],
       ["All", "all", loadStoredSidebarSessionStatusFilter],
     ] as const) {
-      await page.getByRole("radio", { name: choice, exact: true }).click();
+      if (choice === "Owners") {
+        await page.getByRole("button", { name: /^Sort by:/ }).click();
+        await page.getByRole("option", { name: choice, exact: true }).click();
+      } else {
+        await page.getByRole("radio", { name: choice, exact: true }).click();
+      }
       expect(read()).toBe(expected);
       await expectFilterCount(choice === "All" ? 1 : 0);
       expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(menu);
     }
     for (const [name, read] of [
       ["Show message preview", loadStoredSidebarSessionsShowPreview],
-      ["Automation", loadStoredSidebarSessionsShowCron],
-      ["System", loadStoredSidebarSessionsShowSystem],
+      ["Show automation sessions", loadStoredSidebarSessionsShowCron],
+      ["Show system sessions", loadStoredSidebarSessionsShowSystem],
     ] as const) {
       const before = read();
-      await page.getByRole("checkbox", { name, exact: true }).click();
+      await page.getByRole("switch", { name, exact: true }).click();
       expect(read()).toBe(!before);
-      await expectFilterCount(name === "Show message preview" ? 1 : name === "Automation" ? 2 : 3);
+      await expectFilterCount(
+        name === "Show message preview" ? 1 : name === "Show automation sessions" ? 2 : 3,
+      );
     }
     const owner = page.getByRole("button", { name: /^Owners:/ });
     await owner.click();
@@ -212,9 +248,15 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await owner.click();
     await page.getByRole("option", { name: "Bob", exact: true }).click();
     expect(sidebar.sessionOwnerFilterId).toBe("profile-bob");
+    expect(
+      sidebar.querySelector(
+        "#sidebar-sessions-owner .picker-select__leading openclaw-viewer-avatar",
+      ),
+    ).not.toBeNull();
     await expectFilterCount(4);
     expect(sessions.list).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "profile-bob" }));
-    await page.getByRole("radio", { name: "Never", exact: true }).click();
+    await page.getByRole("button", { name: /^Hide empty groups:/ }).click();
+    await page.getByRole("option", { name: "Never", exact: true }).click();
     await page.getByRole("button", { name: "Reset", exact: true }).click();
     expect(loadStoredSidebarSessionStatusFilter()).toBe("active");
     expect(sidebar.sessionOwnerFilterId).toBeNull();
@@ -223,15 +265,19 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     expect(loadStoredSidebarSessionsGrouping()).toBe("person");
     expect(loadStoredSidebarSessionSortMode()).toBe("people");
     expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
-    await expect.element(page.getByRole("radio", { name: "Never", exact: true })).toBeChecked();
+    await expect
+      .element(page.getByRole("button", { name: "Hide empty groups: Never", exact: true }))
+      .toBeVisible();
     await expectFilterCount(0);
     await expect.element(page.getByRole("radio", { name: "Active", exact: true })).toHaveFocus();
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(menu);
     await page.getByRole("button", { name: "Group by: Person", exact: true }).click();
     await page.getByRole("option", { name: "Custom groups", exact: true }).click();
-    await page.getByRole("radio", { name: "Always", exact: true }).click();
+    await page.getByRole("button", { name: /^Hide empty groups:/ }).click();
+    await page.getByRole("option", { name: "Always", exact: true }).click();
     expect(sidebar.querySelector('[data-session-section="category:Empty"]')).toBeNull();
-    await page.getByRole("radio", { name: "Never", exact: true }).click();
+    await page.getByRole("button", { name: /^Hide empty groups:/ }).click();
+    await page.getByRole("option", { name: "Never", exact: true }).click();
     expect(sidebar.querySelector('[data-session-section="category:Empty"]')).not.toBeNull();
   });
 });

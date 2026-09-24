@@ -11,9 +11,9 @@ export function sessionMenuChoice(menu: Element, value: string) {
     status: "status",
     "empty-groups": "empty",
   };
-  if (kind === "grouping") {
+  if (kind !== "status") {
     return menu.querySelector<HTMLElement>(
-      `[role="listbox"][aria-label="Group by"] [data-value="${option}"]`,
+      `#sidebar-sessions-${ids[kind!]} ~ wa-popup [data-value="${option}"]`,
     );
   }
   return menu.querySelector<HTMLElement>(
@@ -35,14 +35,22 @@ export async function openSessionMenu(sidebar: SidebarLifecycleState): Promise<H
 
 export async function activateSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
   const menu = await openSessionMenu(sidebar);
-  if (value === "involving-me" || value.startsWith("owner:") || value.startsWith("grouping:")) {
-    const grouping = value.startsWith("grouping:");
-    const id = grouping ? "group" : "owner";
-    const selected = grouping
-      ? value.slice("grouping:".length)
-      : value === "owner:"
-        ? "all"
-        : value;
+  if (
+    value === "involving-me" ||
+    value.startsWith("owner:") ||
+    value.startsWith("grouping:") ||
+    value.startsWith("sort:") ||
+    value.startsWith("empty-groups:")
+  ) {
+    const [kind, choice] = value.split(":");
+    const displayIds: Record<string, string> = {
+      grouping: "group",
+      sort: "sort",
+      "empty-groups": "empty",
+    };
+    const display = kind !== undefined && kind in displayIds;
+    const id = display ? displayIds[kind!] : "owner";
+    const selected = display ? choice : value === "owner:" ? "all" : value;
     menu.querySelector<HTMLButtonElement>(`#sidebar-sessions-${id}`)!.click();
     await waitForFast(() =>
       expect(menu.querySelector(`#sidebar-sessions-${id}`)?.getAttribute("aria-expanded")).toBe(
