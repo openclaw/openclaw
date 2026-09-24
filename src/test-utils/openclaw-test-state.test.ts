@@ -24,7 +24,11 @@ import {
   snapshotGatewayStartupEnv,
 } from "../gateway/test-helpers.env.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import { closeIdleSqliteCoordinators } from "../infra/sqlite-coordinator.js";
+import {
+  acquireStateDatabaseCoordinator,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
 import { createOpenClawTestState, withOpenClawTestState } from "../plugin-sdk/test-state.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -195,6 +199,54 @@ describe("openclaw test state", () => {
       await expectPathMissing(root!);
     } finally {
       opened.mockRestore();
+    }
+  });
+
+  it("closes direct fixture idle coordinators before removal while preserving other roots", async () => {
+    const state = await createOpenClawTestState({ label: "direct-coordinator-retention" });
+    const other = await createOpenClawTestState({ label: "other-coordinator", applyEnv: false });
+    nodeSqlite.requireNodeSqlite();
+    const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+    const retainIdle = (fixture: typeof state): DatabaseSync =>
+      withStateDatabaseCoordinatorRuntimeDirectory(
+        { directory: fixture.path("coordinators"), keepAlive: true },
+        () => {
+          const databasePath = fixture.statePath("openclaw.sqlite");
+          acquireStateDatabaseCoordinator({ databasePath }).release();
+          opened.mockClear();
+          const lease = acquireStateDatabaseCoordinator({ databasePath });
+          const index = opened.mock.calls.findIndex((args) => args[0] === lease.path);
+          const database = opened.mock.results[index]?.value as DatabaseSync;
+          lease.release();
+          expect(database.isOpen).toBe(true);
+          return database;
+        },
+      );
+    const rm = fs.rm;
+    let restoreRemoval: (() => void) | undefined;
+    try {
+      const owned = retainIdle(state);
+      const unrelated = retainIdle(other);
+      const removal = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+        if (args[0] === state.root) {
+          // Fail before Windows unlink retries if the fixture retains a native handle.
+          expect(owned.isOpen).toBe(false);
+          expect(unrelated.isOpen).toBe(true);
+        }
+        return rm(...args);
+      });
+      restoreRemoval = () => removal.mockRestore();
+      await state.cleanup();
+      await expectPathMissing(state.root);
+      expect(unrelated.isOpen).toBe(true);
+    } finally {
+      restoreRemoval?.();
+      opened.mockRestore();
+      closeIdleSqliteCoordinators(state.root);
+      closeIdleSqliteCoordinators(other.root);
+      await state.restoreEnv();
+      await rm(state.root, { recursive: true, force: true });
+      await other.cleanup();
     }
   });
 
