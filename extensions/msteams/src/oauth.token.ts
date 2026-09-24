@@ -86,6 +86,8 @@ async function fetchMSTeamsTokens(params: {
   auditContext: string;
   failureLabel: string;
 }): Promise<MSTeamsTokenResponse> {
+  // Guard-owned timeoutMs covers DNS/proxy preflight; init.signal alone does not.
+  // Sibling graph.ts already passes top-level timeoutMs into fetchWithSsrFGuard.
   const { response, release } = await fetchWithSsrFGuard({
     url: params.tokenUrl,
     init: {
@@ -95,9 +97,9 @@ async function fetchMSTeamsTokens(params: {
         Accept: "application/json",
       },
       body: params.body,
-      signal: AbortSignal.timeout(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS),
     },
     auditContext: params.auditContext,
+    timeoutMs: MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS,
   });
 
   try {
@@ -151,14 +153,16 @@ async function requestMSTeamsDelegatedTokens(params: {
   };
 }
 
-export async function exchangeMSTeamsCodeForTokens(params: {
-  tenantId: string;
-  clientId: string;
-  clientSecret: string;
-  code: string;
-  verifier: string;
-  scopes?: readonly string[];
-}): Promise<MSTeamsDelegatedTokens> {
+export async function exchangeMSTeamsCodeForTokens(
+  params: {
+    tenantId: string;
+    clientId: string;
+    clientSecret: string;
+    code: string;
+    verifier: string;
+    scopes?: readonly string[];
+  },
+): Promise<MSTeamsDelegatedTokens> {
   return await requestMSTeamsDelegatedTokens({
     tenantId: params.tenantId,
     clientId: params.clientId,
@@ -181,13 +185,15 @@ export async function exchangeMSTeamsCodeForTokens(params: {
   });
 }
 
-export async function refreshMSTeamsDelegatedTokens(params: {
-  tenantId: string;
-  clientId: string;
-  clientSecret: string;
-  refreshToken: string;
-  scopes?: readonly string[];
-}): Promise<MSTeamsDelegatedTokens> {
+export async function refreshMSTeamsDelegatedTokens(
+  params: {
+    tenantId: string;
+    clientId: string;
+    clientSecret: string;
+    refreshToken: string;
+    scopes?: readonly string[];
+  },
+): Promise<MSTeamsDelegatedTokens> {
   return await requestMSTeamsDelegatedTokens({
     tenantId: params.tenantId,
     clientId: params.clientId,
