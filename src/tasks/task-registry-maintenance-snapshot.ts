@@ -28,7 +28,7 @@ export function getTaskRegistryMaintenanceSnapshot(read: TaskRegistryMaintenance
 } {
   read.assertCurrent();
   // Stable sorting keeps later insertions first when creation timestamps match.
-  const ordered = [...tasks.values()].reverse().sort(compareTasksNewestFirst);
+  const ordered = [...tasks.values()].toReversed().toSorted(compareTasksNewestFirst);
   return {
     taskIds: ordered.map((task) => task.taskId),
     cronHistoryOverflowTaskIds: collectCronHistoryOverflowTaskIds(ordered),
