@@ -520,7 +520,11 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             } finally {
               releaseFallbackProvider();
             }
-          } else if (!this.provider && this.fts.enabled && this.fts.available) {
+          } else if (
+            (!this.provider || this.providerRequirement.mode !== "required") &&
+            this.fts.enabled &&
+            this.fts.available
+          ) {
             this.assertRequiredProviderAvailable("search");
             log.warn(
               `memory search: embeddings unavailable; using keyword-only results: ${message}`,
