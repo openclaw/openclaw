@@ -353,13 +353,10 @@ describe("Doctor maintenance admission", () => {
         const before = fs.existsSync(state.configPath)
           ? fs.readFileSync(state.configPath, "utf8")
           : undefined;
+        const gatewayAcquisitions = vi.spyOn(coordinators, "acquireGatewayMaintenanceCoordinator");
+        const stateAcquisitions = vi.spyOn(coordinators, "acquireStateDatabaseCoordinator");
         if (owner !== "agent") {
-          vi.spyOn(
-            coordinators,
-            owner === "gateway"
-              ? "acquireGatewayMaintenanceCoordinator"
-              : "acquireStateDatabaseCoordinator",
-          ).mockImplementation(() => {
+          (owner === "gateway" ? gatewayAcquisitions : stateAcquisitions).mockImplementation(() => {
             throw new coordinators.StateDatabaseCoordinatorContentionError(
               owner === "gateway" ? "gateway-lifecycle" : "state-lifecycle",
             );
@@ -369,7 +366,6 @@ describe("Doctor maintenance admission", () => {
         snapshotProcesses.execFile.mockClear();
         mocks.runContributions.mockClear();
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        const started = performance.now();
         const failure = await runDoctorHealthFlow(
           runtime,
           {
@@ -415,7 +411,9 @@ describe("Doctor maintenance admission", () => {
           expect(failure).toBeInstanceOf(Error);
           expect(String(failure)).toMatch(/Stop.*service|stop.*process/);
         }
-        expect(performance.now() - started).toBeLessThan(1_000);
+        // Refuse without retrying ownership; snapshot/read startup cost depends on the host.
+        expect(gatewayAcquisitions).toHaveBeenCalledOnce();
+        expect(stateAcquisitions).toHaveBeenCalledTimes(owner === "gateway" ? 0 : 1);
         expect(
           fs.existsSync(state.configPath) ? fs.readFileSync(state.configPath, "utf8") : undefined,
         ).toBe(before);
