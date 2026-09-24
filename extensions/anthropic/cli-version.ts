@@ -17,8 +17,10 @@ export function createClaudeCodeVersionProbe(api: OpenClawPluginApi) {
       if (!executable) {
         // Without evidence the transport keeps its version floor; say so loudly
         // instead of letting a later 400 blame a CLI the user already updated.
+        // Log only the failure category: subprocess output and error text may
+        // carry private paths or values the redactor cannot guarantee to strip.
         log.warn(
-          "Claude Code executable not found; OAuth requests keep the built-in version floor",
+          "Claude Code version probe: executable-missing; OAuth requests keep the built-in version floor",
         );
         return undefined;
       }
@@ -35,20 +37,20 @@ export function createClaudeCodeVersionProbe(api: OpenClawPluginApi) {
       );
       if (result.code !== 0 || result.outputLimitExceeded) {
         log.warn(
-          `Claude Code --version probe failed (code=${result.code} outputLimitExceeded=${result.outputLimitExceeded}); OAuth requests keep the built-in version floor`,
+          "Claude Code version probe: command-failed; OAuth requests keep the built-in version floor",
         );
         return undefined;
       }
       installedVersion = parseClaudeCodeVersion(result.stdout);
       if (!installedVersion) {
         log.warn(
-          `Claude Code --version output not recognized (${JSON.stringify(result.stdout.slice(0, 80))}); OAuth requests keep the built-in version floor`,
+          "Claude Code version probe: unparseable-output; OAuth requests keep the built-in version floor",
         );
       }
       return installedVersion;
-    } catch (error) {
+    } catch {
       log.warn(
-        `Claude Code --version probe threw (${error instanceof Error ? error.message : String(error)}); OAuth requests keep the built-in version floor`,
+        "Claude Code version probe: probe-error; OAuth requests keep the built-in version floor",
       );
       return undefined;
     }
