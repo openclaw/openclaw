@@ -22,6 +22,10 @@ import type {
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  DeliverOutboundPayloadsParams,
+  DurableFinalDeliveryRequirements,
+} from "../../infra/outbound/deliver.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
@@ -30,7 +34,6 @@ import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 import type { ChannelDeliveryResult } from "./delivery-outcome.js";
-import type { DurableInboundReplyDeliveryOptions } from "./durable-delivery.js";
 
 export type { SupplementalContextFacts } from "../../auto-reply/templating.js";
 
@@ -170,6 +173,16 @@ type ChannelProviderOwnedDeliveryInfo = ChannelDeliveryInfo & {
 
 export type { ChannelDeliveryOutcome, ChannelDeliveryResult } from "./delivery-outcome.js";
 
+/** Durable outbound delivery options available to channel turn delivery adapters. */
+type ChannelTurnDurableDeliveryOptions = Pick<
+  DeliverOutboundPayloadsParams,
+  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
+> & {
+  to?: string | null;
+  replyToId?: string | null;
+  requiredCapabilities?: DurableFinalDeliveryRequirements;
+};
+
 type ChannelDeliveryAdapterBase = {
   /** Return null when channel policy intentionally suppresses this logical payload. */
   preparePayload?: (
@@ -198,14 +211,14 @@ export type ChannelCoreManagedTurnDeliveryAdapter = ChannelDeliveryAdapterBase &
   ) => Promise<ChannelDeliveryResult | void>;
   durable?:
     | false
-    | DurableInboundReplyDeliveryOptions
+    | ChannelTurnDurableDeliveryOptions
     | ((
         payload: ReplyPayload,
         info: ChannelDeliveryInfo,
       ) =>
         | false
-        | DurableInboundReplyDeliveryOptions
-        | Promise<false | DurableInboundReplyDeliveryOptions>);
+        | ChannelTurnDurableDeliveryOptions
+        | Promise<false | ChannelTurnDurableDeliveryOptions>);
 };
 
 /** Delivery adapter used by legacy caller-assembled channel turns. */
