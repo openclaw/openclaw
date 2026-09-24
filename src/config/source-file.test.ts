@@ -178,7 +178,7 @@ describe("config file adapter", () => {
       const { adapter, current, watch, onChange, onReady } = createHarness();
       adapter.start();
       const closing = createDeferred();
-      vi.mocked(current().close).mockReturnValue(closing.promise);
+      const close = vi.spyOn(current(), "close").mockReturnValue(closing.promise);
       const updating = adapter.observePaths(["/tmp/next.json5"]);
       current().emit("ready");
       current().emit("change", "/tmp/openclaw.json");
@@ -199,7 +199,7 @@ describe("config file adapter", () => {
         }
         await Promise.all([updating, stopping]);
       }
-      expect(current().close).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
       expect(watch).toHaveBeenCalledOnce();
     },
   );

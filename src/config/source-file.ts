@@ -146,16 +146,16 @@ export function createConfigFileAdapter(opts: {
   };
 
   return {
-    start() {
+    start: () => {
       if (!started && !stopped) {
         started = true;
         createWatcher(false);
       }
     },
-    observePaths(paths: readonly string[]) {
+    observePaths: (paths: readonly string[]) => {
       return reconcilePaths([...acceptedPaths, ...paths]);
     },
-    acceptPaths(paths: readonly string[]) {
+    acceptPaths: (paths: readonly string[]) => {
       acceptedPaths = [...paths];
       return reconcilePaths(acceptedPaths);
     },
