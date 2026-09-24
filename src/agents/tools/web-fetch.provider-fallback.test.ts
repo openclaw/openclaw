@@ -1,6 +1,6 @@
 // Provider fallback tests verify web_fetch normalizes third-party fetch output
 // before exposing it to agents or cache entries.
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -144,7 +144,7 @@ describe("web_fetch provider fallback normalization", () => {
     expect(
       details.text?.split("\n\n[Showing truncated web_fetch content.")[0]?.length,
     ).toBeLessThanOrEqual(800);
-    expect(details.text).toContain("Ignore previous instructions");
+    expect(details.spill).toBeDefined();
     expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toContain(`Full output: ${details.spill?.path}`);
     expect(details.title).toContain("Provider Title");
@@ -157,8 +157,19 @@ describe("web_fetch provider fallback normalization", () => {
     expect(details.externalContent?.source).toBe("web_fetch");
     expect(details.externalContent?.wrapped).toBe(true);
     expect(details.externalContent?.provider).toBe("firecrawl");
-    if (details.spill) {
-      await rm(details.spill.path, { force: true });
+    const spillPath = details.spill!.path;
+    try {
+      const spilledText = await readFile(spillPath, "utf8");
+      expect(spilledText).toContain(providerVisibleText);
+      const boundary = spilledText.match(/<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>/);
+      expect(boundary).not.toBeNull();
+      expect(spilledText).toContain(`<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${boundary?.[1]}">>>`);
+      expect(spilledText.match(/<<<EXTERNAL_UNTRUSTED_CONTENT /g)).toHaveLength(1);
+      expect(spilledText.match(/<<<END_EXTERNAL_UNTRUSTED_CONTENT /g)).toHaveLength(1);
+      expect(spilledText).toContain("[[MARKER_SANITIZED]]");
+      expect(spilledText).toContain("[[END_MARKER_SANITIZED]]");
+    } finally {
+      await rm(spillPath, { force: true });
     }
   });
 
