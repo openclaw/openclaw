@@ -71,18 +71,27 @@ async function readPkgFiles(timeoutMs: number): Promise<string[]> {
     result.stderr.length !== 0 ||
     !isUtf8(result.stdout)
   ) {
-    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable");
+    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "database", {
+      operation: "pkg query",
+      ...(result.termination === "timeout"
+        ? { budgetMs: timeoutMs }
+        : { code: extractErrorCode(result.error) }),
+    });
   }
   const output = result.stdout.toString("utf8");
   if (output !== "" && !output.endsWith("\n")) {
-    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable");
+    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "database", {
+      operation: "pkg query",
+    });
   }
   const files = output === "" ? [] : output.slice(0, -1).split("\n");
   if (
     files.length > 250_000 ||
     files.some((file) => !path.isAbsolute(file) || containsAsciiControlCharacter(file))
   ) {
-    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable");
+    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "database", {
+      operation: "pkg query",
+    });
   }
   return files;
 }

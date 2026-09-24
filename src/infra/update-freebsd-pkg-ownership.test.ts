@@ -44,7 +44,7 @@ describe("FreeBSD pkg ownership", () => {
   it.each([
     { name: "missing owner or unavailable database", value: result("", { code: 1 }) },
     { name: "timeout", value: result("", { code: null, termination: "timeout" }) },
-    { name: "truncated inventory", value: result("", { termination: "output-limit" }) },
+    { name: "truncated inventory", value: result("", { code: null, termination: "output-limit" }) },
     {
       name: "nonfatal configuration error",
       value: result("", { stderr: Buffer.from("configuration error") }),
@@ -56,15 +56,25 @@ describe("FreeBSD pkg ownership", () => {
   ])("preserves unknown ownership for $name", async ({ value }) => {
     vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(value);
     await withMockedPlatform("freebsd", async () => {
-      await expect(
-        createFreeBsdPkgOwnershipInspection(100).assertUnowned("/fixture/openclaw"),
-      ).rejects.toMatchObject({ reason: "pkg-ownership-unavailable" });
+      const failed = createFreeBsdPkgOwnershipInspection(100).assertUnowned("/fixture/openclaw");
+      await expect(failed).rejects.toMatchObject({
+        reason: "pkg-ownership-unavailable",
+        message: expect.stringMatching(
+          value.termination === "timeout"
+            ? /^FreeBSD pkg inspection exhausted its shared 100 ms budget during pkg query\./u
+            : /^FreeBSD pkg inspection failed during pkg query\./u,
+        ),
+      });
+      await expect(failed).rejects.not.toThrow(/configuration error|\/fixture/u);
+      await expect(failed).rejects.not.toHaveProperty("cause");
     });
   });
 
   it("preserves launch failure as unknown without exposing subprocess details", async () => {
     const cause = Object.assign(new Error("private database detail"), { code: "EACCES" });
-    vi.spyOn(exec, "runCommandBuffered").mockRejectedValue(cause);
+    vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
+      result("", { code: null, termination: "error", error: cause }),
+    );
     await withMockedPlatform("freebsd", async () => {
       const failed = createFreeBsdPkgOwnershipInspection(100).assertUnowned("/fixture/openclaw");
       await expect(failed).rejects.toMatchObject({
@@ -73,10 +83,10 @@ describe("FreeBSD pkg ownership", () => {
           /^FreeBSD pkg inspection failed during pkg query \(EACCES\)\./u,
         ),
       });
-      expect(await failed.catch((error: Error) => error.cause)).toBeUndefined();
+      await expect(failed).rejects.not.toHaveProperty("cause");
       const fact = createUpdateErrorFact(
         "installation-inspection",
-        await failed.catch((error) => error),
+        await failed.catch((error: unknown) => error),
       );
       expect(fact.message).toContain("pkg query (EACCES)");
       expect(JSON.stringify(fact)).not.toContain("private database detail");
@@ -180,7 +190,7 @@ describe("FreeBSD pkg ownership", () => {
             path.join(base, "openclaw"),
           );
           await expect(failed).rejects.toThrow("registered package directories");
-          const error = await failed.catch((error: FreeBsdPkgOwnershipError) => error);
+          const error = await failed.catch((caught: unknown) => caught);
           expect(error).toBeInstanceOf(FreeBsdPkgOwnershipError);
           if (!(error instanceof FreeBsdPkgOwnershipError)) {
             throw new Error("Expected pkg inspection refusal");
