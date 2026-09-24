@@ -419,11 +419,20 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     lines.push(
       `Diagnostics: ${diagnosticCounts.errors} errors · ${diagnosticCounts.warnings} warnings`,
     );
-    for (const diagnostic of diagnostics.slice(0, 8)) {
+    for (const diagnostic of diagnostics.filter((entry) => entry.level !== "info").slice(0, 8)) {
       const target = diagnostic.pluginId ? `${diagnostic.pluginId}: ` : "";
       lines.push(`- ${diagnostic.level.toUpperCase()} ${target}${diagnostic.message}`);
     }
   }
+
+  appendSection(
+    "Information",
+    diagnostics.filter((entry) => entry.level === "info"),
+    (diagnostic) => {
+      const target = diagnostic.pluginId ? `${diagnostic.pluginId}: ` : "";
+      return `- INFO ${target}${diagnostic.message}`;
+    },
+  );
 
   appendSection("Compatibility notices", compatibilityNotices, (notice) => {
     const code = notice.code ? ` [${notice.code}]` : "";

@@ -564,6 +564,7 @@ export function buildPluginManifestRegistry(
       }
       diagnostics.push({
         level: explicitOverride ? "info" : "warn",
+        ...(explicitOverride ? { code: "explicit-config-plugin-selection" as const } : {}),
         pluginId: effectivePluginId,
         source: overriddenCandidate.source,
         message: staleForeignPin

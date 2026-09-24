@@ -303,7 +303,14 @@ describe("installed plugin index persistence", () => {
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
     const index = createIndex({
       workspaceDir: "/agents/gadget/workspace",
-      diagnostics: [{ level: "info", pluginId: "demo", message: "explicit override" }],
+      diagnostics: [
+        {
+          level: "info",
+          code: "explicit-config-plugin-selection",
+          pluginId: "demo",
+          message: "explicit override",
+        },
+      ],
     });
 
     await expect(writePersistedInstalledPluginIndex(index, { stateDir })).resolves.toBe(filePath);
