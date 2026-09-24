@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/tools/pdf-tool.auth-routing.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-tool-search-prompt.test.ts",
   "src/config/sessions/session-entry-readonly.worker.test.ts",
@@ -68,6 +69,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/gateway.hosted-routing.test.ts",
   "src/agents/tools/gateway.runtime-identity.test.ts",
   "src/agents/cli-runner.prepare-fixture.test.ts",
+  "src/agents/cli-runner.context-engine.test.ts",
   "src/agents/harness/selection.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-cron-authority.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-settle-results.test.ts",
@@ -231,6 +233,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/compact.foreground-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.hooks.test.ts",
   "src/agents/embedded-agent-runner/compact.queued-successor.test.ts",
+  "src/agents/embedded-agent-runner/compact.queued-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.terminal-metadata.test.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite-notifications.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",

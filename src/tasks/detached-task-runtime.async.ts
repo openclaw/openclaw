@@ -36,6 +36,17 @@ async function mutateDetachedTask(
   return result;
 }
 
+export function startTaskRunByRunIdAsync(
+  params: Parameters<DetachedTaskLifecycleRuntime["startTaskRunByRunId"]>[0],
+  assertCurrent?: () => void,
+) {
+  return mutateDetachedTask(
+    { kind: "state", params: { ...params, status: "running" } },
+    (runtime) => runtime.startTaskRunByRunId(params),
+    assertCurrent,
+  );
+}
+
 export function finalizeTaskRunByRunIdAsync(
   params: DetachedTaskFinalizeParams,
   assertCurrent?: () => void,

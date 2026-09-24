@@ -11,6 +11,34 @@ beforeAll(async () => {
 afterAll(() => restoreMigrationRuntime?.());
 
 describe("legacy config migrate validation", () => {
+  it("leaves pre-June keys unresolved while migrating supported config", () => {
+    const raw = {
+      heartbeat: { every: "30m", showOk: true },
+      agents: {
+        defaults: {
+          llm: { idleTimeoutSeconds: 120 },
+          embeddedPi: { executionContract: "strict-agentic" },
+          embeddedHarness: { runtime: "claude-cli", fallback: "none" },
+          sandbox: { perSession: true },
+        },
+      },
+      session: { typingMode: "thinking" },
+    };
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+
+    expect(result.partiallyValid).toBe(true);
+    expect(result.config).toEqual({
+      ...raw,
+      agents: { defaults: { ...raw.agents.defaults, typingMode: "thinking" } },
+      session: {},
+    });
+    expect(result.changes).toEqual([
+      "Moved session.typingMode → agents.defaults.typingMode.",
+      "Migration applied; other validation issues remain — run doctor to review.",
+    ]);
+    expect(raw.session.typingMode).toBe("thinking");
+  });
+
   it.each([0, 1000.9, 7_200_000])("preserves restored MCP idle TTL %s", (sessionIdleTtlMs) => {
     const raw = {
       mcp: { sessionIdleTtlMs },

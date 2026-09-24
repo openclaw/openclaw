@@ -41,9 +41,8 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Validate provider secrets before dispatching expensive full release matrices.
 - Every selected test lane gates validation across Linux, Windows, and macOS,
   including native apps, UI, QA, Telegram, live providers, and performance.
-  Profiles never automatically downgrade failures to advisory success. Only an
-  explicit operator lane waiver may accept eligible failures, preserving their
-  actual conclusions and waiver reasons. Omitted coverage stays not run.
+  Profiles never automatically downgrade failures to advisory success.
+  Omitted coverage stays not run.
 - Release priority: release runs always beat PR-side hosted-runner work. The
   repo variable `OPENCLAW_RELEASE_PRIORITY_RUN` names the active FRV parent;
   `pnpm ci:full-release` records the pause window, sets it on dispatch, and
@@ -190,7 +189,7 @@ until their dependent enforcement changes land.
 - An `all` run without soak for an actual beta package on its matching canonical
   release branch or beta tag records `coveragePolicy=npm-beta-v1`. It keeps
   Linux/macOS/Windows Node, Control UI, plugin, package, install/update,
-  Linux cross-OS, QA parity, runtime-pair/restart, and tool-coverage gates. Native app
+  Linux/Windows/macOS cross-OS, QA parity, runtime-pair/restart, and tool-coverage gates. Native app
   CI, performance, and published-package Telegram are deferred to confidence.
   Beta `all` without soak also defers Package Acceptance Telegram, including
   beta-profile checks of `main` or alpha. Record deferred checks as not run,
@@ -245,10 +244,10 @@ until their dependent enforcement changes land.
   or `performance`. Never use the removed `release-checks` handle. `qa` is
   only a direct-child manual aggregate, not a controller retry API.
 - Filtered retries fail closed unless the filter belongs to the selected group.
-  All-group runs also accept `cross_os_suite_filter`: for example,
-  `-f cross_os_suite_filter=ubuntu,macos` excludes Windows. `npm-stable-v1` and
-  `npm-beta-v1` still qualify when explicitly filtered OS lanes are omitted, provided all
-  Linux suites remain selected and the other policy requirements hold.
+  All-group `cross_os_suite_filter` selections must retain `packaged-fresh`,
+  `installer-fresh`, and `packaged-upgrade` on Linux (`ubuntu`), Windows, and
+  macOS: all nine OS/suite pairs are required for qualification. Focused
+  `cross-os` reruns may select individual lanes.
   Never turn an empty derived filter into an unfiltered broad run.
 - A new all-group parent is justified only when shared orchestration changed,
   earlier evidence is invalid for the selected tuple, or the operator explicitly
@@ -311,8 +310,8 @@ non-billable credentials fail before the expensive release matrix.
 
 For regular beta/stable protected publication, after evidence validation run
 `pnpm release:publish-preflight` with the intended tag, exact Full Release
-Validation run and attempt, npm dist-tag, plugin scope, approved soak waiver when
-applicable, and protected publication tooling ref. `pnpm release:candidate`
+Validation run and attempt, npm dist-tag, plugin scope, and protected publication
+tooling ref. `pnpm release:candidate`
 invokes this check with its downloaded manifests; do not redownload them or
 replace the selected attempt. Use the report's exact dispatch command for the
 chosen publication route only after resolving every `FAIL` and owner-action
@@ -459,13 +458,9 @@ focused fixes; never widen automatically.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
-Stable publication requires soak unless the operator supplies `stable_soak_waiver`
-with a reason; the publisher forwards and records that reason in release evidence
-without changing validation coverage or other publication gates.
-An operator lane waiver (repository variable `OPENCLAW_FRV_LANE_WAIVER="<target version> <reason>"`, cleared after the release) keeps
-non-proof lane failures advisory; install-smoke, upgrade-survivor, pack/qualify-npm,
-`resolve_target`, and artifact gates stay blocking, and publishing that manifest
-needs the same `lane_waiver` acknowledgement on the publish workflow.
+Stable publication requires a stable/full validation profile, soak, and
+successful blocking performance evidence. Beta-profile evidence cannot authorize
+stable publication.
 
 ### Publish children
 
@@ -502,10 +497,6 @@ needs the same `lane_waiver` acknowledgement on the publish workflow.
   settle and propagates its failure without dispatching a replacement.
   Diagnose and fix the failed owner before explicitly recovering publication;
   preserve successful immutable packages and evidence.
-- Core child `Verify full release validation target` failing with
-  `pass lane_waiver=<reason> to acknowledge it`: the tooling tag predates
-  #156816 (waiver forwarded to children). Cut a new tooling tag from a `main`
-  that includes it; the candidate and validation evidence stay valid.
 
 ### Extended-stable validation
 
@@ -657,10 +648,9 @@ Interpret state precisely:
 - `cancelled_with_children`: the collector was cancelled while exact children
   remained active.
 
-Read explicitly waived **advisory** entries separately from Release Decision.
-They retain their failed conclusions and waiver reasons; a passing decision does
-not mean waived lanes passed. Selected lanes still need terminal evidence, and
-filtered-out lanes are not run, never passed.
+Selected lanes need successful terminal evidence. Failed attempts remain failures,
+while filtered-out or deferred lanes are not run, never passed. Gateway install
+and upgrade checks on Linux, Windows, and macOS block beta/stable/full validation.
 
 The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
 failure and timing manifest. Use it after an early blocker instead of
@@ -740,7 +730,7 @@ Record:
 - active full parent run URL, attempt, workflow SHA, and any superseded parent
   with the exact replacement reason
 - selected child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram, Product Performance; record deferred confidence as not run
-- Selected cross-OS lane conclusions and any explicit operator waiver reasons
+- Linux, Windows, and macOS Gateway cross-OS install/upgrade conclusions
 - performance comparison result versus earlier releases when available
 - targeted local proof commands
 - provider-secret preflight result

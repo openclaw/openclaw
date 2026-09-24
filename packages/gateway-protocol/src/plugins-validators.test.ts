@@ -402,6 +402,7 @@ describe("plugin lifecycle protocol validators", () => {
       generation: 2,
       pluginIds: ["notes"],
       sourceDigests: { notes: "sha256-fixture" },
+      selectedEntries: { notes: "/plugins/notes/dist/index.js" },
     };
     expect(Value.Check(PluginRuntimeApplicationSchema, receipt)).toBe(true);
     expect(Value.Check(PluginsChangedEventSchema, { generation: 2 })).toBe(true);
