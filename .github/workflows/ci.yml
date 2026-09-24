@@ -871,7 +871,7 @@ jobs:
                           check_cancelled()
                           if not reset:
                               raise SystemExit(124 if isinstance(error, FetchTimeout) else error.code)
-                          print(f"{label} attempt {attempt}/5 failed", flush=True)
+                          print(f"::warning::{label} attempt {attempt}/5 failed", flush=True)
                           backoff(attempt * 5)
                   print(f"{label} failed after 5 attempts", file=sys.stderr)
                   raise SystemExit(1)
@@ -3519,6 +3519,7 @@ jobs:
               case "$fetch_status" in 125|129|130|143) exit "$fetch_status" ;; esac
             fi
             if [[ "$attempt" != "6" ]]; then
+              echo "::warning::GitHub merge ref is not ready for the selected head; retrying acquisition ($attempt/6)." >&2
               sleep 5
             fi
           done
@@ -4199,7 +4200,6 @@ jobs:
           OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ needs.preflight.outputs.compatibility_target == 'true' && '["--hookTimeout=600000"]' || '[]' }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: ${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}
-          OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency }}
         shell: bash
         run: |
@@ -5503,11 +5503,12 @@ jobs:
             esac
             swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
             swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
-            curl --fail --location --silent --show-error \
+            curl --fail --location --no-progress-meter --show-error \
               --connect-timeout 10 --max-time 120 \
               --retry 3 --retry-max-time 120 \
               --output "$swiftformat_archive" \
-              "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
+              "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip" \
+              2> >(sed 's/^Warning: /::warning::/' >&2)
             if [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" != "$swiftformat_checksum" ]]; then
               echo "SwiftFormat $swiftformat_version archive checksum mismatch" >&2
               exit 1
@@ -5897,11 +5898,12 @@ jobs:
             esac
             swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
             swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
-            curl --fail --location --silent --show-error \
+            curl --fail --location --no-progress-meter --show-error \
               --connect-timeout 10 --max-time 120 \
               --retry 3 --retry-max-time 120 \
               --output "$swiftformat_archive" \
-              "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
+              "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip" \
+              2> >(sed 's/^Warning: /::warning::/' >&2)
             if [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" != "$swiftformat_checksum" ]]; then
               echo "SwiftFormat $swiftformat_version archive checksum mismatch" >&2
               exit 1

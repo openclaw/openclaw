@@ -4,10 +4,6 @@ import {
   validateFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
 import {
-  normalizeKnownFlakyJobs,
-  validateReleaseFlakeRecords,
-} from "./full-release-flake-policy.mjs";
-import {
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
   FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
   publicationIntentInputs,
@@ -70,9 +66,6 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     candidateBinding: plan.candidate,
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     childEvidence,
-    ...(plan.knownFlakyJobs !== undefined
-      ? { knownFlakyJobs: plan.knownFlakyJobs, automaticRetries: drain?.automaticRetries ?? [] }
-      : {}),
     executionPlanSha256: plan.sha256,
     sourceParentRunAttempt: Number(plan.parentRunAttempt),
     ...(plan.sourceAdmissionContract
@@ -1099,7 +1092,18 @@ function hasExactKeys(value, expectedKeys) {
   );
 }
 
+// Published validation artifacts contain empty retired retry metadata. Preserve
+// those bytes for digest verification without accepting a retry allowance.
+export function validateRetiredReleaseRetryFields(value) {
+  for (const key of ["knownFlakyJobs", "automaticRetries"]) {
+    if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length !== 0)) {
+      throw new Error(`release artifact ${key} must be empty; automatic retries are disabled`);
+    }
+  }
+}
+
 function releaseExecutionPlanShape(payload) {
+  validateRetiredReleaseRetryFields(payload);
   const hasAttemptEvidence = Object.hasOwn(payload, "attemptEvidenceVersion");
   const attemptEvidenceVersion = hasAttemptEvidence ? payload.attemptEvidenceVersion : undefined;
   const basePlanKeys = hasAttemptEvidence
@@ -1181,7 +1185,7 @@ function executionPlanDigestPayload(plan) {
     ...publication,
     ...waiver,
     ...coverage,
-    ...(plan.knownFlakyJobs !== undefined ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
+    ...(Object.hasOwn(plan, "knownFlakyJobs") ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
     attemptEvidenceVersion: plan.attemptEvidenceVersion,
     blockers: plan.blockers,
     candidate: plan.candidate,
@@ -1213,7 +1217,6 @@ export function buildReleaseExecutionPlanArtifact({
   blockers = [],
   candidate = null,
   coveragePolicy,
-  knownFlakyJobs,
   children,
   errors = [],
   evidenceReuse,
@@ -1285,9 +1288,6 @@ export function buildReleaseExecutionPlanArtifact({
       : {}),
     ...(waiver ? { telegramWaiver: waiver, targetVersion } : {}),
     ...(coveragePolicy !== undefined ? { coveragePolicy, targetVersion } : {}),
-    ...(knownFlakyJobs !== undefined
-      ? { knownFlakyJobs: normalizeKnownFlakyJobs(knownFlakyJobs, normalizedChildren) }
-      : {}),
     version: 1,
     kind: "openclaw.full-release-execution-plan",
     parentRunId: String(expected.parentRunId),
@@ -1307,10 +1307,8 @@ export function buildReleaseExecutionPlanArtifact({
   validatePlanSourceAdmission(basePlan, expected);
   validatePlanPublicationAdmission(basePlan, expected);
   if (!attemptAware) {
-    if (coveragePolicy !== undefined || knownFlakyJobs !== undefined) {
-      throw new Error(
-        "release coverage policy and flake allowance require an attempt-aware execution plan",
-      );
+    if (coveragePolicy !== undefined) {
+      throw new Error("release coverage policy requires a phase-three execution plan");
     }
     const result = { ...basePlan, sha256: releaseExecutionPlanSha256(basePlan) };
     serializeReleaseArtifact(result);
@@ -1423,32 +1421,6 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
   ) {
     throw new Error("release coverage policy differs from the expected execution plan");
   }
-  if (payload.knownFlakyJobs !== undefined) {
-    const selectors = normalizeKnownFlakyJobs(payload.knownFlakyJobs, payload.children);
-    if (
-      JSON.stringify(selectors) !== JSON.stringify(payload.knownFlakyJobs) ||
-      (expected.knownFlakyJobs !== undefined &&
-        JSON.stringify(selectors) !==
-          JSON.stringify(normalizeKnownFlakyJobs(expected.knownFlakyJobs)))
-    ) {
-      throw new Error("known flaky jobs differ from the immutable execution plan");
-    }
-  }
-  if (
-    expected.knownFlakyJobs !== undefined &&
-    JSON.stringify(normalizeKnownFlakyJobs(expected.knownFlakyJobs)) !==
-      JSON.stringify(payload.knownFlakyJobs ?? [])
-  ) {
-    throw new Error("known flaky jobs differ from the expected execution plan");
-  }
-  if (
-    payload.sourceAdmission &&
-    JSON.stringify(
-      normalizeKnownFlakyJobs(payload.sourceAdmission.coverage?.known_flaky_jobs_json || []),
-    ) !== JSON.stringify(payload.knownFlakyJobs ?? [])
-  ) {
-    throw new Error("known flaky jobs differ from source admission");
-  }
   const telegramWaiver = normalizeReleaseTelegramWaiver(payload);
   if (
     (Object.hasOwn(payload, "telegramWaiver") && !telegramWaiver) ||
@@ -1547,118 +1519,21 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-export function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
-  if (
-    jobName.startsWith("Run QA Lab parity lane (") ||
-    jobName === "Run QA Lab parity report" ||
-    jobName.startsWith("Run QA Lab runtime-pair lane (") ||
-    jobName === "Verify QA Lab runtime-pair lanes" ||
-    jobName === "Run QA Lab live Discord lane" ||
-    jobName === "Run QA Lab live WhatsApp lane" ||
-    jobName === "Run QA Lab live Slack lane"
-  ) {
-    return true;
-  }
-  if (/^tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(workflowRef)) {
-    return !(
-      jobName === "resolve_target" ||
-      jobName === "Prepare release package artifact" ||
-      jobName.startsWith("install_smoke_release_checks / ") ||
-      jobName === "Run package acceptance" ||
-      jobName.startsWith("Run package acceptance / ")
-    );
-  }
-  return (
-    releaseProfile === "beta" &&
-    (jobName.startsWith("Run package acceptance / Telegram package acceptance / ") ||
-      (jobName.startsWith("Run repo/live E2E validation / ") &&
-        (jobName.includes("Docker live") ||
-          jobName.includes("Live media suites") ||
-          jobName.includes("validate_live_provider_suites") ||
-          jobName.includes("validate_release_live_cache") ||
-          jobName.includes("prepare_live_test_image"))))
-  );
-}
-
-function isReleaseChecksChild(key) {
-  return ["releaseChecks", "releaseChecksIndependent", "releaseChecksCandidate"].includes(key);
-}
-
-function isAdvisoryChild(key, releaseProfile) {
-  return key === "productPerformance" && releaseProfile === "beta";
-}
-
 function isFailedJob(job) {
   return (
     job.status === "completed" && !SUCCESSFUL_JOB_CONCLUSIONS.has(String(job.conclusion ?? ""))
   );
 }
 
-export function isReleaseJobAdvisory({ childKey, jobName, releaseProfile, workflowRef }) {
+function failedJobsForPolicy(child) {
+  return child.jobs.filter(isFailedJob);
+}
+
+export function terminalPolicyPass(child) {
   return (
-    isAdvisoryChild(childKey, releaseProfile) ||
-    (isReleaseChecksChild(childKey) &&
-      isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }))
-  );
-}
-
-function failedJobsForPolicy(child, releaseProfile, workflowRef) {
-  return child.jobs.filter(
-    (job) =>
-      isFailedJob(job) &&
-      !isReleaseJobAdvisory({
-        childKey: child.key,
-        jobName: stringValue(job.name),
-        releaseProfile,
-        workflowRef,
-      }),
-  );
-}
-
-// Failed advisory lanes of a sealed state artifact, for the Release Decision
-// warning that names each lane so it is fixed in parallel with publication.
-export function releaseAdvisoryJobFailures(payload) {
-  return Object.entries(payload.children ?? {}).flatMap(([childKey, child]) => {
-    const jobs = child.timing?.jobs ?? [];
-    return jobs
-      .filter(
-        (job) =>
-          isFailedJob(job) &&
-          isReleaseJobAdvisory({
-            childKey,
-            jobName: stringValue(job.name),
-            releaseProfile: payload.releaseProfile,
-            workflowRef: payload.workflowRef,
-          }),
-      )
-      .map((job) => ({ child: childKey, conclusion: job.conclusion, job: job.name, url: job.url }));
-  });
-}
-
-export function formatAdvisoryJobFailure(failure) {
-  return `${failure.child} advisory lane ${failure.job} ended ${failure.conclusion}; fix it in parallel, it does not block npm/ClawHub publication${failure.url ? ` (${failure.url})` : ""}`;
-}
-
-export function terminalPolicyPass(child, releaseProfile, workflowRef) {
-  if (child.status !== "completed") {
-    return false;
-  }
-  if (child.conclusion === "success") {
-    return true;
-  }
-  if (isAdvisoryChild(child.key, releaseProfile)) {
-    return true;
-  }
-  if (!isReleaseChecksChild(child.key)) {
-    return false;
-  }
-  // Advisory failures require complete evidence and a successful verifier.
-  return (
-    child.jobs.every((job) => job.status === "completed") &&
-    child.jobs.some(
-      (job) => job.name === "Verify release checks" && job.conclusion === "success",
-    ) &&
-    failedJobsForPolicy(child, releaseProfile, workflowRef).length === 0
+    child.status === "completed" &&
+    child.conclusion === "success" &&
+    failedJobsForPolicy(child).length === 0
   );
 }
 
@@ -1706,8 +1581,6 @@ export function classifyReleaseSnapshot({
   extraBlockers = [],
   extraErrors = [],
   localFailures = [],
-  releaseProfile,
-  workflowRef,
 }) {
   const selected = children.filter((child) => child.selected);
   const active = selected.filter(
@@ -1717,7 +1590,7 @@ export function classifyReleaseSnapshot({
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
   );
   const childJobBlockers = selected.flatMap((child) =>
-    failedJobsForPolicy(child, releaseProfile, workflowRef).map((job) => ({
+    failedJobsForPolicy(child).map((job) => ({
       child: child.key,
       conclusion: job.conclusion,
       job: job.name,
@@ -1739,7 +1612,7 @@ export function classifyReleaseSnapshot({
         child.runId &&
         child.runAttempt &&
         child.status === "completed" &&
-        !terminalPolicyPass(child, releaseProfile, workflowRef) &&
+        !terminalPolicyPass(child) &&
         !childJobBlockerKeys.has(`${child.key}:${child.runId}`),
     )
     .map((child) => ({
@@ -1832,7 +1705,6 @@ function normalizedPlanChild(child, options = {}) {
 }
 
 export function buildReleaseStateArtifact({
-  automaticRetries = [],
   cancellation = {},
   children,
   decision,
@@ -1869,9 +1741,6 @@ export function buildReleaseStateArtifact({
     releaseProfile,
     rerunGroup,
     executionPlanSha256: executionPlan.sha256,
-    ...(executionPlan.knownFlakyJobs !== undefined
-      ? { automaticRetries: validateReleaseFlakeRecords(automaticRetries, executionPlan) }
-      : {}),
     state: decision.state,
     activeRunIds,
     blockerCount: decision.blockerCount ?? completeBlockerIndex.length,
@@ -2029,6 +1898,7 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("release state artifact is invalid");
   }
+  validateRetiredReleaseRetryFields(payload);
   const mode = expectedMode ?? payload.mode;
   const expectedKind =
     mode === "decision"
@@ -2253,25 +2123,6 @@ export function releaseStateChildEvidence(child) {
 }
 
 function verifyStateStructure(state, executionPlan, label) {
-  if (executionPlan.knownFlakyJobs !== undefined && !Object.hasOwn(state, "automaticRetries")) {
-    throw new Error(`${label} omitted automatic retry receipts`);
-  }
-  const retries = validateReleaseFlakeRecords(
-    state.automaticRetries ?? [],
-    executionPlan,
-    state.children,
-  );
-  if (
-    (retries.some(
-      (record) => !["observed", "not-attempted", "rejected"].includes(record.outcome),
-    ) ||
-      (executionPlan.knownFlakyJobs ?? []).some(
-        (selector) => !retries.some((record) => record.child === selector.split(":", 1)[0]),
-      )) &&
-    !state.errors.some((error) => error.kind === "automatic_retry_unresolved")
-  ) {
-    throw new Error(`${label} omits unresolved automatic retry`);
-  }
   const selected = executionPlan.children.filter((entry) => entry.selected);
   const expectedKeys = selected.map((child) => child.key).toSorted();
   if (JSON.stringify(Object.keys(state.children).toSorted()) !== JSON.stringify(expectedKeys)) {
@@ -2473,11 +2324,6 @@ function verifyReleaseStatePair(planPayload, decisionPayload, drainPayload, expe
   verifyStateStructure(decision, executionPlan, "release decision");
   verifyStateStructure(drain, executionPlan, "diagnostic drain");
   verifyStateTransition(decision, drain, executionPlan);
-  if (
-    JSON.stringify(decision.automaticRetries ?? []) !== JSON.stringify(drain.automaticRetries ?? [])
-  ) {
-    throw new Error("release decision and diagnostic drain automatic retries differ");
-  }
   return {
     decision,
     drain,
@@ -2578,9 +2424,6 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
     Math.max(0, payload.errors.length - normalizedMax);
   if (omitted > 0) {
     lines.push(`- ${omitted} additional blocker/error item(s) omitted`);
-  }
-  for (const failure of releaseAdvisoryJobFailures(payload)) {
-    lines.push(`- Advisory: ${formatAdvisoryJobFailure(failure)}`);
   }
   return lines;
 }

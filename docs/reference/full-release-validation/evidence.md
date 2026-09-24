@@ -15,11 +15,10 @@ confirmed product failure changes the Code SHA. Use one diagnosis, one fix when
 needed, and one narrow retry, then reassess; do not automatically rerun `all`.
 Narrow evidence is not publish authorization by itself.
 
-Read the **advisory** entries in `release-ci-summary` alongside Release Decision.
 Linux, Windows, and macOS Gateway cross-OS install and upgrade lanes are
 required for beta, stable, and full validation. The manifest records their
 actual conclusions, and failures block the release decision. Keep diagnostic
-artifacts for required and advisory lanes; never report a failed lane as passed.
+artifacts; never report a failed, omitted, or deferred lane as passed.
 
 For a regular release, record Code SHA and Release SHA even when they are the
 same commit. In that case, retain the successful full validation parent and

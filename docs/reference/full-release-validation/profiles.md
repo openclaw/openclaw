@@ -24,7 +24,7 @@ Acceptance supplies the canonical package Telegram E2E when selected; beta
 | -------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `beta`   | Fastest release-critical smoke.   | OpenAI/core live path, Docker live models for OpenAI, native gateway core, native OpenAI gateway profile, native OpenAI plugin, and Docker live gateway OpenAI.                                            |
 | `stable` | Default release approval profile. | `beta` plus Anthropic smoke, Google, MiniMax, backend, native live test harness, Docker live CLI backend, Docker ACP bind, Docker Codex harness, Docker subagent-announce, and an OpenCode Go smoke shard. |
-| `full`   | Broad advisory sweep.             | `stable` plus advisory providers, plugin live shards, and media live shards.                                                                                                                               |
+| `full`   | Broad provider sweep.             | `stable` plus additional providers, plugin live shards, and media live shards.                                                                                                                             |
 
 ## Full-only additions
 
@@ -83,7 +83,7 @@ canonical selector `qa-live-matrix`, `qa-live-buzz`, `qa-live-telegram`,
 `qa-live-discord`, `qa-live-whatsapp`, or `qa-live-slack`.
 
 The `live-gateway-advisory-docker` handle is an aggregate rerun handle for its
-three provider shards, so it still fans out to all advisory Docker gateway jobs.
+three provider shards, so it still fans out to all additional Docker gateway jobs.
 
 Use `cross_os_suite_filter` with `rerun_group=cross-os` when one cross-OS lane
 failed. The filter accepts comma-separated OS ids, suite ids, or OS/suite pairs,
@@ -97,20 +97,11 @@ summaries include per-phase timings for packaged upgrade lanes, and long-running
 commands print heartbeat lines so a stuck update is visible before the job
 timeout.
 
-QA release-check failures block normal release validation, including selected
-parity, runtime-pair/restart, Matrix, and runtime tool coverage. Some QA jobs use
-`continue-on-error` to preserve diagnostics, but the release verifier checks
-their recorded status; that setting does not remove the gate. Selected source
-Telegram QA and standalone npm Telegram tests must pass. Package Acceptance
-Telegram remains advisory for beta and blocking for stable/full; beta no-soak
-deferrals and reviewed version-specific omissions remain separate selection
-policies. Failed, skipped, or deferred attempts are never reported as passed.
-Tideclaw alpha runs may still treat non-package-safety
-release-check lanes as advisory. With
-`release_profile=beta`, the `Run repo/live E2E validation` live-provider suites
-are advisory: third-party model deployments change underneath a release, so
-beta surfaces their failures as warnings while stable and full profiles keep
-them blocking. When
+Selected QA, source and package Telegram, live-provider, cross-OS, and performance
+failures block validation across beta, stable, full, and Tideclaw alpha profiles.
+Beta no-soak deferrals and reviewed version-specific omissions remain separate
+selection policies. Failed, skipped, or deferred attempts are never reported as
+passed. When
 `live_suite_filter` explicitly requests a gated QA live lane such as Discord,
 WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo
 variable must be enabled; otherwise input capture fails instead of silently skipping the lane.

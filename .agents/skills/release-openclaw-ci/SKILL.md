@@ -39,10 +39,10 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
 - Validate provider secrets before dispatching expensive full release matrices.
-- Linux (`ubuntu`), Windows, and macOS Gateway cross-OS install and upgrade
-  lanes gate publication for beta, stable, and full. Record their actual
-  pass/fail conclusions. Selected normal CI lanes, including
-  Windows Node, macOS Swift, and Control UI, remain blocking.
+- Every selected test lane gates validation across Linux, Windows, and macOS,
+  including native apps, UI, QA, Telegram, live providers, and performance.
+  Profiles never automatically downgrade failures to advisory success.
+  Omitted coverage stays not run.
 - Release priority: release runs always beat PR-side hosted-runner work. The
   repo variable `OPENCLAW_RELEASE_PRIORITY_RUN` names the active FRV parent;
   `pnpm ci:full-release` records the pause window, sets it on dispatch, and
@@ -207,25 +207,9 @@ until their dependent enforcement changes land.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
-- For diagnosed intermittent jobs, declare exact `child:job name` selectors
-  before dispatch with `-f known_flaky_jobs_json='["normalCi:checks-node-agentic-control-plane-agent-chat"]'`.
-  The default is `[]`; the immutable plan binds the allowance. Each selected
-  child gets at most one automatic wave from attempt 1 to attempt 2: exactly
-  one declared failure uses the targeted job API; multiple declared failures
-  use the failed-jobs API only when every failed job is declared. Multiple
-  declared failures mixed with an undeclared failure record no automatic
-  attempt; required failures remain blockers. Any earlier child rerun consumes this budget,
-  even if it did not execute the listed job. GitHub also reruns dependent jobs
-  and offers no atomic arbitrary-subset operation. Explicit manual job retries
-  remain separate. Decision and Drain wait for retry owners and preserve their records
-  in the manifest. The owner uploads and witnesses an immutable intent, saves
-  its exact cache key, then sends its mutation once. Parent reruns authenticate
-  the restored intent and reconcile read-only; they never renew or replay it.
-  A dedicated original rejection witness preserves confirmed no-effect outcomes
-  through artifact loss and later manual attempts. `observed` authenticates a
-  matching replacement; it does not claim the automatic POST caused that attempt.
-  Preserve original logs and intent cache through verified validation. An
-  uncertain or exhausted allowance requires explicit operator recovery.
+- Never automatically rerun a failed or timed out test job. New dispatches reject
+  `known_flaky_jobs_json`; diagnose the original failure and fix its owner before
+  explicit operator recovery.
 - For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
 "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.
@@ -371,7 +355,7 @@ gh workflow run openclaw-performance.yml \
   infrastructure noise.
 - Full Release Validation requires blocking performance evidence for stable
   and full profiles. `npm-beta-v1` defers the child; explicit `performance`
-  and soak-enabled beta runs retain advisory performance coverage. Every
+  and soak-enabled beta runs retain blocking performance coverage. Every
   selected performance child must finish and prove artifact-only publication.
 
 Prefer an immutable trusted-main workflow revision, target the exact Code SHA:
@@ -508,11 +492,11 @@ without changing validation coverage or other publication gates.
     -f state=rejected -f comment="Reject stale release gate" -F "environment_ids[]=$env_id"
   gh run cancel <child> --repo openclaw/openclaw
   ```
-- `gh run rerun --failed` on a plugin npm child never passes: `Validate npm
-preflight artifact readback` pins `workflow.runAttempt`, so attempt 2 fails
-  `Preflight manifest workflow mismatch`. Only a fresh child works; since
-  #156760 the parent re-dispatches one (at most twice) when only pack/preflight
-  jobs failed.
+- `gh run rerun --failed` on a plugin npm child fails its attempt-bound
+  preflight artifact readback. The parent waits for the original child to
+  settle and propagates its failure without dispatching a replacement.
+  Diagnose and fix the failed owner before explicitly recovering publication;
+  preserve successful immutable packages and evidence.
 
 ### Extended-stable validation
 
@@ -664,12 +648,9 @@ Interpret state precisely:
 - `cancelled_with_children`: the collector was cancelled while exact children
   remained active.
 
-Read **advisory** entries separately from Release Decision. Beta live-provider
-and performance lanes retain their actual conclusions in the manifest and
-summary; `passed` does not mean those advisory lanes passed. Gateway install
+Selected lanes need successful terminal evidence. Failed attempts remain failures,
+while filtered-out or deferred lanes are not run, never passed. Gateway install
 and upgrade checks on Linux, Windows, and macOS block beta/stable/full validation.
-Selected lanes still need terminal evidence, and filtered-out lanes are not run,
-never passed.
 
 The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
 failure and timing manifest. Use it after an early blocker instead of

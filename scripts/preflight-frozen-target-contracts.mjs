@@ -987,13 +987,8 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     tooling: source,
     selected: createFrozenTargetSource(roots.selected, input.selected.sha),
   };
-  const {
-    DEFAULT_LIVE_RETRIES,
-    parseLaneSelection,
-    parseLiveMode,
-    parseProfile,
-    resolveDockerE2ePlan,
-  } = await import("./lib/docker-e2e-plan.mts");
+  const { parseLaneSelection, parseLiveMode, parseProfile, resolveDockerE2ePlan } =
+    await import("./lib/docker-e2e-plan.mts");
   const { classifyReleaseTrain, parseReleaseVersion } = await import("./lib/release-version.mjs");
   const { resolveFrozenCodexCompatibility } = await import("./resolve-frozen-codex-live-suite.mjs");
   const { resolveFsSafeNativeContract } = await import("./resolve-fs-safe-native-contract.mjs");
@@ -1054,7 +1049,6 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
       frozenTarget: { mode: "inert", source: sources.selected },
       includeOpenWebUI: normalizedDocker.includeOpenWebUI,
       liveMode: normalizedDocker.liveMode,
-      liveRetries: DEFAULT_LIVE_RETRIES,
       orderLanes: (lanes) => lanes,
       planReleaseAll: normalizedDocker.planReleaseAll,
       profile: normalizedDocker.profile,

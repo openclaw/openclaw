@@ -150,8 +150,7 @@ and sends explicit completion. This catches the v2026.7.1 regression where an
 ordinary progress send terminated the turn.
 
 Selected source Telegram QA and standalone npm Telegram tests must pass before
-normal release validation can pass. Package Acceptance Telegram must pass for
-`stable` and `full`; its existing beta advisory policy remains. Missing credentials,
+normal release validation can pass. Selected Package Acceptance Telegram must also pass in every profile. Missing credentials,
 an exhausted pool, and failed attempts do not count as successful proof. Exact
 candidate identity, credential isolation, and lease cleanup remain required.
 

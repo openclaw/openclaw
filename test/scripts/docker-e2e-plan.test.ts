@@ -12,7 +12,6 @@ import {
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  DEFAULT_LIVE_RETRIES,
   RELEASE_PATH_PROFILE,
   findLaneByName,
   parseLaneSelection,
@@ -79,7 +78,6 @@ function planFor(
     allowFrozenTargetScenarioOmissions: true,
     includeOpenWebUI: false,
     liveMode: "all",
-    liveRetries: DEFAULT_LIVE_RETRIES,
     orderLanes,
     planReleaseAll: false,
     profile: "all",
@@ -830,8 +828,6 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       expect(plan.needs.functionalImage).toBe(true);
       expect(plan.needs.liveImage).toBe(false);
       expect(plan.credentials).toContain("anthropic-api-key");
-      const lane = findLaneByName("live-anthropic-cache");
-      expect(lane?.retryPatterns).toEqual([]);
     },
   );
 
@@ -2160,12 +2156,12 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     }
   });
 
-  it("marks the aggregate Gemini CLI backend lane advisory for auth drift", () => {
+  it("requires the aggregate Gemini CLI backend lane to report failures", () => {
     const plan = planFor({ selectedLaneNames: ["live-cli-backend-gemini"] });
     const lane = requireFirstLane(plan);
 
-    expect(lane.command).toContain("OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1");
-    expect(lane.command).toContain("OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1");
+    expect(lane.command).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_ADVISORY");
+    expect(lane.command).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP");
     expect(lane.command).toContain(
       "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
     );
