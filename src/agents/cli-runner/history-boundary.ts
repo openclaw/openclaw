@@ -23,6 +23,7 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import type { NativeCliAuthIdentity } from "../cli-credentials.js";
 import { buildSessionContext, SessionManager } from "../sessions/session-manager.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -35,7 +36,7 @@ import type { PreparedCliRunContext } from "./types.js";
  */
 export async function prepareCliHistoryBoundary(
   params: PreparedCliRunContext["params"],
-  identity: { credential?: AuthProfileCredential },
+  identity: { credential?: AuthProfileCredential; nativeAuth?: NativeCliAuthIdentity },
 ): Promise<CliHistoryWriter | undefined> {
   const source = params.sessionTarget;
   if (
@@ -62,11 +63,21 @@ export async function prepareCliHistoryBoundary(
   const currentUserIsLast = !admission || watermark.maxSeq === admission.rawSeq;
   const stored = snapshot.cliHistoryBoundary;
   const credential = identity.credential;
+  const nativeAuth = identity.nativeAuth;
   // Native reuse epochs intentionally tolerate identity-less OAuth and stable
   // SecretRefs. History cannot: use the resolved static credential or a named
   // OAuth account, never a profile name, reference, or opaque CLI login alone.
-  const owner =
-    credential?.type === "oauth"
+  // A native CLI login (e.g. Claude) owns its credential, so its stable
+  // non-secret account identity substitutes for a forwarded credential.
+  const owner = nativeAuth?.accountRef.trim()
+    ? [
+        "native",
+        normalizeProviderId(params.provider),
+        nativeAuth.profileId,
+        nativeAuth.accountRef,
+        nativeAuth.planRef ?? null,
+      ]
+    : credential?.type === "oauth"
       ? credential.accountId?.trim() || credential.email?.trim()
         ? [
             "oauth",

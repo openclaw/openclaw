@@ -19,6 +19,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import type { NativeCliAuthIdentity } from "../cli-credentials.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./session-history.js";
@@ -59,6 +60,7 @@ async function fixture(withHeader = true) {
     action: (allowed: boolean, params: PreparedCliRunContext["params"]) => Promise<T>,
     overrides: Partial<PreparedCliRunContext["params"]> = {},
     credential?: AuthProfileCredential,
+    nativeAuth?: NativeCliAuthIdentity,
   ) => {
     const runId = "boundary-run-" + ++runNumber;
     await patchSessionEntryCore(target, (entry) => ({ ...entry, activeWriterRunId: runId }));
@@ -81,6 +83,7 @@ async function fixture(withHeader = true) {
       const writer = await prepareCliHistoryBoundary(params, {
         credential:
           credential ?? (epoch ? { type: "token", provider: "test-cli", token: epoch } : undefined),
+        ...(nativeAuth ? { nativeAuth } : {}),
       });
       return await runWithCliHistoryWriter(writer, () => action(Boolean(writer), params));
     } finally {
@@ -173,6 +176,68 @@ describe("CLI transcript account boundary", () => {
       {},
       { ...credential, accountId: "account-b" },
     );
+  });
+
+  it("resumes native CLI history for the same non-secret account identity", async () => {
+    const f = await fixture();
+    const nativeAuth = {
+      profileId: "anthropic:claude-cli",
+      accountRef: "owner@example.com",
+      planRef: "max",
+    };
+    await f.run(
+      undefined,
+      async (allowed) => {
+        expect(allowed).toBe(true);
+        f.manager().appendMessage({ role: "user", content: "native canary", timestamp: 1 });
+      },
+      {},
+      undefined,
+      nativeAuth,
+    );
+    await f.run(
+      undefined,
+      async (allowed, params) => {
+        expect(allowed).toBe(true);
+        expect(await history(allowed, params)).toContain("native canary");
+      },
+      {},
+      undefined,
+      nativeAuth,
+    );
+  });
+
+  it("refuses native CLI history after the native account changes", async () => {
+    const f = await fixture();
+    const nativeAuth = { profileId: "anthropic:claude-cli", accountRef: "owner@example.com" };
+    await f.run(
+      undefined,
+      async (allowed) => {
+        expect(allowed).toBe(true);
+        f.manager().appendMessage({ role: "user", content: "native canary", timestamp: 1 });
+      },
+      {},
+      undefined,
+      nativeAuth,
+    );
+    await f.run(
+      undefined,
+      async (allowed, params) => {
+        expect(allowed).toBe(false);
+        expect(await history(allowed, params)).toBeUndefined();
+      },
+      {},
+      undefined,
+      { ...nativeAuth, accountRef: "other@example.com" },
+    );
+  });
+
+  it("keeps native CLI history unknown when the account identity is unreadable", async () => {
+    const f = await fixture();
+    await f.run(undefined, async (allowed) => expect(allowed).toBe(false), {}, undefined, {
+      profileId: "anthropic:claude-cli",
+      accountRef: "   ",
+    });
   });
 
   it("compares resolved static tokens rather than the unchanged SecretRef", async () => {

@@ -185,6 +185,50 @@ function readClaudeAccountEmail(homeDir?: string): string | undefined {
   return typeof email === "string" && email.trim() ? email.trim() : undefined;
 }
 
+/** Non-secret identity of the locally logged-in Claude CLI account. */
+export type ClaudeNativeAuthIdentity = {
+  /** Stable account reference (the logged-in account email). */
+  accountRef: string;
+  /** Optional non-secret plan discriminator; never token material. */
+  planRef?: string;
+};
+
+/**
+ * Reads the non-secret account identity of the native Claude CLI login. The
+ * result never contains access/refresh/token material, so callers may hash it
+ * into an account-ownership fingerprint. Returns undefined (fail closed) when
+ * no stable account email is readable, and never prompts the macOS Keychain.
+ */
+export function readClaudeNativeAuthIdentity(
+  options: { homeDir?: string } = {},
+): ClaudeNativeAuthIdentity | undefined {
+  if (
+    path.dirname(resolveClaudeCliCredentialsPath(options.homeDir)) !==
+    resolveClaudeCliConfigDir(options.homeDir)
+  ) {
+    // oauthAccount is config-scoped, so it cannot identify a credential
+    // selected from an independent secure-storage root. Fail closed.
+    return undefined;
+  }
+  const accountRef = readClaudeAccountEmail(options.homeDir)?.trim();
+  if (!accountRef) {
+    return undefined;
+  }
+  const credential = readClaudeCliCredentials({
+    ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
+    allowKeychainPrompt: false,
+  });
+  const planRef = (
+    credential && credential.type !== "api_key_helper"
+      ? [credential.subscriptionType, credential.rateLimitTier]
+      : []
+  )
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value))
+    .join("|");
+  return planRef ? { accountRef, planRef } : { accountRef };
+}
+
 function withClaudeAccountEmail(
   credential: ClaudeCliCredential | null,
   homeDir?: string,
