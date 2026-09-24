@@ -241,7 +241,9 @@ actor GatewayConnection: Observable {
 
     private var subscribers: [UUID: AsyncStream<PushDelivery>.Continuation] = [:]
     var realtimeTalkSubscribers: [
-        UInt64: [UUID: AsyncStream<PushDelivery>.Continuation]
+        UInt64: [UUID: (
+            continuation: AsyncStream<PushDelivery>.Continuation,
+            includes: @Sendable (GatewayPush) -> Bool)]
     ] = [:]
     var lastSnapshot: HelloOk? {
         didSet { self.publishConnectedServerLease() }
@@ -1441,15 +1443,16 @@ extension GatewayConnection {
         }
         if let socketGeneration = self.socketGenerationState.activeGeneration {
             var terminatedSubscriberIDs: [UUID] = []
-            for (id, continuation) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {
-                switch continuation.yield(delivery) {
+            for (id, subscriber) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {
+                guard subscriber.includes(push) else { continue }
+                switch subscriber.continuation.yield(delivery) {
                 case .enqueued:
                     break
                 case .dropped, .terminated:
-                    continuation.finish()
+                    subscriber.continuation.finish()
                     terminatedSubscriberIDs.append(id)
                 @unknown default:
-                    continuation.finish()
+                    subscriber.continuation.finish()
                     terminatedSubscriberIDs.append(id)
                 }
             }

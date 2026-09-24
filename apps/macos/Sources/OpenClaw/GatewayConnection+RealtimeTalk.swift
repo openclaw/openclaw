@@ -3,6 +3,29 @@ import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 
+private actor RealtimeTalkEventIterator {
+    private var iterator: AsyncStream<GatewayConnection.PushDelivery>.Iterator?
+
+    init(stream: AsyncStream<GatewayConnection.PushDelivery>) {
+        self.iterator = stream.makeAsyncIterator()
+    }
+
+    func next() async -> EventFrame? {
+        guard var iterator = self.iterator else {
+            preconditionFailure("Concurrent AsyncStream iteration is unsupported")
+        }
+        self.iterator = nil
+        defer { self.iterator = iterator }
+        guard !Task.isCancelled else { return nil }
+        while let delivery = await iterator.next(isolation: self) {
+            guard !Task.isCancelled else { return nil }
+            guard delivery.isCurrent, case let .event(event)? = delivery.push else { continue }
+            return event
+        }
+        return nil
+    }
+}
+
 extension GatewayConnection {
     // MARK: - VoiceWake
 
@@ -71,31 +94,20 @@ extension GatewayConnection {
     {
         RealtimeTalkRelayTransport(
             subscribeServerEvents: { bufferingNewest in
-                let pushes = await self.subscribe(
+                let subscription = await self.makeLeasedPushSubscription(
                     bufferingNewest: bufferingNewest,
-                    ifCurrentServerLease: lease)
-                return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
-                    let task = Task {
-                        for await delivery in pushes {
-                            guard delivery.isCurrent, let push = delivery.push else { continue }
-                            guard case let .event(event) = push else { continue }
-                            switch continuation.yield(event) {
-                            case .enqueued:
-                                continue
-                            case .dropped, .terminated:
-                                continuation.finish()
-                                return
-                            @unknown default:
-                                continuation.finish()
-                                return
-                            }
-                        }
+                    ifCurrentServerLease: lease,
+                    includes: { push in
+                        if case .event = push { return true }
+                        return false
+                    })
+                let iterator = RealtimeTalkEventIterator(stream: subscription.stream)
+                // Pull directly from the owning queue; prefetching adds another buffer and stale frames.
+                return AsyncStream(
+                    unfolding: { await iterator.next() },
+                    onCancel: { [continuation = subscription.continuation] in
                         continuation.finish()
-                    }
-                    continuation.onTermination = { @Sendable _ in
-                        task.cancel()
-                    }
-                }
+                    })
             },
             request: { method, params, timeoutMs in
                 try await self.request(
@@ -113,34 +125,49 @@ extension GatewayConnection {
         bufferingNewest: Int,
         ifCurrentServerLease lease: ServerLease) -> AsyncStream<PushDelivery>
     {
+        self.makeLeasedPushSubscription(
+            bufferingNewest: bufferingNewest,
+            ifCurrentServerLease: lease,
+            includes: { _ in true }).stream
+    }
+
+    private func makeLeasedPushSubscription(
+        bufferingNewest: Int,
+        ifCurrentServerLease lease: ServerLease,
+        includes: @escaping @Sendable (GatewayPush) -> Bool)
+        -> (stream: AsyncStream<PushDelivery>, continuation: AsyncStream<PushDelivery>.Continuation)
+    {
         let id = UUID()
         let connection = self
-        return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
-            guard self.serverLeaseMatchesCurrentState(lease) else {
+        let subscription = AsyncStream<PushDelivery>.makeStream(bufferingPolicy: .bufferingNewest(bufferingNewest))
+        let continuation = subscription.continuation
+        guard self.serverLeaseMatchesCurrentState(lease) else {
+            continuation.finish()
+            return subscription
+        }
+        if let snapshot = self.lastSnapshot, includes(.snapshot(snapshot)),
+           let delivery = self.makePushDelivery(.snapshot(snapshot))
+        {
+            switch continuation.yield(delivery) {
+            case .enqueued:
+                break
+            case .dropped, .terminated:
                 continuation.finish()
-                return
-            }
-            if let snapshot = self.lastSnapshot, let delivery = self.makePushDelivery(.snapshot(snapshot)) {
-                switch continuation.yield(delivery) {
-                case .enqueued:
-                    break
-                case .dropped, .terminated:
-                    continuation.finish()
-                    return
-                @unknown default:
-                    continuation.finish()
-                    return
-                }
-            }
-            self.realtimeTalkSubscribers[lease.socketGeneration, default: [:]][id] = continuation
-            continuation.onTermination = { @Sendable _ in
-                Task {
-                    await connection.removeRealtimeTalkSubscriber(
-                        id,
-                        socketGeneration: lease.socketGeneration)
-                }
+                return subscription
+            @unknown default:
+                continuation.finish()
+                return subscription
             }
         }
+        self.realtimeTalkSubscribers[lease.socketGeneration, default: [:]][id] = (continuation, includes)
+        continuation.onTermination = { @Sendable _ in
+            Task {
+                await connection.removeRealtimeTalkSubscriber(
+                    id,
+                    socketGeneration: lease.socketGeneration)
+            }
+        }
+        return subscription
     }
 
     func removeRealtimeTalkSubscriber(_ id: UUID, socketGeneration: UInt64) {
@@ -154,12 +181,12 @@ extension GatewayConnection {
         let subscribers: [AsyncStream<PushDelivery>.Continuation]
         if let socketGeneration {
             if let removed = self.realtimeTalkSubscribers.removeValue(forKey: socketGeneration) {
-                subscribers = Array(removed.values)
+                subscribers = removed.values.map(\.continuation)
             } else {
                 subscribers = []
             }
         } else {
-            subscribers = self.realtimeTalkSubscribers.values.flatMap(\.values)
+            subscribers = self.realtimeTalkSubscribers.values.flatMap { $0.values.map(\.continuation) }
             self.realtimeTalkSubscribers.removeAll()
         }
         subscribers.forEach { $0.finish() }
