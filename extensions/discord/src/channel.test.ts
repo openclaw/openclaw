@@ -539,9 +539,7 @@ describe("discordPlugin outbound", () => {
           assertPlatformSendAuthorized: () => {},
         });
         expect(fetch).toHaveBeenCalledOnce();
-        expect(String(fetch.mock.calls[0]?.[0])).toBe(
-          "https://discord.com/api/v10/channels/456/typing",
-        );
+        expect(fetch.mock.calls[0]?.[0]).toBe("https://discord.com/api/v10/channels/456/typing");
         expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
       } finally {
         resolveRest.mockRestore();
