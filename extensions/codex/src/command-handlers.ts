@@ -15,6 +15,7 @@ import {
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { refreshCodexHostedApps } from "./command-apps-refresh.js";
 import {
+  assertCodexHostOwnerCurrent,
   canMutateCodexHost,
   CODEX_HOST_INSPECTION_AUTH_ERROR,
   CODEX_NATIVE_EXECUTION_AUTH_ERROR,
@@ -164,7 +165,11 @@ export async function handleCodexSubcommand(
           options.pluginConfig,
           CODEX_CONTROL_METHODS.installPlugin,
           requestParams,
-          { ...scope, config: ctx.config },
+          {
+            ...scope,
+            config: ctx.config,
+            assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
+          },
         )) as v2.PluginInstallResponse;
       },
       refresh: async (workspaceDir) => {

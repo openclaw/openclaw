@@ -42,6 +42,7 @@ describe("lazy file-transfer node invoke policy", () => {
       "dir.list",
       "dir.fetch",
       "file.write",
+      "file.create",
     ]);
     expect(loadPolicy).not.toHaveBeenCalled();
   });

@@ -17,6 +17,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
+import { selectThemeSettings } from "../../app/server-prefs-intent.ts";
 import { isAppearancePref, type ResettableServerUiPrefKey } from "../../app/server-prefs-state.ts";
 import { resetServerUiPref, resolveServerUiPrefState } from "../../app/server-prefs.ts";
 import {
@@ -765,8 +766,10 @@ export class ConfigPage extends OpenClawLightDomElement {
     };
   }
 
-  private applySettings(patch: Partial<UiSettings>) {
-    this.settings = patchSettings(patch);
+  private applySettings(patch: Partial<UiSettings>, selectedTheme?: ThemeName) {
+    this.settings = selectedTheme
+      ? selectThemeSettings(selectedTheme, patch)
+      : patchSettings(patch);
     applyTextScale(this.settings.textScale);
     // theme.refresh() also republishes non-theme appearance prefs (text
     // scale, lobster pet visits/sounds) to app-host subscribers.
@@ -851,13 +854,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     const preference = this.currentSyncedPref("theme");
     const reset = preference.overridden && theme === preference.resetValue;
     this.customThemeImportOwner.recordActivation(reset ? null : theme);
-    const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
     startThemeTransition({
-      currentTheme,
+      currentTheme: resolveTheme(this.settings.theme, this.settings.themeMode),
       nextTheme: resolveTheme(theme, this.settings.themeMode),
       context,
       applyTheme: () =>
-        reset ? this.resetSyncedAppearancePref("theme") : this.applySettings({ theme }),
+        reset ? this.resetSyncedAppearancePref("theme") : this.applySettings({}, theme),
     });
   }
 
@@ -906,10 +908,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       hasCustomTheme: Boolean(this.settings.customTheme),
       load: importCustomThemeFromUrl,
       apply: (customTheme, activate) =>
-        this.applySettings({
-          customTheme,
-          theme: activate ? "custom" : this.settings.theme,
-        }),
+        this.applySettings({ customTheme }, activate ? "custom" : this.settings.theme),
       messages: {
         blocked: (reason) => t(reason === "loading" ? "common.loading" : "common.unsavedChanges"),
         imported: (label) => t("configPage.themeImported", { name: label }),
@@ -920,10 +919,10 @@ export class ConfigPage extends OpenClawLightDomElement {
   private clearCustomTheme() {
     this.customThemeImportOwner.clear({
       apply: () =>
-        this.applySettings({
-          theme: this.settings.theme === "custom" ? "claw" : this.settings.theme,
-          customTheme: undefined,
-        }),
+        this.applySettings(
+          { customTheme: undefined },
+          this.settings.theme === "custom" ? "claw" : this.settings.theme,
+        ),
       message: t("configPage.themeRemoved"),
     });
   }

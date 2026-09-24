@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { syncDirectoryIfSupported } from "./directory-durability.js";
+import { writeFileWindowFully } from "./file-descriptor.js";
 import { readFileWindowFully } from "./file-read.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import {
@@ -196,26 +197,6 @@ function buildScrubbedAuditRecoveryContent(rawBytes: Buffer, scrubPattern: Buffe
   return scrubbed;
 }
 
-async function writeAuditRecoveryRange(
-  handle: Awaited<ReturnType<AuditMigrationRoot["openWritable"]>>["handle"],
-  content: Buffer,
-  position: number,
-): Promise<void> {
-  let offset = 0;
-  while (offset < content.byteLength) {
-    const { bytesWritten } = await handle.write(
-      content,
-      offset,
-      content.byteLength - offset,
-      position + offset,
-    );
-    if (bytesWritten === 0) {
-      throw new Error("zero-byte write while updating legacy recovery archive");
-    }
-    offset += bytesWritten;
-  }
-}
-
 const AUDIT_RECOVERY_WRITE_CHUNK_BYTES = 64 * 1024;
 
 async function writeAuditRecoveryProgress(params: {
@@ -275,7 +256,7 @@ async function advanceAuditRecoveryWrite(params: {
 }): Promise<AuditRecoveryProgress> {
   let progress = params.progress;
   if (progress.pendingEnd > progress.committedBytes) {
-    await writeAuditRecoveryRange(
+    await writeFileWindowFully(
       params.handle,
       params.desiredContent.subarray(progress.committedBytes, progress.pendingEnd),
       progress.committedBytes,
@@ -293,7 +274,7 @@ async function advanceAuditRecoveryWrite(params: {
     // range changed; pendingEnd lets recovery finish it without guessing.
     progress = { ...progress, pendingEnd: end };
     await writeAuditRecoveryProgress({ ...params, progress });
-    await writeAuditRecoveryRange(
+    await writeFileWindowFully(
       params.handle,
       params.desiredContent.subarray(progress.committedBytes, end),
       progress.committedBytes,
@@ -315,7 +296,7 @@ async function reconcileAuditRecoveryPendingWrite(params: {
   if (params.progress.pendingEnd === params.progress.committedBytes) {
     return params.progress;
   }
-  await writeAuditRecoveryRange(
+  await writeFileWindowFully(
     params.handle,
     params.desiredContent.subarray(params.progress.committedBytes, params.progress.pendingEnd),
     params.progress.committedBytes,

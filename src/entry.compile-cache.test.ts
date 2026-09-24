@@ -219,6 +219,20 @@ describe("entry compile cache", () => {
     },
   );
 
+  it.each(["linux", "darwin"] as const)(
+    "keeps the serving Gateway in process with inherited compile cache on %s",
+    async (platform) => {
+      await markSourceCheckout();
+      argv = [process.execPath, entryFile, "--profile=fixture", "gateway", "run"];
+      await withMockedPlatform(platform, async () => {
+        await expect(
+          respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root }),
+        ).resolves.toBe(false);
+        expect(spawn).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("keeps interactive no-cache respawns attached to the terminal", async () => {
     await markSourceCheckout();
     argv = [process.execPath, entryFile, "tui"];

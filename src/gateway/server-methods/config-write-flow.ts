@@ -19,7 +19,7 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { scheduleGatewayRestart } from "../../infra/restart.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { isRecord } from "../../utils.js";
@@ -308,7 +308,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
 }): Promise<{
   payload: RestartSentinelPayload;
   sentinelPersisted: boolean;
-  restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | undefined;
+  restart: ReturnType<typeof scheduleGatewayRestart> | undefined;
 }> {
   const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
     resolveConfigRestartRequest(params.requestParams);
@@ -329,7 +329,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   });
   const sentinelPersisted = await tryWriteRestartSentinelPayload(payload);
   const restart = restartRequirement.scheduleDirectRestart
-    ? scheduleGatewaySigusr1Restart({
+    ? scheduleGatewayRestart({
         delayMs: restartDelayMs,
         reason: params.mode,
         audit: {

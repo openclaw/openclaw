@@ -120,6 +120,8 @@ export type UpdateInstalledPluginsParams = {
   versionBoundPluginIds?: ReadonlySet<string>;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   specOverrides?: Record<string, string>;
+  /** Prepared package targets that preserve the recorded update selector. */
+  npmInstallSpecOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
@@ -528,13 +530,14 @@ function resolveUnpinnedOfficialReleaseSpec(params: {
   return order !== null && order <= 0 ? official.raw : undefined;
 }
 
-/** Shares recorded target and catalog replacement precedence with update admission. */
+/** Apply selector and release-pin policy before automatic cohort targets. */
 export function resolveNpmUpdateTarget(params: {
   record: PluginInstallRecord;
   trustedOfficialInstall?: ReturnType<
     typeof officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall
   >;
   specOverride?: string;
+  installSpecOverride?: string;
   syncOfficialPluginInstalls?: boolean;
   updateChannel?: UpdateChannel;
   coreVersion?: string;
@@ -548,7 +551,7 @@ export function resolveNpmUpdateTarget(params: {
     resolveUnpinnedOfficialReleaseSpec({
       spec: params.record.spec,
       officialSpec: official?.npmSpec,
-      coreVersion: params.coreVersion,
+      coreVersion: resolveExactNpmSpecVersion(params.installSpecOverride) ?? params.coreVersion,
     });
   const spec =
     specOverride ??
@@ -559,6 +562,10 @@ export function resolveNpmUpdateTarget(params: {
     target: spec
       ? {
           spec,
+          installSpecOverride:
+            !params.specOverride && resolveDefaultNpmSpec(spec)
+              ? params.installSpecOverride
+              : undefined,
           updateChannel: params.updateChannel,
           officialPackageName: resolveNpmSpecPackageName(official?.npmSpec),
           coreVersion: params.coreVersion,

@@ -165,6 +165,8 @@ it.each(["healthy", "original-owner-replaced"] as const)(
           opts.run!.executorFence = fence;
           const params = {
             phase: "post-plugin" as const,
+            // This prepared candidate already supplies the native Doctor contract.
+            doctorConfigWrites: true as const,
             root,
             entryPath,
             opts,

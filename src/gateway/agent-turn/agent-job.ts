@@ -418,33 +418,20 @@ function ensureAgentRunListener() {
 }
 
 function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
-  const payload = entry.payload as
-    | {
-        status?: unknown;
-        startedAt?: unknown;
-        endedAt?: unknown;
-        error?: unknown;
-        summary?: unknown;
-        stopReason?: unknown;
-        livenessState?: unknown;
-        yielded?: unknown;
-        timeoutPhase?: unknown;
-        providerStarted?: unknown;
-        result?: unknown;
-        terminalReply?: unknown;
-      }
-    | undefined;
+  const payload = asOptionalRecord(entry.payload);
   const status = typeof payload?.status === "string" ? payload.status : undefined;
   if (isNonTerminalAgentRunStatus(status)) {
     return { state: "active" };
   }
 
   const terminalStatus =
-    status === "ok" || status === "timeout" || status === "error"
-      ? status
-      : entry.ok
-        ? undefined
-        : "error";
+    status === "completed"
+      ? "ok"
+      : status === "ok" || status === "timeout" || status === "error"
+        ? status
+        : entry.ok
+          ? undefined
+          : "error";
   if (!terminalStatus) {
     return { state: "untracked" };
   }

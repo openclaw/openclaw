@@ -550,7 +550,7 @@ suite.define(() => {
       await composer.waitFor();
 
       await gateway.setOnline(false);
-      await page.locator('.agent-chat__composer-status[data-tone="warn"]').waitFor();
+      await page.locator('.agent-chat__composer-status[data-tone="info"]').waitFor();
       await composer.fill(text);
       await page.locator(".agent-chat__file-input").setInputFiles({
         name: "offline.txt",

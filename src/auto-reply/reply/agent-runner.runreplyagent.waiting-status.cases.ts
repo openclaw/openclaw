@@ -10,17 +10,20 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplySource, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import * as pendingToolTaskDrain from "./pending-tool-task-drain.js";
 
 type WaitingStatusFixture = {
-  createMinimalRun: (params?: { opts?: InternalGetReplyOptions }) => {
+  createMinimalRun: (params?: {
+    opts?: InternalGetReplyOptions;
+    currentInboundEventKind?: "room_event";
+  }) => {
     run: () => Promise<ReplyPayload | ReplyPayload[] | undefined>;
   };
-  runEmbeddedAgentMock: Pick<Mock, "mockImplementationOnce" | "mockResolvedValueOnce">;
+  runEmbeddedAgentMock: Pick<Mock, "mockImplementationOnce">;
 };
 
 export async function mockAcceptedWaitingStatusRun(
@@ -49,7 +52,7 @@ export async function mockAcceptedWaitingStatusRun(
       requesterAgentId: params.agentId,
       requesterTurnRunId: params.runId,
     };
-    registerSubagentRun(createSubagentRunParams({ ...spawn, ...requester, queued: true }));
+    await registerSubagentRun(createSubagentRunParams({ ...spawn, ...requester, queued: true }));
     const runResult = typeof result === "function" ? await result(params) : result;
     if (runResult.meta.yielded) {
       expect(markRequesterTurnYielded(requester)).toBe(1);
@@ -235,4 +238,37 @@ export function registerWaitingStatusCases({
       }
     },
   );
+
+  it.each([
+    { label: "default status" },
+    { label: "explicit status", acknowledgment: "Research started; results will follow." },
+    {
+      label: "room event",
+      acknowledgment: "Research started; results will follow.",
+      roomEvent: true,
+      warning: true,
+    },
+    { label: "empty acknowledgment", acknowledgment: "[[reply_to_current]]", warning: true },
+  ])("resolves an earlier tool warning with $label", async (testCase) => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    await mockAcceptedWaitingStatusRun(runEmbeddedAgentMock, {
+      payloads: [toolWarning],
+      meta: { durationMs: 0, yielded: true, yieldAcknowledgment: testCase.acknowledgment },
+    });
+    const { run } = createMinimalRun({
+      currentInboundEventKind: testCase.roomEvent ? "room_event" : undefined,
+    });
+
+    await expect(run()).resolves.toMatchObject({
+      text: testCase.warning
+        ? "⚠️ Bash failed"
+        : (testCase.acknowledgment ??
+          "I’m continuing this work and will send the result when it is ready."),
+      ...(testCase.warning ? { isError: true } : {}),
+      replyToId: "msg",
+    });
+  });
 }

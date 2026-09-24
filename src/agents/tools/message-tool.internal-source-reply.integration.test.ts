@@ -353,6 +353,7 @@ describe("WebChat message tool internal source reply", () => {
         const sessionId = "restart-proof-session";
         const imagePaths = ["first.png", "second.png"].map((name) => path.join(workspaceDir, name));
         const documentPath = path.join(workspaceDir, "report.json");
+        const documentName = "Quarterly report.json";
         await fs.mkdir(workspaceDir, { recursive: true });
         await Promise.all(
           imagePaths.map((imagePath) =>
@@ -394,6 +395,7 @@ describe("WebChat message tool internal source reply", () => {
           action: "send" as const,
           message: "Durable image reply",
           mediaUrls: [...imagePaths, documentPath],
+          attachments: [{ media: documentPath, name: documentName, mimeType: "application/json" }],
         };
         const updates: SessionTranscriptUpdate[] = [];
         const publishedDownloads: Array<Promise<unknown>> = [];
@@ -458,7 +460,7 @@ describe("WebChat message tool internal source reply", () => {
             expect.objectContaining({ name: "first.png", trustedLocalMedia: true }),
             expect.objectContaining({ name: "second.png", trustedLocalMedia: true }),
             expect.objectContaining({
-              name: "report.json",
+              name: documentName,
               mimeType: "application/json",
               trustedLocalMedia: true,
             }),
@@ -508,7 +510,7 @@ describe("WebChat message tool internal source reply", () => {
           attachment: {
             artifactId: expect.stringMatching(/^artifact_managed_media_/u),
             kind: "document",
-            label: "report.json",
+            label: documentName,
             mimeType: "application/json",
           },
         });
@@ -535,6 +537,9 @@ describe("WebChat message tool internal source reply", () => {
         expect(
           publishedMessage?.openclawDisplayContent?.filter((block) => block.type === "image"),
         ).toHaveLength(2);
+        expect(
+          publishedMessage?.openclawDisplayContent?.find((block) => block.type === "attachment"),
+        ).toEqual(document);
         await expect(Promise.all(publishedDownloads)).resolves.toEqual([
           expect.objectContaining({ type: "image" }),
           expect.objectContaining({ type: "image" }),
@@ -557,7 +562,7 @@ describe("WebChat message tool internal source reply", () => {
             artifactId: String(documentAttachment?.artifactId),
             stateDir,
           }),
-        ).resolves.toMatchObject({ type: "file", title: "report.json" });
+        ).resolves.toMatchObject({ type: "file", title: documentName });
       },
     );
   });

@@ -281,9 +281,9 @@ function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): SecurityAudi
       title: "WARNING",
       detail: "openclaw.json contains plaintext secret-bearing config fields.",
       remediation: [
+        `Migrate them to SecretRefs with ${formatCliCommand("openclaw secrets configure")} or ${formatCliCommand("openclaw secrets apply")}, then verify with ${formatCliCommand("openclaw secrets audit --check")}.`,
         `Paths: ${pathLine}`,
         "Agents or workspace tools that can read config files may see these API keys/tokens.",
-        `Migrate them to SecretRefs with ${formatCliCommand("openclaw secrets configure")} or ${formatCliCommand("openclaw secrets apply")}, then verify with ${formatCliCommand("openclaw secrets audit --check")}.`,
       ].join("\n"),
     },
   ];

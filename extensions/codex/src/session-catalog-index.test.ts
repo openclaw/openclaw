@@ -261,6 +261,9 @@ describe("resident Codex catalog", () => {
   });
 
   it("does not reread unchanged incomplete rollouts during currency scans", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     const root = path.join(tempDirs.make("openclaw-resident-incomplete-"), "sessions");
     const file = await writeCatalogRollout(root, idleThread({ id: "partial" }));
     await fs.writeFile(file, '{"type":"session_meta","payload":');
@@ -272,6 +275,7 @@ describe("resident Codex catalog", () => {
     });
     try {
       await index.initialize();
+      await vi.advanceTimersByTimeAsync(0);
       await index.reconcile();
       const open = vi.spyOn(fs, "open");
       await index.reconcile();
@@ -318,10 +322,12 @@ describe("resident Codex catalog", () => {
       expect(stat).toHaveBeenCalled();
       expect(readNative).toHaveBeenCalledTimes(2);
       stat.mockClear();
+      await index.upsertThread(existing);
       await vi.advanceTimersByTimeAsync(30_000);
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       expect(readNative).toHaveBeenCalledTimes(3);
       expect(stat).not.toHaveBeenCalled();
+      await index.upsertThread(existing);
       await vi.advanceTimersByTimeAsync(30_000);
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       expect(readNative).toHaveBeenCalledTimes(4);

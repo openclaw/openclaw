@@ -1,5 +1,8 @@
 import type { Message } from "grammy/types";
-import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
+import {
+  isAbortRequestText,
+  isBtwRequestText,
+} from "openclaw/plugin-sdk/command-primitives-runtime";
 import type {
   DmPolicy,
   OpenClawConfig,
@@ -46,6 +49,7 @@ import {
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
+import { isTelegramControlLaneText } from "./sequential-key.js";
 
 export interface TelegramInboundProcessing {
   processInboundMessage: (params: TelegramInboundMessage) => Promise<TelegramInboundDisposition>;
@@ -153,6 +157,9 @@ export function createTelegramInboundProcessing({
     const messageText = getTelegramTextParts(msg).text;
     const botUsername = ctx.me?.username;
     const isAbortControlMessage = isAbortRequestText(messageText, { botUsername });
+    const bypassTextBuffer =
+      isTelegramControlLaneText({ rawText: messageText, botUsername }) ||
+      isBtwRequestText(messageText, { botUsername });
     let abortControlAuthorized: Promise<boolean> | undefined;
     const isAuthorizedAbortControlMessage = () => {
       if (!isAbortControlMessage || !senderId) {
@@ -182,7 +189,8 @@ export function createTelegramInboundProcessing({
     }
 
     if (
-      await handleTextFragment({
+      !bypassTextBuffer &&
+      (await handleTextFragment({
         ctx,
         msg,
         chatId,
@@ -193,7 +201,7 @@ export function createTelegramInboundProcessing({
         promptContextAmbientWatermark,
         dispatchDedupeClaims,
         channelIngressResolver,
-      })
+      }))
     ) {
       return { kind: "buffered", buffer: "text-fragment" };
     }
@@ -351,7 +359,8 @@ export function createTelegramInboundProcessing({
       allMedia,
       storeAllowFrom,
       receivedAtMs: Date.now(),
-      debounceKey: isAbortControlMessage ? null : debounceKey,
+      // Waiting here would hold the shared control lane and block /stop in other topics.
+      debounceKey: bypassTextBuffer ? null : debounceKey,
       debounceLane,
       botUsername,
       threadSpec,

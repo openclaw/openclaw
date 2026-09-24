@@ -195,7 +195,6 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(args.runId).toBe("source-delivery-run");
     expect(args.sessionId).toBe("test-session-id");
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
-    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.requireExplicitMessageTarget).toBe(false);
     expect(args.disableMessageTool).toBe(false);
@@ -217,8 +216,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
-    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
-    expect(args.terminalReplyExpectation).toBe("required");
+    expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -257,7 +255,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
-    expect(args.terminalReplyExpectation).toBe("required");
+    expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");

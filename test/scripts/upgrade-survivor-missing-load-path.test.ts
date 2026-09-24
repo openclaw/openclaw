@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
@@ -36,43 +36,135 @@ it("plans the named missing-load-path row without adding aggregate coverage", ()
   }
 });
 
-it("dispatches missing-load-path fixture stages through the assertion entrypoint", () => {
-  const root = tempDirs.make("openclaw-missing-load-path-dispatch-");
-  const configPath = path.join(root, "openclaw.json");
-  const paths = readUpgradeSurvivorPaths(root, {
-    OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
-    OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "missing-load-path",
-  });
-  const artifactRoot = paths.artifactRoot;
-  const pluginRoot = path.join(root, "custom-plugins", "survivor-unavailable-path");
-  writeFileSync(configPath, JSON.stringify({ plugins: { allow: [], entries: {} } }));
-  const env = {
-    ...process.env,
-    OPENCLAW_CONFIG_PATH: configPath,
-    ...paths.env,
-    OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifactRoot,
-  };
-  const run = (stage: string) =>
-    execFileSync(resolveTestNodeExecPath(), [assertionsPath, "missing-load-path", stage], {
-      env,
-      encoding: "utf8",
+it.each(["source", "compiled"])(
+  "dispatches missing-load-path stages after loading the %s fixture",
+  (loading) => {
+    const root = tempDirs.make("openclaw-missing-load-path-dispatch-");
+    const configPath = path.join(root, "openclaw.json");
+    const paths = readUpgradeSurvivorPaths(root, {
+      OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "missing-load-path",
     });
+    const artifactRoot = paths.artifactRoot;
+    const pluginRoot = path.join(root, "custom-plugins", "survivor-unavailable-path");
+    writeFileSync(configPath, JSON.stringify({ plugins: { allow: [], entries: {} } }));
+    const env = {
+      ...process.env,
+      OPENCLAW_CONFIG_PATH: configPath,
+      ...paths.env,
+      OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifactRoot,
+    };
+    const run = (stage: string) =>
+      execFileSync(resolveTestNodeExecPath(), [assertionsPath, "missing-load-path", stage], {
+        env,
+        encoding: "utf8",
+      });
 
-  run("seed");
-  expect(existsSync(path.join(pluginRoot, "openclaw.plugin.json"))).toBe(true);
-  const seededConfig = readFileSync(configPath, "utf8");
-  writeFileSync(
-    path.join(artifactRoot, "missing-load-path", "baseline-registration.json"),
-    JSON.stringify({ source: pathToFileURL(path.join(pluginRoot, "index.mjs")).href }),
-  );
+    run("seed");
+    expect(existsSync(path.join(pluginRoot, "openclaw.plugin.json"))).toBe(true);
+    const seededConfig = readFileSync(configPath, "utf8");
+    let entry = path.join(pluginRoot, "index.mjs");
+    if (loading === "compiled") {
+      const compiledRoot = path.join(root, "compiled-plugin");
+      mkdirSync(compiledRoot);
+      const compiledEntry = path.join(compiledRoot, "index.mjs");
+      copyFileSync(entry, compiledEntry);
+      entry = compiledEntry;
+    }
+    execFileSync(
+      resolveTestNodeExecPath(),
+      [
+        "--input-type=module",
+        "-e",
+        `const { default: plugin } = await import(${JSON.stringify(pathToFileURL(entry).href)}); plugin.register();`,
+      ],
+      { env },
+    );
+    if (loading === "compiled") {
+      const receiptPath = path.join(
+        artifactRoot,
+        "missing-load-path",
+        "baseline-registration.json",
+      );
+      const receipt = readFileSync(receiptPath);
+      writeFileSync(receiptPath, JSON.stringify({ registrationToken: "previous-fixture" }));
+      expect(() => run("unavailable")).toThrow(
+        "The published baseline did not load the configured fixture plugin",
+      );
+      expect(existsSync(pluginRoot)).toBe(true);
+      expect(readFileSync(configPath, "utf8")).toBe(seededConfig);
+      writeFileSync(receiptPath, receipt);
+    }
 
-  expect(run("unavailable")).toContain("Removed loaded baseline plugin source before update:");
-  expect(existsSync(pluginRoot)).toBe(false);
-  expect(readFileSync(configPath, "utf8")).toBe(seededConfig);
-});
+    expect(run("unavailable")).toContain("Removed loaded baseline plugin source before update:");
+    expect(existsSync(pluginRoot)).toBe(false);
+    expect(readFileSync(configPath, "utf8")).toBe(seededConfig);
+  },
+);
 
 const convergenceRestartMessage =
   "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.";
+
+it.skipIf(process.platform === "win32").each([
+  { version: "2026.4.23", provision: false, installExit: 0 },
+  { version: "2026.4.30-beta.1", provision: false, installExit: 0 },
+  { version: "2026.5.2-beta.1", provision: true, installExit: 0 },
+  { version: "2026.7.1-2", companionVersion: "2026.7.1", provision: true, installExit: 0 },
+  { version: "2026.6.35", provision: true, installExit: 0 },
+  { version: "2026.7.33", provision: true, installExit: 0 },
+  { version: "2026.7.35", provision: true, installExit: 0 },
+  { version: "2026.8.1", provision: true, installExit: 0 },
+  { version: "2026.8.2", provision: true, installExit: 0 },
+  { version: "2026.9.1-beta.1", provision: true, installExit: 0 },
+  { version: "2026.9.1", provision: false, installExit: 0 },
+  { version: "2026.9.4", provision: false, installExit: 0 },
+  { version: "2026.9.5", provision: false, installExit: 0 },
+  { version: "2026.8.2", provision: true, installExit: 42 },
+])(
+  "provisions the published companion cohort for $version (install exit $installExit)",
+  ({ version, companionVersion = version, provision, installExit }) => {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail
+source scripts/e2e/lib/prepublish-plugin-registry.sh
+source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
+baseline_version="$1"
+SCENARIO=base
+UPDATE_RESTART_MODE=manual
+ARTIFACT_ROOT=/unused
+OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL=https://candidate.example.invalid
+OPENCLAW_NPM_REGISTRY_UPSTREAM=https://published.example.invalid
+NPM_CONFIG_REGISTRY=https://candidate.example.invalid
+phase() { shift; "$@"; }
+openclaw_e2e_fixture_plugin_command() {
+  test "$NPM_CONFIG_REGISTRY" = https://published.example.invalid || return 90
+  printf 'install:%s\\n' "$*"
+  return ${installExit}
+}
+start_missing_load_path_baseline() { printf 'start\\n'; }
+check_gateway_probes() { :; }
+stop_gateway() { :; }
+run_missing_load_path_fixture baseline
+test "$NPM_CONFIG_REGISTRY" = https://candidate.example.invalid
+`,
+        "published-companion-cohort",
+        version,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(installExit);
+    const plugins = provision ? (installExit ? ["codex"] : ["codex", "discord", "whatsapp"]) : [];
+    expect(result.stdout.trim().split("\n")).toEqual([
+      ...plugins.map(
+        (plugin) =>
+          `install:openclaw -- plugins install @openclaw/${plugin}@${companionVersion} --force`,
+      ),
+      ...(installExit ? [] : ["start"]),
+    ]);
+  },
+);
 
 it.skipIf(process.platform === "win32").each([
   { mode: "ready", code: 0, launches: 1, restarted: false },

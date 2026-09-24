@@ -79,6 +79,8 @@ export type OpenClawCodingToolsOptions = {
   delegationCapability?: DelegationCapability;
   /** Model API for the current provider (used for provider-native tool arbitration). */
   modelApi?: string;
+  /** Resolved endpoint for provider-native tool eligibility. */
+  modelBaseUrl?: string;
   /** Model context window in tokens (used to scale read-tool output budget). */
   modelContextWindowTokens?: number;
   /** Resolved runtime model compatibility hints. */

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, linkSync, renameSync, watch, writeFileSync } from "node:fs";
-import path from "node:path";
+import { existsSync, linkSync, renameSync, writeFileSync } from "node:fs";
 import { parentPort, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Generated } from "kysely";
@@ -71,18 +70,16 @@ export type FixtureOperations = {
 };
 
 function waitForFile(file: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const watcher = watch(path.dirname(file), () => {
+  return new Promise((resolve) => {
+    const check = () => {
       if (existsSync(file)) {
-        watcher.close();
+        clearInterval(poll);
         resolve();
       }
-    });
-    watcher.once("error", reject);
-    if (existsSync(file)) {
-      watcher.close();
-      resolve();
-    }
+    };
+    // Worker watch notifications can be missed or coalesced; observe the persistent gate.
+    const poll = setInterval(check, 50);
+    check();
   });
 }
 

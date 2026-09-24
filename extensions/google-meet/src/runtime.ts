@@ -94,6 +94,10 @@ export class GoogleMeetRuntime {
   readonly #voiceCallGateway: VoiceCallGateway;
   readonly #sessions: GoogleMeetSessionRuntime;
 
+  reconcileTranscriptPolicy(enabled: boolean): Promise<void> {
+    return this.#sessions.reconcileTranscriptPolicy(enabled);
+  }
+
   constructor(
     private readonly params: {
       config: GoogleMeetConfig;

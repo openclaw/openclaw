@@ -2,7 +2,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { getGroupThreadDispatchContext } from "../../auto-reply/group-thread-context.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  isReplyPayloadTargetSuppressed,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
@@ -13,11 +16,13 @@ import {
   type OutboundDeliveryIntent,
   resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
+  sendStructuredDurableMessageBatchCore,
 } from "../message/send.js";
 import {
   createChannelDeliveryResultFromReceipt,
@@ -48,6 +53,11 @@ export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptio
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
 };
 
+export type StructuredDurableInboundReplyDeliveryParams = Omit<
+  DurableInboundReplyDeliveryParams,
+  "payload"
+> & { plan: OutboundPayloadPlan };
+
 /** Outcome of attempting durable final delivery for an inbound reply payload. */
 type DurableInboundReplyDeliveryResult =
   | { status: "not_applicable"; reason: "non_final" }
@@ -75,6 +85,9 @@ function resolveDeliveryTarget(params: DurableInboundReplyDeliveryParams): strin
 function resolveDurableInboundReplyToId(
   params: Pick<DurableInboundReplyDeliveryParams, "ctxPayload" | "payload" | "replyToId">,
 ): string | null | undefined {
+  if (isReplyPayloadTargetSuppressed(params.payload)) {
+    return null;
+  }
   // Explicit null means "do not reply to a source message"; do not fall back to context ids.
   if (params.replyToId === null || params.payload.replyToId === null) {
     return null;
@@ -152,7 +165,26 @@ function resolveAcceptedVisibleContent(
 
 /** Delivers final inbound replies through the durable message-send context when supported. */
 export async function deliverInboundReplyWithMessageSendContextCore(
+  params: DurableInboundReplyDeliveryParams,
+): Promise<DurableInboundReplyDeliveryResult> {
+  return await deliverInboundReplyWithMessageSendContext(params, sendDurableMessageBatchCore);
+}
+
+/** Delivers a prepared final reply through the same durable owner without parsing its text. */
+export async function deliverStructuredInboundReplyWithMessageSendContextCore(
+  params: StructuredDurableInboundReplyDeliveryParams,
+): Promise<DurableInboundReplyDeliveryResult> {
+  const { plan, ...context } = params;
+  return await deliverInboundReplyWithMessageSendContext(
+    { ...context, payload: plan.payload },
+    ({ payloads: _payloads, ...sendParams }) =>
+      sendStructuredDurableMessageBatchCore({ ...sendParams, plan: [plan] }),
+  );
+}
+
+async function deliverInboundReplyWithMessageSendContext(
   input: DurableInboundReplyDeliveryParams,
+  sendBatch: typeof sendDurableMessageBatchCore,
 ): Promise<DurableInboundReplyDeliveryResult> {
   if (input.info.kind !== "final") {
     return { status: "not_applicable", reason: "non_final" };
@@ -221,7 +253,7 @@ export async function deliverInboundReplyWithMessageSendContextCore(
     requesterSenderUsername: params.ctxPayload.SenderUsername,
     requesterSenderE164: params.ctxPayload.SenderE164,
   });
-  const send = await sendDurableMessageBatchCore({
+  const send = await sendBatch({
     cfg: params.cfg,
     channel,
     to,

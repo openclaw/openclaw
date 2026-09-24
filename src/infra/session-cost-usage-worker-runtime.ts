@@ -39,6 +39,7 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import {
   readSessionCostUsageRollupByteRowsInDatabase,
+  readSessionCostUsageRollupBodyInDatabase,
   type SessionCostUsageRollupSnapshot,
 } from "./session-cost-usage-cache.kernel.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
@@ -123,7 +124,13 @@ export function prepareUsageCostWorker(params: {
     add(toDatabaseOptions(resolveSqliteReadScope({ ...target, env })));
   }
   return {
-    location: { agentId, databasePath, storePath, env },
+    location: {
+      agentId,
+      databasePath,
+      storePath,
+      // Windows preparation uses a Proxy; transfer data needs its resolved root in a plain snapshot.
+      env: { ...env, OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR },
+    },
     config: params.config,
     agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, agentId),
     databases: [...databases.values()],
@@ -428,6 +435,22 @@ export async function runUsageCostWorker(
                   }
                   break;
                 }
+                case "memory-cache-body": {
+                  const binding = memoryBinding({
+                    agentId: location.agentId,
+                    storePath: location.databasePath,
+                  });
+                  const row = binding.database
+                    ? readSessionCostUsageRollupBodyInDatabase(binding.database.db, request.input)
+                    : undefined;
+                  // Copy native bytes into a standalone allocation before transferring custody.
+                  const blob = row?.blob ? Uint8Array.from(row.blob) : null;
+                  output = row ? { blob } : undefined;
+                  if (blob) {
+                    transferList.push(blob.buffer);
+                  }
+                  break;
+                }
                 case "prune-row":
                   if (!lock) {
                     throw new Error("Usage report cannot prune cache rows");
@@ -455,6 +478,7 @@ export async function runUsageCostWorker(
                     rollupId: request.input.key,
                     previousValueJson: request.input.previousValue,
                     valueJson: request.input.value,
+                    blob: request.input.blob,
                     updatedAt: request.input.updatedAt,
                   });
                   break;

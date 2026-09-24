@@ -41,7 +41,9 @@ const {
 } = fixtureMocks;
 
 describe("worker session tool topology", () => {
-  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks);
+  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, {
+    operatorProfileId: "profile-worker-requester",
+  });
   let placements: ReturnType<typeof getFixture>["placements"];
   let identity: ReturnType<typeof getFixture>["identity"];
   let execute: ReturnType<typeof getFixture>["execute"];
@@ -140,7 +142,7 @@ describe("worker session tool topology", () => {
   });
 
   it.each([false, true])(
-    "creates and replays a cloud child with inherited required isolation (%s)",
+    "defers inherited required isolation to the Gateway child owner (%s)",
     async (required) => {
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       const creator = { type: "human", id: "profile-worker-creator" } as const;
@@ -158,7 +160,7 @@ describe("worker session tool topology", () => {
       expect(gatewayCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           creation: expect.objectContaining({
-            actor: required ? creator : { type: "agent", id: SOURCE.agentId },
+            actor: { type: "agent", id: SOURCE.agentId },
             requesterSessionKey: SOURCE.sessionKey,
             via: "spawn",
           }),
@@ -171,9 +173,7 @@ describe("worker session tool topology", () => {
           params: expect.not.objectContaining({ task: expect.anything() }),
         }),
       );
-      expect(gatewayCreate.mock.calls[0]?.[0]?.creation?.sandbox).toBe(
-        required ? "required" : undefined,
-      );
+      expect(gatewayCreate.mock.calls[0]?.[0]?.creation?.sandbox).toBeUndefined();
       expect(dispatchChild).toHaveBeenCalledWith(
         {
           sessionId: CHILD.sessionId,
@@ -247,6 +247,7 @@ describe("worker session tool topology", () => {
         sessionKey: SOURCE.sessionKey,
         executionIdentityToken: PARENT_EXECUTION_IDENTITY_TOKEN,
         operationalRunInstance: expect.objectContaining({ runId: sourceClaim.runId }),
+        operatorAuthority: expect.objectContaining({ profileId: "profile-worker-requester" }),
         receiptAuthority: expect.any(Function),
         workerTurnClaim: sourceClaim,
       }),

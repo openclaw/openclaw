@@ -9,7 +9,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type GatewaySuspendAdmissionPhase = GatewaySuspension["phase"];
 
-export type GatewayShutdownTrigger = "SIGTERM" | "SIGINT" | "SIGUSR1" | "hosted Gateway stop";
+export type GatewayShutdownTrigger = "SIGTERM" | "SIGINT" | "SIGUSR2" | "hosted Gateway stop";
 export type GatewayDrainReason =
   | "restart"
   | `${"stop" | "restart"} (${GatewayShutdownTrigger}${"" | `: ${string}`})`;
@@ -681,9 +681,9 @@ export function tryBeginGatewaySuspendAdmission(
   };
 }
 
-/** Clears restart/suspend admission during SIGUSR1 and isolated tests. */
+/** Clears restart/suspend admission during SIGUSR2 and isolated tests. */
 export function resetGatewayWorkAdmission(): void {
-  // SIGUSR1 can abandon old async chains before their finally blocks run.
+  // SIGUSR2 can abandon old async chains before their finally blocks run.
   // Retire their ALS records so surviving chains must re-enter admission.
   GATEWAY_WORK_ADMISSION_STATE.restartDrainController.abort(
     new GatewayDrainingError("gateway runtime reset"),

@@ -32,12 +32,21 @@ export function registerDoctorRestorationRollbackTests(
   },
   makeTempDir: (prefix: string) => string,
 ) {
-  it.each(["exception", "child-result"] as const)(
-    "restores and verifies the previous package after typed Doctor restoration failure (%s)",
-    async (transport) => {
+  it.each([
+    { transport: "exception", differentService: false },
+    { transport: "child-result", differentService: false },
+    { transport: "exception", differentService: true },
+  ] as const)(
+    "restores and verifies the previous package after typed Doctor restoration failure ($transport, differentService=$differentService)",
+    async ({ transport, differentService }) => {
       const base = makeTempDir("update-doctor-restoration-");
       const fixture = await createPackageSwapFixture(base);
       await writePackageRoot(fixture.params.stage.packageRoot, "9999.1.1");
+      const serviceRoot = differentService ? path.join(base, "service-a") : fixture.packageRoot;
+      const serviceVersion = differentService ? "0.9.0" : "1.0.0";
+      if (differentService) {
+        await writePackageRoot(serviceRoot, serviceVersion);
+      }
       let transaction: PackageUpdateTransaction | undefined;
       const swap = await swapStagedPackageInstall({
         ...fixture.params,
@@ -103,17 +112,20 @@ export function registerDoctorRestorationRollbackTests(
         runtimeInspected: true,
         running: true,
         serviceEnv: env,
+        serviceIdentity: { version: serviceVersion },
         serviceUpdateVerdict: {
           kind: "owned",
-          root: fixture.packageRoot,
+          root: serviceRoot,
           fingerprint: "fixture",
           refreshDefinition: false,
+          requiresInstallRootRefresh: differentService,
         },
       };
       harness.stopCandidate.mockResolvedValueOnce(before);
       harness.restartCandidate.mockImplementationOnce(async (params) => {
         expect(params.requireRunningServiceAfterRestart).toBe(true);
         expect(params.result.after?.version).toBe("1.0.0");
+        expect(params.expectedGatewayIdentity).toEqual({ version: serviceVersion });
         expect(
           JSON.parse(await fs.readFile(path.join(fixture.packageRoot, "package.json"), "utf8"))
             .version,
@@ -123,7 +135,7 @@ export function registerDoctorRestorationRollbackTests(
           run.runId,
           {
             serviceRunning: true,
-            runningVersion: "1.0.0",
+            runningVersion: serviceVersion,
             versionMatch: true,
             settled: true,
             readyz: true,
@@ -174,18 +186,20 @@ export function registerDoctorRestorationRollbackTests(
       expect(rollback).toHaveBeenCalledOnce();
       expect(harness.stopCandidate).toHaveBeenCalledOnce();
       expect(harness.restartCandidate).toHaveBeenCalledOnce();
+      expect(failure?.result.root).toBe(fixture.packageRoot);
+      expect(failure?.result.after?.version).toBe("1.0.0");
       expect(failure?.result.recovery).toMatchObject({
         serviceRestartSafe: true,
         packageRollbackVerified: true,
         service: "healthy",
-        version: "1.0.0",
+        version: serviceVersion,
       });
       expect(failure?.result.steps.flatMap((step) => step.failureFacts ?? [])).toEqual(facts);
       const recorded = getUpdateRun(run.runId, { env });
       expect(recorded?.status).toBe("rolled-back");
       expect(recorded?.verification).toMatchObject({
         serviceRunning: true,
-        runningVersion: "1.0.0",
+        runningVersion: serviceVersion,
         versionMatch: true,
       });
       if (!recorded) {

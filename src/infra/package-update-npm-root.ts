@@ -99,7 +99,7 @@ export async function createNpmPackageRootLinkLifecycle(params: {
         return null;
       } catch (error) {
         assertCurrent();
-        return `Could not retire retained npm package link at ${params.backupRoot}: ${formatErrorMessage(error)}`;
+        return `Could not retire retained npm package link: ${formatErrorMessage(error)}; backup retained at ${params.backupRoot}`;
       }
     },
   };

@@ -1,33 +1,54 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { isMainThread } from "node:worker_threads";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import {
   NodeWorkerLaunchStore,
   type NodeWorkerContainerIdentity,
   type NodeWorkerLaunchClaim,
   type NodeWorkerTerminalState,
 } from "./node-worker-launch-store.js";
-import { requireNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import * as launchTransport from "./node-worker-launch-transport.js";
+import {
+  requireNodeWorkerProcessIdentity,
+  type NodeWorkerProcessIdentity,
+} from "./node-worker-process-identity.js";
+import * as processIdentity from "./node-worker-process-identity.js";
+import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+import { NodeWorkerTurnKernel } from "./node-worker-turn-store.kernel.js";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const NOW_MS = 10 * DAY_MS;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
-
-function fixture() {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("node-worker-turn-store-") };
-  const launches = new NodeWorkerLaunchStore({ env });
-  const turns = new NodeWorkerTurnStore({ env });
-  const supervisor = requireNodeWorkerProcessIdentity(process.pid);
+async function fixture(
+  supervisor: NodeWorkerProcessIdentity = requireNodeWorkerProcessIdentity(process.pid),
+  env = { OPENCLAW_STATE_DIR: tempDirs.make("node-worker-turn-store-") },
+) {
+  const journal = new NodeWorkerJournalWorker({ env });
+  const launches = new NodeWorkerLaunchStore(journal);
+  const turns = new NodeWorkerTurnStore(journal);
   const first: NodeWorkerLaunchClaim = {
     launchId: "first-turn",
     planHash: "a".repeat(64),
@@ -45,18 +66,19 @@ function fixture() {
     runId: "second-run",
   };
   const owner = { ownerLaunchId: first.launchId, supervisor, worker: supervisor };
-  launches.claim(first, supervisor, 1, NOW_MS);
+  await launches.claim(first, supervisor, 1, NOW_MS);
   return {
     env,
+    journal,
     launches,
     turns,
     supervisor,
     first,
     next,
     owner,
-    start(container?: NodeWorkerContainerIdentity) {
-      turns.claim({ claim: first, ownerLaunchId: first.launchId, supervisor, nowMs: NOW_MS });
-      launches.markRunning({
+    async start(container?: NodeWorkerContainerIdentity) {
+      await turns.claim({ claim: first, ownerLaunchId: first.launchId, supervisor, nowMs: NOW_MS });
+      await launches.markRunning({
         ...first,
         supervisor,
         worker: supervisor,
@@ -78,39 +100,165 @@ function fixture() {
 }
 
 describe("node worker turn journal", () => {
-  it("keeps completed turn receipts independent of the running physical slot and later turns", () => {
-    const f = fixture();
-    expect(
-      f.turns.claim({
-        claim: f.first,
-        ownerLaunchId: f.first.launchId,
-        supervisor: f.supervisor,
-        nowMs: NOW_MS,
+  it("returns durable claim and finish receipts within one turn and owner read each", async () => {
+    const f = await fixture();
+    await f.start();
+    await f.finish();
+    const database = openOpenClawStateDatabase({ env: f.env });
+    const kernel = new NodeWorkerTurnKernel({ database, env: f.env });
+    const measure = <T>(operation: () => T): T => {
+      const admission = vi
+        .spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission")
+        .mockImplementation(() => {});
+      const reads = trackSqliteStatementExecutions(database.db, ["receipt"], (sql) =>
+        sql.startsWith("select ") &&
+        (sql.includes('from "node_worker_turns"') || sql.includes('from "node_worker_launches"'))
+          ? "receipt"
+          : null,
+      );
+      try {
+        const result = operation();
+        expect.soft(reads.counts.receipt).toBeLessThanOrEqual(2);
+        return result;
+      } finally {
+        reads.restore();
+        admission.mockRestore();
+      }
+    };
+    const claimed = measure(() => kernel.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS + 1 }));
+    expect(claimed.action).toBe("start");
+    expect(claimed.receipt).toEqual(await f.turns.get(f.next.launchId));
+    const finished = measure(() =>
+      kernel.finish({
+        expected: f.next,
+        ...f.owner,
+        state: "completed",
+        resultJson: "{}",
+        nowMs: NOW_MS + 2,
       }),
-    ).toMatchObject({ action: "start", receipt: { state: "pending", worker: null } });
-    f.start();
-    expect(f.turns.get(f.first.launchId)).toMatchObject({ state: "running", worker: f.supervisor });
-    const completed = f.finish();
+    );
+    expect(finished).toMatchObject({ state: "completed", completedAtMs: NOW_MS + 2 });
+    expect(finished).toEqual(await f.turns.get(f.next.launchId));
+  });
 
-    expect(f.launches.get(f.first.launchId)?.state).toBe("running");
-    expect(f.launches.nonterminalCount()).toBe(1);
-    expect(f.turns.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS })).toMatchObject({
-      action: "start",
-      receipt: { launchId: f.next.launchId, ownerLaunchId: f.first.launchId, state: "running" },
-    });
-    expect(f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS })).toEqual({
-      action: "replay",
-      receipt: completed,
-    });
-    expect(
-      f.turns.finish({ ...f.owner, expected: f.first, state: "failed", errorText: "late failure" }),
-    ).toEqual(completed);
-    expect(f.turns.get(f.next.launchId)?.state).toBe("running");
-    expect(
-      f.launches.claim({ ...f.next, launchId: "another-worker" }, f.supervisor, 1, NOW_MS),
-    ).toMatchObject({
-      action: "at-capacity",
-    });
+  it("reads and replays durable receipts after supervisor shutdown without restarting recovery", async () => {
+    const unexpected = () => {
+      throw new Error("Process work is outside this receipt-only fixture");
+    };
+    vi.spyOn(processIdentity, "requireNodeWorkerProcessIdentity").mockImplementation(unexpected);
+    vi.spyOn(processIdentity, "inspectNodeWorkerProcessIdentity").mockImplementation(unexpected);
+    vi.spyOn(launchTransport, "prepareNodeWorkerLaunchTransport").mockImplementation(unexpected);
+    const f = await fixture({ pid: 17, startTime: 23 });
+    const supervisor = createNodeWorkerSupervisor({ env: f.env, capacity: 1 });
+    try {
+      await f.start();
+      const completed = await f.finish();
+      expect(completed).toMatchObject({ state: "completed" });
+      await f.launches.finish({
+        ...f.owner,
+        launchId: f.first.launchId,
+        planHash: f.first.planHash,
+        state: "completed",
+        resultJson: JSON.stringify({ turnId: f.first.launchId }),
+        nowMs: NOW_MS,
+      });
+      await supervisor.close();
+      expect(await supervisor.status(f.first.launchId)).toEqual(completed);
+      expect(await supervisor.cancel(f.first)).toEqual(completed);
+      expect(await supervisor.status("absent-turn")).toBeUndefined();
+      await supervisor.close();
+      expect(await supervisor.status(f.first.launchId)).toEqual(completed);
+      await f.journal.drain();
+      expect(await f.turns.get(f.first.launchId)).toEqual(completed);
+      await expect(f.finish()).rejects.toThrow("admission is closed");
+    } finally {
+      await supervisor.close();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("keeps completed turn receipts independent of the physical slot and later turns across reopen", async () => {
+    expect(isMainThread).toBe(true);
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("node-worker-turn-store-") };
+    const parentSql = observeHostDataSql(env);
+    try {
+      const f = await fixture({ pid: 17, startTime: 23 }, env);
+      expect(
+        await f.launches.cleanupBinding({
+          launchId: f.first.launchId,
+          planHash: f.first.planHash,
+          supervisor: f.supervisor,
+        }),
+      ).toMatchObject({ launchId: f.first.launchId, supervisor: f.supervisor });
+      expect(
+        await f.turns.claim({
+          claim: f.first,
+          ownerLaunchId: f.first.launchId,
+          supervisor: f.supervisor,
+          nowMs: NOW_MS,
+        }),
+      ).toMatchObject({ action: "start", receipt: { state: "pending", worker: null } });
+      await f.start();
+      expect(await f.turns.get(f.first.launchId)).toMatchObject({
+        state: "running",
+        worker: f.supervisor,
+      });
+      const completed = await f.finish();
+
+      expect((await f.launches.get(f.first.launchId))?.state).toBe("running");
+      expect(await f.launches.nonterminalCount()).toBe(1);
+      expect(await f.turns.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS })).toMatchObject({
+        action: "start",
+        receipt: { launchId: f.next.launchId, ownerLaunchId: f.first.launchId, state: "running" },
+      });
+      expect(await f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS })).toEqual({
+        action: "replay",
+        receipt: completed,
+      });
+      expect(
+        await f.turns.finish({
+          ...f.owner,
+          expected: f.first,
+          state: "failed",
+          errorText: "late failure",
+        }),
+      ).toEqual(completed);
+      expect((await f.turns.get(f.next.launchId))?.state).toBe("running");
+      expect(
+        await f.launches.claim({ ...f.next, launchId: "another-worker" }, f.supervisor, 1, NOW_MS),
+      ).toMatchObject({
+        action: "at-capacity",
+      });
+      const terminal = await f.launches.finish({
+        ...f.first,
+        supervisor: f.supervisor,
+        worker: f.supervisor,
+        state: "completed",
+        resultJson: "{}",
+        nowMs: NOW_MS + 1,
+      });
+      expect(terminal.state).toBe("completed");
+      expect(await f.turns.get(f.first.launchId)).toEqual(completed);
+      expect(await f.turns.get(f.next.launchId)).toMatchObject({ state: "interrupted" });
+      expect(parentSql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      await f.journal.drain();
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+
+      const reopenedJournal = new NodeWorkerJournalWorker({ env: f.env });
+      expect(await new NodeWorkerLaunchStore(reopenedJournal).get(f.first.launchId)).toEqual(
+        terminal,
+      );
+      expect(await new NodeWorkerTurnStore(reopenedJournal).get(f.first.launchId)).toEqual(
+        completed,
+      );
+      expect(await new NodeWorkerTurnStore(reopenedJournal).get(f.next.launchId)).toMatchObject({
+        state: "interrupted",
+      });
+      expect(parentSql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    } finally {
+      parentSql.restore();
+    }
   });
 
   it.each([
@@ -121,71 +269,73 @@ describe("node worker turn journal", () => {
     ["placement generation", { placementGeneration: 5 }],
   ] satisfies Array<[string, Partial<NodeWorkerLaunchClaim>]>)(
     "rejects a turn bound to another %s",
-    (_label, patch) => {
-      const f = fixture();
-      f.start();
-      expect(() => f.turns.claim({ claim: { ...f.next, ...patch }, ...f.owner })).toThrow(
+    async (_label, patch) => {
+      const f = await fixture();
+      await f.start();
+      await expect(f.turns.claim({ claim: { ...f.next, ...patch }, ...f.owner })).rejects.toThrow(
         "live physical owner",
       );
-      expect(f.turns.get(f.next.launchId)).toBeUndefined();
+      expect(await f.turns.get(f.next.launchId)).toBeUndefined();
     },
   );
 
-  it("requires the exact supervisor and worker even when the placement matches", () => {
-    const f = fixture();
-    f.start();
+  it("requires the exact supervisor and worker even when the placement matches", async () => {
+    const f = await fixture();
+    await f.start();
     for (const field of ["supervisor", "worker"] as const) {
-      expect(() =>
+      await expect(
         f.turns.claim({
           claim: f.next,
           ...f.owner,
           [field]: { ...f.supervisor, startTime: f.supervisor.startTime + 1 },
         }),
-      ).toThrow("live physical owner");
+      ).rejects.toThrow("live physical owner");
     }
-    expect(() =>
+    await expect(
       f.turns.claim({ claim: f.next, ownerLaunchId: f.first.launchId, supervisor: f.supervisor }),
-    ).toThrow("live physical owner");
+    ).rejects.toThrow("live physical owner");
   });
 
-  it("rejects conflicting retries and serializes different turns across store handles", () => {
-    const f = fixture();
-    f.start();
-    f.turns.claim({ claim: f.first, ...f.owner });
-    const other = new NodeWorkerTurnStore({ env: f.env });
-    expect(other.claim({ claim: f.first, ...f.owner }).action).toBe("replay");
+  it("rejects conflicting retries and serializes different turns across store handles", async () => {
+    const f = await fixture();
+    await f.start();
+    await f.turns.claim({ claim: f.first, ...f.owner });
+    const other = new NodeWorkerTurnStore(new NodeWorkerJournalWorker({ env: f.env }));
+    expect((await other.claim({ claim: f.first, ...f.owner })).action).toBe("replay");
     for (const patch of [
       { planHash: f.next.planHash },
       { runId: f.next.runId },
       { sessionId: f.next.sessionId + "-other" },
     ]) {
-      expect(() => other.claim({ claim: { ...f.first, ...patch }, ...f.owner })).toThrow(
+      await expect(other.claim({ claim: { ...f.first, ...patch }, ...f.owner })).rejects.toThrow(
         "different plan or owner",
       );
     }
-    expect(() =>
+    await expect(
       other.claim({ claim: f.first, ...f.owner, ownerLaunchId: "different-worker" }),
-    ).toThrow("different plan or owner");
-    expect(() => other.claim({ claim: f.next, ...f.owner })).toThrow("UNIQUE constraint failed");
-    f.finish();
-    expect(other.claim({ claim: f.next, ...f.owner }).action).toBe("start");
+    ).rejects.toThrow("different plan or owner");
+    await expect(other.claim({ claim: f.next, ...f.owner })).rejects.toThrow(
+      "UNIQUE constraint failed",
+    );
+    await f.finish();
+    expect((await other.claim({ claim: f.next, ...f.owner })).action).toBe("start");
   });
 
-  it("rejects stale result writers and immutable identity mismatches", () => {
-    const f = fixture();
-    f.start();
-    f.turns.claim({ claim: f.first, ...f.owner });
+  it("rejects stale result writers and immutable identity mismatches", async () => {
+    const f = await fixture();
+    await f.start();
+    await f.turns.claim({ claim: f.first, ...f.owner });
     expect(
-      f.turns.finish({
+      await f.turns.finish({
         ...f.owner,
         expected: { ...f.first, runId: "wrong-run" },
         state: "completed",
         resultJson: "{}",
       }),
     ).toBeUndefined();
-    expect(f.turns.getMatching({ ...f.first, ownerEpoch: 4 })).toBeUndefined();
+    expect(await f.turns.getMatching({ ...f.first, ownerEpoch: 4 })).toBeUndefined();
     expect(
-      f.turns.finish({
+      await f.turns.finish({
         ...f.owner,
         expected: f.first,
         worker: { ...f.supervisor, startTime: f.supervisor.startTime + 1 },
@@ -193,18 +343,18 @@ describe("node worker turn journal", () => {
         resultJson: "{}",
       }),
     ).toMatchObject({ state: "running" });
-    expect(f.turns.get(f.first.launchId)?.state).toBe("running");
+    expect((await f.turns.get(f.first.launchId))?.state).toBe("running");
   });
 
   it.each(["completed", "failed", "interrupted", "cancelled"] satisfies NodeWorkerTerminalState[])(
     "closes unfinished turns atomically when their physical owner becomes %s",
-    (state) => {
-      const f = fixture();
-      f.start();
-      f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS });
-      const completed = f.finish();
-      f.turns.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS + 2 });
-      f.launches.finish({
+    async (state) => {
+      const f = await fixture();
+      await f.start();
+      await f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS });
+      const completed = await f.finish();
+      await f.turns.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS + 2 });
+      await f.launches.finish({
         ...f.first,
         supervisor: f.supervisor,
         worker: f.supervisor,
@@ -223,14 +373,14 @@ describe("node worker turn journal", () => {
         state: state === "completed" ? "interrupted" : state,
         completed_at_ms: NOW_MS + 2,
       });
-      expect(f.turns.get(f.first.launchId)).toEqual(completed);
-      expect(f.launches.nonterminalCount()).toBe(0);
+      expect(await f.turns.get(f.first.launchId)).toEqual(completed);
+      expect(await f.launches.nonterminalCount()).toBe(0);
     },
   );
 
-  it("keeps bare physical cleanup inert and cancels a pending first turn once admitted", () => {
-    const untracked = fixture();
-    untracked.launches.finishCancelled({
+  it("keeps bare physical cleanup inert and cancels a pending first turn once admitted", async () => {
+    const untracked = await fixture();
+    await untracked.launches.finishCancelled({
       expected: untracked.first,
       supervisor: untracked.supervisor,
       worker: null,
@@ -240,20 +390,24 @@ describe("node worker turn journal", () => {
         .db.prepare("SELECT name FROM sqlite_schema WHERE name = 'node_worker_turns'")
         .get(),
     ).toBeUndefined();
-    const f = fixture();
-    f.turns.claim({ claim: f.first, ownerLaunchId: f.first.launchId, supervisor: f.supervisor });
-    f.launches.finishCancelled({ expected: f.first, supervisor: f.supervisor, worker: null });
-    expect(f.turns.get(f.first.launchId)).toMatchObject({
+    const f = await fixture();
+    await f.turns.claim({
+      claim: f.first,
+      ownerLaunchId: f.first.launchId,
+      supervisor: f.supervisor,
+    });
+    await f.launches.finishCancelled({ expected: f.first, supervisor: f.supervisor, worker: null });
+    expect(await f.turns.get(f.first.launchId)).toMatchObject({
       state: "cancelled",
       errorText: "node worker launch cancelled",
     });
   });
 
-  it("prunes bounded old turn receipts without releasing the warm owner or losing the current replay", () => {
-    const f = fixture();
-    f.start();
-    f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS });
-    f.finish();
+  it("prunes bounded old turn receipts without releasing the warm owner or losing the current replay", async () => {
+    const f = await fixture();
+    await f.start();
+    await f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS });
+    await f.finish();
     const database = openOpenClawStateDatabase({ env: f.env }).db;
     const insert = database.prepare(`
       INSERT INTO node_worker_turns (turn_id, owner_launch_id, plan_hash, run_id, state,
@@ -263,38 +417,39 @@ describe("node worker turn journal", () => {
     for (let index = 0; index < 258; index += 1) {
       insert.run(`old-${index}`, f.first.launchId, f.first.planHash);
     }
-    expect(f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS + DAY_MS + 1 }).action).toBe(
-      "replay",
-    );
+    expect(
+      (await f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS + DAY_MS + 1 })).action,
+    ).toBe("replay");
     expect(database.prepare("SELECT count(*) AS count FROM node_worker_turns").get()).toEqual({
       count: 3,
     });
-    expect(f.turns.get(f.first.launchId)?.state).toBe("completed");
-    f.turns.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS + DAY_MS + 1 });
+    expect((await f.turns.get(f.first.launchId))?.state).toBe("completed");
+    await f.turns.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS + DAY_MS + 1 });
     expect(database.prepare("SELECT turn_id FROM node_worker_turns").all()).toEqual([
       { turn_id: f.next.launchId },
     ]);
-    expect(f.launches.get(f.first.launchId)?.state).toBe("running");
-    expect(f.launches.nonterminalCount()).toBe(1);
-    f.finish(f.next);
-    expect(() => f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS + DAY_MS + 1 })).toThrow(
-      "live physical owner",
-    );
+    expect((await f.launches.get(f.first.launchId))?.state).toBe("running");
+    expect(await f.launches.nonterminalCount()).toBe(1);
+    await f.finish(f.next);
+    await expect(
+      f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS + DAY_MS + 1 }),
+    ).rejects.toThrow("live physical owner");
   });
 
-  it("lets the predecessor preserve live capacity, finish and prune the owner, then reopens the candidate", () => {
-    const f = fixture();
+  it("lets the predecessor preserve live capacity, finish and prune the owner, then reopens the candidate", async () => {
+    const f = await fixture();
     const container = {
       engine: "docker",
       containerId: "c".repeat(64),
       engineTarget: "d".repeat(64),
     } as const;
-    f.start(container);
-    f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS });
-    const completed = f.finish();
-    f.turns.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS });
+    await f.start(container);
+    await f.turns.claim({ claim: f.first, ...f.owner, nowMs: NOW_MS });
+    const completed = await f.finish();
+    await f.turns.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS });
     const opened = openOpenClawStateDatabase({ env: f.env });
     const initialVersion = opened.db.prepare("PRAGMA user_version").get();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
@@ -344,12 +499,13 @@ describe("node worker turn journal", () => {
       predecessor.close();
     }
 
-    const candidate = new NodeWorkerTurnStore({ env: f.env });
-    expect(candidate.get(f.first.launchId)).toEqual(completed);
-    expect(candidate.get(f.next.launchId)).toMatchObject({
+    const candidate = new NodeWorkerTurnStore(new NodeWorkerJournalWorker({ env: f.env }));
+    expect(await candidate.get(f.first.launchId)).toEqual(completed);
+    expect(await candidate.get(f.next.launchId)).toMatchObject({
       state: "interrupted",
       errorText: "predecessor cleanup",
     });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const pruningPredecessor = new DatabaseSync(opened.path);
@@ -369,6 +525,10 @@ describe("node worker turn journal", () => {
     } finally {
       pruningPredecessor.close();
     }
-    expect(new NodeWorkerTurnStore({ env: f.env }).get(f.first.launchId)).toBeUndefined();
+    expect(
+      await new NodeWorkerTurnStore(new NodeWorkerJournalWorker({ env: f.env })).get(
+        f.first.launchId,
+      ),
+    ).toBeUndefined();
   });
 });

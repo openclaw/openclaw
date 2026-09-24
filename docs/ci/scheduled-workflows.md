@@ -58,6 +58,32 @@ cleanup failure, and cancellation stop before fallback, retry, replay, or succes
 Full Release Validation continues to disable the publisher entirely and retains
 performance evidence only as workflow artifacts.
 
+### Gateway concurrency benchmark
+
+The manual `gateway-concurrency` mode measures a busy isolated Gateway and retains
+its results as Actions artifacts:
+
+```bash
+gh workflow run openclaw-performance.yml --ref main \
+  -f mode=gateway-concurrency -f live_openai_candidate=true
+```
+
+One job builds the selected source once, runs the mock provider, then optionally
+runs OpenAI with a real key. Each run seeds 1,000 sessions across 32 agents and
+completes 96 turns alongside session updates, history reads, subscriptions, and
+64 probe rounds. Dreaming is disabled; normal indexing, recaps, and the database
+idle retention policy remain unchanged. The live run denies tools and caps model
+output at 128 tokens. Results include load-phase main-thread and Worker CPU
+profiles. The two providers are different workloads, not a before/after speed
+comparison.
+
+Live execution requires the default-branch workflow and the tested SHA to equal
+the workflow SHA. A requested live run fails if that condition or
+`OPENAI_API_KEY` is missing. Omit `live_openai_candidate` for mock-only evidence.
+This mode runs no Kova lanes, source-probe jobs, or report publication, and is not
+selected by the daily schedule. See [Gateway concurrency](/reference/test/performance#benchmarks)
+for local invocation and result interpretation.
+
 ### Vitest paired benchmark
 
 The manual-only `vitest-pair` mode compares two exact commits with the workflow

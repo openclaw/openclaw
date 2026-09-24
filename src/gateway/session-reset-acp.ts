@@ -6,10 +6,15 @@ import { isAcpOwnerRepairRequired } from "../acp/control-plane/manager.runtime-o
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { resolveAcpSessionTarget } from "../acp/control-plane/manager.utils.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
-import { readAcpSessionMeta, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import {
+  listAcpSessionEntries,
+  readAcpSessionMeta,
+  upsertAcpSessionMeta,
+} from "../acp/runtime/session-meta.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
+import { listTasksForRelatedSessionKey } from "../tasks/task-registry-query.js";
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
 async function runAcpCleanupStep(params: {
   op: () => Promise<void>;
@@ -184,6 +189,95 @@ export async function closeAcpRuntimeForSession(params: {
   } finally {
     ownership.release();
   }
+}
+export async function closeChildAcpRuntimesForParent(params: {
+  cfg: OpenClawConfig;
+  parentKey: string;
+  parentAgentId?: string;
+  reason: "session-reset" | "session-delete";
+  assertCurrent?: () => void;
+  shouldCleanup?: () => boolean;
+}): Promise<void> {
+  // ACP children may belong to another agent. Keep each canonical owner while
+  // enumerating metadata; combining stores by bare key would collapse owners.
+  let children: Array<{ sessionKey: string; agentId?: string }>;
+  try {
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      return;
+    }
+    params.assertCurrent?.();
+    children = (await listAcpSessionEntries({ cfg: params.cfg })).filter(
+      ({ entry, sessionKey, agentId }) => {
+        if (entry?.spawnedBy !== params.parentKey && entry?.parentSessionKey !== params.parentKey) {
+          return false;
+        }
+        const requesterOwners = new Set(
+          listTasksForRelatedSessionKey(sessionKey)
+            .filter(
+              (task) =>
+                task.runtime === "acp" &&
+                task.childSessionKey === sessionKey &&
+                task.agentId === agentId &&
+                (task.requesterSessionKey === params.parentKey ||
+                  task.ownerKey === params.parentKey),
+            )
+            .flatMap((task) => (task.requesterAgentId ? [task.requesterAgentId] : [])),
+        );
+        try {
+          if (requesterOwners.size > 1) {
+            throw new Error("ACP parent ownership is ambiguous");
+          }
+          const parent = resolveAcpSessionTarget({
+            cfg: params.cfg,
+            sessionKey: params.parentKey,
+            agentId: requesterOwners.values().next().value,
+          });
+          return parent.agentId === params.parentAgentId;
+        } catch (error) {
+          logVerbose(
+            `sessions.${params.reason}: retained ACP child ${sessionKey} because parent ownership could not be proven: ${String(error)}`,
+          );
+          return false;
+        }
+      },
+    );
+  } catch (error) {
+    logVerbose(
+      `sessions.${params.reason}: failed to enumerate sessions for child ACP cleanup: ${String(error)}`,
+    );
+    return;
+  }
+  // Close only direct ACP-backed children of the session being mutated; the
+  // parent itself is closed separately by the caller. Without this, child ACP
+  // sessions spawned via sessions_spawn are orphaned on parent reset/delete.
+  // Close children concurrently so total latency is bounded by a single ACP
+  // cleanup timeout window rather than scaling with the number of stuck
+  // children; per-child failures are logged best-effort and never propagated,
+  // so a stuck child cannot block or fail the parent mutation.
+  if (params.shouldCleanup && !params.shouldCleanup()) {
+    return;
+  }
+  params.assertCurrent?.();
+  await Promise.allSettled(
+    children.map(({ sessionKey, agentId }) =>
+      closeAcpRuntimeForSession({
+        cfg: params.cfg,
+        sessionKey,
+        agentId,
+        reason: params.reason,
+        assertCurrent: params.assertCurrent,
+        shouldCleanup: params.shouldCleanup,
+      }).then((childError) => {
+        if (childError) {
+          logVerbose(`sessions.${params.reason}: child ACP cleanup incomplete for ${sessionKey}`);
+        }
+      }),
+    ),
+  );
+  if (params.shouldCleanup && !params.shouldCleanup()) {
+    return;
+  }
+  params.assertCurrent?.();
 }
 
 export function buildPendingAcpMeta(base: SessionAcpMeta, now: number): SessionAcpMeta {

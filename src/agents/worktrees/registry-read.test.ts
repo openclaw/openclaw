@@ -7,7 +7,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { getRegistryWorktree, insertRegistryWorktree } from "./registry.js";
+import { readLiveRegistryWorktreeIds } from "./registry-read.js";
+import { getRegistryWorktree, insertRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -75,6 +76,7 @@ describe("managed worktree registry worker reads", () => {
     }
 
     expect(await service.listRegistryRecords()).toEqual([]);
+    expect(await readLiveRegistryWorktreeIds(env)).toEqual([]);
     expect((await fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).isFile()).toBe(true);
     expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
 
@@ -120,6 +122,19 @@ describe("managed worktree registry worker reads", () => {
     env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
     expect(await pending).toEqual([removed, newer, older]);
     await closeOpenClawStateDatabaseAsync();
+    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+
+    env.OPENCLAW_STATE_DIR = stateDir;
+    const liveIds = readLiveRegistryWorktreeIds(env);
+    env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
+    expect((await liveIds).toSorted()).toEqual([older.id, newer.id]);
+    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+
+    env.OPENCLAW_STATE_DIR = stateDir;
+    updateRegistryWorktree(env, older.id, { removedAt: 50 });
+    updateRegistryWorktree(env, removed.id, { removedAt: undefined });
+    clearCounters();
+    expect((await readLiveRegistryWorktreeIds(env)).toSorted()).toEqual([removed.id, newer.id]);
     expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
   });
 });

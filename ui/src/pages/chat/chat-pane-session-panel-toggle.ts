@@ -1,6 +1,14 @@
 import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import { resolveLinkReaderTarget } from "../../components/link-reader-target.ts";
 import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  LINK_READER_PANEL_TOGGLE_EVENT,
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  PORTAL_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../../components/panel-toggle-contract.ts";
+import {
   clearSessionPanelToggle,
   panelToggleSessionKey,
   takeSessionPanelToggle,
@@ -42,9 +50,39 @@ interface SessionPanelToggleControllerOptions {
   updateSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
 }
 
+const panelToggleEvents = [
+  [TERMINAL_PANEL_TOGGLE_EVENT, "terminal", "openclaw-terminal-panel"],
+  [BROWSER_PANEL_TOGGLE_EVENT, "browser", "openclaw-browser-panel"],
+  [LINK_READER_PANEL_TOGGLE_EVENT, "link-reader", "openclaw-link-reader-panel"],
+  [DESKTOP_PANEL_TOGGLE_EVENT, "desktop", "openclaw-desktop-panel"],
+  [PORTAL_PANEL_TOGGLE_EVENT, "portal", "openclaw-portals-page"],
+] as const;
+
 /** Owns shell-to-pane panel intent handoff for the active chat presentation. */
 export class ChatPaneSessionPanelToggleController {
   constructor(private readonly options: SessionPanelToggleControllerOptions) {}
+
+  subscribe(): () => void {
+    const cleanups = panelToggleEvents.map(([eventName, slot, tagName]) => {
+      const listener = (event: Event) => {
+        this.handle(slot, tagName, event);
+      };
+      window.addEventListener(eventName, listener);
+      return () => window.removeEventListener(eventName, listener);
+    });
+    const handleTerminalDockBottom = () => {
+      const owner = this.options.current();
+      if (owner) {
+        owner.state.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, "terminal"));
+      }
+    };
+    window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, handleTerminalDockBottom);
+    return () => {
+      cleanups.forEach((cleanup) => cleanup());
+      window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, handleTerminalDockBottom);
+      this.options.pending.clear();
+    };
+  }
 
   handle(slot: SessionPanelToggleSlot, tagName: PanelTagName, event: Event): boolean {
     const owner = this.options.current();
@@ -186,13 +224,7 @@ export class ChatPaneSessionPanelToggleController {
     if (!owner) {
       return;
     }
-    for (const [slot, tagName] of [
-      ["terminal", "openclaw-terminal-panel"],
-      ["browser", "openclaw-browser-panel"],
-      ["link-reader", "openclaw-link-reader-panel"],
-      ["desktop", "openclaw-desktop-panel"],
-      ["portal", "openclaw-portals-page"],
-    ] as const) {
+    for (const [, slot, tagName] of panelToggleEvents) {
       let event: Event | null;
       while ((event = takeSessionPanelToggle(slot, owner.state.sessionKey))) {
         this.handle(slot, tagName, event);

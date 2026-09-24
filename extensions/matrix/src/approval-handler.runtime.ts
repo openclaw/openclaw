@@ -34,7 +34,7 @@ import {
   isMatrixAnyApprovalClientEnabled,
   shouldHandleMatrixApprovalRequest,
 } from "./exec-approvals.js";
-import { resolveMatrixAccount } from "./matrix/accounts.js";
+import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import { deleteMatrixMessage, editMatrixMessage } from "./matrix/actions/messages.js";
 import { repairMatrixDirectRooms } from "./matrix/direct-management.js";
 import type { MatrixClient } from "./matrix/sdk.js";
@@ -221,7 +221,7 @@ async function prepareTarget(
   }
   const threadId = normalizeThreadId(params.rawTarget.threadId);
   if (target.kind === "user") {
-    const account = resolveMatrixAccount({
+    const accountConfig = resolveMatrixAccountConfig({
       cfg: params.cfg,
       accountId: resolved.accountId,
     });
@@ -231,7 +231,7 @@ async function prepareTarget(
         await repairDirectRooms({
           client: resolved.context.client,
           remoteUserId: target.id,
-          encrypted: account.config.encryption === true,
+          encrypted: accountConfig.encryption === true,
         }),
     );
     if (!repaired.activeRoomId) {

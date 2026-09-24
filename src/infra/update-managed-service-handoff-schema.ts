@@ -116,10 +116,15 @@ export function parseManagedHandoffLeasePayload(value: string) {
 }
 
 /** Distinguish an exactly decoded retired record from unreadable prospective data. */
-export function isRetiredManagedHandoffLeasePayload(value: string): boolean {
+export function parseRetiredManagedHandoffLeasePayload(value: string) {
   try {
-    return retiredPayloadSchema.safeParse(JSON.parse(value)).success;
+    const parsed = retiredPayloadSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export function isRetiredManagedHandoffLeasePayload(value: string): boolean {
+  return parseRetiredManagedHandoffLeasePayload(value) !== null;
 }

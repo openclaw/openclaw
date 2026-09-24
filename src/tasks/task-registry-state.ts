@@ -13,7 +13,6 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { restoreTaskExecutionSnapshot } from "./task-execution-owner.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
-import { reconcileTaskFlowWorkerReceipts } from "./task-flow-runtime-internal.js";
 import {
   clearTaskFlowSyncRetries,
   receiveTaskRegistryRestoreResult,
@@ -26,41 +25,37 @@ import {
   startTaskRegistryListener,
   withPendingTaskRegistryEvents,
 } from "./task-registry-listener-state.js";
-import { listTasksFromIndex, normalizeTaskTimestamps } from "./task-registry-records.js";
+import { createTaskRegistryProjectionPreparation } from "./task-registry-projection-prepare.js";
+import {
+  isEquivalentTaskRecord,
+  listTasksFromIndex,
+  normalizeTaskTimestamps,
+} from "./task-registry-records.js";
 import { createAsyncRegistryRestore, createSyncRegistryReader } from "./task-registry-restore.js";
 import type { TaskRegistryRestoreResult } from "./task-registry-restore.worker.js";
 import {
   createPendingTaskRegistryMutation,
-  createTaskRegistryPublicationRecovery,
   claimTaskRegistryPublication,
   publishTaskRegistryWorkerMutation,
   reconcileTaskRegistryWorkerSnapshot,
   type TaskRegistryWorkerMutationContext,
 } from "./task-registry-worker-publication.js";
 import {
-  addRunIdIndex,
+  updateTaskIndexes,
   addTaskIndexes,
   removeTaskIndexes,
-  deleteRunIdIndex,
-  addOwnerKeyIndex,
-  deleteOwnerKeyIndex,
-  addParentFlowIdIndex,
-  deleteParentFlowIdIndex,
-  addRelatedSessionKeyIndex,
-  deleteRelatedSessionKeyIndex,
   getTaskRegistryProcessState,
-  taskIdsInScope,
-  matchesScope,
+  selectTaskRegistryScopes,
   captureTaskRegistryPublicationRollback,
   recordTaskRegistryPublication,
   recordTaskRegistryProjectionWrite,
   selectLiveTaskFlowForSync,
   clearTaskProgressBatches,
+  clearTaskRegistryIndexes,
 } from "./task-registry.process-state.js";
 import {
   deliverTaskRegistryObserverEvent,
   getTaskRegistryStore,
-  loadTaskRegistryMutationSnapshots,
   type TaskRegistryStore,
 } from "./task-registry.store.js";
 import type {
@@ -87,8 +82,11 @@ export function readTaskRegistryRevision(): number {
   return taskRegistryRevisionState.value;
 }
 
-export function bumpTaskRegistryRevision(invalidateWorkerReads = true): void {
-  taskRegistryRevisionState.value += 1;
+export function bumpTaskRegistryRevision(invalidateWorkerReads = true, changed = true): void {
+  // Cold restore uses the public revision to reject snapshots taken before a write.
+  if (changed || taskRegistryRestoreState.status !== "ready") {
+    taskRegistryRevisionState.value += 1;
+  }
   if (invalidateWorkerReads) {
     taskRegistryProcessState.projection.epoch += 1;
   }
@@ -96,7 +94,6 @@ export function bumpTaskRegistryRevision(invalidateWorkerReads = true): void {
 
 export const tasks = taskRegistryProcessState.tasks;
 export const taskDeliveryStates = taskRegistryProcessState.taskDeliveryStates;
-const taskIdsByRunId = taskRegistryProcessState.taskIdsByRunId;
 export const taskIdsByOwnerKey = taskRegistryProcessState.taskIdsByOwnerKey;
 export const taskIdsByParentFlowId = taskRegistryProcessState.taskIdsByParentFlowId;
 export const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSessionKey;
@@ -130,10 +127,7 @@ export function clearTaskRegistryMemory(): void {
   tasks.clear();
   bumpTaskRegistryRevision();
   taskDeliveryStates.clear();
-  taskIdsByRunId.clear();
-  taskIdsByOwnerKey.clear();
-  taskIdsByParentFlowId.clear();
-  taskIdsByRelatedSessionKey.clear();
+  clearTaskRegistryIndexes();
   recordTaskRegistryProjectionWrite("snapshot");
 }
 
@@ -146,10 +140,7 @@ function installRestoredTaskRegistrySnapshot(
   // Replace rows in snapshot order without disturbing live execution owners.
   tasks.clear();
   taskDeliveryStates.clear();
-  taskIdsByRunId.clear();
-  taskIdsByOwnerKey.clear();
-  taskIdsByParentFlowId.clear();
-  taskIdsByRelatedSessionKey.clear();
+  clearTaskRegistryIndexes();
   for (const [id, task] of snapshot.tasks) {
     tasks.set(id, task);
     addTaskIndexes(task);
@@ -215,7 +206,7 @@ export function syncFlowFromTaskAfterTaskMutationAsync(
   task: TaskRecord,
   operation: string,
   flowStore: ReturnType<typeof getTaskFlowRegistryStore>,
-): Promise<void> {
+): Promise<boolean> {
   return syncTaskFlowWithLiveRetryAsync(
     context,
     store,
@@ -272,6 +263,22 @@ function restoreTaskRegistryOnce() {
     }
     installRestoredTaskRegistrySnapshot(restored);
     taskRegistryRestoreState = { status: "ready", admission: reader.admission };
+    const installed = taskRegistryRestoreState;
+    const database = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath);
+    if (database?.db.isTransaction) {
+      stageSqliteTransactionState(database.db, {
+        stage() {},
+        commit() {},
+        rollback() {
+          if (taskRegistryRestoreState === installed) {
+            // An enclosing rollback can undo orphan settlement and snapshot inputs.
+            taskRegistryRestoreState = { status: "uninitialized", admission: reader.admission };
+            projection.dirty = true;
+            bumpTaskRegistryRevision();
+          }
+        },
+      });
+    }
     markTaskRegistryProjectionRestored();
     for (const task of settledTasks) {
       const flowId = task.parentFlowId?.trim();
@@ -324,15 +331,12 @@ export const ensureTaskRegistryReadyAsync = createAsyncRegistryRestore<
   getStore: getTaskRegistryStore,
   onReady: () => startTaskRegistryListener(),
   received: (result, context, store) => receiveTaskRegistryRestoreResult(result, context, store),
-  async reconcile(result, context, store) {
+  async reconcile(_result, context, store, reconcileFlows) {
     if (getTaskRegistryStore() !== store || !isCurrentTaskRegistryDatabase(context.admission)) {
       return;
     }
     try {
-      await reconcileTaskFlowWorkerReceipts(
-        context,
-        result.flowSyncs.flatMap((outcome) => (outcome.flowId ? [outcome.flowId] : [])),
-      );
+      await reconcileFlows();
     } catch (error) {
       if (taskRegistryRestoreState.status !== "failed") {
         throw error;
@@ -391,35 +395,12 @@ export function assertTaskRegistryOwnerCurrent(
   }
 }
 
-export async function prepareTaskRegistryProjectionAsync(
-  context: OpenClawStateWorkerContext,
-  store: TaskRegistryStore,
-  maxAttempts = Number.POSITIVE_INFINITY,
-): Promise<boolean> {
-  assertTaskRegistryOwnerCurrent(context, store);
-  await ensureTaskRegistryReadyAsync(context);
-  assertTaskRegistryOwnerCurrent(context, store);
-  let attempts = 0;
-  while (projection.mutationDepth === 0 && (projection.dirty || dirtyScopes.size > 0)) {
-    if (attempts++ >= maxAttempts) {
-      return false;
-    }
-    const epoch = projection.epoch;
-    const scopes = projection.dirty ? [undefined] : [...dirtyScopes];
-    const snapshots = await loadTaskRegistryMutationSnapshots(context, store, scopes);
-    assertTaskRegistryOwnerCurrent(context, store);
-    if (epoch !== projection.epoch) {
-      continue;
-    }
-    for (const { snapshot, scope } of snapshots) {
-      installSnapshot(snapshot, scope);
-    }
-    // In-flight mutations retain their publication obligations after this read.
-    markTaskRegistryProjectionRestored();
-    return true;
-  }
-  return true;
-}
+export const prepareTaskRegistryProjectionAsync = createTaskRegistryProjectionPreparation({
+  ensureReady: ensureTaskRegistryReadyAsync,
+  assertCurrent: assertTaskRegistryOwnerCurrent,
+  installSnapshot,
+  markRestored: markTaskRegistryProjectionRestored,
+});
 
 function failTaskRegistryRestore(
   error: unknown,
@@ -462,11 +443,18 @@ export function resetTaskRegistryRestoreState(): void {
 }
 
 const projection = taskRegistryProcessState.projection;
-const pendingMutations = projection.pending;
-const dirtyScopes = projection.dirtyScopes;
+const { pending: pendingMutations, dirtyScopes } = projection;
 
 registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind !== "opened") {
+  if (event.kind === "opened") {
+    return;
+  }
+  const admission = taskRegistryRestoreState.admission;
+  // Physical aliases share an owner; its path also covers failed or replaced opens.
+  if (
+    admission &&
+    (event.path === admission.databasePath || event.identity?.key === admission.identity.key)
+  ) {
     invalidateTaskRegistryProjection();
   }
 });
@@ -486,28 +474,32 @@ function markTaskRegistryProjectionRestored(): void {
 
 function installSnapshot(
   snapshot: TaskRegistryStoreSnapshot,
-  scope?: TaskRegistryMutationScope,
+  scope?: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],
   invalidateWorkerReads = true,
   recordWrites: ReadonlyMap<string, TaskRecord> | "refresh" | false = "refresh",
 ): void {
-  for (const taskId of taskIdsInScope(scope)) {
+  const scopes = scope && ("taskId" in scope ? [scope] : scope);
+  const { matches, taskIds } = selectTaskRegistryScopes(scopes);
+  let changed = false;
+  for (const taskId of taskIds) {
     const current = tasks.get(taskId);
-    if (current && (!scope || matchesScope(current, scope)) && !snapshot.tasks.has(taskId)) {
+    if (current && matches(current) && !snapshot.tasks.has(taskId)) {
       if (recordWrites) {
         recordTaskRegistryProjectionWrite(recordWrites, taskId, true);
       }
       removeTaskIndexes(current);
-      tasks.delete(taskId);
+      changed = tasks.delete(taskId) || changed;
       taskDeliveryStates.delete(taskId);
     }
   }
   for (const [taskId, record] of snapshot.tasks) {
-    if (scope && !matchesScope(record, scope)) {
+    if (!matches(record)) {
       continue;
     }
     const current = tasks.get(taskId);
     const next = normalizeTaskTimestamps(record);
-    if (!isDeepStrictEqual(current, next)) {
+    if (!current || !isEquivalentTaskRecord(current, next)) {
+      changed = true;
       tasks.set(taskId, next);
       if (recordWrites) {
         recordTaskRegistryProjectionWrite(recordWrites, taskId);
@@ -515,32 +507,15 @@ function installSnapshot(
       if (!current) {
         addTaskIndexes(next);
       } else {
-        if (current.runId !== next.runId) {
-          deleteRunIdIndex(taskId, current.runId);
-          addRunIdIndex(taskId, next.runId);
-        }
-        if (current.ownerKey !== next.ownerKey) {
-          deleteOwnerKeyIndex(taskId, current);
-          addOwnerKeyIndex(taskId, next);
-        }
-        if (current.parentFlowId !== next.parentFlowId) {
-          deleteParentFlowIdIndex(taskId, current);
-          addParentFlowIdIndex(taskId, next);
-        }
-        if (
-          current.ownerKey !== next.ownerKey ||
-          current.requesterSessionKey !== next.requesterSessionKey ||
-          current.childSessionKey !== next.childSessionKey
-        ) {
-          deleteRelatedSessionKeyIndex(taskId, current);
-          addRelatedSessionKeyIndex(taskId, next);
-        }
+        updateTaskIndexes(current, next);
       }
     } else if (recordWrites && recordWrites !== "refresh" && recordWrites.has(taskId)) {
       recordTaskRegistryProjectionWrite(recordWrites, taskId);
     }
     const delivery = snapshot.deliveryStates.get(taskId);
-    if (recordWrites && !isDeepStrictEqual(taskDeliveryStates.get(taskId), delivery)) {
+    const deliveryChanged = !isDeepStrictEqual(taskDeliveryStates.get(taskId), delivery);
+    changed ||= deliveryChanged;
+    if (recordWrites && deliveryChanged) {
       recordTaskRegistryProjectionWrite("delivery", taskId);
     }
     if (delivery) {
@@ -552,17 +527,18 @@ function installSnapshot(
   if (!scope) {
     for (const taskId of taskDeliveryStates.keys()) {
       if (!snapshot.deliveryStates.has(taskId)) {
-        taskDeliveryStates.delete(taskId);
+        changed = taskDeliveryStates.delete(taskId) || changed;
       }
     }
     for (const [taskId, delivery] of snapshot.deliveryStates) {
+      changed ||= !isDeepStrictEqual(taskDeliveryStates.get(taskId), delivery);
       taskDeliveryStates.set(taskId, delivery);
     }
   }
   if (recordWrites && !scope) {
     recordTaskRegistryProjectionWrite(recordWrites);
   }
-  bumpTaskRegistryRevision(invalidateWorkerReads);
+  bumpTaskRegistryRevision(invalidateWorkerReads, changed);
 }
 
 function refreshUnderCustody(): void {
@@ -574,11 +550,18 @@ function refreshUnderCustody(): void {
     return;
   }
   const store = getTaskRegistryStore();
-  const snapshots = !refresh
-    ? []
-    : projection.dirty || !store.loadMutationSnapshot
-      ? [{ snapshot: store.loadSnapshot(), scope: undefined }]
-      : [...dirtyScopes].map((scope) => ({ snapshot: store.loadMutationSnapshot!(scope), scope }));
+  const scopes =
+    projection.dirty || !store.loadMutationSnapshot
+      ? undefined
+      : [
+          ...new Map(
+            [...dirtyScopes].map((scope) => [
+              JSON.stringify([scope.taskId, scope.runId, scope.childSessionKey]),
+              scope,
+            ]),
+          ).values(),
+        ];
+  const snapshot = refresh && (scopes ? store.loadMutationSnapshot!(scopes) : store.loadSnapshot());
   // Keep transaction-local writes reversible even when no projection refresh is needed.
   const previous = database?.db.isTransaction
     ? {
@@ -590,16 +573,9 @@ function refreshUnderCustody(): void {
   // Only commit supersedes held reads; rollback may restore a cache older than their snapshot.
   const publication = {
     stage() {
-      if (!refresh) {
-        return;
-      }
-      for (const { snapshot, scope } of snapshots) {
-        installSnapshot(snapshot, scope, true, false);
-      }
-      projection.dirty = false;
-      dirtyScopes.clear();
-      for (const pending of pendingMutations) {
-        dirtyScopes.add(pending.scope);
+      if (snapshot) {
+        installSnapshot(snapshot, scopes, true, false);
+        markTaskRegistryProjectionRestored();
       }
     },
     rollback() {
@@ -670,12 +646,12 @@ export async function runTaskRegistryWorkerMutation<T>(
   mutate: (beginRecovery: () => void) => Promise<T>,
   readCurrent: () => Promise<TaskRegistryStoreSnapshot>,
 ): Promise<T> {
-  const { scope, admission } = context;
+  const { scope, admission, readEventTarget } = context;
   const store = getTaskRegistryStore();
   admission.assertCurrent();
-  const readEventTarget = context.readEventTarget;
-  const pending = createPendingTaskRegistryMutation(
-    scope,
+  const { pending, recovery, settle } = createPendingTaskRegistryMutation(
+    context,
+    store,
     readEventTarget
       ? () => {
           admission.assertCurrent();
@@ -686,28 +662,28 @@ export async function runTaskRegistryWorkerMutation<T>(
         }
       : undefined,
   );
-  pending.readIdentity = context.readIdentity;
-  const recovery = context.recoverPublication
-    ? createTaskRegistryPublicationRecovery(pending, context.recoverPublication)
-    : undefined;
   pendingMutations.add(pending);
-  dirtyScopes.add(scope);
-  bumpTaskRegistryRevision();
+  const assertOwner = () => {
+    admission.assertCurrent();
+    if (!isCurrentTaskRegistryDatabase(admission) || getTaskRegistryStore() !== store) {
+      projection.dirty = true;
+      throw new Error("Task registry publication owner is no longer current.");
+    }
+    recovery?.assertCurrent();
+  };
   try {
+    if (context.prepare) {
+      await context.prepare();
+      assertOwner();
+    }
+    dirtyScopes.add(scope);
+    bumpTaskRegistryRevision(true, pending.readIdentity !== "preserved");
     return await mutate(() => recovery?.begin());
   } finally {
     dirtyScopes.add(scope);
-    bumpTaskRegistryRevision();
+    bumpTaskRegistryRevision(true, pending.readIdentity !== "preserved");
     try {
       claimTaskRegistryPublication(pending, context.publicationRecords());
-      const assertOwner = () => {
-        admission.assertCurrent();
-        if (!isCurrentTaskRegistryDatabase(admission) || getTaskRegistryStore() !== store) {
-          projection.dirty = true;
-          throw new Error("Task registry publication owner is no longer current.");
-        }
-        recovery?.assertCurrent();
-      };
       const { conflicted } = await reconcileTaskRegistryWorkerSnapshot({
         pending,
         assertCurrent: assertOwner,
@@ -716,7 +692,6 @@ export async function runTaskRegistryWorkerMutation<T>(
         recoverPublication: recovery?.recover,
         taskRowsWritten: context.taskRowsWritten?.(),
       });
-      recovery?.bindExpected(pending.publication?.records.get(scope.taskId));
       assertOwner();
       await context.beforeObservers?.(assertOwner);
       assertOwner();
@@ -730,13 +705,21 @@ export async function runTaskRegistryWorkerMutation<T>(
         dirtyScopes.delete(scope);
       }
     } catch (error) {
-      context.onPublicationError?.(error);
-      taskRegistryLog.warn("Failed to reconcile managed child task after worker operation", {
-        flowId: scope.flowId,
-        error,
-      });
+      // Failed readback cannot establish unchanged page order, even for a superseded publisher.
+      bumpTaskRegistryRevision(false);
+      // A newer committed row owns publication now. Keep the dirty scope for
+      // canonical readback without rejecting readers of the settled mutation.
+      if (!recovery?.isSuperseded(error)) {
+        context.onPublicationError?.(error);
+        taskRegistryLog.warn("Failed to reconcile managed child task after worker operation", {
+          flowId: scope.flowId,
+          error,
+        });
+      }
     } finally {
       pendingMutations.delete(pending);
+      // Readers join settlement, then revalidate canonical state even when the write failed.
+      settle?.();
     }
   }
 }

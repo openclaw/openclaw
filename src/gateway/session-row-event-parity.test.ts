@@ -161,6 +161,7 @@ it("delivers nested event rows identical to the full list for each viewer and cl
           }),
           sessionKey: key,
           agentId: "main",
+          message: { role: "assistant", content: [{ type: "text", text: 'Shared "🦞"\nbody' }] },
           sessionId: "parent-session",
           reason: "run-capacity",
           status: "queued",
@@ -177,6 +178,78 @@ it("delivers nested event rows identical to the full list for each viewer and cl
             label: null,
           });
           expect(frame.payload.session).toEqual(expected[index]);
+          expect(frame.payload.message).toEqual(source.message);
+        }
+        if (event === "session.message") {
+          connection.broadcast(event, {
+            ...source,
+            toJSON(property: string) {
+              return { transformed: property, message: source.message };
+            },
+          });
+          for (const peer of peers) {
+            expect(JSON.parse(peer.send.mock.lastCall![0]).payload).toEqual({
+              transformed: "payload",
+              message: source.message,
+            });
+          }
+          for (const publisher of ["getter", "proxy", "mutation"]) {
+            let message = structuredClone(source.message);
+            const sourceWithMessage = { ...source, message };
+            const payload =
+              publisher === "getter"
+                ? {
+                    ...sourceWithMessage,
+                    get message() {
+                      return message;
+                    },
+                  }
+                : publisher === "proxy"
+                  ? new Proxy(sourceWithMessage, {
+                      get(target, property, receiver) {
+                        return property === "message"
+                          ? message
+                          : Reflect.get(target, property, receiver);
+                      },
+                    })
+                  : sourceWithMessage;
+            peers[0]!.send.mockImplementationOnce(() => {
+              if (publisher === "mutation") {
+                message.content[0]!.text = "Mutated body";
+              } else {
+                message = {
+                  role: "assistant",
+                  content: [{ type: "text", text: `Replacement from ${publisher}` }],
+                };
+              }
+            });
+            connection.broadcast(event, payload);
+            expect
+              .soft(JSON.parse(peers[0]!.send.mock.lastCall![0]).payload.message)
+              .toEqual(source.message);
+            expect
+              .soft(JSON.parse(peers[1]!.send.mock.lastCall![0]).payload.message)
+              .toEqual(message);
+          }
+          const stateVersion = { presence: 1 };
+          connection.broadcast(
+            event,
+            {
+              sessionKey: key,
+              agentId: "main",
+              sessionId: "parent-session",
+              get message() {
+                stateVersion.presence = 9;
+                return source.message;
+              },
+            },
+            { stateVersion },
+          );
+          for (const peer of peers) {
+            expect
+              .soft(JSON.parse(peer.send.mock.lastCall![0]).stateVersion)
+              .toEqual({ presence: 1 });
+          }
         }
       }
       expect(prepares).not.toHaveBeenCalled();

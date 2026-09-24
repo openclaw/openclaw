@@ -51,7 +51,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private readonly candidates = new Set<DiscordRealtimeSpeakerSession>();
 
   constructor(private readonly params: DiscordRealtimeSessionParams) {
-    this.player = new DiscordRealtimePlayer(params.entry.player);
+    this.player = new DiscordRealtimePlayer(params.entry.audio);
   }
 
   async connect(): Promise<void> {

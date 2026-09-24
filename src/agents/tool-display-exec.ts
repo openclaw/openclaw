@@ -667,6 +667,17 @@ export function resolveExecTitle(args: unknown): string | undefined {
   return sliceUtf16Safe(redactToolPayloadText(text), 0, 120) || undefined;
 }
 
+/** Native Codex cells retain their freeform source under input. */
+export function resolveExecCode(args: unknown): string | undefined {
+  const record = asRecord(args);
+  for (const value of [record?.code, record?.input]) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 export function resolveExecDetail(
   args: unknown,
   options?: { detailMode?: ToolDetailMode },
@@ -680,9 +691,10 @@ export function resolveExecDetail(
   if (title) {
     return title;
   }
-  if (typeof record.code === "string" && record.code.trim()) {
+  const code = resolveExecCode(record);
+  if (code) {
     return options?.detailMode === "raw"
-      ? compactRawCommand(record.code)
+      ? compactRawCommand(code)
       : record.language === "typescript"
         ? "run TypeScript"
         : "run JavaScript";

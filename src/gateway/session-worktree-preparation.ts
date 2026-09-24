@@ -616,7 +616,7 @@ export async function prepareSessionWorktreeCreation(params: {
     name,
     baseRef,
     checkoutCommit: baseCommit,
-    label: params.label ?? title ?? resolveExplicitSessionName(lifecycleTarget.entry) ?? source,
+    label: params.label ?? title ?? resolveExplicitSessionName(lifecycleTarget.entry),
     runSetupScript: params.runSetupScript,
     signal,
     commitGuard,

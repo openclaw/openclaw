@@ -516,12 +516,6 @@ export function pluginStateClear(params: {
   );
 }
 
-export function sweepExpiredPluginStateEntries(): number {
-  return writePluginState("sweep", "Failed to sweep expired plugin state entries.", ({ db }) =>
-    deleteExpiredPluginStateEntries(db, Date.now()),
-  );
-}
-
 export function getPluginStateCapacity(
   pluginId: string,
   env?: NodeJS.ProcessEnv,

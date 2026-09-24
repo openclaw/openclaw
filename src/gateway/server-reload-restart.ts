@@ -3,12 +3,12 @@ import { isRestartEnabled } from "../config/commands.flags.js";
 import { getConfigValueAtPath } from "../config/config-paths.js";
 import { setRuntimeConfigAppliedHash } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../infra/restart-intent.js";
 import {
   deferGatewayRestartUntilIdle,
   type RestartDeferralHandle,
-  resolveGatewayRestartDeferralTimeoutMs,
-  setGatewaySigusr1RestartPolicy,
+  setGatewayRestartPolicy,
 } from "../infra/restart.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createAppliedConfigHashPublisher } from "./applied-config-hash-publisher.js";
@@ -57,15 +57,13 @@ type GatewayRestartOperation =
     };
 
 type AcceptedRestartTargetState =
-  | { kind: "empty"; generation: number }
+  | { kind: "empty" }
   | {
       kind: "candidate-pending";
-      generation: number;
       previousTarget: AcceptedRestartTarget | undefined;
     }
   | {
       kind: "accepted";
-      generation: number;
       target: AcceptedRestartTarget;
     };
 
@@ -85,7 +83,6 @@ type GatewayRestartCoordinatorOptions = {
 };
 
 class GatewayRestartTransaction {
-  private restartPending = false;
   private retryStopped = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private restartDeferral: RestartDeferralHandle | null = null;
@@ -97,7 +94,7 @@ class GatewayRestartTransaction {
   // Post-commit recovery is satisfied only by an accepted restart emission.
   // Keep it separate from config-owned debt that later baselines may retire.
   private conservativeDebt: RestartRequestDetails | null = null;
-  private acceptedTargetState: AcceptedRestartTargetState = { kind: "empty", generation: 0 };
+  private acceptedTargetState: AcceptedRestartTargetState = { kind: "empty" };
 
   readonly appliedConfigHashPublisher = createAppliedConfigHashPublisher({
     hasPendingRestart: () =>
@@ -116,7 +113,6 @@ class GatewayRestartTransaction {
     this.acceptedTargetState.kind === "accepted" ? this.acceptedTargetState.target : null;
 
   recordAcceptedTarget(target: AcceptedRestartTarget): AcceptedRestartTargetOwnership {
-    const generation = this.acceptedTargetState.generation + 1;
     const acceptedTarget: AcceptedRestartTarget = {
       ...target,
       prepareRuntimeConfig: async () => {
@@ -130,7 +126,7 @@ class GatewayRestartTransaction {
         return prepared;
       },
     };
-    const acceptedState = { kind: "accepted", generation, target: acceptedTarget } as const;
+    const acceptedState = { kind: "accepted", target: acceptedTarget } as const;
     this.acceptedTargetState = acceptedState;
     return {
       reject: () => {
@@ -143,7 +139,6 @@ class GatewayRestartTransaction {
         }
         this.acceptedTargetState = {
           kind: "candidate-pending",
-          generation: generation + 1,
           previousTarget: undefined,
         };
       },
@@ -194,10 +189,6 @@ class GatewayRestartTransaction {
     return debt ? { retireRejectedRestart: false, debt } : { retireRejectedRestart: true };
   }
 
-  retireRejectedRequest(): boolean {
-    return this.acceptConfig().retireRejectedRestart;
-  }
-
   beginLifecycle() {
     // A newer restart candidate owns the disk config now. Cancel any older
     // emission before async preflight so it cannot restart into stale secrets.
@@ -233,7 +224,6 @@ class GatewayRestartTransaction {
           : undefined;
     this.acceptedTargetState = {
       kind: "candidate-pending",
-      generation: state.generation,
       previousTarget,
     };
     // Candidate acceptance owns debt rearm. Until then, invalid/failed config
@@ -326,7 +316,6 @@ class GatewayRestartTransaction {
 
   private supersedeRequest(): void {
     this.requestGeneration += 1;
-    this.restartPending = false;
     this.restartDeferral?.cancel();
     this.restartDeferral = null;
     if (this.retryTimer) {
@@ -347,7 +336,6 @@ class GatewayRestartTransaction {
     }
     // Retry the exact failed emission. Re-entering request planning would start
     // a fresh idle deferral and discard a timeout's force/deadline decision.
-    this.restartPending = true;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       if (!this.isCurrentRequest(retry.requestGeneration)) {
@@ -359,7 +347,6 @@ class GatewayRestartTransaction {
         if (!this.isCurrentRequest(retry.requestGeneration)) {
           return;
         }
-        this.restartPending = false;
         if (retry.prepareForEmit && !(await retry.prepareForEmit())) {
           this.scheduleEmissionRetry(retry);
           return;
@@ -419,7 +406,7 @@ class GatewayRestartTransaction {
           return false;
         }
         emissionPrepared = true;
-        setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(preparedConfig) });
+        setGatewayRestartPolicy({ allowExternal: isRestartEnabled(preparedConfig) });
         return this.isCurrentRequest(requestGeneration);
       } catch (err) {
         emissionPrepared = false;
@@ -431,14 +418,6 @@ class GatewayRestartTransaction {
     const active = this.options.getActiveCounts();
 
     if (active.totalActive > 0 || options?.prepareRuntimeConfig || params.assertRestartReady) {
-      // Avoid spinning up duplicate polling loops from repeated config changes.
-      if (this.restartPending) {
-        params.logReload.info(
-          `config change requires gateway restart (${reasons}) — already waiting for operations to complete`,
-        );
-        return true;
-      }
-      this.restartPending = true;
       if (active.totalActive > 0) {
         const initialDetails = this.options.formatActiveDetails(active);
         params.logReload.warn(
@@ -456,7 +435,6 @@ class GatewayRestartTransaction {
 
       let failedEmission: { reason: string; intent?: GatewayRestartIntent } | undefined;
       // Timeout and failed checks leave a live deferral owned by this request.
-      this.restartDeferral?.cancel();
       this.restartDeferral = deferGatewayRestartUntilIdle({
         getPendingCount: () => this.options.getActiveCounts().totalActive,
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(undefined),
@@ -501,7 +479,6 @@ class GatewayRestartTransaction {
         },
         hooks: {
           onReady: () => {
-            this.restartPending = false;
             this.restartDeferral = null;
             params.logReload.info("all operations and replies completed; restarting gateway now");
           },
@@ -512,7 +489,6 @@ class GatewayRestartTransaction {
           },
           onTimeout: (_pending, elapsedMs) => {
             // Keep the handle until delivery or cancellation; forced attempts may retry.
-            this.restartPending = false;
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${this.options.formatDeferredWorkStatus("still active")}; forcing restart`,
             );
@@ -524,7 +500,7 @@ class GatewayRestartTransaction {
           },
         },
       });
-      setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
+      setGatewayRestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
       return true;
     }
     // No active operations or pending replies, restart immediately
@@ -550,7 +526,7 @@ class GatewayRestartTransaction {
     if (emitResult.status === "coalesced") {
       params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
     }
-    setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
+    setGatewayRestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     return true;
   }
 }
@@ -573,7 +549,6 @@ export function createGatewayRestartCoordinator(options: GatewayRestartCoordinat
     ) => transaction.request(plan, nextConfig, requestOptions),
     restoreConservativeRestartDebt: (debt: RestartRequestDetails) =>
       transaction.restoreConservativeDebt(debt),
-    retireRejectedRestartRequest: () => transaction.retireRejectedRequest(),
     stopRestartRetries: () => transaction.stop(),
     deferGatewayRestartDebt: (
       plan: GatewayReloadPlan,

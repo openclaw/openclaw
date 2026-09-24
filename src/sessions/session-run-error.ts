@@ -16,12 +16,13 @@ function sanitizeSessionRunError(error: unknown): string {
   return redactSensitiveText(text, { mode: "tools" });
 }
 
-/** Shared transcript outcome for owners that already committed a failed run. */
+/** Shared failure receipt; optional settlement joins the receipt's synchronous transaction. */
 export async function recordGatewaySessionRunFailure(params: {
   target: SessionTranscriptWriteScope & { sessionId: string };
   runId: string;
   error: unknown;
   assertCommitAllowed?: () => void;
+  settleSession?: () => undefined;
 }): Promise<void> {
   const { runId } = params;
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
@@ -30,6 +31,8 @@ export async function recordGatewaySessionRunFailure(params: {
     customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
     suppressWhenAssistantRun: runId,
     selectReport: (latest) => {
+      params.assertCommitAllowed?.();
+      params.settleSession?.();
       params.assertCommitAllowed?.();
       if (isRecord(latest?.details) && latest.details.runId === runId) {
         return undefined;

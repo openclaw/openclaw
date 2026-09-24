@@ -10,12 +10,17 @@ import {
 } from "../../../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../../../agents/bash-process-registry.test-helpers.js";
 import { createProcessTool } from "../../../agents/bash-tools.process.js";
+import { resolveCurrentAttemptAssistant } from "../../../agents/embedded-agent-runner/run/attempt-terminal-evidence.js";
+import { createEmbeddedRunContextRecoveryState } from "../../../agents/embedded-agent-runner/run/context-recovery-state.js";
 import { buildEmbeddedRunPayloads } from "../../../agents/embedded-agent-runner/run/payloads.js";
+import { resolveEmbeddedRunAttemptTerminalState } from "../../../agents/embedded-agent-runner/run/terminal-outcome.js";
+import { prepareEmbeddedRunTerminal } from "../../../agents/embedded-agent-runner/run/terminal-preparation.js";
 import { mergeAttemptToolMediaPayloads } from "../../../agents/embedded-agent-runner/run/tool-media-payloads.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../../../agents/embedded-agent-runner/run/types.js";
+import { createUsageAccumulator } from "../../../agents/embedded-agent-runner/usage-accumulator.js";
 import { createAdmittedHostCapabilityTestFixture } from "../../../agents/harness/host-capability.test-support.js";
 import type { AgentToolResult } from "../../../agents/runtime/index.js";
 import type { ToolErrorSummary } from "../../../agents/tool-error-summary.js";
@@ -139,10 +144,39 @@ export function createContractToolTerminalObserver(
   return createToolTerminalObserver(runId);
 }
 
-export function buildContractReplyPayloads(params: {
-  assistantText: string;
-  lastToolError?: ToolErrorSummary;
-}) {
+export function buildContractReplyPayloads(
+  params:
+    | { assistantText: string; lastToolError?: ToolErrorSummary }
+    | Pick<Parameters<typeof prepareEmbeddedRunTerminal>[0], "attempt" | "runParams">,
+) {
+  if ("attempt" in params) {
+    const { attempt, runParams } = params;
+    const provider = runParams.provider ?? "codex";
+    const model = runParams.model ?? "runtime-contract";
+    // Use the terminal owner so canonical assistant/segment selection and tool
+    // media merging stay identical to ordinary final delivery.
+    return (
+      prepareEmbeddedRunTerminal({
+        attempt,
+        runParams,
+        currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
+        provider,
+        model,
+        activeErrorContext: { provider, model },
+        authProfileStore: { version: 1, profiles: {} },
+        sessionIdUsed: attempt.sessionIdUsed,
+        outerContextTokenMeta: {},
+        usageAccumulator: createUsageAccumulator(),
+        contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+        resolvedToolResultFormat: "plain",
+        terminalState: resolveEmbeddedRunAttemptTerminalState({
+          attempt,
+          assistant: resolveCurrentAttemptAssistant(attempt),
+          abortSignal: runParams.abortSignal,
+        }),
+      }).payloadsWithToolMedia ?? []
+    );
+  }
   return buildEmbeddedRunPayloads({
     assistantTexts: [params.assistantText],
     lastAssistant: undefined,

@@ -49,7 +49,7 @@ function startConnectionFixture(workerHostingEnabled = false, preparedWorkspaces
     handleInput: vi.fn(),
     cancel: vi.fn(),
     cancelAll: vi.fn(),
-    tryPauseForUpdate: vi.fn(() => true),
+    tryPauseForUpdate: vi.fn(async () => true),
     resumeAfterUpdate: vi.fn(),
     updateGatewayConnection: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),

@@ -106,7 +106,9 @@ describe("AppSidebar agent chip", () => {
       expect.stringContaining("Check tests"),
     ]);
     expect(childRows.every((row) => row.getAttribute("draggable") === "false")).toBe(true);
-    expect(childRows.every((row) => row.querySelector("[data-session-menu]") !== null)).toBe(true);
+    expect(
+      childRows.every((row) => row.querySelector("[data-sidebar-session-archive]") !== null),
+    ).toBe(true);
     expect(childRows.every((row) => row.querySelector("[data-sidebar-session-pin]") === null)).toBe(
       true,
     );
@@ -175,12 +177,14 @@ describe("AppSidebar agent chip", () => {
     });
     await sidebar.updateComplete;
     expect(harness.list).toHaveBeenCalledOnce();
+    vi.useFakeTimers();
     gatewayHarness.publishEvent("sessions.changed", {
       sessionKey: "agent:main:child-one",
       agentId: "main",
       reason: "patch",
       spawnedBy: "agent:main:parent",
     });
+    await vi.advanceTimersByTimeAsync(5_000);
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     await waitForFast(() =>
       expect(

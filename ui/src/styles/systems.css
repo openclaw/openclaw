@@ -68,33 +68,59 @@ openclaw-systems-page {
   height: 17px;
 }
 .systems-metrics {
-  display: flex;
-  align-items: center;
-  gap: 22px;
-  padding: 10px 18px;
+  padding: 12px 18px 8px;
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
-  flex-wrap: wrap;
+  max-height: 50%;
+  overflow-y: auto;
 }
-.systems-metrics > div {
+.systems-vitals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.systems-vitals--volumes {
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+}
+.systems-vital {
+  min-height: 106px;
+}
+.systems-vital .sparkline-tile__head {
   display: flex;
-  gap: 7px;
   align-items: baseline;
-  font-size: 11px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 3px 8px;
 }
-.systems-metrics span,
-.systems-metrics small {
+.systems-vital--memory {
+  color: var(--info);
+}
+.systems-vital--disk {
+  color: var(--accent);
+}
+.systems-vital--disk .sparkline-tile__label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.systems-metrics[data-stale="true"] .systems-vital {
+  color: var(--muted);
+}
+.systems-metrics[data-stale="true"] .sparkline-tile__dot--now {
+  animation: none;
+  box-shadow: none;
+}
+.systems-metrics[data-stale="true"] .sparkline-tile__value {
+  color: var(--muted);
+}
+.systems-metrics-caption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 6px;
   color: var(--muted);
   font-size: 10px;
-  font-weight: 400;
-}
-.systems-metrics strong {
-  color: var(--text);
-  font-weight: 500;
-  font-size: 11px;
-}
-.systems-metrics[data-stale="true"] strong {
-  color: var(--muted);
 }
 .systems-sample-time {
   margin-left: auto;
@@ -125,7 +151,7 @@ openclaw-systems-page {
   flex: 1;
   min-height: 180px;
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;
   flex-direction: column;
   padding: 28px;
   text-align: center;
@@ -223,14 +249,12 @@ openclaw-systems-page {
 }
 .systems-details .systems-metrics {
   padding: 0;
-  gap: 12px;
   border: 0;
-  flex-direction: column;
-  align-items: stretch;
+  max-height: none;
+  overflow: visible;
 }
-.systems-details .systems-metrics > div {
-  justify-content: space-between;
-  flex-wrap: wrap;
+.systems-details .systems-vitals {
+  grid-template-columns: minmax(0, 1fr);
 }
 .systems-details .systems-sample-time {
   margin: 0;
@@ -331,7 +355,8 @@ openclaw-systems-page {
 .systems-filter input::placeholder {
   color: var(--muted);
 }
-.systems-filter__refresh {
+.systems-filter__refresh,
+.systems-filter__sort {
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;
@@ -342,17 +367,20 @@ openclaw-systems-page {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  opacity: 0;
   transition:
     opacity var(--duration-fast) ease,
     color var(--duration-fast) ease;
+}
+.systems-filter__refresh {
+  opacity: 0;
 }
 .systems-filter:hover .systems-filter__refresh,
 .systems-filter:focus-within .systems-filter__refresh,
 .systems-filter__refresh:focus-visible {
   opacity: 1;
 }
-.systems-filter__refresh:hover {
+.systems-filter__refresh:hover,
+.systems-filter__sort:hover {
   color: var(--text);
   background: var(--bg-hover);
 }
@@ -360,7 +388,8 @@ openclaw-systems-page {
   opacity: 0;
   pointer-events: none;
 }
-.systems-filter__refresh:focus-visible {
+.systems-filter__refresh:focus-visible,
+.systems-filter__sort:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -487,9 +516,6 @@ openclaw-systems-page {
     width: 230px;
     flex-basis: 230px;
   }
-  .systems-metrics {
-    gap: 12px;
-  }
 }
 @media (max-width: 768px) {
   .systems-heading {
@@ -513,9 +539,28 @@ openclaw-systems-page {
   }
   .systems-metrics {
     padding: 8px 10px;
-    gap: 8px 14px;
   }
   .systems-sample-time {
     margin-left: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .systems-vitals--volumes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 400px) {
+  .systems-vitals {
+    gap: 6px;
+  }
+  .systems-vital .sparkline-tile__label {
+    white-space: normal;
+    letter-spacing: normal;
+  }
+  .systems-vital .sparkline-tile__value {
+    font-size: 14px;
+    white-space: nowrap;
   }
 }

@@ -1,13 +1,25 @@
+import fs from "node:fs";
+import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "./openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+} from "./openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "./openclaw-agent-db-readonly-scope.js";
-import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
+import {
+  retainOpenClawAgentDatabaseReadOnly,
+  withOpenClawAgentDatabaseReadOnly,
+} from "./openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
 it("bounds query preparation while scoped reads observe new commits", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -144,3 +156,200 @@ it.each([
     }
   });
 });
+
+it("reuses ordinary readers until idle expiry and reopens after lifecycle invalidation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { agentId: "main", env: state.env };
+    const { path } = openOpenClawAgentDatabase(options);
+    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const read = () => withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
+    const opens = () => open.mock.calls.filter(([filename]) => filename === path).length;
+    try {
+      const first = read();
+      expect(first.found).toBe(true);
+      if (!first.found) {
+        throw new Error("Missing synthetic agent database");
+      }
+      for (let index = 0; index < 20; index++) {
+        expect(read()).toEqual(first);
+      }
+      expect(opens()).toBe(1);
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+      expect(read()).toEqual(first);
+      vi.advanceTimersByTime(1);
+      expect(first.value.isOpen).toBe(true);
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+      expect(first.value.isOpen).toBe(false);
+      const reopened = read();
+      expect(opens()).toBe(2);
+      closeOpenClawAgentDatabaseByPath(path);
+      expect(reopened.found && reopened.value.isOpen).toBe(false);
+      const replacement = read();
+      expect(replacement.found).toBe(true);
+      expect(opens()).toBe(3);
+      await Promise.resolve();
+      expect(replacement.found && replacement.value.isOpen).toBe(true);
+      if (replacement.found) {
+        replacement.value.close();
+      }
+      expect(() => vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS)).not.toThrow();
+      expect(read().found).toBe(true);
+      expect(opens()).toBe(4);
+    } finally {
+      vi.useRealTimers();
+      open.mockRestore();
+    }
+  });
+});
+
+it("pins retained readers through idle expiry but revokes them before database removal", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { agentId: "main", env: state.env };
+    const { path } = openOpenClawAgentDatabase(options);
+    await closeOpenClawAgentDatabaseByPathAsync(path);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const retained = retainOpenClawAgentDatabaseReadOnly(options);
+      expect(retained.found).toBe(true);
+      if (!retained.found) {
+        throw new Error("Missing synthetic agent database");
+      }
+      expect(() =>
+        withOpenClawAgentDatabaseReadOnly(() => "wrong owner", {
+          ...options,
+          path,
+          agentId: "other",
+        }),
+      ).toThrow("belongs to agent main; requested agent other");
+      expect(retained.claim.isCurrent()).toBe(true);
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+      expect(retained.claim.isCurrent()).toBe(true);
+      const other = retainOpenClawAgentDatabaseReadOnly(options);
+      expect(other.found && other.database.db).toBe(retained.database.db);
+      if (other.found) {
+        other.claim.release();
+      }
+      retained.claim.release();
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+      expect(retained.database.db.isOpen).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(retained.database.db.isOpen).toBe(false);
+      const stale = retainOpenClawAgentDatabaseReadOnly(options);
+      if (!stale.found) {
+        throw new Error("Missing synthetic agent database");
+      }
+      stale.database.db.close();
+      const next = retainOpenClawAgentDatabaseReadOnly(options);
+      if (!next.found) {
+        throw new Error("Missing synthetic replacement reader");
+      }
+      next.claim.release();
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+      expect(next.database.db.isOpen).toBe(false);
+      stale.claim.release();
+      const reopened = retainOpenClawAgentDatabaseReadOnly(options);
+      expect(reopened.found).toBe(true);
+      await closeOpenClawAgentDatabaseByPathAsync(path);
+      expect(reopened.found && reopened.claim.isCurrent()).toBe(false);
+      if (reopened.found) {
+        reopened.claim.release();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+it("keeps later reads owned by an explicit scope after its native handle expires", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { agentId: "main", env: state.env };
+    const { path } = openOpenClawAgentDatabase(options);
+    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const scope = new OpenClawAgentDatabaseReadOnlyScope();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await scope.run({ agentId: "main", path }, async () => {
+        const first = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
+        await Promise.resolve();
+        vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+        expect(first.found && first.value.isOpen).toBe(false);
+        const next = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
+        expect(next.found && next.value.isOpen).toBe(true);
+        scope.close();
+        expect(next.found && next.value.isOpen).toBe(false);
+      });
+    } finally {
+      scope.close();
+      vi.useRealTimers();
+    }
+  });
+});
+
+it("promotes a reused reader beyond the maintenance scope that first opened it", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { agentId: "main", env: state.env };
+    const { path } = openOpenClawAgentDatabase(options);
+    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const parent = createOpenClawDatabaseMaintenanceScope();
+    const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+    const read = () => withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
+    try {
+      const first = child.run(read);
+      expect(parent.run(read)).toEqual(first);
+      await child.close();
+      expect(first.found && first.value.isOpen).toBe(true);
+      await parent.close();
+      expect(first.found && first.value.isOpen).toBe(false);
+    } finally {
+      await child.close();
+      await parent.close();
+    }
+  });
+});
+
+it.each(["database-missing", "schema-missing", "callback-error"] as const)(
+  "keeps retries owned by their explicit scope after %s",
+  async (failure) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const options = { agentId: "scope-retry", env: state.env };
+      const pathname = resolveOpenClawAgentSqlitePath(options);
+      const scope = new OpenClawAgentDatabaseReadOnlyScope();
+      const create = () => {
+        openOpenClawAgentDatabase(options);
+        closeOpenClawAgentDatabaseByPath(pathname);
+      };
+      if (failure === "callback-error") {
+        create();
+      } else if (failure === "schema-missing") {
+        fs.mkdirSync(nodePath.dirname(pathname), { recursive: true });
+        nodeSqlite.openNodeSqliteDatabase(pathname).close();
+      }
+      try {
+        scope.run({ agentId: options.agentId, path: pathname }, () => {
+          if (failure === "callback-error") {
+            const error = new Error("synthetic reader failure");
+            expect(() =>
+              withOpenClawAgentDatabaseReadOnly(() => {
+                throw error;
+              }, options),
+            ).toThrow(error);
+          } else {
+            expect(withOpenClawAgentDatabaseReadOnly(() => "unreachable", options)).toEqual({
+              found: false,
+              reason: failure,
+            });
+            create();
+          }
+          const reopened = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
+          expect(reopened.found && reopened.value.isOpen).toBe(true);
+          scope.close();
+          expect(reopened.found && reopened.value.isOpen).toBe(false);
+        });
+      } finally {
+        scope.close();
+      }
+    });
+  },
+);

@@ -27,7 +27,7 @@ import {
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -48,7 +48,6 @@ import { findModelInCatalog } from "../model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
-import { resolveCliBoundModelRef } from "../model-runtime-aliases.js";
 import { dedupeModelCatalogEntries } from "../model-selection-shared.js";
 import { resolveDefaultModelForAgent, resolveModelAliasFromPair } from "../model-selection.js";
 import {
@@ -184,11 +183,10 @@ export async function resolveEmbeddedModelSelection(params: {
       ...params.modelManifestContext,
     });
     if (directOverride) {
-      const normalizedOverride = resolveCliBoundModelRef(
-        { provider: directOverride.provider ?? defaultProvider, model: directOverride.model },
-        params.cfg,
-        entry,
-      );
+      const normalizedOverride = {
+        provider: directOverride.provider ?? defaultProvider,
+        model: directOverride.model,
+      };
       if (!hasSessionAutoModelSelection(entry) && !visibilityPolicy.allows(normalizedOverride)) {
         const { updated } = applyModelOverrideToSessionEntry({
           entry,
@@ -312,11 +310,10 @@ export async function resolveEmbeddedModelSelection(params: {
             ...params.modelManifestContext,
           })
         : null;
-    const normalizedStored = resolveCliBoundModelRef(
-      storedAlias ?? { provider: candidateProvider, model: storedModelOverride },
-      params.cfg,
-      sessionEntry,
-    );
+    const normalizedStored = storedAlias ?? {
+      provider: candidateProvider,
+      model: storedModelOverride,
+    };
     if (
       isModelSelectionLocked(sessionEntry) ||
       hasStoredAutomaticSelection ||
@@ -491,6 +488,7 @@ export async function resolveEmbeddedModelSelection(params: {
         !params.suppressVisibleSessionEffects
       ) {
         await clearSessionAuthProfileOverride({
+          agentId: params.sessionAgentId,
           sessionEntry: entry,
           sessionStore: params.sessionStore,
           sessionKey: params.sessionKey,

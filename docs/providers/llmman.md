@@ -640,7 +640,7 @@ Replace model ids with names from `llmman list` or
   </Accordion>
 
   <Accordion title="Small local profile">
-    Local models served through a custom `openai-completions` provider do not enable [Tool Search](/tools/tool-search) automatically. Turn it on to keep optional capabilities available while loading their schemas only when needed, and cap the context to what the host can run with `LLMMAN_CONTEXT_LENGTH=32768` in the daemon's environment:
+    Local models served through a custom `openai-completions` provider use structured [Tool Search](/tools/tool-search) automatically when unset. The explicit setting below pins that surface, keeping optional capabilities available while loading their schemas only when needed. Cap the context to what the host can run with `LLMMAN_CONTEXT_LENGTH=32768` in the daemon's environment:
 
     ```json5
     {

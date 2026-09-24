@@ -34,7 +34,7 @@ function runFirstHop(scenario: string, automatic: boolean) {
     CURRENT_PHASE="$1"
     shift
     case "$CURRENT_PHASE" in
-      install-baseline) baseline_spec="$OPENCLAW_UPGRADE_SURVIVOR_BASELINE" ;;
+      install-baseline) normalize_baseline ;;
       prepare-workshop-baseline) printf 'baseline-doctor\\n' >>"$HOME/events" ;;
       capture-workshop-candidate) printf 'candidate-identity\\n' >>"$HOME/events" ;;
       seed-workshop-baseline-index|seed-workshop-candidate-index) printf 'seed\\n' >>"$HOME/events" ;;

@@ -58,7 +58,7 @@ it.each([
   [["scripts/e2e/lib/upgrade-survivor/test-support.ts"], ["published-upgrade-survivor"]],
   ...[
     "src/cli/update-cli/run-update.ts",
-    "src/infra/update-runner.ts",
+    "src/infra/update-runner-git.ts",
     "src/infra/package-update-global.ts",
     "src/plugins/update.ts",
     "src/plugins/update-internal.ts",

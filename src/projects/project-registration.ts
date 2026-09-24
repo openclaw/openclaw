@@ -54,7 +54,7 @@ export async function registerPreparedProjectRegistry(
     );
   }
   const { runWithOpenClawStateLeaseWorker } =
-    await import("../state/openclaw-state-worker-store.js");
+    await import("../state/openclaw-state-lease-worker-storage.js");
   return await runWithOpenClawStateLeaseWorker(lease, context, async (scope, identity) => {
     const project = await scope.execute({
       type: "projects.insert",

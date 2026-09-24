@@ -1,6 +1,7 @@
 // Transcripts CLI tests cover SQLite reads and explicit artifact materialization.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -379,18 +380,61 @@ describe("transcripts CLI", () => {
     const sessionDir = await writeSession(stateDir, "design-review");
     await fs.rm(sessionDir, { recursive: true, force: true });
 
-    const metadataOutput = await runTranscriptsCli(["path", "design-review", "--metadata"]);
-    const transcriptOutput = await runTranscriptsCli(["path", "design-review", "--transcript"]);
-    const dirOutput = await runTranscriptsCli(["path", "design-review", "--dir"]);
+    const ownershipReads: string[] = [];
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    }).db;
+    // Manifest writers retain the same SELECT inside their synchronous transaction.
+    // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted native receiver below.
+    const prepare = DatabaseSync.prototype.prepare;
+    const prepareSpy = vi
+      .spyOn(DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: DatabaseSync, sql) {
+        if (!this.isTransaction && /^select\b/iu.test(sql) && sql.includes("export_pending_json")) {
+          ownershipReads.push(sql);
+        }
+        return prepare.call(this, sql);
+      });
+    // The identical writer SELECT may already be prepared and cached before observation.
+    // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted statement receiver below.
+    const get = StatementSync.prototype.get;
+    const getSpy = vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
+      this: StatementSync,
+      ...args
+    ) {
+      if (!database.isTransaction && this.sourceSQL.includes("export_pending_json")) {
+        ownershipReads.push(this.sourceSQL);
+      }
+      return get.apply(this, args);
+    });
 
-    expect(metadataOutput.trim()).toBe(path.join(sessionDir, "metadata.json"));
-    expect(transcriptOutput.trim()).toBe(path.join(sessionDir, "transcript.jsonl"));
-    expect(dirOutput.trim()).toBe(sessionDir);
-    await expect(fs.readFile(path.join(sessionDir, "metadata.json"), "utf8")).resolves.toContain(
-      '"sessionId": "design-review"',
-    );
-    await expect(fs.readFile(path.join(sessionDir, "transcript.jsonl"), "utf8")).resolves.toContain(
-      '"text":"Action item: Ship CLI"',
-    );
+    try {
+      const metadataOutput = await runTranscriptsCli(["path", "design-review", "--metadata"]);
+      const transcriptOutput = await runTranscriptsCli(["path", "design-review", "--transcript"]);
+      const dirOutput = await runTranscriptsCli(["path", "design-review", "--dir"]);
+
+      expect(metadataOutput.trim()).toBe(path.join(sessionDir, "metadata.json"));
+      expect(transcriptOutput.trim()).toBe(path.join(sessionDir, "transcript.jsonl"));
+      expect(dirOutput.trim()).toBe(sessionDir);
+      await expect(fs.readFile(path.join(sessionDir, "metadata.json"), "utf8")).resolves.toContain(
+        '"sessionId": "design-review"',
+      );
+      await expect(
+        fs.readFile(path.join(sessionDir, "transcript.jsonl"), "utf8"),
+      ).resolves.toContain('"text":"Action item: Ship CLI"');
+      expect(await runTranscriptsCli(["show", "design-review"])).toContain("Ship CLI");
+      const alias: TranscriptSessionDescriptor = {
+        sessionId: "Design-review",
+        source: { providerId: "manual-transcript" },
+        startedAt: "2026-05-22T11:00:00.000Z",
+      };
+      const store = storeFor(stateDir);
+      await store.writeSession(alias);
+      expect(await store.readSession(alias.sessionId)).toEqual(alias);
+      expect(ownershipReads, "standalone export ownership SQL on the caller thread").toEqual([]);
+    } finally {
+      prepareSpy.mockRestore();
+      getSpy.mockRestore();
+    }
   });
 });

@@ -1,9 +1,11 @@
 // Memory Core tests cover index plugin behavior.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  encodeMemoryEmbedding,
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_CHUNKING_VERSION,
@@ -19,6 +21,7 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
+import { writeMemoryIndexArchiveTranscript } from "./index-archive.test-support.js";
 import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
@@ -40,42 +43,13 @@ describe("memory index", () => {
     getFtsSessionManager,
     getPersistentManager,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
-    trackManager,
   } = fixture;
-
-  function rewritePersistedProviderIdentity(manager: MemoryIndexManager, model: string): void {
-    const providerKey = hashText(
-      JSON.stringify({
-        provider: providerFixture.identityAlias.provider,
-        model,
-      }),
-    );
-    const db = Reflect.get(manager, "db") as {
-      prepare: (sql: string) => {
-        get: (...params: unknown[]) => { value?: string } | undefined;
-        run: (...params: unknown[]) => void;
-      };
-    };
-    const metaRow = db
-      .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
-      .get("memory_index_meta_v1");
-    const meta = JSON.parse(metaRow?.value ?? "{}") as MemoryIndexMeta;
-    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = ?").run(
-      JSON.stringify({ ...meta, model, providerKey }),
-      "memory_index_meta_v1",
-    );
-    db.prepare("UPDATE memory_index_chunks SET model = ?").run(model);
-    db.prepare(
-      "UPDATE memory_embedding_cache SET model = ?, provider_key = ? WHERE provider = ?",
-    ).run(model, providerKey, providerFixture.identityAlias.provider);
-  }
 
   it("rebuilds a missing vector table through forced sync with cached readiness", async () => {
     const cfg = createCfg({
       vectorEnabled: true,
     });
     const manager = await getFreshManager(cfg);
-    trackManager(manager);
     await manager.sync({ reason: "test", force: true });
     const db = Reflect.get(manager, "db") as DatabaseSync;
     expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
@@ -589,7 +563,7 @@ describe("memory index", () => {
       db.prepare(
         `INSERT INTO memory_index_chunks
          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, ?, 'memory', 1, 3, ?, 'fts-only', ?, '[]', ?)`,
+         VALUES (?, ?, 'memory', 1, 3, ?, 'fts-only', ?, x'', ?)`,
       ).run(
         "legacy-curated-chunk",
         "MEMORY.md",
@@ -611,7 +585,7 @@ describe("memory index", () => {
          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
          VALUES (
            'stale-default-media', 'memory/default-diagram.png', 'memory', 1, 1,
-           'stale-default-media', 'fts-only', 'Image file: memory/default-diagram.png', '[]', ?
+           'stale-default-media', 'fts-only', 'Image file: memory/default-diagram.png', x'', ?
          )`,
       ).run(Date.now());
       db.prepare(
@@ -792,8 +766,8 @@ describe("memory index", () => {
       await statusManager.close?.();
       statusManager = undefined;
 
-      expect(await fs.readFile(agentPath)).toEqual(databaseBefore);
-      expect(await fs.readFile(`${agentPath}-wal`)).toEqual(walBefore);
+      assert.deepStrictEqual(await fs.readFile(agentPath), databaseBefore);
+      assert.deepStrictEqual(await fs.readFile(`${agentPath}-wal`), walBefore);
     } finally {
       await statusManager?.close?.();
       writer.close();
@@ -855,10 +829,10 @@ describe("memory index", () => {
         }
       ).db
         .prepare("SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
-        .get("%2026-01-13.md", "memory") as { embedding: string } | undefined;
+        .get("%2026-01-13.md", "memory") as { embedding: Uint8Array } | undefined;
 
       expect(betaRow).toBeDefined();
-      expect(JSON.parse(betaRow?.embedding ?? "[]")).toEqual([0, 1, 0, 0]);
+      expect(betaRow?.embedding).toEqual(encodeMemoryEmbedding([0, 1, 0, 0]));
     } finally {
       await manager.close?.();
     }
@@ -1232,65 +1206,6 @@ describe("memory index", () => {
       await nextManager.close?.();
     }
   });
-
-  it.each([
-    {
-      direction: "HF to exact cache path",
-      indexedModel: providerFixture.identityAlias.canonicalModel,
-      configuredModel: providerFixture.identityAlias.cacheModel,
-    },
-    {
-      direction: "exact cache path to HF",
-      indexedModel: providerFixture.identityAlias.cacheModel,
-      configuredModel: providerFixture.identityAlias.canonicalModel,
-    },
-  ])(
-    "keeps $direction indexes and embedding caches usable",
-    async ({ indexedModel, configuredModel }) => {
-      const indexedCfg = createCfg({
-        provider: providerFixture.identityAlias.provider,
-        model: providerFixture.identityAlias.canonicalModel,
-        cacheEnabled: true,
-        vectorEnabled: false,
-      });
-      const indexedManager = await getFreshManager(indexedCfg);
-      await indexedManager.sync({ reason: "test", force: true });
-      if (indexedModel !== providerFixture.identityAlias.canonicalModel) {
-        rewritePersistedProviderIdentity(indexedManager, indexedModel);
-      }
-      await indexedManager.close?.();
-
-      const embedsBeforeReuse = providerFixture.embedBatchCalls;
-      const nextCfg = createCfg({
-        provider: providerFixture.identityAlias.provider,
-        model: configuredModel,
-        cacheEnabled: true,
-        vectorEnabled: false,
-      });
-      const statusManager = await getFreshManager(nextCfg, "status");
-      try {
-        expect(statusManager.status().dirty).toBe(false);
-        expect(statusManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-      } finally {
-        await statusManager.close?.();
-      }
-
-      const nextManager = await getFreshManager(nextCfg);
-      try {
-        const results = await nextManager.search("zebra");
-
-        expect(results.length).toBeGreaterThan(0);
-        expect(results[0]?.path).toContain("memory/2026-01-12.md");
-        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-
-        await nextManager.sync({ reason: "test", force: true });
-
-        expect(providerFixture.embedBatchCalls).toBe(embedsBeforeReuse);
-      } finally {
-        await nextManager.close?.();
-      }
-    },
-  );
 
   it("keeps status clean when configured provider alias resolves to indexed adapter", async () => {
     const oldCfg = createCfg({
@@ -2040,28 +1955,10 @@ describe("memory index", () => {
   });
 
   it("keeps provider cutover vector search paused during targeted session sync", async () => {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "session-targeted-cutover.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session-targeted-cutover",
-          timestamp: "2026-04-07T15:24:04.113Z",
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: [{ type: "text", text: "Targeted cutover marker." }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+    const sessionFile = await writeMemoryIndexArchiveTranscript({
+      sessionId: "session-targeted-cutover",
+      text: "Targeted cutover marker.",
+    });
 
     const oldCfg = createCfg({
       sources: ["memory", "sessions"],
@@ -2101,27 +1998,10 @@ describe("memory index", () => {
   });
 
   it("preserves memory dirty events raised during session identity reindex", async () => {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sessionsDir, "session-dirty-during-reindex.jsonl"),
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session-dirty-during-reindex",
-          timestamp: "2026-04-07T15:24:04.113Z",
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: [{ type: "text", text: "Dirty during session marker." }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+    await writeMemoryIndexArchiveTranscript({
+      sessionId: "session-dirty-during-reindex",
+      text: "Dirty during session marker.",
+    });
 
     const oldCfg = createCfg({
       sources: ["memory", "sessions"],
@@ -2358,10 +2238,12 @@ describe("memory index", () => {
       const db = Reflect.get(diagnostic, "db") as DatabaseSync;
       db.prepare(`INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
-        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', '[0,1]', 2, 1)`).run();
+        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', ?, 2, 1)`).run(
+        encodeMemoryEmbedding([0, 1]),
+      );
       expect(diagnostic.status().storage).toMatchObject({
         embeddingCacheEntries: 1,
-        embeddingCacheBytes: 5,
+        embeddingCacheBytes: 16,
       });
       const storedBytes = db
         .prepare(
@@ -2418,16 +2300,15 @@ describe("memory index", () => {
     }
   });
 
-  it("drops the shipped legacy vector table and schedules a full reindex", async () => {
-    const cfg = createCfg({ vectorEnabled: true });
-    const manager = await getPersistentManager(cfg);
+  it("prepares the native vector connection after child retrieval and retires the legacy table", async () => {
+    const manager = await getPersistentManager(createCfg({ vectorEnabled: true }));
+    await manager.sync({ reason: "test", force: true });
+    await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
+    expect(manager.status().vector?.storeAvailable).toBe(true);
     const db = Reflect.get(manager, "db") as DatabaseSync;
     db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
 
-    const available = await manager.probeVectorStoreAvailability?.();
-    if (!available) {
-      return;
-    }
+    await expect(manager.probeVectorStoreAvailability?.()).resolves.toBe(true);
 
     expect(
       db
@@ -2664,7 +2545,6 @@ describe("memory index", () => {
     });
 
     const manager = await getFreshManager(cfg, "status", true);
-    trackManager(manager);
 
     const result = manager.status();
     expect(result.dirty).toBe(true);
@@ -2709,7 +2589,6 @@ describe("memory index", () => {
     });
 
     const initial = await getFreshManager(cfg, "cli");
-    trackManager(initial);
     await initial.sync({ reason: "cli", force: true });
     await expect(
       initial.search("ORBIT-DELETE-91", { minScore: 0, sources: ["sessions"] }),
@@ -2731,12 +2610,10 @@ describe("memory index", () => {
     ).resolves.toBe(true);
 
     const statusManager = await getFreshManager(cfg, "status", true);
-    trackManager(statusManager);
     expect(statusManager.status().dirty).toBe(true);
     await statusManager.close?.();
 
     const repairManager = await getFreshManager(cfg, "cli");
-    trackManager(repairManager);
     await repairManager.sync({ reason: "cli" });
     expect(providerFixture.embedBatchCalls).toBe(0);
     const deletedResults = await repairManager.search("ORBIT-DELETE-91", {

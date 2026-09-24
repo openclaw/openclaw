@@ -4,7 +4,7 @@ import {
   attachStateLifecycleDelegate,
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "../../infra/state-database-coordinator.js";
-import { serveWorkerTasks } from "../../infra/worker-task-pool.js";
+import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
@@ -14,13 +14,13 @@ import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { SqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import type { TranscriptIndexEntry } from "./session-transcript-projection-append.js";
 import {
   prepareSessionTranscriptProjection,
   prepareMemorySessionTranscriptProjection,
   type SessionTranscriptProjectionRow,
   type PreparedSessionTranscriptProjection,
   type PreparedSessionTranscriptProjectionMetadata,
-  type TranscriptIndexEntry,
 } from "./session-transcript-projection-rebuild.js";
 import type { MemoryTranscriptProjectionFrame } from "./session-transcript-reconcile-memory.js";
 
@@ -134,10 +134,18 @@ function resolveLeaseEnvironment(owner: ReconcileWorkerOwner) {
   };
 }
 
-function releaseLease(owner: ReconcileWorkerOwner & { leaseId: string }, port: MessagePort): void {
+function releaseLease(
+  owner: ReconcileWorkerOwner & { leaseId: string },
+  port: MessagePort,
+  readOnlyClosed = false,
+): void {
   let failure: Error | undefined;
   try {
-    releaseOpenClawAgentDatabaseLease(owner.leaseId, { env: resolveLeaseEnvironment(owner) });
+    releaseOpenClawAgentDatabaseLease(
+      owner.leaseId,
+      { env: resolveLeaseEnvironment(owner) },
+      readOnlyClosed ? "read-only" : undefined,
+    );
   } catch (error) {
     failure = error instanceof Error ? error : new Error(String(error));
   } finally {
@@ -265,6 +273,7 @@ async function prepareMemoryProjection(sessionId: string, port: MessagePort) {
         sessionId,
         frame.snapshot.transcriptUpdatedAt,
         rows,
+        frame.snapshot.generation,
       );
       rows.clear();
       return plan;
@@ -350,7 +359,7 @@ async function run(input: SessionTranscriptReconcileWorkerInput, port: MessagePo
         });
       });
       // Port callbacks do not inherit the delegate's runtime and live custody.
-      releaseLease(reconcileInput, port);
+      releaseLease(reconcileInput, port, closeDatabase !== undefined);
     }
   } finally {
     if (reconcileInput.mode === "memory") {

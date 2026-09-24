@@ -11,13 +11,15 @@ import { getTaskById } from "./task-registry.js";
 import {
   createTaskFixture,
   reloadTaskRegistryFromStoreAsync,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
   withTaskRegistryTempDir,
 } from "./task-registry.test-support.js";
 
 const hoisted = vi.hoisted(() => ({ sendMessageMock: vi.fn<typeof sendMessage>() }));
+vi.mock("./task-registry-delivery-runtime.js", () => ({
+  sendMessage: hoisted.sendMessageMock,
+  resolveTaskControlUiSessionUrl: () => undefined,
+}));
 const GUILDCHAT_ORIGIN = { channel: "guildchat", to: "guildchat:123" } as const;
 let releaseHeartbeat: (() => void) | undefined;
 let heartbeatFlushed = false;
@@ -45,7 +47,6 @@ beforeEach(async () => {
     return { status: "ran", durationMs: 0 };
   });
   await flushHeartbeat();
-  setTaskRegistryDeliveryRuntimeForTests({ sendMessage: hoisted.sendMessageMock });
 });
 
 afterEach(async () => {
@@ -54,7 +55,6 @@ afterEach(async () => {
   releaseHeartbeat = undefined;
   resetSystemEventsForTest();
   resetAgentEventsForTest({ preserveListeners: true });
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   hoisted.sendMessageMock.mockReset();

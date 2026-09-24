@@ -8,15 +8,25 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION, type ConnectParams } from "../../packages/gateway-protocol/src/index.js";
-import { writeConfigFile } from "../config/config.js";
+import { confirmGatewayReachable } from "../cli/daemon-cli/restart-health-probe.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
+import { loadDeviceAuthTokenReadOnly, storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import {
+  loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import {
+  getPairedDevice,
+  listDevicePairing,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { loggingState } from "../logging/state.js";
+import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { CONTROL_UI_CLIENT, NODE_CLIENT } from "./server.auth.test-helpers.js";
 import {
@@ -190,6 +200,63 @@ async function connectBrowserWithoutScopes(params: {
 }
 
 describe("trusted-proxy operator device auto-approval", () => {
+  test("restart health reuses the service profile's paired identity without proxy credentials", async () => {
+    await writeGatewayAuthConfig({ mode: "trusted-proxy" });
+    await withOpenClawTestState({ applyEnv: false }, async (clientState) => {
+      const env = clientState.env;
+      const identity = loadOrCreateDeviceIdentity({ env });
+      const pending = await requestDevicePairing({
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        clientId: GATEWAY_CLIENT_IDS.CLI,
+        clientMode: GATEWAY_CLIENT_MODES.CLI,
+        ...resolveGatewayClientPlatformIdentity(process.platform),
+        role: "operator",
+        scopes: ["operator.read"],
+      });
+      const approved = await approveDevicePairing(pending.request.requestId, {
+        callerScopes: ["operator.read"],
+      });
+      expect(approved?.status).toBe("approved");
+      await withGatewayServer(async ({ port }) => {
+        const auth = (await getPairedDevice(identity.deviceId))?.tokens?.operator;
+        if (!auth) {
+          throw new Error("Fixture operator device was not paired");
+        }
+        await storeDeviceAuthToken({
+          env,
+          deviceId: identity.deviceId,
+          role: "operator",
+          token: auth.token,
+          scopes: auth.scopes,
+        });
+        const stored = await loadDeviceAuthTokenReadOnly({
+          env,
+          deviceId: identity.deviceId,
+          role: "operator",
+        });
+        const health = await confirmGatewayReachable({
+          env,
+          port,
+          config: loadConfig(),
+          timeoutMs: 3_000,
+        });
+        expect(health).toMatchObject({
+          reachable: true,
+          activatedPluginErrors: [],
+          channelProbeErrors: [],
+        });
+        expect(health.gatewayVersion).toEqual(expect.any(String));
+        expect(health.gatewayBootId).toEqual(expect.any(String));
+        expect(
+          await loadDeviceAuthTokenReadOnly({ env, deviceId: identity.deviceId, role: "operator" }),
+        ).toEqual(stored);
+        expect(loadDeviceIdentityIfPresent({ env })).toEqual(identity);
+        expect((await listDevicePairing()).pending).toEqual([]);
+      });
+    });
+  });
+
   test("auto-approves operator.admin and warns once at startup", async () => {
     await writeGatewayAuthConfig({
       mode: "trusted-proxy",

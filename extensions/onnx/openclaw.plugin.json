@@ -1,0 +1,98 @@
+{
+  "id": "onnx",
+  "name": "ONNX",
+  "description": "Local typed decisions using pinned ONNX classifiers.",
+  "categories": [
+    "developer-tools"
+  ],
+  "enabledByDefault": false,
+  "cliCommands": [
+    {
+      "name": "onnx",
+      "description": "Manage local ONNX decision models",
+      "hasSubcommands": true
+    }
+  ],
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "decisionProviders": [
+      "onnx"
+    ]
+  },
+  "uiHints": {
+    "modelDir": {
+      "label": "Model directory",
+      "help": "Local model artifacts. Download models explicitly with openclaw onnx download."
+    },
+    "threads": {
+      "label": "CPU inference threads",
+      "advanced": true
+    },
+    "maxLoadedModels": {
+      "label": "Resident model limit",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "modelDir": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "threads": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 8,
+        "default": 2
+      },
+      "maxLoadedModels": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 5,
+        "default": 2
+      }
+    }
+  },
+  "decisionModels": [
+    {
+      "provider": "onnx",
+      "id": "gliclass-edge-v3.0",
+      "name": "GLiClass Edge v3"
+    },
+    {
+      "provider": "onnx",
+      "id": "gliclass-base-v3.0",
+      "name": "GLiClass Base v3"
+    },
+    {
+      "provider": "onnx",
+      "id": "gliner2.5-small-v1",
+      "name": "GLiNER 2.5 Small"
+    },
+    {
+      "provider": "onnx",
+      "id": "gliner2.5-base-v1",
+      "name": "GLiNER 2.5 Base"
+    },
+    {
+      "provider": "onnx",
+      "id": "deberta-v3-base-zeroshot-v2.0",
+      "name": "DeBERTa Zero-shot v2"
+    },
+    {
+      "provider": "onnx",
+      "id": "gliclass-instruct-edge-v1.0",
+      "name": "GLiClass Instruct Edge (local export)"
+    },
+    {
+      "provider": "onnx",
+      "id": "gliclass-instruct-base-v1.0",
+      "name": "GLiClass Instruct Base (local export)"
+    }
+  ]
+}

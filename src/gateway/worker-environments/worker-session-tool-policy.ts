@@ -1,9 +1,7 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import {
-  type WorkerSessionsSendParams,
   WorkerSessionsSendParamsSchema,
-  type WorkerSessionsSpawnParams,
   WorkerSessionsSpawnParamsSchema,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
@@ -11,16 +9,13 @@ import {
   runBeforeToolCallHook,
 } from "../../agents/agent-tools.before-tool-call.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerSessionToolRequest } from "./worker-session-tool-result.js";
 import type { WorkerSessionToolSource } from "./worker-session-tool-topology.js";
 
-export type WorkerSessionOperationRequest = {
-  identity: WorkerConnectionIdentity;
-  signal?: AbortSignal;
-} & (
-  | { toolName: "sessions_spawn"; request: WorkerSessionsSpawnParams }
-  | { toolName: "sessions_send"; request: WorkerSessionsSendParams }
-);
+type WorkerSessionOperationRequest = Extract<
+  WorkerSessionToolRequest,
+  { toolName: "sessions_spawn" | "sessions_send" }
+>;
 
 export async function applyWorkerSessionToolPolicy(params: {
   request: WorkerSessionOperationRequest;

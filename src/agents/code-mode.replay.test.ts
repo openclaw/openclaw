@@ -22,9 +22,9 @@ describe("Code Mode restart-safe replay", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("completes audited core reads inline in restart-safe mode", async () => {

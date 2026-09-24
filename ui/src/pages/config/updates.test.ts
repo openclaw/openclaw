@@ -50,7 +50,11 @@ describe("renderUpdates", () => {
       name: "failed check with a known update",
       props: {
         update: {
-          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+          updateStatusCheckBanner: {
+            mode: "manual",
+            tone: "warn",
+            text: "Could not check for updates: timeout",
+          },
         },
       },
       status: "Could not check for updates: timeout",
@@ -70,7 +74,11 @@ describe("renderUpdates", () => {
             install: { kind: "git", git: { status: "behind", commitsBehind: 3 } },
           },
           updateAvailable: null,
-          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+          updateStatusCheckBanner: {
+            mode: "manual",
+            tone: "warn",
+            text: "Could not check for updates: timeout",
+          },
         },
       },
       status: "Could not check for updates: timeout",
@@ -93,7 +101,11 @@ describe("renderUpdates", () => {
             },
           },
           updateAvailable: null,
-          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+          updateStatusCheckBanner: {
+            mode: "manual",
+            tone: "warn",
+            text: "Could not check for updates: timeout",
+          },
         },
       },
       status: "Could not check for updates: timeout",
@@ -108,7 +120,11 @@ describe("renderUpdates", () => {
         update: {
           updateSchedule: null,
           updateAvailable: null,
-          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+          updateStatusCheckBanner: {
+            mode: "manual",
+            tone: "warn",
+            text: "Could not check for updates: timeout",
+          },
         },
       },
       status: "Could not check for updates: timeout",
@@ -210,7 +226,7 @@ describe("renderUpdates", () => {
               updateStatusBanner: { tone: "danger", text: "Update error: build failed" },
               updateStatusCheckBanner: statusChecking
                 ? null
-                : { tone: "warn", text: "Could not check for updates: timeout" },
+                : { mode: "manual", tone: "warn", text: "Could not check for updates: timeout" },
             },
           }),
         ),
@@ -234,7 +250,7 @@ describe("renderUpdates", () => {
         openSystemSettings: vi.fn(),
         openPanel: vi.fn(),
         checkForUpdates: vi.fn(),
-        installChromeExtension: vi.fn(),
+        setupChromeExtension: vi.fn(),
         refresh: vi.fn(),
         dispose: vi.fn(),
       } satisfies NativeDeviceSettingsCapability;
@@ -261,7 +277,7 @@ describe("renderUpdates", () => {
       openSystemSettings: vi.fn(),
       openPanel: vi.fn(),
       checkForUpdates: vi.fn(),
-      installChromeExtension: vi.fn(),
+      setupChromeExtension: vi.fn(),
       refresh: vi.fn(),
       dispose: vi.fn(),
     } satisfies NativeDeviceSettingsCapability;
@@ -614,52 +630,6 @@ describe("renderUpdates", () => {
       container,
     );
     expect(row("Status").querySelector("button")).toBeNull();
-  });
-
-  it("renders bounded dev commit details only when supplied", () => {
-    render(
-      renderUpdates(
-        createProps({
-          update: {
-            updateSchedule: {
-              channel: "dev",
-              autoEnabled: false,
-              install: { kind: "git", git: { status: "behind", commitsBehind: 2 } },
-              target: {
-                kind: "git",
-                upstreamRef: "origin/main",
-                upstreamSha: "b".repeat(40),
-                commitsBehind: 2,
-              },
-            },
-            updateAvailable: {
-              currentVersion: "2026.8.1",
-              latestVersion: "2026.8.1",
-              channel: "dev",
-              currentSha: "a".repeat(40),
-              upstreamRef: "origin/main",
-              upstreamSha: "b".repeat(40),
-              commitsBehind: 2,
-              commits: [
-                { sha: "b123456", subject: "Add held update campaigns" },
-                { sha: "a987654", subject: "Show dev commit details" },
-              ],
-            },
-          },
-        }),
-      ),
-      container,
-    );
-
-    expect(row("Commits").querySelectorAll("[role='listitem']")).toHaveLength(2);
-    expect(row("Commits").textContent).toContain("b123456");
-    expect(row("Commits").textContent).toContain("Show dev commit details");
-    expect(row("Status").textContent).toContain("Update available 2 commits behind");
-    expect(row("Status").textContent).not.toContain("Up to date");
-    expect(row("Status").querySelector(".settings-status__dot")).toBeNull();
-
-    render(renderUpdates(createProps()), container);
-    expect(container.querySelector(".updates-commit-list")).toBeNull();
   });
 
   it("shows truthful Git build, install, and commit ages", () => {

@@ -50,7 +50,7 @@ if (isMainThread && process.send && process.report.directory) {
       }
     }
   };
-  process.prependListener("SIGUSR2", () => {
+  process.prependListener("SIGQUIT", () => {
     try {
       const handles = process._getActiveHandles();
       fs.writeFileSync(

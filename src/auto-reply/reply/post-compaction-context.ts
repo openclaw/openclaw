@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
@@ -15,6 +18,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { FollowupRun } from "./queue/types.js";
 
 const log = createSubsystemLogger("post-compaction-context");
 
@@ -251,4 +255,26 @@ export function extractSections(
   }
 
   return results;
+}
+
+export async function appendPostCompactionRefreshPrompt(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+}): Promise<void> {
+  const refreshPrompt = await readPostCompactionContext(params.followupRun.run.workspaceDir, {
+    cfg: params.cfg,
+    agentId: params.followupRun.run.agentId,
+  });
+  if (!refreshPrompt) {
+    return;
+  }
+
+  const existingPrompt = normalizeOptionalString(params.followupRun.run.extraSystemPrompt);
+  if (existingPrompt?.includes(refreshPrompt)) {
+    return;
+  }
+
+  params.followupRun.run.extraSystemPrompt = [existingPrompt, refreshPrompt]
+    .filter(Boolean)
+    .join("\n\n");
 }

@@ -84,8 +84,9 @@ describe("createDiscordProviderInteractionSurface", () => {
 
   it("binds native slash commands to the owning Gateway dispatcher", () => {
     const dispatchReplyFromConfig = vi.fn();
+    const buildContext = vi.fn();
     const channelRuntime = createPluginRuntimeMock({
-      channel: { reply: { dispatchReplyFromConfig } },
+      channel: { reply: { dispatchReplyFromConfig }, inbound: { buildContext } },
     }).channel;
     const { createNativeCommand } = createInteractionHarness({
       commandSpecs: [normalCommandSpec],
@@ -96,5 +97,6 @@ describe("createDiscordProviderInteractionSurface", () => {
     expect(createNativeCommand.mock.calls[0]?.[0].dispatchReplyFromConfig).toBe(
       dispatchReplyFromConfig,
     );
+    expect(createNativeCommand.mock.calls[0]?.[0].buildContext).toBe(buildContext);
   });
 });

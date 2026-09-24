@@ -1,6 +1,7 @@
 // Message-action specs describe which actions need destinations and which
 // legacy/plugin aliases count as an existing target.
 import {
+  hasNonEmptyString,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -20,66 +21,99 @@ type MessageActionTargetMode = "to" | "channelId" | "none";
 /**
  * Target-parameter policy for each supported channel message action.
  */
-export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, MessageActionTargetMode> =
-  {
-    send: "to",
-    broadcast: "none",
-    poll: "to",
-    "poll-vote": "to",
-    react: "to",
-    reactions: "to",
-    read: "to",
-    edit: "to",
-    unsend: "to",
-    reply: "to",
-    sendWithEffect: "to",
-    renameGroup: "to",
-    setGroupIcon: "to",
-    addParticipant: "to",
-    removeParticipant: "to",
-    leaveGroup: "to",
-    sendAttachment: "to",
-    delete: "to",
-    pin: "to",
-    unpin: "to",
-    "list-pins": "to",
-    permissions: "to",
-    "thread-create": "to",
-    "thread-list": "none",
-    "thread-reply": "to",
-    search: "none",
-    sticker: "to",
-    "sticker-search": "none",
-    "member-info": "none",
-    "role-info": "none",
-    "emoji-list": "none",
-    "emoji-upload": "none",
-    "sticker-upload": "none",
-    "role-add": "none",
-    "role-remove": "none",
-    "channel-info": "channelId",
-    "channel-list": "none",
-    "channel-create": "none",
-    "conversation-open": "none",
-    "channel-edit": "channelId",
-    "channel-delete": "channelId",
-    "channel-move": "channelId",
-    "category-create": "none",
-    "category-edit": "none",
-    "category-delete": "none",
-    "topic-create": "to",
-    "topic-edit": "to",
-    "voice-status": "none",
-    "event-list": "none",
-    "event-create": "none",
-    timeout: "none",
-    kick: "none",
-    ban: "none",
-    "set-profile": "none",
-    "set-presence": "none",
-    "download-file": "none",
-    "upload-file": "to",
-  };
+const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, MessageActionTargetMode> = {
+  send: "to",
+  broadcast: "none",
+  poll: "to",
+  "poll-vote": "to",
+  react: "to",
+  reactions: "to",
+  read: "to",
+  edit: "to",
+  unsend: "to",
+  reply: "to",
+  sendWithEffect: "to",
+  renameGroup: "to",
+  setGroupIcon: "to",
+  addParticipant: "to",
+  removeParticipant: "to",
+  leaveGroup: "to",
+  sendAttachment: "to",
+  delete: "to",
+  pin: "to",
+  unpin: "to",
+  "list-pins": "to",
+  permissions: "to",
+  "thread-create": "to",
+  "thread-list": "none",
+  "thread-reply": "to",
+  search: "none",
+  sticker: "to",
+  "sticker-search": "none",
+  "member-info": "none",
+  "role-info": "none",
+  "emoji-list": "none",
+  "emoji-upload": "none",
+  "sticker-upload": "none",
+  "role-add": "none",
+  "role-remove": "none",
+  "channel-info": "channelId",
+  "channel-list": "none",
+  "channel-create": "none",
+  "conversation-open": "none",
+  "channel-edit": "channelId",
+  "channel-delete": "channelId",
+  "channel-move": "channelId",
+  "category-create": "none",
+  "category-edit": "none",
+  "category-delete": "none",
+  "topic-create": "to",
+  "topic-edit": "to",
+  "voice-status": "none",
+  "event-list": "none",
+  "event-create": "none",
+  timeout: "none",
+  kick: "none",
+  ban: "none",
+  "set-profile": "none",
+  "set-presence": "none",
+  "download-file": "none",
+  "upload-file": "to",
+};
+
+/** Maps canonical `target` into the legacy field required by the action implementation. */
+export function applyTargetToParams(params: {
+  action: string;
+  args: Record<string, unknown>;
+}): void {
+  const target = normalizeOptionalString(params.args.target) ?? "";
+  const hasLegacyTo = hasNonEmptyString(params.args.to);
+  const hasLegacyChannelId = hasNonEmptyString(params.args.channelId);
+  const mode =
+    // SAFETY: Missing keys fall back to "none"; only "to" and "channelId" map a target below.
+    MESSAGE_ACTION_TARGET_MODE[params.action as keyof typeof MESSAGE_ACTION_TARGET_MODE] ?? "none";
+
+  if (mode !== "none") {
+    if (hasLegacyTo || hasLegacyChannelId) {
+      throw new Error("Use `target` instead of `to`/`channelId`.");
+    }
+  } else if (hasLegacyTo) {
+    throw new Error("Use `target` for actions that accept a destination.");
+  }
+
+  if (!target) {
+    return;
+  }
+  if (mode === "channelId") {
+    params.args.channelId = target;
+    return;
+  }
+  if (mode === "to") {
+    params.args.to = target;
+    return;
+  }
+  throw new Error(`Action ${params.action} does not accept a target.`);
+}
 
 type ActionTargetAliasSpec = {
   aliases: string[];

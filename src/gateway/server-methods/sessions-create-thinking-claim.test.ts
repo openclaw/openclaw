@@ -144,7 +144,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         15_000,
         "created-claim create response",
       );
-      expect(created).toMatchObject({
+      expect(created, sessions.state.error ?? undefined).toMatchObject({
         key,
         initialRun: { status: "started" },
         entry: { thinkingLevel: "high", updatedAt: Date.now() },

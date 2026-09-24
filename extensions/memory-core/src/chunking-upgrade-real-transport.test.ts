@@ -11,7 +11,9 @@ import { DatabaseSync } from "node:sqlite";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -182,6 +184,7 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
     }
     await manager.close();
     await closeAllMemorySearchManagers();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const db = new DatabaseSync(dbPath);
     try {
@@ -240,7 +243,9 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
     const pendingServers = servers.splice(0);
     await Promise.all(pendingServers.map((server) => server.close()));
     await closeAllMemorySearchManagers();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     resetMemoryCoreDreamingStateForTests();
     if (originalStateDir === undefined) {

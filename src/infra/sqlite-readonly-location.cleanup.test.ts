@@ -34,6 +34,30 @@ function fixture(strict: boolean) {
 
 describe("prepared SQLite snapshot cleanup", () => {
   it.each([false, true])(
+    "removes captured host links without enumerating a symlink cycle (async: %s)",
+    async (asynchronous) => {
+      const { ownedRoot, prepared } = fixture(false);
+      const host = tempDirs.make("sqlite-snapshot-linked-host-");
+      const sentinel = path.join(host, "host-package.txt");
+      const modules = path.join(ownedRoot, "plugin-captures", "generation", "node_modules");
+      fs.mkdirSync(modules, { recursive: true });
+      fs.writeFileSync(path.join(ownedRoot, "owner.sqlite"), "");
+      fs.writeFileSync(sentinel, "host bytes");
+      fs.symlinkSync(host, path.join(modules, "openclaw"), "junction");
+      fs.symlinkSync(ownedRoot, path.join(host, "captures"), "junction");
+      const reads = vi.spyOn(fs, "readdirSync");
+
+      expect(asynchronous ? await prepared.cleanupAsync() : prepared.cleanup()).toBe(true);
+      expect(fs.existsSync(ownedRoot)).toBe(false);
+      expect(fs.readFileSync(sentinel, "utf8")).toBe("host bytes");
+      const enumeratedNames = reads.mock.results.flatMap((result) =>
+        result.type === "return" ? result.value.map((entry) => entry.name.toString()) : [],
+      );
+      expect(enumeratedNames).not.toContain("host-package.txt");
+    },
+  );
+
+  it.each([false, true])(
     "retains cancelled orphan cleanup for retry (strict: %s)",
     async (strict) => {
       const { ownedRoot, sibling, prepared } = fixture(strict);

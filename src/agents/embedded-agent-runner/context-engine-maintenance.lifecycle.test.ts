@@ -11,7 +11,6 @@ import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-stat
 import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
 import {
   configureTaskRegistryMaintenance,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
 } from "../../tasks/task-registry.maintenance.js";
 import {
@@ -24,7 +23,7 @@ import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 const CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
 
 afterEach(async () => {
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetCommandQueueStateForTest();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });

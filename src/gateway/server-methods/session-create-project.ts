@@ -373,7 +373,7 @@ export async function prepareSessionWorkspace(params: {
         name: pending.name,
         baseRef: pending.baseRef,
         checkoutCommit: pending.baseCommit,
-        label: title ?? resolveExplicitSessionName(saved) ?? pending.titleSource,
+        label: title ?? resolveExplicitSessionName(saved),
         runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         signal,
         commitGuard: assertRunOwnership,

@@ -26,7 +26,9 @@ export type ControlUiLinkReaderPreviewParams = {
   /** Selected agent hint; the receiving owner still authorizes identity selection. */
   agentId?: string;
 };
-export type ControlUiLinkReaderDetailParams = { url: string; refresh?: boolean };
+export type ControlUiLinkReaderDetailParams = ControlUiLinkReaderPreviewParams & {
+  refresh?: boolean;
+};
 export type ControlUiLinkReaderImage = {
   /** Echo the validated requested image URL. */
   url: string;
@@ -44,9 +46,14 @@ export type ControlUiLinkReaderPreview = {
     tone: "neutral" | "positive" | "negative" | "attention" | "accent";
   };
   author?: string;
+  /** Optional HTTPS profile link on the source origin. */
+  authorUrl?: string;
+  coAuthors?: Array<{ name: string; imageUrl?: string }>;
+  /** Total including authors omitted from the bounded coAuthors array. */
+  coAuthorCount?: number;
   createdAt?: string;
   updatedAt?: string;
-  metadata?: Array<{ label: string; value: string }>;
+  metadata?: Array<{ label: string; value: string; tone?: "positive" | "negative" }>;
   imageUrl?: string;
 };
 
@@ -55,6 +62,24 @@ export type ControlUiLinkReaderDocument = ControlUiLinkReaderPreview & {
   body: string;
   bodyTruncated?: boolean;
   partial?: boolean;
+  /** Passive provider-reported checks, not a mergeability or approval decision. */
+  checks?: {
+    state: "success" | "failure" | "pending" | "neutral" | "unavailable";
+    summary: string;
+    /** Known total; may be incomplete when truncated or unavailable. */
+    total: number;
+    items: Array<{
+      name: string;
+      state: "success" | "failure" | "pending" | "neutral";
+      detail?: string;
+      url?: string;
+    }>;
+    /** The item list is incomplete, including when a source could not be read. */
+    truncated?: boolean;
+    url?: string;
+    /** Exact source revision these checks describe, when available. */
+    commit?: string;
+  };
   comments?: Array<{
     id: string;
     url: string;

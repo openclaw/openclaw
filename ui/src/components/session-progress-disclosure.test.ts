@@ -49,11 +49,13 @@ describe("progress disclosure transitions", () => {
     (readingHistory) => {
       let state = collapse();
       state = resolve(state, { type: "history", readingHistory });
-      expect(resolve(state, { type: "complete", runId: "older-run" }).open).toBe(false);
-      state = resolve(state, { type: "complete", runId: "run-1" });
+      expect(resolve(state, { type: "complete", runId: "older-run", reopen: true }).open).toBe(
+        false,
+      );
+      state = resolve(state, { type: "complete", runId: "run-1", reopen: true });
       expect(state.open).toBe(!readingHistory);
       state = resolve(state, { type: "history", readingHistory: false });
-      state = resolve(state, { type: "complete", runId: "run-1" });
+      state = resolve(state, { type: "complete", runId: "run-1", reopen: true });
       expect(state.open).toBe(!readingHistory);
     },
   );
@@ -61,7 +63,7 @@ describe("progress disclosure transitions", () => {
   it("keeps a manual close through completion, new runs, and later visits", () => {
     let state = resolve(mount(), { type: "click", open: false });
     state = resolve(state, { type: "history", readingHistory: false });
-    state = resolve(state, { type: "complete", runId: "run-1" });
+    state = resolve(state, { type: "complete", runId: "run-1", reopen: true });
     expect(state.open).toBe(false);
     state = resolve(state, { type: "run", runId: "run-2", open: true });
     expect(state.open).toBe(false);
@@ -103,11 +105,11 @@ describe("progress disclosure transitions", () => {
       completedRunId: "run-1",
       readingHistory: false,
     });
-    state = resolve(state, { type: "complete", runId: "run-1" });
+    state = resolve(state, { type: "complete", runId: "run-1", reopen: true });
     expect(state.open).toBe(false);
     state = resolve(state, { type: "run", runId: "run-2", open: false });
     expect(state.open).toBe(false);
-    state = resolve(state, { type: "complete", runId: "run-2" });
+    state = resolve(state, { type: "complete", runId: "run-2", reopen: true });
     expect(state.open).toBe(true);
   });
 });
@@ -116,7 +118,7 @@ describe("elastic progress disclosure", () => {
   it("retains pixel choices through history and completion, resetting only for a new run", () => {
     let state = resolve(mount(), { type: "extent", extent: 48 });
     state = resolve(state, { type: "history", readingHistory: false });
-    state = resolve(state, { type: "complete", runId: "run-1" });
+    state = resolve(state, { type: "complete", runId: "run-1", reopen: true });
     state = resolve(state, { type: "run", runId: "run-1", open: false });
     expect(state).toMatchObject({ open: true, manualOpen: 48 });
     expect(mount(state.manualOpen).manualOpen).toBe(48);

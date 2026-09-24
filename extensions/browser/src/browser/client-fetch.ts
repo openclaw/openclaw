@@ -23,6 +23,7 @@ import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
 import {
+  BROWSER_ACT_ERROR_CODES,
   parseBrowserErrorPayload,
   type BrowserActErrorCode,
   type BrowserErrorPayload,
@@ -59,7 +60,10 @@ function browserServiceErrorFromPayload(
 ): BrowserServiceError {
   const parsed = parseBrowserErrorPayload(value);
   const message = parsed?.error ?? fallback;
-  const modelHint = resolveBrowserServiceModelHint(message, status);
+  const modelHint =
+    parsed?.code === BROWSER_ACT_ERROR_CODES.operationFailed && status !== 401
+      ? undefined
+      : resolveBrowserServiceModelHint(message, status);
   return new BrowserServiceError(
     modelHint ? appendBrowserToolModelHint(message, modelHint) : message,
     parsed ?? undefined,
@@ -91,33 +95,32 @@ function withLoopbackBrowserAuth(
     return { ...init, headers };
   }
 
-  try {
-    const cfg = getRuntimeConfig();
-    const auth = resolveBrowserControlAuth(cfg);
-    if (auth.token) {
-      headers.set("Authorization", `Bearer ${auth.token}`);
-      return { ...init, headers };
-    }
-    if (auth.password) {
-      headers.set("x-openclaw-password", auth.password);
-      return { ...init, headers };
-    }
-  } catch {
-    // ignore config/auth lookup failures and continue without auth headers
-  }
-
-  // Sandbox bridge servers can run with per-process ephemeral auth on dynamic ports.
-  // Fall back to the in-memory registry if config auth is not available.
+  // A registered listener owns its credential even when Gateway auth differs.
   try {
     const { port } = parseBrowserHttpUrl(url, "browser control URL");
     const bridgeAuth = getBridgeAuthForPort(port);
     if (bridgeAuth?.token) {
       headers.set("Authorization", `Bearer ${bridgeAuth.token}`);
-    } else if (bridgeAuth?.password) {
+      return { ...init, headers };
+    }
+    if (bridgeAuth?.password) {
       headers.set("x-openclaw-password", bridgeAuth.password);
+      return { ...init, headers };
     }
   } catch {
-    // ignore
+    // A non-bridge listener may still use configured browser control auth.
+  }
+
+  try {
+    const cfg = getRuntimeConfig();
+    const auth = resolveBrowserControlAuth(cfg);
+    if (auth.token) {
+      headers.set("Authorization", `Bearer ${auth.token}`);
+    } else if (auth.password) {
+      headers.set("x-openclaw-password", auth.password);
+    }
+  } catch {
+    // Continue without implicit auth when config lookup fails.
   }
 
   return { ...init, headers };
@@ -192,7 +195,7 @@ function resolveBrowserFetchOperatorHint(
   }
   const isLocal = !isAbsoluteHttp(url);
   return isLocal
-    ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
+    ? `Run \`${formatCliCommand("openclaw browser doctor")}\` and check the Gateway logs.`
     : "If this is a sandboxed session, ensure the sandbox browser is running.";
 }
 

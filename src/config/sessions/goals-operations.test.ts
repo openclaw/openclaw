@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -237,6 +238,7 @@ describe("typed Goal operation persistence", () => {
     const first = await admit();
     await clearSessionGoal(scope());
     const eventsBefore = await loadTranscriptEvents(scope());
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const replay = await admit();
     expect(replay.sessionTurnMutationResult).toEqual({
@@ -263,7 +265,7 @@ describe("typed Goal operation persistence", () => {
         .db.prepare("UPDATE session_goal_operations SET result_json = ? WHERE operation_id = ?")
         .run(corrupt, "start-1");
       const eventsBefore = await loadTranscriptEvents(scope());
-      await expect(admit()).rejects.toThrow("Stored Goal operation receipt is invalid");
+      await expect(admit()).rejects.toMatchObject({ code: "receipt-invalid" });
       expect(loadSessionEntry(scope())?.goal).toBeUndefined();
       expect(await loadTranscriptEvents(scope())).toEqual(eventsBefore);
     },

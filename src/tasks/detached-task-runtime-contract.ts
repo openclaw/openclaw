@@ -104,6 +104,10 @@ export type DetachedTaskTerminalState = Omit<
 
 export type CreatedDetachedTaskRun = {
   task: TaskRecord;
+  finalizeActive: (
+    terminal: Pick<DetachedTaskTerminalState, "status" | "endedAt" | "error" | "terminalSummary">,
+    canSettle: (task: TaskRecord) => boolean,
+  ) => Promise<void>;
   settleUnstarted: (
     terminal: Pick<DetachedTaskTerminalState, "status" | "endedAt" | "error" | "terminalSummary">,
     canSettle: (task: TaskRecord) => boolean,

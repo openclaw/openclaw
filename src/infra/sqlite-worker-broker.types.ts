@@ -1,5 +1,6 @@
 import type { Worker } from "node:worker_threads";
 import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type { SqliteWorkerRequest, SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -57,6 +58,8 @@ export type Job = {
   detach(): void;
 };
 export type Slot = {
+  runtimeGeneration?: RuntimeWorkerGeneration;
+  borrowedGenerationSlot?: true;
   worker: Worker;
   receiveReply(reply: SqliteWorkerReply, pumping?: boolean): void;
   actors: Set<Actor>;
@@ -70,6 +73,10 @@ export type Slot = {
   pendingOpens: number;
 };
 export type Actor = {
+  runtimeGeneration?: RuntimeWorkerGeneration;
+  nativeStopped: Promise<void>;
+  markNativeStopped(): void;
+  stateDatabasePath?: string;
   id: number;
   key: string;
   databasePath: string;
@@ -121,6 +128,7 @@ export type StoreClient = {
 };
 
 export type SqliteWorkerStoreOptions = {
+  runtimeGeneration?: RuntimeWorkerGeneration;
   moduleUrl: URL;
   databasePath: string;
   input: unknown;
@@ -129,10 +137,16 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  preparation?: Buffer;
+  runtimeGeneration?: RuntimeWorkerGeneration;
+  carrierUrl: URL;
   expectedIdentity?: string;
   createOpenAdmission?: SqliteWorkerAdmissionFactory;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   retainCleanup?: (cleanup: SqliteWorkerAdmissionCleanup) => void;
+  onNativeStopped?: (stopped: Promise<void>) => void;
+  stateDatabasePath?: string;
+  createAdmission?: SqliteWorkerAdmissionFactory;
   assertCurrent?: () => void;
   moduleUrl: URL;
   databasePath: string;
@@ -145,4 +159,15 @@ export type PreparedSqliteWorkerOpen = {
 export type SqliteWorkerAdmissionCleanup = {
   readonly pending: boolean;
   close(): Promise<void>;
+};
+
+export type SqliteWorkerOpenCustody = Pick<
+  PreparedSqliteWorkerOpen,
+  "maintenanceScope" | "retainCleanup" | "createAdmission" | "stateDatabasePath" | "onNativeStopped"
+> & { preparation?: unknown };
+export type SqliteWorkerInputPreparation = {
+  assertCurrent: () => void;
+  /** Transfer to a dispatch that reaches enqueue synchronously, before returning its Promise. */
+  handoff<T>(dispatch: () => Promise<T>): Promise<T>;
+  release(): void;
 };

@@ -3,8 +3,18 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import {
+  expectPaletteProjectGrouping,
+  expectPaletteSettingsAlignment,
+} from "./command-palette-settings.test-support.ts";
+import {
+  appearanceKey,
+  foregroundKey,
+  foregroundDraft,
+  scenario,
+  openFromForeground,
+  expectForegroundUnchanged,
+} from "./command-palette.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -20,133 +30,6 @@ const suite = createControlUiE2eSuite({
   name: "command palette background creation",
   browserLaunchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] },
 });
-const foregroundKey = "agent:main:dashboard:palette-foreground";
-const appearanceKey = "agent:main:dashboard:palette-appearance";
-const foregroundDraft = "Keep this unsent foreground draft exactly as it is.";
-const caret = 10;
-const workspace = "/workspace/palette-fixture";
-
-function scenario(methodResponses: Record<string, unknown> = {}): ControlUiMockGatewayScenario {
-  return {
-    sessionKey: foregroundKey,
-    workspace,
-    workspaceGit: true,
-    operatorScopes: ["operator.read", "operator.write"],
-    featureMethods: [
-      "agent.wait",
-      "chat.metadata",
-      "chat.startup",
-      "sessions.create",
-      "sessions.dispatch",
-      "sessions.search",
-    ],
-    sessions: [
-      createControlUiSessionRow(foregroundKey, "Foreground planning", Date.now() - 60_000),
-      createControlUiSessionRow(appearanceKey, "Appearance audit", Date.now() - 120_000),
-    ],
-    historyMessages: [
-      { role: "assistant", content: [{ type: "text", text: "The foreground task stays here." }] },
-    ],
-    methodResponses: {
-      "sessions.list": {
-        cases: [
-          {
-            match: { search: "appearance" },
-            response: {
-              ts: 1,
-              path: "",
-              defaults: {},
-              count: 1,
-              sessions: [
-                createControlUiSessionRow(appearanceKey, "Appearance audit", Date.now() - 60_000),
-              ],
-            },
-          },
-        ],
-      },
-      "agents.list": {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [
-          {
-            id: "main",
-            name: "Main",
-            workspace,
-            workspaceGit: true,
-            model: { primary: "openai/gpt-5.5" },
-          },
-          {
-            id: "reviewer",
-            name: "Reviewer",
-            workspace,
-            workspaceGit: true,
-            model: { primary: "openai/gpt-5.5" },
-          },
-        ],
-      },
-      "agent.identity.get": {
-        cases: [
-          { match: { agentId: "main" }, response: { agentId: "main", name: "Main" } },
-          { match: { agentId: "reviewer" }, response: { agentId: "reviewer", name: "Reviewer" } },
-        ],
-      },
-      "environments.list": {
-        environments: [
-          {
-            id: "node:palette-runner",
-            type: "node",
-            label: "Palette runner",
-            status: "available",
-            sessionHost: true,
-            workerSlots: { total: 2, available: 1 },
-          },
-        ],
-        profiles: [],
-      },
-      "worktrees.branches": {
-        branches: [{ kind: "local", name: "main" }],
-        defaultBranch: "main",
-        repositoryStatus: "git",
-      },
-      ...methodResponses,
-    },
-  };
-}
-
-async function openFromForeground(page: Page) {
-  await page.goto(controlUiSessionUrl(suite.server.baseUrl, foregroundKey));
-  const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
-  await composer.fill(foregroundDraft);
-  await composer.evaluate((element: HTMLTextAreaElement, offset) => {
-    element.focus();
-    element.setSelectionRange(offset, offset);
-  }, caret);
-  const url = page.url();
-  await page.keyboard.press("ControlOrMeta+K");
-  const palette = page.locator("openclaw-command-palette");
-  const input = palette.locator(".cmd-palette__input");
-  await input.waitFor({ state: "visible" });
-  await expect
-    .poll(() => input.evaluate((element) => document.activeElement === element))
-    .toBe(true);
-  return { composer, url, palette, input };
-}
-
-async function expectForegroundUnchanged(page: Page, composer: Locator, url: string) {
-  expect(page.url()).toBe(url);
-  expect(await composer.inputValue()).toBe(foregroundDraft);
-  await expect
-    .poll(() =>
-      composer.evaluate((element: HTMLTextAreaElement) => ({
-        focused: document.activeElement === element,
-        start: element.selectionStart,
-        end: element.selectionEnd,
-      })),
-    )
-    .toEqual({ focused: true, start: caret, end: caret });
-}
-
 async function changePicker(
   picker: Locator,
   eventType: "wa-after-show" | "wa-after-hide",
@@ -198,6 +81,308 @@ function captureAfter(page: Page, name: string) {
 }
 
 suite.define(() => {
+  it("preserves manual prompt scrolling when background destination discovery finishes", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        ...scenario(),
+        deferredMethods: ["environments.list"],
+      });
+      const { composer, url, palette, input } = await openFromForeground(
+        page,
+        suite.server.baseUrl,
+      );
+      await gateway.waitForRequest("environments.list");
+      const capture = captureAfter(page, "palette-manual-scroll");
+      const prompt = [
+        "FIRST WORDS: Review the complete task before starting.",
+        "Keep the foreground conversation unchanged.",
+        "Read the existing behavior and identify its owner.",
+        "Compare related paths before choosing a repair.",
+        "Keep the fix focused on the reported behavior.",
+        "Add a regression test that fails before the fix.",
+        "Verify the repaired behavior in the browser.",
+        "LAST WORDS: Open a pull request with the evidence.",
+      ].join("\n");
+      await input.fill(prompt);
+      const search = palette.locator(".cmd-palette__search");
+      await expect.poll(() => search.evaluate((element: HTMLElement) => element.inert)).toBe(true);
+      expect(await gateway.getRequests("sessions.search")).toEqual([]);
+      await expect.poll(() => input.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      await input.hover();
+      await page.mouse.wheel(0, -2000);
+      await expect.poll(() => input.evaluate((element) => element.scrollTop)).toBe(0);
+      expect(await input.evaluate((element: HTMLTextAreaElement) => element.selectionEnd)).toBe(
+        prompt.length,
+      );
+      await capture("scrolled-to-first-words");
+
+      // Prompt mode pauses search, but destination discovery still updates the
+      // real draft controller and rerenders its input without an edit.
+      await gateway.resolveDeferred("environments.list");
+      // Let the render's layout frame and ResizeObserver delivery finish.
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      await capture("after-background-discovery");
+      expect(await input.evaluate((element) => element.scrollTop)).toBe(0);
+      expect(await input.inputValue()).toBe(prompt);
+      expect(await composer.inputValue()).toBe(foregroundDraft);
+      expect(page.url()).toBe(url);
+      expect(await gateway.getRequests("sessions.create")).toEqual([]);
+
+      await input.pressSequentially(" Continue.");
+      await expect
+        .poll(() =>
+          input.evaluate(
+            (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        )
+        .toBeLessThanOrEqual(1);
+      expect(await input.inputValue()).toBe(prompt + " Continue.");
+    });
+  });
+
+  it.each([
+    { width: 1280, colorScheme: "dark", reducedMotion: "no-preference" },
+    { width: 390, colorScheme: "light", reducedMotion: "reduce" },
+  ] as const)(
+    "collapses prompt searches in place and restores them at $width px",
+    async (options) => {
+      await suite.withPage(
+        {
+          colorScheme: options.colorScheme,
+          reducedMotion: options.reducedMotion,
+          viewport: { width: options.width, height: 900 },
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(
+            page,
+            scenario({ "models.list": { models: [], refreshFailed: true } }),
+          );
+          const { palette, input, composer, url } = await openFromForeground(
+            page,
+            suite.server.baseUrl,
+          );
+          await input.fill("appearance");
+          await palette.getByRole("option", { name: /^Appearance audit/ }).waitFor();
+          await palette
+            .locator(".cmd-palette__search")
+            .getByRole("status")
+            .filter({ hasText: "Models unavailable" })
+            .waitFor();
+          const search = palette.locator(".cmd-palette__search");
+          const original = (await palette.locator(".cmd-palette").boundingBox())!;
+          const inputTop = (await input.boundingBox())!.y;
+          const initialHeight = (await search.boundingBox())!.height;
+          const requestCount = (await gateway.getRequests("sessions.search")).length;
+          const prompt = "Help me plan the next steps for this small project this week";
+          const samples = await input.evaluateHandle((element: HTMLTextAreaElement, value) => {
+            const frames: Array<{
+              x: number;
+              y: number;
+              width: number;
+              inputY: number;
+              searchHeight: number;
+            }> = [];
+            const start = performance.now();
+            const sample = () => {
+              const bounds = element.closest(".cmd-palette")!.getBoundingClientRect();
+              frames.push({
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                inputY: element.getBoundingClientRect().y,
+                searchHeight: element
+                  .closest(".cmd-palette")!
+                  .querySelector(".cmd-palette__search")!
+                  .getBoundingClientRect().height,
+              });
+              if (performance.now() - start < 400) {
+                requestAnimationFrame(sample);
+              }
+            };
+            requestAnimationFrame(sample);
+            element.value = value;
+            element.dispatchEvent(new Event("input", { bubbles: true }));
+            return frames;
+          }, prompt);
+          await expect
+            .poll(() => search.evaluate((element: HTMLElement) => element.inert))
+            .toBe(true);
+          await expect.poll(async () => (await search.boundingBox())?.height).toBe(0);
+          await page.waitForTimeout(450);
+          const frames = await samples.jsonValue();
+          await samples.dispose();
+          expect(frames.length).toBeGreaterThan(1);
+          for (const frame of frames) {
+            expect(frame.x).toBeCloseTo(original.x, 1);
+            expect(frame.y).toBeCloseTo(original.y, 1);
+            expect(frame.width).toBeCloseTo(original.width, 1);
+            expect(frame.inputY).toBeCloseTo(inputTop, 1);
+          }
+          if (options.reducedMotion === "no-preference") {
+            expect(
+              frames.some(
+                (frame) => frame.searchHeight > 0 && frame.searchHeight < initialHeight - 1,
+              ),
+            ).toBe(true);
+          } else {
+            expect(
+              await search.evaluate((element) =>
+                Number.parseFloat(getComputedStyle(element).transitionDuration),
+              ),
+            ).toBeLessThanOrEqual(0.00001);
+          }
+          expect(await palette.getByRole("group", { name: "Filter search results" }).count()).toBe(
+            0,
+          );
+          expect(await palette.locator(".cmd-palette__search").getByRole("status").count()).toBe(0);
+          expect(await palette.getByRole("option").count()).toBe(0);
+          expect(await input.getAttribute("aria-controls")).toBeNull();
+          expect(await input.getAttribute("aria-activedescendant")).toBeNull();
+          expect(await input.evaluate((element) => document.activeElement === element)).toBe(true);
+          await input.press("ArrowDown");
+          await input.press("Enter");
+          expect(await input.inputValue()).toBe(prompt);
+          expect(page.url()).toBe(url);
+          expect(await composer.inputValue()).toBe(foregroundDraft);
+          expect(await gateway.getRequests("sessions.create")).toEqual([]);
+          expect(await gateway.getRequests("sessions.search")).toHaveLength(requestCount);
+          expect(
+            (await gateway.getRequests("sessions.list")).some(
+              (request) => isRecord(request.params) && request.params.search === prompt,
+            ),
+          ).toBe(false);
+          await input.fill(prompt.slice(0, 55));
+          await page.waitForTimeout(100);
+          expect(await search.evaluate((element: HTMLElement) => element.inert)).toBe(true);
+          expect(await gateway.getRequests("sessions.search")).toHaveLength(requestCount);
+          await input.fill(prompt.slice(0, 50));
+          await expect.poll(() => input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
+          await expect
+            .poll(async () => (await gateway.getRequests("sessions.search")).length)
+            .toBe(requestCount + 1);
+          expect((await gateway.getRequests("sessions.search")).at(-1)?.params).toMatchObject({
+            query: prompt.slice(0, 50),
+          });
+          await input.fill(prompt.slice(0, 59));
+          expect(await search.evaluate((element: HTMLElement) => element.inert)).toBe(false);
+          await expect
+            .poll(async () => (await gateway.getRequests("sessions.search")).length)
+            .toBe(requestCount + 2);
+          expect((await gateway.getRequests("sessions.search")).at(-1)?.params).toMatchObject({
+            query: prompt.slice(0, 59),
+          });
+          await input.fill(prompt);
+          await expect
+            .poll(() => search.evaluate((element: HTMLElement) => element.inert))
+            .toBe(true);
+          await page.waitForTimeout(100);
+          expect(await gateway.getRequests("sessions.search")).toHaveLength(requestCount + 2);
+          await input.fill("");
+          await expect
+            .poll(() => search.evaluate((element: HTMLElement) => element.inert))
+            .toBe(false);
+          await palette.getByRole("option", { name: "New session", exact: true }).waitFor();
+          await input.fill("appearance");
+          await palette.getByRole("option", { name: /^Appearance audit/ }).waitFor();
+          expect(await gateway.getRequests("sessions.search")).toHaveLength(requestCount + 3);
+          expect((await palette.locator(".cmd-palette").boundingBox())!.y).toBe(original.y);
+        },
+      );
+    },
+  );
+
+  it.each([
+    { mode: "dark", width: 1280 },
+    { mode: "light", width: 1280 },
+    { mode: "dark", width: 390 },
+    { mode: "light", width: 390 },
+  ] as const)(
+    "aligns settings and preserves keyboard focus in $mode at $width",
+    async ({ mode, width }) => {
+      await suite.withPage(
+        {
+          ...createControlUiE2eContextOptions(),
+          colorScheme: mode,
+          viewport: { width, height: 900 },
+          deviceScaleFactor: 2,
+        },
+        async ({ page }) => {
+          await installMockGateway(page, scenario());
+          const { palette } = await openFromForeground(page, suite.server.baseUrl);
+          const popup = palette.locator("wa-popover.palette-session-settings");
+          await changePicker(popup, "wa-after-show", () =>
+            palette.getByRole("button", { name: "New session settings", exact: true }).click(),
+          );
+          const directory =
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? createControlUiE2eArtifactDir(
+                  "palette-settings-" + mode + "-" + width,
+                  suite.artifactDir,
+                )
+              : undefined;
+          const capture = async (stage: string) => {
+            if (directory) {
+              await page.mouse.move(0, 0);
+              await popup.locator('[part="body"]').screenshot({
+                path: path.join(directory, stage + ".png"),
+                animations: "disabled",
+              });
+              await page.screenshot({
+                path: path.join(directory, stage + "-page.png"),
+                animations: "disabled",
+              });
+            }
+          };
+          await capture("initial");
+          await expectPaletteSettingsAlignment(popup);
+          const remember = popup.getByRole("checkbox", { name: /Remember settings for/ });
+          expect(await remember.isVisible()).toBe(true);
+          const workspaceButton = popup.locator(".palette-session-settings__workspace");
+          const search = popup.getByRole("searchbox", { name: "Search", exact: true });
+          await workspaceButton.click();
+          await search.waitFor({ state: "visible" });
+          await capture("pointer-projects");
+          await expectPaletteProjectGrouping(popup);
+          expect.soft(await remember.count()).toBe(0);
+          expect
+            .soft(await search.evaluate((element) => getComputedStyle(element).outlineStyle))
+            .toBe("none");
+          // Pointer entry keeps focus inside the nested view without summoning a
+          // text caret (or a touch keyboard). Tab still reaches its search field.
+          await page.keyboard.press("Tab");
+          expect
+            .soft(await search.evaluate((element) => document.activeElement === element))
+            .toBe(true);
+          await search.press("Escape");
+          expect(await remember.isVisible()).toBe(true);
+          expect(
+            await workspaceButton.evaluate((element) => document.activeElement === element),
+          ).toBe(true);
+          await workspaceButton.press("Enter");
+          await search.waitFor({ state: "visible" });
+          expect(await search.evaluate((element) => document.activeElement === element)).toBe(true);
+          expect(await search.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
+            "solid",
+          );
+          await capture("keyboard-projects");
+          await search.fill("no-such-workspace");
+          expect(await popup.locator("[data-machine]").count()).toBe(0);
+          await popup.getByRole("button", { name: "Back", exact: true }).click();
+          expect(await remember.isVisible()).toBe(true);
+          await workspaceButton.press("Enter");
+          expect(await search.inputValue()).toBe("");
+          await popup.locator('[data-machine="local"][data-project=""]').click();
+          expect(await remember.isVisible()).toBe(true);
+        },
+      );
+    },
+  );
+
   it.each(["light", "dark"] as const)(
     "remembers only palette settings and restores defaults when unchecked in %s",
     async (mode) => {
@@ -213,7 +398,10 @@ suite.define(() => {
             featureMethods: [...(base.featureMethods ?? []), "users.prefs.get", "users.prefs.set"],
             presenceUsers: [{ self: true, id: "palette-user", name: "Example User" }],
           });
-          const { composer, url, palette, input } = await openFromForeground(page);
+          const { composer, url, palette, input } = await openFromForeground(
+            page,
+            suite.server.baseUrl,
+          );
           const capture = captureAfter(page, "palette-remember-" + mode);
           const prompt = "Keep this prompt and its caret while changing preferences.";
           await input.fill(prompt);
@@ -326,8 +514,8 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
           await composer.fill(foregroundDraft);
           const url = page.url();
-          await module.request;
           await page.keyboard.press("ControlOrMeta+K");
+          await module.request;
           const input = page.locator(".cmd-palette__input");
           await input.fill("Start exactly this cold task");
           await input.press("ControlOrMeta+Enter");
@@ -367,7 +555,7 @@ suite.define(() => {
   it("keeps settings and session results as launcher actions instead of sending the query", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, scenario());
-      const { palette, input } = await openFromForeground(page);
+      const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
       const capture = captureAfter(page, "palette-mixed-results");
       await input.fill("appearance");
       const results = palette.locator(".cmd-palette__results");
@@ -426,7 +614,10 @@ suite.define(() => {
               "sessions.send": { runId: "palette-device-run", status: "started" },
             }),
           );
-          const { composer, url, palette, input } = await openFromForeground(page);
+          const { composer, url, palette, input } = await openFromForeground(
+            page,
+            suite.server.baseUrl,
+          );
           const capture = captureAfter(page, "palette-create-" + destination);
           await capture("empty-launcher");
           const singleLineHeight = (await input.boundingBox())!.height;
@@ -447,12 +638,12 @@ suite.define(() => {
             ],
           });
           await input.fill(prompt);
-          const results = palette.locator(".cmd-palette__results");
-          await expect.poll(() => results.getAttribute("aria-busy")).toBe("false");
-          const empty = palette.getByRole("heading", { name: "No results found", exact: true });
-          await empty.waitFor();
-          expect(await results.getByRole("option").count()).toBe(0);
-          expect(await results.isVisible()).toBe(false);
+          const searchPanel = palette.locator(".cmd-palette__search");
+          await expect
+            .poll(() => searchPanel.evaluate((element: HTMLElement) => element.inert))
+            .toBe(true);
+          await expect.poll(async () => (await searchPanel.boundingBox())?.height).toBe(0);
+          expect(await palette.getByRole("option").count()).toBe(0);
           expect((await input.boundingBox())!.height).toBeGreaterThan(singleLineHeight);
           const lineHeight = await input.evaluate((element) =>
             Number.parseFloat(getComputedStyle(element).lineHeight),
@@ -465,9 +656,13 @@ suite.define(() => {
           await input.pressSequentially(finalLine);
           const submittedPrompt = prompt + "\n" + finalLine;
           expect(await input.inputValue()).toBe(submittedPrompt);
-          await expect.poll(() => results.getAttribute("aria-busy")).toBe("false");
-          await empty.waitFor();
-          await capture("multiline-quiet-no-match");
+          expect(await input.getAttribute("aria-controls")).toBeNull();
+          expect(
+            (await gateway.getRequests("sessions.search")).filter(
+              (request) => isRecord(request.params) && request.params.query === submittedPrompt,
+            ),
+          ).toEqual([]);
+          await capture("multiline-prompt-mode");
 
           const settings = palette.locator("wa-popover.palette-session-settings");
           await changePicker(settings, "wa-after-show", () =>
@@ -586,8 +781,12 @@ suite.define(() => {
             },
           }),
         );
-        const { composer, url, palette, input } = await openFromForeground(page);
-        const prompt = "Keep this accepted session recoverable without sending twice.";
+        const { composer, url, palette, input } = await openFromForeground(
+          page,
+          suite.server.baseUrl,
+        );
+        const prompt =
+          "Keep this accepted session recoverable.\nDo not send the same request twice.";
         await input.fill(prompt);
         const start = palette.getByRole("button", {
           name: "Start new session in background",
@@ -640,7 +839,10 @@ suite.define(() => {
           "sessions.create": { key: "agent:main:dashboard:palette-retried", runStarted: true },
         }),
       );
-      const { composer, url, palette, input } = await openFromForeground(page);
+      const { composer, url, palette, input } = await openFromForeground(
+        page,
+        suite.server.baseUrl,
+      );
       const capture = captureAfter(page, "palette-create-retry");
       const prompt = "Preserve this task when creation is denied.\nRetry only after I ask.";
       await input.fill(prompt);

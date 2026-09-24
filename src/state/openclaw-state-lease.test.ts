@@ -91,7 +91,7 @@ describe("OpenClaw state lease", () => {
           }, async () => {
             // Recreate the pending-migration condition for the exit-time reopen.
             const { db } = openOpenClawStateDatabase({ env });
-            db.exec("PRAGMA user_version = 0;");
+            db.exec("DROP INDEX idx_worker_session_placements_environment; PRAGMA user_version = 0;");
             closeOpenClawStateDatabaseForTest();
             // Simulate the JSON envelope followed by restored output routing.
             // Await the write callback — stdout is piped in the test harness, so

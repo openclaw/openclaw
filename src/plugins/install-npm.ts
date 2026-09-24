@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withInstallActivity } from "../infra/install-progress.js";
 import { resolveNpmSpecMetadata, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import { resolveManagedNpmRootDependencySpec } from "../infra/npm-managed-root.js";
@@ -83,7 +84,9 @@ export async function installPluginFromNpmSpec(
     };
   }
 
-  const metadataResult = await resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal });
+  const metadataResult = await withInstallActivity(logger, "resolve", () =>
+    resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal }),
+  );
   if (!metadataResult.ok) {
     return {
       ok: false,

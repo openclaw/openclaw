@@ -1,9 +1,10 @@
+import path from "node:path";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 /**
  * Resolves workspace, runtime setup, context guards, and startup for an embedded attempt.
  * It may assume dispatch inputs and provider metadata are ready.
  */
-import path from "node:path";
-import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import type { ModelCompatConfig } from "../../../config/types.models.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -241,11 +242,15 @@ export function installEmbeddedAttemptContextGuards(input: {
         }
       : {};
 
+  const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
   const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
   // Disabled pruning must not resolve provider hooks and cold-load plugin metadata.
   const cacheTtlSettings =
     contextPruning?.mode === "cache-ttl" &&
-    isCacheTtlEligibleProvider(attempt.provider, attempt.modelId, attempt.model.api)
+    isCacheTtlEligibleProvider(attempt.provider, attempt.modelId, attempt.model.api, {
+      baseUrl: attempt.model.baseUrl,
+      supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
+    })
       ? resolveCacheTtlPruningSettings(contextPruning)
       : undefined;
   const previousCacheTtlTransform = activeSession.agent.transformContext;
@@ -355,6 +360,7 @@ export function installEmbeddedAttemptContextGuards(input: {
     activeSession.agent,
     {
       workspaceDir: input.effectiveWorkspace,
+      agentWorkspaceDir: attempt.workspaceDir,
       model: attempt.model,
       maxBytes: MAX_IMAGE_BYTES,
       maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,

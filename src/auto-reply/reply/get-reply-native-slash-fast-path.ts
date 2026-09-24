@@ -18,7 +18,7 @@ import type { SkillCommandSpec } from "../../skills/types.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   isAuthorizedTextSlashCommandTurn,
@@ -300,16 +300,16 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
 
   let loadedSkillCommands: SkillCommandSpec[] | undefined;
   const loadNativeSkillCommands = async () => {
-    loadedSkillCommands ??= (await skillCommandsRuntimeLoader.load()).listSkillCommandsForWorkspace(
-      {
-        workspaceDir: params.workspaceDir,
-        cfg: params.cfg,
-        agentId: params.agentId,
-        skillFilter: params.skillFilter,
-        sessionEntry: sessionState.sessionEntry,
-        sessionKey: sessionState.sessionKey,
-      },
-    );
+    loadedSkillCommands ??= await (
+      await skillCommandsRuntimeLoader.load()
+    ).prepareSkillCommandsForWorkspace({
+      workspaceDir: params.workspaceDir,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      skillFilter: params.skillFilter,
+      sessionEntry: sessionState.sessionEntry,
+      sessionKey: sessionState.sessionKey,
+    });
     return loadedSkillCommands;
   };
 

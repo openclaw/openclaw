@@ -196,7 +196,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       }
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
-      const decisionPromise = manager.register(record, timeoutMs);
+      const { decision: decisionPromise } = await manager.register(record, timeoutMs);
       await handlePendingPluginApprovalRequest({
         manager,
         record,
@@ -215,7 +215,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       }
       if (
         decision === "allow-once" &&
-        !manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`)
+        !(await manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`))
       ) {
         return { id: record.id, decision: null };
       }

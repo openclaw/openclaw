@@ -24,6 +24,11 @@ type Claim = Awaited<
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => resetPluginStateStoreForTests());
 
+async function expectNoMigrationStaging(sourcePath: string) {
+  const files = await fs.readdir(path.dirname(sourcePath));
+  expect(files.filter((name) => name.startsWith(".openclaw-owner-"))).toEqual([]);
+}
+
 async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey = "global") {
   const directory = directories.make("acpx-owner-migration-");
   const stateDir = path.join(directory, "state");
@@ -37,7 +42,7 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
       overrides: {
         fixture: [
           process.execPath,
-          fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url)),
+          fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url)),
           peer,
         ].join(" "),
       },
@@ -144,6 +149,7 @@ it.each(["none", "publication", "canonical"])(
       expect((await acpxSessionOwnerMigration.migrateLegacyState(f.input)).warnings).toEqual([
         expect.stringContaining("canonical metadata verification failed"),
       ]);
+      await expectNoMigrationStaging(f.sourcePath);
       expect(JSON.parse(await fs.readFile(f.sourcePath, "utf8"))).toEqual(f.raw);
       f.setVerificationInterrupted(false);
     }
@@ -152,11 +158,13 @@ it.each(["none", "publication", "canonical"])(
       expect((await acpxSessionOwnerMigration.migrateLegacyState(f.input)).warnings).toEqual([
         expect.stringContaining("interrupted after publication"),
       ]);
+      await expectNoMigrationStaging(f.sourcePath);
       expect(JSON.parse(await fs.readFile(f.sourcePath, "utf8"))).toEqual(f.raw);
       f.setInterrupted(false);
     }
     const result = await acpxSessionOwnerMigration.migrateLegacyState(f.input);
     expect(result.warnings).toEqual([]);
+    await expectNoMigrationStaging(f.sourcePath);
     expect(JSON.parse(await fs.readFile(f.file(resource), "utf8"))).toEqual({
       ...f.raw,
       name: resource,
@@ -229,7 +237,13 @@ it.each(["ambiguous", "missing", "event-log", "conflict", "live"])(
     const before = await fs.readFile(f.sourcePath, "utf8");
     const result = await acpxSessionOwnerMigration.migrateLegacyState(f.input);
     expect(result.warnings.length).toBeGreaterThan(0);
+    if (scenario === "event-log") {
+      expect(result.warnings).toEqual([
+        expect.stringContaining("rekey would alter interpreted history/event references"),
+      ]);
+    }
     expect(result.changes).toEqual([]);
+    await expectNoMigrationStaging(f.sourcePath);
     expect(await fs.readFile(f.sourcePath, "utf8")).toBe(before);
     if (scenario === "conflict") {
       expect(await fs.readFile(f.file(resource), "utf8")).toBe('{"conflict":true}');
@@ -329,6 +343,7 @@ it("keeps oneshot physical IDs and bytes while repairing the canonical locator",
   const before = await fs.readFile(f.sourcePath, "utf8");
   expect(f.handle.acpxRecordId).toMatch(/^global:oneshot:/);
   expect((await acpxSessionOwnerMigration.migrateLegacyState(f.input)).warnings).toEqual([]);
+  await expectNoMigrationStaging(f.sourcePath);
   expect(await fs.readFile(f.sourcePath, "utf8")).toBe(before);
   expect(f.claims[0]!.meta.identity?.acpxRecordId).toBe(f.handle.acpxRecordId);
   expect(decodeAcpxRuntimeHandleState(f.claims[0]!.meta.runtimeSessionName)?.name).toBe(
@@ -356,6 +371,7 @@ it("requires repair when a bare backend locator belongs to an agent-qualified ca
   });
   expect(JSON.parse(await fs.readFile(f.sourcePath, "utf8"))).toEqual(f.raw);
   expect((await acpxSessionOwnerMigration.migrateLegacyState(f.input)).warnings).toEqual([]);
+  await expectNoMigrationStaging(f.sourcePath);
   const resource = resolveAcpxSessionResource(f.claims[0]!);
   expect(resource).toBe(target.sessionKey);
   expect(JSON.parse(await fs.readFile(f.file(resource), "utf8"))).toEqual({

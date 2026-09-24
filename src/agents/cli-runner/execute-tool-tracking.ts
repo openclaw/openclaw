@@ -26,7 +26,6 @@ import {
   isMessagingTool,
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
-  isPluginNativeMessagingTool,
 } from "../embedded-agent-messaging.js";
 import type {
   MessagingToolSend,
@@ -236,7 +235,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     const delivered = deliveryFact
       ? deliveryFact.status === "settled" &&
         (params.isError !== true || deliveryFact.partialDelivery)
-      : isPluginNativeMessagingTool(params.toolName) && isDeliveredMessagingToolResult(params);
+      : isDeliveredMessagingToolResult(params);
     if (!delivered) {
       return;
     }

@@ -2,13 +2,17 @@ import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.j
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
-import { normalizeUpdateFailureFacts } from "../../infra/update-failure-facts.js";
+import {
+  normalizeUpdateFailureFacts,
+  type UpdateFailureFact,
+} from "../../infra/update-failure-facts.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
@@ -16,9 +20,11 @@ import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordUpdateResultNextAction,
+  failUpdateCommandRun,
+  createUpdateCommandFailureResult,
   UnreportedUpdateAdmissionOutcome,
   type UpdateAdmissionReportParams,
   UpdateCommandFailure,
@@ -57,6 +63,49 @@ export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
   return terminalOwners.get(run)?.publish !== undefined;
 }
 
+/** Record facts while admitted; publish only when the executor has settled. */
+export async function prepareUnexpectedUpdateCommandFailure(
+  error: unknown,
+  opts: UpdateCommandOptions & { run: Run },
+  onPublishedRecord?: PublishedRecord,
+): Promise<UpdateCommandFailure> {
+  const failure = {
+    mode: "unknown" as const,
+    durationMs: 0,
+    failure: { cause: error },
+  };
+  let fact: UpdateFailureFact;
+  try {
+    const recorded = failUpdateCommandRun(error, opts.run);
+    if (!recorded) {
+      throw new Error("Update history remains with its existing recovery owner.");
+    }
+    fact = recorded;
+  } catch (cause) {
+    return new UpdateCommandPendingRecoveryFailure(
+      createUpdateCommandFailureResult(failure),
+      formatErrorMessage(cause),
+      { cause: error },
+    );
+  }
+  const result = createUpdateCommandFailureResult({ ...failure, phase: fact.check });
+  result.failedStep.failureFacts = [fact];
+  const params = { opts, root: result.root ?? "" };
+  const publish: Publisher = async (settlementFailure, onTerminalRecord) => {
+    const settled = await resolveSettledUpdateCommandResult(params, result, settlementFailure);
+    return publishUpdateCommandTerminalResult(
+      params,
+      settled.result,
+      { rolledBack: false },
+      onTerminalRecord,
+    );
+  };
+  if (!deferUpdateCommandTerminalResult(opts.run, publish)) {
+    await publish(undefined, onPublishedRecord);
+  }
+  return new UpdateCommandFailure(result, 1, fact.message, { cause: error });
+}
+
 /** Enclose the real executor so its final checks and release precede terminal output. */
 export async function withUpdateCommandTerminalResult<T>(
   operation: (registerRun: (run: Run) => void) => Promise<T>,
@@ -85,6 +134,9 @@ export async function withUpdateCommandTerminalResult<T>(
     if (run) {
       terminalOwners.delete(run);
     }
+  }
+  if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
+    throw outcome.error;
   }
   const activationTimeout =
     "error" in outcome
@@ -167,7 +219,7 @@ export async function resolveSettledUpdateCommandResult(
   );
   const failedStep: UpdateStepResult | undefined = settlementFailed
     ? {
-        name: "update executor settlement",
+        name: "update-executor-settlement",
         command: "openclaw update",
         cwd: pendingResult.root ?? params.root,
         durationMs: 0,
@@ -214,7 +266,7 @@ export async function resolveSettledUpdateCommandResult(
 
 /** Share verified retirement and unverified recovery retention across finalizers. */
 export async function recordUpdatePackageCompletion(
-  params: Pick<FinishUpdateParams, "packageTransaction" | "root">,
+  params: Pick<FinishUpdateParams, "packageTransaction" | "root" | "opts">,
   result: UpdateRunResult,
   assertCurrent: () => void,
 ): Promise<UpdateCommandFailure | void> {
@@ -222,11 +274,16 @@ export async function recordUpdatePackageCompletion(
   if (!transaction) {
     return;
   }
-  if (isUpdateGatewayReadinessPending(result)) {
+  if (
+    isUpdateGatewayReadinessPending(result) ||
+    (result.status === "ok" &&
+      params.opts.run?.completionOwner === "gateway-restart" &&
+      params.opts.run.gatewayRestartRequired === true)
+  ) {
     assertCurrent();
     const message = `Gateway readiness is pending; backup retirement deferred for ${transaction.backupRoot}. Verify readiness before cleanup.`;
     result.steps.push({
-      name: "global install backup retention",
+      name: "package-backup-retention",
       command: "openclaw update",
       cwd: result.root ?? params.root,
       durationMs: 0,
@@ -246,7 +303,7 @@ export async function recordUpdatePackageCompletion(
       }
       cleanupFailure = error;
       return {
-        name: "global install backup retention",
+        name: "package-backup-retention",
         command: "openclaw update",
         cwd: result.root ?? params.root,
         durationMs: 0,
@@ -259,13 +316,14 @@ export async function recordUpdatePackageCompletion(
     return;
   }
   const step = { ...retained, stderrTail: retained.stderrTail };
-  if (step.exitCode !== 0 && !step.stderrTail?.includes(transaction.backupRoot)) {
-    step.stderrTail = [
-      step.stderrTail,
-      `Recovery transaction backup path: ${transaction.backupRoot}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+  if (step.exitCode !== 0) {
+    const recoveryPath = `Recovery transaction backup path: ${transaction.backupRoot}`;
+    if (!step.advisory) {
+      step.warnings = [...(step.warnings ?? []), recoveryPath];
+    }
+    if (!step.stderrTail?.includes(transaction.backupRoot)) {
+      step.stderrTail = [step.stderrTail, recoveryPath].filter(Boolean).join("\n");
+    }
   }
   result.steps = [...result.steps, step];
   if (result.status !== "ok" && !result.recovery?.packageRollbackVerified) {
@@ -412,12 +470,12 @@ async function publishPreMutationUpdateOutcome(
   if (params.opts.json && params.message) {
     defaultRuntime.error(params.message);
   }
-  printResult(result, params.opts, { nextAction: params.message });
+  await printResult(result, params.opts, { nextAction: params.message });
   return result;
 }
 
 /** Write the terminal ledger and its visible result together after settlement. */
-export function publishUpdateCommandTerminalResult(
+export async function publishUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
   outcome: {
@@ -426,7 +484,7 @@ export function publishUpdateCommandTerminalResult(
     captured?: UpdateCommandTerminalRecord;
   },
   onTerminalRecord?: PublishedRecord,
-): UpdateRunResult {
+): Promise<UpdateRunResult> {
   let record: UpdateCommandTerminalRecord["record"] | undefined;
   if (outcome.captured) {
     try {
@@ -440,7 +498,7 @@ export function publishUpdateCommandTerminalResult(
   const result = record
     ? { ...input, runId: record.runId }
     : completeUpdateCommandRun(input, params.opts.run, outcome);
-  printResult(result, params.opts, { nextAction, record });
+  await printResult(result, params.opts, { nextAction, record });
   if (record) {
     onTerminalRecord?.(record);
   }

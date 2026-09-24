@@ -330,7 +330,7 @@ export function loadPluginManifest(
     });
   }
 
-  const themesResult = normalizeManifestThemes(raw.themes, id);
+  const themesResult = normalizeManifestThemes(raw.themes, id, file.contents.toString("utf8"));
   if (!themesResult.ok) {
     return cacheResult({
       ok: false,
@@ -355,6 +355,10 @@ export function loadPluginManifest(
       uiHints: setupNormalizers.normalizeConfigUiHints(raw.uiHints),
       configGroups: normalizeConfigGroups(raw.configGroups, configSchema),
       contracts,
+      decisionModels: capabilityNormalizers.normalizeManifestDecisionModels(
+        raw.decisionModels,
+        contracts?.decisionProviders,
+      ),
       transcriptSources: capabilityNormalizers.normalizeManifestTranscriptSources(
         raw.transcriptSources,
         contracts?.transcriptSourceProviders,

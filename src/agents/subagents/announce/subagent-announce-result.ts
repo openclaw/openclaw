@@ -6,7 +6,7 @@ import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../../sessions/transcript-events.js";
-import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
@@ -18,7 +18,7 @@ import {
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
 
 type OutputRuntime = typeof import("./subagent-announce.runtime.js");
-export type SubagentAnnounceResultDeps = Pick<
+type SubagentAnnounceResultDeps = Pick<
   OutputRuntime,
   | "getRuntimeConfig"
   | "readSubagentSessionEntry"

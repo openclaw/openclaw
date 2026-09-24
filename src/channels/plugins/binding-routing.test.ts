@@ -7,9 +7,12 @@ import {
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   ensureConfiguredBindingRouteReady,
   resolveRuntimeConversationBindingRoute,
+  resolveRuntimeConversationBindingRouteAsync,
+  inspectRuntimeConversationBindingRoute,
   type RuntimeConversationBindingRouteResult,
 } from "./binding-routing.js";
 import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
@@ -63,6 +66,41 @@ describe("runtime conversation binding route", () => {
     testing.resetSessionBindingAdaptersForTests();
   });
 
+  it("rechecks the binding after awaiting activity persistence and keeps inspection pure", async () => {
+    let binding = createBinding();
+    const gate = createDeferredCore();
+    const touchAsync = vi.fn(() => gate.promise);
+    const touch = vi.fn();
+    registerSessionBindingAdapter({
+      channel: "demo",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => binding,
+      touch,
+      touchAsync,
+    });
+    const params = { route: createRoute(), conversation: binding.conversation };
+    expect(
+      inspectRuntimeConversationBindingRoute({
+        route: params.route,
+        inspection: { status: "available", binding },
+      }).boundSessionKey,
+    ).toBe(binding.targetSessionKey);
+    expect(touchAsync).not.toHaveBeenCalled();
+    expect(touch).not.toHaveBeenCalled();
+    let settled = false;
+    const pending = resolveRuntimeConversationBindingRouteAsync(params).then((result) => {
+      settled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    binding = createBinding({ targetSessionKey: "agent:replacement:acp:session-2" });
+    gate.resolve();
+    expect((await pending).boundSessionKey).toBe(binding.targetSessionKey);
+    expect(touch).not.toHaveBeenCalled();
+  });
+
   it("keeps the stable runtime-route result structurally assignable", () => {
     const result: RuntimeConversationBindingRouteResult = {
       bindingRecord: null,
@@ -70,6 +108,65 @@ describe("runtime conversation binding route", () => {
     };
 
     expect(result.bindingOwnerAvailable).toBeUndefined();
+  });
+
+  it.each([
+    { mode: "stable", change: { bindingId: "binding-2" }, label: "new ID" },
+    { mode: "churn", change: { bindingId: "binding-2" }, label: "repeated replacement" },
+    { mode: "stable", change: { boundAt: 2 }, label: "reused ID with new creation time" },
+    {
+      mode: "stable",
+      change: { targetSessionKey: "agent:replacement:main" },
+      label: "reused ID with new target",
+    },
+    { mode: "stable", change: { targetKind: "subagent" }, label: "reused ID with new kind" },
+  ] as const)("settles replacement activity before routing ($label)", async ({ mode, change }) => {
+    let binding = createBinding();
+    const entered = createDeferredCore();
+    const firstTouch = createDeferredCore();
+    const touchAsync = vi
+      .fn(async (_bindingId: string) => {
+        binding =
+          mode === "churn"
+            ? createBinding({ bindingId: "binding-3" })
+            : { ...binding, metadata: { lastActivityAt: 1234 } };
+      })
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await firstTouch.promise;
+      });
+    registerSessionBindingAdapter({
+      channel: "demo",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => binding,
+      inspectByConversationAsync: async () => binding,
+      touchAsync,
+    });
+    const pending = resolveRuntimeConversationBindingRouteAsync({
+      route: createRoute(),
+      conversation: binding.conversation,
+    });
+    const failure =
+      mode === "churn" ? expect(pending).rejects.toThrow(/changed.*activity/) : undefined;
+    await entered.promise;
+    const replacement = createBinding({
+      ...change,
+      metadata: { lastActivityAt: 1 },
+    });
+    binding = replacement;
+    firstTouch.resolve();
+    if (failure) {
+      await failure;
+    } else {
+      const result = await pending;
+      expect(result.boundSessionKey).toBe(replacement.targetSessionKey);
+      expect(result.bindingRecord?.metadata?.lastActivityAt).toBe(1234);
+    }
+    expect(touchAsync.mock.calls.map(([bindingId]) => bindingId)).toEqual([
+      "binding-1",
+      replacement.bindingId,
+    ]);
   });
 
   it("rewrites the route and touches only the owning channel account's binding", () => {

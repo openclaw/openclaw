@@ -3,12 +3,12 @@ import { expressionBuilder, type AliasableExpression } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { USAGE_COST_ROLLUP_SCOPE as ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
 
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
 const LEGACY_CACHE_KEY = "cache";
 const REFRESH_LOCK_KEY = "refresh-lock";
-const RETIRED_ROLLUP_SCOPE = "session-cost-usage-rollup-v1";
-const ROLLUP_SCOPE = "session-cost-usage-rollup-v2";
+const RETIRED_ROLLUP_SCOPES = ["session-cost-usage-rollup-v1", "session-cost-usage-rollup-v2"];
 const ROLLUP_PRUNE_BATCH_SIZE = 32;
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
@@ -101,13 +101,14 @@ export function writeSessionCostUsageRollupInDatabase(
     rollupId: string;
     previousValueJson: Uint8Array | null;
     valueJson: Uint8Array;
+    blob: Uint8Array | null;
     updatedAt: number;
   },
 ): boolean {
   const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
   const values = {
     value_json: cacheJsonText(params.valueJson),
-    blob: null,
+    blob: params.blob,
     expires_at: null,
     updated_at: params.updatedAt,
   };
@@ -135,6 +136,23 @@ export function writeSessionCostUsageRollupInDatabase(
         .where("value_json", "=", cacheJsonText(params.previousValueJson)),
     ).numAffectedRows === 1n
   );
+}
+
+/** Read one body only while its exact metadata snapshot still owns the row. */
+export function readSessionCostUsageRollupBodyInDatabase(
+  db: DatabaseSync,
+  row: SessionCostUsageRollupSnapshot,
+): { blob: Uint8Array | null } | undefined {
+  return executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<AgentCacheDatabase>(db)
+      .selectFrom("cache_entries")
+      .select("blob")
+      .where("scope", "=", ROLLUP_SCOPE)
+      .where("key", "=", row.key)
+      .where("updated_at", "=", row.updatedAt)
+      .where("value_json", "=", cacheJsonText(row.valueJson)),
+  ).rows[0];
 }
 
 export function pruneSessionCostUsageRollupsInDatabase(
@@ -178,7 +196,7 @@ export function pruneSessionCostUsageRollupsInDatabase(
   // Delete by scope so those values are never materialized during cleanup.
   executeSqliteQuerySync(
     db,
-    kysely.deleteFrom("cache_entries").where("scope", "=", RETIRED_ROLLUP_SCOPE),
+    kysely.deleteFrom("cache_entries").where("scope", "in", RETIRED_ROLLUP_SCOPES),
   );
 }
 

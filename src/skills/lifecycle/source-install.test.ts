@@ -3,9 +3,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { buildWorkspaceSkillStatus } from "../discovery/status.js";
+import { buildWorkspaceSkillStatus, prepareWorkspaceSkillStatus } from "../discovery/status.js";
+import { installSkill } from "./install.js";
 import { installSkillFromSource } from "./source-install.js";
 
 async function writeSkill(
@@ -101,6 +103,41 @@ function capturePolicyConfig(params: { scriptPath: string; capturePath: string }
 }
 
 describe("installSkillFromSource", () => {
+  it.each(["active", "stopped"])(
+    "installs local sources with a %s document-only adapter",
+    async (state) => {
+      await withTestDir({ prefix: "openclaw-skill-document-only-" }, async (root) => {
+        const workspaceDir = path.join(root, "workspace");
+        const sourceDir = path.join(root, "source");
+        await writeSkill(sourceDir, { name: "local-guide" });
+        const release = registerAgentWorkspaceAccess(workspaceDir, {
+          bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+        });
+        if (state === "stopped") {
+          release();
+        }
+        try {
+          expect(await installSkillFromSource({ workspaceDir, spec: sourceDir })).toMatchObject({
+            ok: true,
+            slug: "local-guide",
+            source: "path",
+          });
+          await expect(
+            fs.readFile(path.join(workspaceDir, "skills/local-guide/SKILL.md"), "utf8"),
+          ).resolves.toContain("local-guide");
+          expect((await prepareWorkspaceSkillStatus(workspaceDir)).report.skills).toEqual(
+            expect.arrayContaining([expect.objectContaining({ name: "local-guide" })]),
+          );
+          expect(
+            await installSkill({ workspaceDir, skillName: "local-guide", installId: "missing" }),
+          ).toMatchObject({ ok: false, message: "Installer not found: missing" });
+        } finally {
+          release();
+        }
+      });
+    },
+  );
+
   it("installs a local skill directory using the SKILL.md frontmatter name", async () => {
     await withTestDir({ prefix: "openclaw-skill-source-local-" }, async (root) => {
       const workspaceDir = path.join(root, "workspace");

@@ -104,7 +104,6 @@ async function fixture(
     requireMention: false,
     isDirectMessage: false,
     isRoomish: true,
-    historyKey: "status-test",
     preview: "hello",
     ackReactionValue: "",
     ackReactionPromise: null,

@@ -307,22 +307,53 @@ describe("Codex registration procfs boundary", () => {
     },
   );
 
-  it.for(["ENOENT", "ESRCH"])(
-    "retires verified disappeared identities only after full containment inspection: %s",
-    async (code) => {
+  it.for(["ENOENT", "ESRCH", "replaced", "dead"])(
+    "retires a verified %s identity despite an unreadable unrelated process",
+    async (mode) => {
       store.register("orphan", { parent, child: { ...child, commandFingerprint } });
-      for (const pid of [parent.pid, child.pid]) {
-        procfs.files.set(`/proc/${pid}/stat`, Object.assign(new Error("gone"), { code }));
+      procfs.files.delete(`/proc/${parent.pid}/stat`);
+      if (mode === "replaced") {
+        procfs.files.set(
+          `/proc/${child.pid}/stat`,
+          `${child.pid} (replacement) S 1 ${child.pid}${" 0".repeat(14)} 1 0 67890\n`,
+        );
+      } else if (mode === "dead") {
+        addProcess(child.pid, 1, "Z");
+      } else {
+        procfs.files.set(
+          `/proc/${child.pid}/stat`,
+          Object.assign(new Error("gone"), { code: mode }),
+        );
       }
-      // Selected identities are gone, but an unreadable full tree still blocks retirement.
-      await expect(prepareCodexAppServerProcessRegistration()).rejects.toThrow(
-        "Cannot reap registered Codex process",
-      );
-      expect(store.lookup("orphan")).toBeDefined();
-      procfs.files.delete(`/proc/${neighbor}/stat`);
-      await prepareCodexAppServerProcessRegistration();
+
+      await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
       expect(store.lookup("orphan")).toBeUndefined();
       expect(kill).not.toHaveBeenCalled();
     },
   );
+
+  it("confirms an orphan's exit without rereading unrelated processes after containment", async () => {
+    store.register("orphan", { parent, child: { ...child, commandFingerprint } });
+    procfs.files.delete(`/proc/${parent.pid}/stat`);
+    addProcess(child.pid, 1);
+    procfs.files.delete(`/proc/${neighbor}/stat`);
+    kill.mockImplementation((pid, signal) => {
+      if (pid === child.pid && signal === "SIGSTOP") {
+        addProcess(child.pid, 1, "T");
+      } else if (pid === -child.pid && signal === "SIGKILL") {
+        procfs.files.delete(`/proc/${child.pid}/stat`);
+        procfs.files.set(
+          `/proc/${neighbor}/stat`,
+          Object.assign(new Error("unreadable neighbor"), { code: "EACCES" }),
+        );
+      } else {
+        throw new Error("unexpected signal");
+      }
+      return true;
+    });
+
+    await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
+    expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+    expect(store.lookup("orphan")).toBeUndefined();
+  });
 });

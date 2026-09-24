@@ -403,6 +403,16 @@ export function registerSharedStateWorkerAdmissionTests(
               },
               { signal },
             );
+          const cancelOverflow = async () => {
+            const controller = new AbortController();
+            const waiting = write(999, controller.signal);
+            const settled = vi.fn();
+            void waiting.then(settled, settled);
+            await Promise.resolve();
+            expect(settled).not.toHaveBeenCalled();
+            controller.abort(stopped);
+            await expect(waiting).rejects.toBe(stopped);
+          };
           const head = write(0, canceled.signal);
           const headOutcome = head.then(
             () => undefined,
@@ -410,13 +420,13 @@ export function registerSharedStateWorkerAdmissionTests(
           );
           const followers = Array.from({ length: 127 }, (_, index) => write(index + 1));
           const settledFollowers = Promise.allSettled(followers);
-          await expect(write(999)).rejects.toMatchObject({ code: "overloaded" });
+          await cancelOverflow();
           expect(factories).toBe(0);
-          canceled.abort(stopped);
-          expect(await headOutcome).toBe(stopped);
           const replacement = write(128);
           const replacementOutcome = Promise.allSettled([replacement]);
-          await expect(write(999)).rejects.toMatchObject({ code: "overloaded" });
+          canceled.abort(stopped);
+          expect(await headOutcome).toBe(stopped);
+          await cancelOverflow();
           foreign.release();
           for (const result of [...(await settledFollowers), ...(await replacementOutcome)]) {
             expect(result.status).toBe("fulfilled");
@@ -425,7 +435,7 @@ export function registerSharedStateWorkerAdmissionTests(
           const nextBurst = Promise.allSettled(
             Array.from({ length: 128 }, (_, index) => write(index + 129)),
           );
-          await expect(write(999)).rejects.toMatchObject({ code: "overloaded" });
+          await cancelOverflow();
           for (const result of await nextBurst) {
             expect(result.status).toBe("fulfilled");
           }

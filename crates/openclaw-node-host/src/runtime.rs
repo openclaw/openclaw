@@ -145,12 +145,15 @@ struct Registration {
     command: String,
     handler: Handler,
     duplex: bool,
+    system_owner: bool,
+    admission: Option<AdmissionPolicy>,
 }
 
 #[derive(Clone)]
 struct RegisteredHandler {
     handler: Handler,
     duplex: bool,
+    admission: Option<AdmissionPolicy>,
 }
 
 /// Builder for a reusable command runtime with explicit resource bounds.
@@ -183,6 +186,32 @@ impl Default for CommandRuntimeBuilder {
 }
 
 impl CommandRuntimeBuilder {
+    /// Register an OpenClaw-owned native system handler with mandatory local admission.
+    /// Ordinary registrations cannot claim this namespace; the product must revalidate
+    /// its current permission/route policy before every system handler entry.
+    #[must_use]
+    pub fn system_duplex_command<A, AF, F, Fut>(
+        mut self,
+        command: impl Into<String>,
+        admission: A,
+        handler: F,
+    ) -> Self
+    where
+        A: Fn(InvocationAdmissionContext) -> AF + Send + Sync + 'static,
+        AF: Future<Output = Result<(), HandlerError>> + Send + 'static,
+        F: Fn(InvocationContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Value, HandlerError>> + Send + 'static,
+    {
+        self.registrations.push(Registration {
+            command: command.into(),
+            duplex: true,
+            system_owner: true,
+            admission: Some(Arc::new(move |context| Box::pin(admission(context)))),
+            handler: Arc::new(move |context| Box::pin(handler(context))),
+        });
+        self
+    }
+
     /// Declare one exact node capability supplied by this runtime.
     #[must_use]
     pub fn capability(mut self, capability: impl Into<String>) -> Self {
@@ -232,6 +261,8 @@ impl CommandRuntimeBuilder {
             command: command.into(),
             handler: Arc::new(move |context| Box::pin(handler(context))),
             duplex,
+            system_owner: false,
+            admission: None,
         });
         self
     }
@@ -298,7 +329,8 @@ impl CommandRuntimeBuilder {
             if command.is_empty() {
                 return Err(RuntimeBuildError::EmptyCommand);
             }
-            if command == "system" || command.starts_with("system.") {
+            if (command == "system" || command.starts_with("system.")) && !registration.system_owner
+            {
                 return Err(RuntimeBuildError::ReservedCommand(command));
             }
             if handlers
@@ -307,6 +339,7 @@ impl CommandRuntimeBuilder {
                     RegisteredHandler {
                         handler: registration.handler,
                         duplex: registration.duplex,
+                        admission: registration.admission,
                     },
                 )
                 .is_some()
@@ -686,16 +719,20 @@ impl CommandRuntime {
                 tracking,
             );
         };
-        timeout = match self
-            .evaluate_admission(&invocation, &cancellation, timeout)
-            .await
-        {
-            Ok(remaining) => remaining,
-            Err(result) => {
-                tracking.cancel();
-                return Evaluation::tracked(result, tracking);
+        // Both policies share timeout/cancellation ownership. Handler entry below
+        // rechecks the exact live session after any awaited native system admission.
+        for policy in [&self.inner.admission_policy, &registration.admission] {
+            timeout = match self
+                .evaluate_admission(policy.as_ref(), &invocation, &cancellation, timeout)
+                .await
+            {
+                Ok(remaining) => remaining,
+                Err(result) => {
+                    tracking.cancel();
+                    return Evaluation::tracked(result, tracking);
+                }
             }
-        };
+        }
         if tracking.input_overflow.is_cancelled() {
             cancellation.cancel();
             return Evaluation::tracked(
@@ -806,11 +843,12 @@ impl CommandRuntime {
 
     async fn evaluate_admission(
         &self,
+        policy: Option<&AdmissionPolicy>,
         invocation: &NodeInvocation,
         cancellation: &CancellationToken,
         timeout: Option<Duration>,
     ) -> Result<Option<Duration>, InvocationResult> {
-        let Some(admission_policy) = &self.inner.admission_policy else {
+        let Some(admission_policy) = policy else {
             return Ok(timeout);
         };
         let started = Instant::now();
@@ -2055,52 +2093,90 @@ mod tests {
 
     #[tokio::test]
     async fn gateway_cancellation_stops_admission_before_handler_execution() {
-        let admission_entered = Arc::new(Notify::new());
-        let handler_ran = Arc::new(AtomicBool::new(false));
-        let entered = Arc::clone(&admission_entered);
-        let handler_state = Arc::clone(&handler_ran);
-        let runtime = CommandRuntime::builder()
-            .admission_policy(move |_context| {
+        for native_system in [false, true] {
+            let command = if native_system {
+                "system.notify"
+            } else {
+                "example.status"
+            };
+            let admission_entered = Arc::new(Notify::new());
+            let handler_ran = Arc::new(AtomicBool::new(false));
+            let entered = Arc::clone(&admission_entered);
+            let handler_state = Arc::clone(&handler_ran);
+            let admission = move |_context| {
                 let entered = Arc::clone(&entered);
                 async move {
                     entered.notify_one();
                     std::future::pending().await
                 }
-            })
-            .command("example.status", move |_context| {
+            };
+            let handler = move |_context| {
                 let handler_state = Arc::clone(&handler_state);
                 async move {
                     handler_state.store(true, Ordering::SeqCst);
                     Ok(Value::Null)
                 }
-            })
+            };
+            let builder = CommandRuntime::builder();
+            let runtime = if native_system {
+                builder.system_duplex_command(command, admission, handler)
+            } else {
+                builder
+                    .admission_policy(admission)
+                    .command(command, handler)
+            }
             .build()
             .unwrap();
-        let active = ActiveInvocations::default();
-        let task_runtime = runtime.clone();
-        let task_active = active.clone();
-        let task = tokio::spawn(async move {
-            task_runtime
-                .evaluate_with_scope(
-                    invocation("invoke-1", "example.status", Value::Null),
-                    task_active,
-                    None,
-                )
+            let active = ActiveInvocations::default();
+            let task_active = active.clone();
+            let task = tokio::spawn(async move {
+                runtime
+                    .evaluate_with_scope(
+                        invocation("invoke-1", command, Value::Null),
+                        task_active,
+                        None,
+                    )
+                    .await
+            });
+            admission_entered.notified().await;
+            active.cancel("invoke-1");
+            let evaluation = tokio::time::timeout(Duration::from_secs(1), task)
                 .await
-        });
+                .expect("cancelled admission returned")
+                .unwrap();
+            assert_eq!(
+                failure_code(&evaluation.result),
+                Some("INVOCATION_CANCELLED")
+            );
+            assert!(!handler_ran.load(Ordering::SeqCst));
+        }
+    }
 
-        admission_entered.notified().await;
-        active.cancel("invoke-1");
-        let evaluation = tokio::time::timeout(Duration::from_secs(1), task)
-            .await
-            .expect("cancelled admission returned")
+    #[tokio::test]
+    async fn native_system_admission_denial_never_enters_handler() {
+        let entered = Arc::new(AtomicBool::new(false));
+        let handler_entered = Arc::clone(&entered);
+        let runtime = CommandRuntime::builder()
+            .system_duplex_command(
+                "system.notify",
+                |_| async {
+                    Err(HandlerError::new(
+                        "PERMISSION_DENIED",
+                        "native permission revoked",
+                    ))
+                },
+                move |_| {
+                    handler_entered.store(true, Ordering::SeqCst);
+                    async { Ok(Value::Null) }
+                },
+            )
+            .build()
             .unwrap();
-
-        assert_eq!(
-            failure_code(&evaluation.result),
-            Some("INVOCATION_CANCELLED")
-        );
-        assert!(!handler_ran.load(Ordering::SeqCst));
+        let result = runtime
+            .evaluate(invocation("denied", "system.notify", Value::Null))
+            .await;
+        assert_eq!(failure_code(&result), Some("PERMISSION_DENIED"));
+        assert!(!entered.load(Ordering::SeqCst));
     }
 
     #[test]

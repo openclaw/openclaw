@@ -1,6 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
   createCodexAppServerProcessReaperService,
   prepareCodexAppServerProcessRegistration,
@@ -84,6 +85,46 @@ afterEach(() => {
 });
 
 describe("Codex registration settlement", () => {
+  it("starts process inspection after a slow durable registration read", async () => {
+    const reading = createDeferred<{ key: string; value: unknown }[]>();
+    const existing = {
+      parent: { pid: process.pid, pgid: process.pid, startedAt: "parent-start" },
+      child: { pid: 500001, pgid: 500001, startedAt: "existing-child-start" },
+    };
+    state.rows.set("live-owner", existing);
+    state.entries.mockReturnValue(reading.promise);
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const spawned = child();
+    state.spawn.mockImplementation(() => {
+      queueMicrotask(() => spawned.emit("spawn"));
+      return spawned;
+    });
+
+    const starting = createStdioTransport({
+      transport: "stdio",
+      command: "codex",
+      args: [],
+      headers: {},
+    });
+    const started = expect(starting).resolves.toBe(spawned);
+    await vi.waitFor(() => expect(state.entries).toHaveBeenCalledOnce());
+    expect(state.spawn).not.toHaveBeenCalled();
+    now += 11_000;
+    reading.resolve([{ key: "live-owner", value: existing }]);
+    await started;
+
+    expect(state.spawn).toHaveBeenCalledOnce();
+    expect(state.register).toHaveBeenCalledOnce();
+    expect(state.rows.size).toBe(2);
+    expect(state.rows.get("live-owner")).toEqual(existing);
+    expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
+    expect(state.delete).not.toHaveBeenCalled();
+    exit(spawned);
+    await closeCodexAppServerTransportAndWait(spawned);
+    expect([...state.rows.entries()]).toEqual([["live-owner", existing]]);
+  });
+
   it("keeps startup pending until the durable registration commits", async () => {
     const admission = createDeferred<void>();
     state.register.mockImplementation(async (key, value) => {

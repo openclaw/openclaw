@@ -1,4 +1,30 @@
+import type { StoreWriterQueue } from "../../src/shared/store-writer-queue.js";
+
 export { createDeferredCore as createDeferred } from "../../src/shared/deferred.js";
+
+/** Waits for active drains to settle while rejecting still-pending test writes. */
+export async function drainStoreWriterQueuesForTest(
+  queues: Map<string, StoreWriterQueue>,
+  message: string,
+): Promise<void> {
+  while (queues.size > 0) {
+    const activeQueues = [...queues.values()];
+    for (const queue of activeQueues) {
+      for (const task of queue.pending) {
+        task.reject(new Error(message));
+      }
+      queue.pending.length = 0;
+    }
+    const activeDrains = activeQueues.flatMap((queue) =>
+      queue.drainPromise ? [queue.drainPromise] : [],
+    );
+    if (activeDrains.length === 0) {
+      queues.clear();
+      return;
+    }
+    await Promise.allSettled(activeDrains);
+  }
+}
 
 export async function withTestTimeout<T>(
   promise: PromiseLike<T>,
@@ -16,6 +42,26 @@ export async function withTestTimeout<T>(
   } finally {
     if (timeout !== undefined) {
       clearTimeout(timeout);
+    }
+  }
+}
+
+export async function raceWithTimeoutResult<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutResult: T,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
     }
   }
 }

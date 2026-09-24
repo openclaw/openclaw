@@ -250,7 +250,7 @@ function validateCliArgs(argv: string[]): void {
 function ensureSupportedRestartPlatform(platform: NodeJS.Platform = process.platform): void {
   if (platform === "win32") {
     throw new Error(
-      "Gateway restart benchmark is not supported on Windows because it requires SIGUSR1 in-process restarts; run it on macOS or Linux.",
+      "Gateway restart benchmark is not supported on Windows because it requires SIGUSR2 in-process restarts; run it on macOS or Linux.",
     );
   }
 }
@@ -333,7 +333,7 @@ function isTraceMetricSummaryKey(name: string): boolean {
     lastSegment === "activeTimersCount" ||
     lastSegment === "processSigintListenersCount" ||
     lastSegment === "processSigtermListenersCount" ||
-    lastSegment === "processSigusr1ListenersCount" ||
+    lastSegment === "processRestartListenersCount" ||
     lastSegment === "restartExpectedMs" ||
     lastSegment?.endsWith("Count") === true ||
     lastSegment?.endsWith("Ms") === true
@@ -959,7 +959,7 @@ async function runGatewaySample(options: {
         type: "restart-intent-written",
       });
       try {
-        process.kill(targetPid, "SIGUSR1");
+        process.kill(targetPid, "SIGUSR2");
       } catch {
         iteration.failureCode = "restart_signal_failed";
         failureCode = iteration.failureCode;

@@ -54,6 +54,32 @@ export function seedMemoryForgetTombstones(
   return recordMemorySessionTombstonesInDatabase(db, params);
 }
 
+export async function seedMemoryIndexWithOrphanedProvenance(
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  database.db.exec(`
+    PRAGMA foreign_keys = OFF;
+    INSERT INTO memory_index_chunks (
+      id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+    ) VALUES (
+      'orphaned-chunk', 'memory/orphan.md', 'memory', 1, 1,
+      'hash', 'none', 'orphaned memory', x'', 1
+    );
+    INSERT INTO memory_index_chunk_provenance (
+      chunk_id, origin_class, session_kind, observed_at
+    ) VALUES ('orphaned-chunk', 'agent', 'unknown', 1);
+    DELETE FROM memory_index_chunks WHERE id = 'orphaned-chunk';
+    PRAGMA foreign_keys = ON;
+  `);
+  closeOpenClawAgentDatabasesForTest();
+  // Replaced files cannot reuse the original connection's clean integrity receipt.
+  const replacementPath = `${database.path}.replacement`;
+  await fs.copyFile(database.path, replacementPath);
+  await fs.rename(replacementPath, database.path);
+  return database.path;
+}
+
 export function consolidateMemoryForTests(
   params: Omit<Parameters<typeof consolidateMemory>[0], "agentId">,
 ) {

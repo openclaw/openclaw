@@ -70,6 +70,7 @@ export async function withSqliteCanonicalValidationWorkerPool<T>(
     >({
       workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive),
       workerOptions: {
+        resourceLimits: { maxOldGenerationSizeMb: 512 },
         workerData: {
           type: "sqlite-transcript-archive-v2",
           operation: "canonical-validation-pool",
@@ -132,7 +133,8 @@ export async function withSqliteCanonicalValidationWorkerPool<T>(
       }
     },
   });
-  process.on("beforeExit", beforeExit);
+  // Failed exit cleanup retains custody for explicit retries without restarting the event loop.
+  process.once("beforeExit", beforeExit);
   try {
     context.maintenanceScope?.own(execution, "shared-resources", execution.close);
     return await canonicalWorkerPool.run(execution, run);

@@ -61,12 +61,12 @@ describe("health and status resident session summaries", () => {
           vi.spyOn(StatementSync.prototype, method),
         );
         const agents = agentIds.map((id) => ({ id }));
-        for (const limit of [0, 5, 10]) {
+        for (const limit of [-2.5, 0, 0.5, 5, 5.7, 10, Infinity, Number.NaN]) {
           const status = await readStatusSessionStores(cfg, agents, limit, projection);
           expect(status.paths).toHaveLength(1);
           expect(status.count).toBe(24);
           expect(status.recent.map((row) => row.sessionKey)).toEqual(
-            suffixes.slice(0, limit).map((suffix) => `agent:worker:${suffix}`),
+            [...sessionKeys.slice(12), ...sessionKeys.slice(0, 12)].slice(0, limit),
           );
           expect(status.byAgent.map((agent) => [agent.agent.id, agent.count])).toEqual([
             ["main", 12],
@@ -77,6 +77,29 @@ describe("health and status resident session summaries", () => {
               suffixes.slice(0, limit).map((suffix) => `agent:${agent.agent.id}:${suffix}`),
             );
           }
+        }
+        for (const limit of [0, 5]) {
+          const subset = await readStatusSessionStores(
+            cfg,
+            [{ id: "main" }, { id: "empty" }, { id: "main" }],
+            limit,
+            projection,
+          );
+          expect(subset.count).toBe(24);
+          expect(subset.recent.map((row) => row.sessionKey)).toEqual(
+            sessionKeys.slice(12, 12 + limit),
+          );
+          expect(
+            subset.byAgent.map(({ agent, count, recent }) => [
+              agent.id,
+              count,
+              recent.map((row) => row.sessionKey),
+            ]),
+          ).toEqual([
+            ["main", 12, sessionKeys.slice(0, limit)],
+            ["empty", 0, []],
+            ["main", 12, sessionKeys.slice(0, limit)],
+          ]);
         }
         const health = await buildHealthAgentSummaries(
           cfg,

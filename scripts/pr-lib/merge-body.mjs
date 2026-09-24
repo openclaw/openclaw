@@ -175,11 +175,50 @@ function prunePreview(lines, unsupported, machineIndexes) {
   return body;
 }
 
-function compose({ preview, source, authors, prAuthor, captured, queue }) {
+function squashPreview(preview, { title, message, commits }) {
+  if (
+    !(title === "PR_TITLE" && ["BLANK", "PR_BODY", "COMMIT_MESSAGES"].includes(message)) &&
+    !(title === "COMMIT_OR_PR_TITLE" && message === "COMMIT_MESSAGES")
+  ) {
+    throw new Error("Cannot preserve unsupported repository squash message defaults.");
+  }
+  if (message === "BLANK") {
+    return "";
+  }
+  if (message === "PR_BODY") {
+    return preview;
+  }
+  if (
+    !Array.isArray(commits) ||
+    commits.length === 0 ||
+    commits.some((item) => typeof item !== "string")
+  ) {
+    throw new Error("Cannot preserve squash commit messages without the published commits.");
+  }
+  if (title === "COMMIT_OR_PR_TITLE" && commits.length === 1) {
+    const newline = commits[0].indexOf("\n");
+    return newline === -1 ? "" : commits[0].slice(newline + 1).replace(/^\n+/, "");
+  }
+  return commits.map((commit) => `* ${commit.trimEnd()}`).join("\n\n");
+}
+
+function compose({
+  preview: initialPreview,
+  source,
+  authors,
+  prAuthor,
+  captured,
+  queue,
+  sourceCredit = false,
+  squashDefault = null,
+}) {
+  const preview =
+    squashDefault === null ? initialPreview : squashPreview(initialPreview, squashDefault);
   const explicit = captured !== "";
   const sourceTrailers = source.split("\n").filter(Boolean);
   const eligibleEmails = new Set();
   const unverifiedEmails = new Set();
+  const authorCredits = [];
   for (const { name, email, user, changesTree } of authors) {
     const normalized = email.trim().toLowerCase();
     const linkedHuman = user?.type === "User" && Boolean(user.login);
@@ -191,6 +230,12 @@ function compose({ preview, source, authors, prAuthor, captured, queue }) {
     if (linkedHuman || prAuthorMatch) {
       if (changesTree || prAuthorMatch || user?.login === prAuthor?.login) {
         eligibleEmails.add(normalized);
+        if (sourceCredit) {
+          if (/[<>\r\n]/.test(name) || /[<>\s]/.test(email)) {
+            throw new Error("Cannot preserve an invalid source author identity in squash credit.");
+          }
+          authorCredits.push(`Co-authored-by: ${name.trim()} <${email.trim()}>`);
+        }
       }
     } else {
       unverifiedEmails.add(normalized);
@@ -251,6 +296,7 @@ function compose({ preview, source, authors, prAuthor, captured, queue }) {
     ...original,
     ...(explicit ? retainedPreviewCredits : []),
     ...sourceTrailers,
+    ...authorCredits,
   ].filter((line) => !isExcludedCredit(line));
   const missing = [...new Set(required)].filter((line) => !original.includes(line));
   if (queue && missing.length > 0) {

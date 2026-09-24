@@ -49,6 +49,66 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     ]);
   });
 
+  it("keeps a scrolled prompt in place through rerenders and resizing until the user edits", async () => {
+    host = document.body.appendChild(document.createElement("div"));
+    host.style.cssText = "width: 740px; max-width: 100%;";
+    const props = {
+      value: Array.from({ length: 12 }, (_, index) => "Prompt line " + (index + 1)).join("\n"),
+      placeholder: "Search or start a task…",
+      onInputRef,
+      onValueChange: (value: string) => {
+        props.value = value;
+      },
+    };
+    render(renderCommandPaletteInput(props), host);
+    const input = host.querySelector("textarea")!;
+    const entry = host.querySelector(".cmd-palette__entry")!;
+    await vi.waitFor(() => expect(input.style.overflowY).toBe("auto"));
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    input.scrollTop = 22;
+    input.dispatchEvent(new Event("scroll"));
+    const previousScroll = input.scrollTop;
+
+    render(renderCommandPaletteInput({ ...props, activeDescendant: "next-result" }), host);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(input.scrollTop).toBe(previousScroll);
+    expect(entry.hasAttribute("data-scroll-fade-top")).toBe(true);
+    expect(entry.hasAttribute("data-scroll-fade-bottom")).toBe(true);
+
+    host.style.width = "500px";
+    await new Promise<void>((resolve) => {
+      const observer = new ResizeObserver(() => {
+        observer.disconnect();
+        requestAnimationFrame(() => resolve());
+      });
+      observer.observe(entry);
+    });
+    expect(input.scrollTop).toBe(previousScroll);
+    expect(input.selectionEnd).toBe(props.value.length);
+
+    input.value += "\nContinue writing";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    render(renderCommandPaletteInput(props), host);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(input.scrollTop).toBe(input.scrollHeight - input.clientHeight);
+    expect(entry.hasAttribute("data-scroll-fade-bottom")).toBe(false);
+
+    input.setSelectionRange(0, 0);
+    input.scrollTop = 0;
+    input.setRangeText("Edit the beginning: ", 0, 0, "end");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    render(renderCommandPaletteInput(props), host);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(input.scrollTop).toBe(0);
+  });
+
   it("grows down through three lines, keeps actions fixed and fades clear of the far-right scrollbar", async () => {
     host = document.body.appendChild(document.createElement("div"));
     host.style.cssText = "width: 740px; max-width: 100%;";

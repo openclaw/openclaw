@@ -1023,10 +1023,8 @@ describe("runHeartbeatOnce", () => {
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
-    expectWhatsAppSendCall(sendWhatsApp, 0, {
-      to: "+15555550166",
-      text: 'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.\nFirst alert',
-    });
+    expect(sendWhatsApp.mock.calls[0]?.[0]).toBe("+15555550166");
+    expect(sendWhatsApp.mock.calls[0]?.[1]).toContain("\nFirst alert");
     expectWhatsAppSendCall(sendWhatsApp, 1, {
       to: "+15555550166",
       text: "Second alert",

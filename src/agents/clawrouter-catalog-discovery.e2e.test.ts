@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildModelsListResult,
@@ -164,6 +165,7 @@ describe("ClawRouter cold prepared catalog", () => {
     const result = await runPreparedModelCatalogWorkerRequest(value, {
       kind: "catalog",
       syntheticAuth: [],
+      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: state.env }),
     });
     expect(result.status).toBe("ok");
     if (result.status !== "ok" || result.kind !== "catalog") {

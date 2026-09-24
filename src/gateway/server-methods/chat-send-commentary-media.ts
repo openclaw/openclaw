@@ -138,7 +138,7 @@ export function observeChatSendCommentaryMedia(params: {
           if (!anchor) {
             const { waitForSessionTranscriptProjection } =
               await import("../../config/sessions/session-transcript-reconcile.js");
-            await waitForSessionTranscriptProjection(scope);
+            await waitForSessionTranscriptProjection(scope, params.abortSignal);
             assertCurrent();
             anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
           }
@@ -187,7 +187,7 @@ export function observeChatSendCommentaryMedia(params: {
             });
             const { waitForSessionTranscriptProjection } =
               await import("../../config/sessions/session-transcript-reconcile.js");
-            await waitForSessionTranscriptProjection(scope);
+            await waitForSessionTranscriptProjection(scope, params.abortSignal);
             assertCurrent();
             const rewritten = await rewriteTranscriptMessageAtAnchor(anchor, (value) => {
               assertCurrent();

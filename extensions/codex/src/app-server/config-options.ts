@@ -315,7 +315,7 @@ export function createCodexAppServerConfig({
       (homeScope === "user" || computerUseConfig.enabled ? "desktop-first" : "package-first");
     const includeManagedCommandOrder =
       commandSource === "managed" &&
-      (managedCommandOrder === "desktop-first" || params.managedCommandOrder === "package-first");
+      (managedCommandOrder === "desktop-first" || params.managedCommandOrder !== undefined);
     const managedComputerUsePluginNames = [
       ...new Set([DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME, computerUseConfig.pluginName]),
     ];

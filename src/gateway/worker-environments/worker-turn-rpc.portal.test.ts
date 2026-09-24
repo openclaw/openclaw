@@ -9,7 +9,7 @@ describe("worker portal RPC authority", () => {
     const executeSessionTool = vi
       .fn<NonNullable<support.WorkerEnvironmentServiceOptions["executeSessionTool"]>>()
       .mockResolvedValue(result);
-    const { identity, placementStore, workerService } = support.placementHarness(
+    const { identity, placementStore, workerService } = await support.placementHarness(
       "worker-portal-authority",
       "session-portal-authority",
       { executeSessionTool },
@@ -52,7 +52,7 @@ describe("worker portal RPC authority", () => {
     const executeSessionTool = vi
       .fn<NonNullable<support.WorkerEnvironmentServiceOptions["executeSessionTool"]>>()
       .mockRejectedValue(new Error("portal port required"));
-    const { identity, workerService } = support.placementHarness(
+    const { identity, workerService } = await support.placementHarness(
       "worker-portal-error",
       "session-portal-error",
       { executeSessionTool },
@@ -78,7 +78,7 @@ describe("worker portal RPC authority", () => {
     async (authority) => {
       const executeSessionTool =
         vi.fn<NonNullable<support.WorkerEnvironmentServiceOptions["executeSessionTool"]>>();
-      const { identity, placementStore, workerService } = support.placementHarness(
+      const { identity, placementStore, workerService } = await support.placementHarness(
         `worker-portal-revoked-${authority}`,
         `session-portal-revoked-${authority}`,
         { executeSessionTool },

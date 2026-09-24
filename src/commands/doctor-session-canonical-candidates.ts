@@ -55,6 +55,7 @@ export function listCanonicalSessionStores(params: {
   return projectExistingAgentDatabaseTargets(
     resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env }),
     params.env,
+    params.cfg,
   );
 }
 

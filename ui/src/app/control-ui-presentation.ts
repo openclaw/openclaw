@@ -46,7 +46,10 @@ export function syncControlUiSystemChrome(): void {
 export function applyControlUiAccent(userAccent?: string): void {
   userAccentOverride = userAccent;
   const root = document.documentElement;
-  const hex = (userAccentOverride ?? operatorSeamColor)?.trim().replace(/^#/, "");
+  // An explicit theme selection must not expose the lower-precedence seam color.
+  const accent =
+    userAccentOverride === "theme" ? undefined : (userAccentOverride ?? operatorSeamColor);
+  const hex = accent?.trim().replace(/^#/, "");
   const color = hex && /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
   if (!color) {
     for (const property of ACCENT_CSS_VARIABLES) {

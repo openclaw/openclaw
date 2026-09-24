@@ -27,10 +27,10 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
   agentCommandMock,
-  getGatewayTestPort,
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
   startTestGatewayServer,
@@ -155,7 +155,6 @@ async function emitLifecycleAssistantReply(params: {
 
 beforeAll(async () => {
   envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
-  gatewayPort = await getGatewayTestPort();
   const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
   const { requestDevicePairing } = await import("../infra/device-pairing.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
@@ -174,9 +173,11 @@ beforeAll(async () => {
     callerScopes: pending.request.scopes ?? ["operator.admin"],
   });
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  gatewayPort = portClaim.port;
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
-  server = await startTestGatewayServer(gatewayPort);
+  server = await startTestGatewayServer(portClaim);
   // Prepare the real history handler before the RPC deadline starts.
   await import("./server-methods/chat.js");
 });
@@ -422,7 +423,7 @@ describe("sessions_send gateway loopback", () => {
           },
         });
 
-        agentStepTesting.setDepsForTest({
+        await agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
             payloads: [{ text: "announce through channel", mediaUrl: null }],
             meta: { durationMs: 1 },
@@ -452,7 +453,7 @@ describe("sessions_send gateway loopback", () => {
           { timeout: 5_000 },
         );
       } finally {
-        agentStepTesting.setDepsForTest();
+        await agentStepTesting.setDepsForTest();
       }
     },
   );
@@ -606,7 +607,7 @@ describe("sessions_send gateway loopback", () => {
           terminalReply: { disposition: "visible", text: deliveredReply },
           terminalReceipt: { runId, sourceReplyDelivered: true },
         });
-        agentStepTesting.setDepsForTest({
+        await agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
             payloads: [{ text: "SHOULD_NOT_SEND", mediaUrl: null }],
             meta: { durationMs: 1 },
@@ -627,7 +628,7 @@ describe("sessions_send gateway loopback", () => {
 
         expect(sendCalls).toEqual([]);
       } finally {
-        agentStepTesting.setDepsForTest();
+        await agentStepTesting.setDepsForTest();
       }
     },
   );

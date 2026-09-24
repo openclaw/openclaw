@@ -234,9 +234,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.viewers.set", "sessions-subscriptions", "operator.read", "2026.7"],
   ["sessions.preview", "sessions-read", "operator.read", "<=2026.7"],
   ["sessions.describe", "sessions-read", "operator.read", "<=2026.7"],
-  ["sessions.compaction.list", "sessions-compaction-queries", "operator.read", "<=2026.7"],
-  ["sessions.compaction.branch", "sessions-compaction-checkpoints", "operator.write", "<=2026.7"],
-  ["sessions.compaction.restore", "sessions-compaction-checkpoints", "operator.admin", "<=2026.7"],
   ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7"],
   ["sessions.branches.switch", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.rewind", "sessions-rewind", "operator.admin", "<=2026.7"],
@@ -571,7 +568,13 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "2026.8",
     CONTROL_PLANE_WRITE,
   ],
-  ["sessions.github.publish", "sessions-github", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
+  [
+    "sessions.github.publish",
+    "sessions-github",
+    "operator.sessions.write",
+    "2026.8",
+    CONTROL_PLANE_WRITE,
+  ],
   ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
   // Evidence-aware member projection is additive so legacy method indices and
   // its required `addedBy` response contract remain unchanged.
@@ -702,4 +705,12 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["themes.get", "themes", "operator.read", "2026.9"],
   ["themes.set", "themes", "operator.write", "2026.9"],
   ["themes.import", "themes", "operator.write", "2026.9"],
+  ["controlUi.githubDetail", "control-ui", "operator.read", "2026.9"],
+  ["progressCard.refresh", "progress-card", "operator.write", "2026.9"],
+  ["webSearch.status", "web-search", "operator.read", "2026.9"],
+  ["webSearch.test", "web-search", "operator.admin", "2026.9"],
+  ["sessions.providerReview.continue", "sessions-provider-review", "operator.write", "2026.9"],
+  ["users.linkChannelIdentity", "users", "operator.admin", "2026.9"],
+  ["users.unlinkChannelIdentity", "users", "operator.admin", "2026.9"],
+  ["users.listChannelIdentities", "users", "operator.admin", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

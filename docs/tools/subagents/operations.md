@@ -37,17 +37,29 @@ whichever is longer). These retained counts govern `/subagents list`,
 status summaries, descendant completion gating, and per-session concurrency
 checks; they are not proof that an executor is live.
 
-After a Gateway restart, fresh interrupted sub-agents resume automatically
-from their latest execution transcript, including progress made during an earlier
-recovery. Recovery handles both sessions marked
-`abortedLastRun: true` and hard kills that prevented the shutdown marker from
-being written. For a hard kill, the child session must still identify the exact
-running sub-agent from the retired Gateway process, with no newer run or admitted
-work owning that session. Stale interrupted runs and other stale unended restored
-runs are finalized without a resume; detecting a hard kill preserves the last
-observed activity timestamp. Orphaned runs settle their background task
-before cleanup, so retained child sessions do not leave phantom running activity.
-If the task update fails, completion remains available for retry.
+During a graceful restart, an already-admitted replacement run can finish
+refreshing a deferred child result before shutdown. The refresh remains tracked
+until capture and persistence finish; it does not admit a new run.
+
+After a Gateway restart, the parent owns continuation of the user's task.
+Interrupted sub-agents are finalized through their normal completion path instead
+of automatically relaunched. Their results tell the parent that execution was
+interrupted and that partially completed actions need checking. A parent waiting
+for its child batch receives the settled results, including children that finished
+before the restart, and decides what work remains.
+
+Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
+prevented the shutdown marker from being written. For a hard kill, the child
+session must still identify the exact run from the retired Gateway, with no newer
+run or admitted work owning that session. Live executions and queued collectors
+keep their existing owners. Orphaned runs settle their background task before
+cleanup, so retained child sessions do not leave phantom running activity. If the
+task update fails, completion remains available for retry.
+
+The parent can inspect a retained child transcript and use `sessions_send` to
+continue that session, or spawn a replacement after confirming the old execution
+has stopped. Reusing a child restores its conversation context; it does not replay
+an interrupted command. Existing cleanup and retention settings still apply.
 
 When a detached cleanup attempt logs `subagent cleanup finalize failed`, its
 retries use bounded backoff in the current Gateway process. If those retries are
@@ -56,28 +68,6 @@ to identify the failing operation. Unrelated
 sub-agent completions do not restart failed cleanup or reset its retry budget.
 Descendant completion still wakes the current requester ancestors waiting on that
 work. These cleanup retries are separate from [completion delivery](/tools/subagents/announce).
-
-An accepted recovery keeps the original task, Task Flow, requester, and child
-session identities. The task returns to `running` as the replacement execution
-continues, and the aborted marker is cleared after acceptance. You do not need
-to send another prompt to restart the work.
-
-If saving an accepted recovery temporarily fails, the Gateway retries adopting
-that same execution into its original task. Cancellation, replacement by a newer
-run, or another Gateway restart prevents that adoption.
-
-For sub-agents that announce completion, OpenClaw also attempts a notice to the
-original requester: “Resumed your interrupted task after the Gateway restart.”
-Failed or suppressed notices are retried without launching another recovery
-turn; completion continues through the normal delivery path.
-
-Automatic restart recovery is bounded per child session. If the same
-sub-agent child is accepted for orphan recovery repeatedly inside the
-rapid re-wedge window, OpenClaw persists a recovery tombstone on that
-session and stops auto-resuming it on later restarts. Run
-`openclaw tasks maintenance --apply` to reconcile the task record, or
-`openclaw doctor --fix` to clear stale aborted recovery flags on
-tombstoned sessions.
 
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /

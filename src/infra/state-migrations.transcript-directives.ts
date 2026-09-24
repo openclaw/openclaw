@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   OpenClawAgentDatabaseLeaseActiveError,
@@ -28,6 +29,7 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import { createSqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
 import {
   resolveAgentDatabaseMigrationTargets,
   type AgentDatabaseMigrationTarget,
@@ -73,7 +75,11 @@ function createMigrationDatabaseHandle(
     agentId,
     db: database,
     path: pathname,
-    walMaintenance: { checkpoint: () => false, close: () => false },
+    walMaintenance: {
+      checkpoint: () => false,
+      close: () => false,
+      reclaimFreePages: createSqliteWalReclamationResult,
+    },
   };
 }
 
@@ -170,7 +176,7 @@ function listTranscriptSessionBatch(database: DatabaseSync, afterSessionId: stri
       .select("session_id")
       .distinct()
       .where("session_id", ">", afterSessionId)
-      .where("event_json", "like", "%[[%")
+      .where(transcriptEventJsonSql(database), "like", "%[[%")
       .orderBy("session_id", "asc")
       .limit(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE),
   ).rows.map((row) => row.session_id);
@@ -186,9 +192,9 @@ function planTranscriptSession(
     database,
     db
       .selectFrom("transcript_events")
-      .select(["event_json", "seq"])
+      .select([transcriptEventJsonSql(database).as("event_json"), "seq"])
       .where("session_id", "=", sessionId)
-      .where("event_json", "like", "%[[%")
+      .where(transcriptEventJsonSql(database), "like", "%[[%")
       .orderBy("seq", "asc"),
   ).rows.map((row) => {
     const event = parseTranscriptEvent(row.event_json, `${pathname}:${sessionId}:${row.seq}`);
@@ -211,9 +217,9 @@ function assertTranscriptSessionSourceUnchanged(
     database,
     db
       .selectFrom("transcript_events")
-      .select(["event_json", "seq"])
+      .select([transcriptEventJsonSql(database).as("event_json"), "seq"])
       .where("session_id", "=", sessionId)
-      .where("event_json", "like", "%[[%")
+      .where(transcriptEventJsonSql(database), "like", "%[[%")
       .orderBy("seq", "asc"),
   ).rows;
   if (
@@ -420,7 +426,7 @@ function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
   }
 }
 
-/** One-time startup migration from inline assistant directives to typed delivery facts. */
+/** Doctor normalization of historical inline assistant directives into typed delivery facts. */
 export async function migrateHistoricalTranscriptDirectives(
   params: {
     configuredAgentDatabaseTargets?: readonly { agentId: string; path: string }[];

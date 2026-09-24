@@ -40,13 +40,19 @@ it("extracts the complete eager runtime import closure without duplicate wrapper
 function coldFixture(perWorktreeConfig = true) {
   const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-provision-"), {
     perWorktreeConfig,
+    precreateWorktree: false,
   });
-  // Remove only this harness's disposable precreated checkout, before review-init.
-  f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
   f.env.OPENCLAW_STATE_DIR = join(f.root, "state");
   f.env.OPENCLAW_CONFIG_PATH = join(f.root, "config.json");
   writeFileSync(f.env.OPENCLAW_CONFIG_PATH, "{}\n");
-  return f;
+  return {
+    ...f,
+    run(...args: Parameters<typeof f.run>) {
+      const result = f.run(...args);
+      f.assertPrivateHandoffVerified();
+      return result;
+    },
+  };
 }
 
 function expectSeed(f: ReturnType<typeof coldFixture>, pr = 42) {
@@ -93,9 +99,11 @@ describePosix("native PR source provisioning", () => {
         JSON.stringify({ worktreeAcceleration: acceleration }),
       );
       const preload = join(f.root, "native-provision-imports.mjs");
+      const guardReceipt = join(f.root, "native-provision-imports.txt");
       writeFileSync(
         preload,
-        `import { registerHooks } from "node:module";
+        `import { appendFileSync } from "node:fs";
+import { registerHooks } from "node:module";
 if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
   registerHooks({ load(url, context, nextLoad) {
     if (url.endsWith("/src/config/config.ts")) {
@@ -103,10 +111,12 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
     }
     return nextLoad(url, context);
   } });
+  appendFileSync(${JSON.stringify(guardReceipt)}, String(process.pid) + "\\n");
 }
 `,
       );
-      f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
+      // Keep both guards: reject config startup and verify each private store.
+      f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href} ${f.env.NODE_OPTIONS}`;
       const parent = join(f.canonical, ".worktrees");
       const physicalParent = join(f.root, "pr-worktrees");
       rmdirSync(parent);
@@ -115,6 +125,7 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
       const result = f.run("review-init");
       expect(result.status, result.stderr).toBe(0);
       expect(result.stderr).toContain("PR source checkout: Git checkout.");
+      expect(readFileSync(guardReceipt, "utf8")).toMatch(/^[1-9]\d*\n$/);
       expectSeed(f);
       expect(f.git(f.worktree, "rev-parse", "--show-toplevel")).toBe(join(physicalParent, "pr-42"));
       expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.main);

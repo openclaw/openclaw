@@ -17,6 +17,7 @@ import {
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
+  QuestionDispatchUnsupportedError,
   resolveAgentQuestionGatewayCall,
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
@@ -86,15 +87,6 @@ type QuestionInputAuthority = { kind: "run" | "source-bound"; assertCurrent: () 
 
 /** One reservation owns both dispatch refusal and the prompt's release notification. */
 function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionInputAuthority) {
-  if (
-    state.kind === "gateway" &&
-    authority?.kind === "source-bound" &&
-    !state.supportsSourceBound
-  ) {
-    throw new QuestionDispatchRefusedError(
-      "source-bound question input requires the default or a version 2 dispatcher",
-    );
-  }
   let refused = false;
   const assertCurrent = () => {
     try {
@@ -113,6 +105,15 @@ function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionI
     }
   };
   assertCurrent();
+  if (
+    state.kind === "gateway" &&
+    authority?.kind === "source-bound" &&
+    !state.supportsSourceBound
+  ) {
+    throw new QuestionDispatchUnsupportedError(
+      "source-bound question input requires the default or a version 2 dispatcher",
+    );
+  }
   state.resolving = true;
   let finish: (() => void) | undefined;
   if (state.kind === "gateway") {

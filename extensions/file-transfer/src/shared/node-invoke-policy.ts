@@ -174,7 +174,7 @@ async function handleFileTransferInvoke(
     }
     boundCanonicalPath = preflight.canonicalPath;
     boundFilesystemIdentity = preflight.binding;
-  } else if (command === "file.write") {
+  } else if (command === "file.write" || command === "file.create") {
     const preflight = await runPathPreflight({
       ctx,
       op,

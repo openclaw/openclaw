@@ -6,6 +6,7 @@ import {
   verifyAndRepairCanonicalSqliteIndexes,
 } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity, assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
+import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -212,6 +213,7 @@ export function repairStateSchema(
       },
       () => {
         applied.push(...repairAdmittedSchema());
+        configureSqliteMaintenanceCache(db);
       },
     );
     const quarantineCleared = clearOpenClawDatabaseQuarantine(pathname, { env });

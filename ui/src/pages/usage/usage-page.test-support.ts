@@ -92,6 +92,28 @@ export function focusDocument(): void {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 }
 
+export function createPendingUsageRouteData(
+  gateway: ApplicationContext["gateway"],
+  date: string,
+): UsageRouteData {
+  return {
+    gateway,
+    gatewaySnapshot: gateway.snapshot,
+    query: {
+      startDate: date,
+      endDate: date,
+      scope: "family",
+      timeZone: "local",
+      agentId: null,
+    },
+    result: null,
+    costSummary: null,
+    providerUsage: { state: "pending" },
+    loadedAtMs: null,
+    error: null,
+  };
+}
+
 export function cleanupUsagePageTest(): void {
   document.body.replaceChildren();
   vi.useRealTimers();

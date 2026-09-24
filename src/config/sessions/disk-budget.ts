@@ -28,6 +28,11 @@ import {
   type SessionsDirFileStat,
 } from "./disk-budget-files.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget-runtime.js";
+import type {
+  SessionDiskBudgetSweepResult,
+  SessionUnreferencedArtifactSweepResult,
+} from "./disk-budget.types.js";
+import { readLegacyCompactionSnapshotPaths } from "./legacy-compaction-history.js";
 import { resolveSessionArtifactDirectory, resolveSessionFilePathCore } from "./paths.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { timeArchivePruningAsync } from "./session-history-archive-pruning-diagnostics.js";
@@ -42,24 +47,6 @@ type SessionDiskBudgetConfig = {
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
   preserveRecentMs?: number | null;
-};
-
-export type SessionDiskBudgetSweepResult = {
-  totalBytesBefore: number;
-  totalBytesAfter: number;
-  removedFiles: number;
-  removedEntries: number;
-  freedBytes: number;
-  maxBytes: number;
-  highWaterBytes: number;
-  overBudget: boolean;
-};
-
-export type SessionUnreferencedArtifactSweepResult = {
-  scannedFiles: number;
-  removedFiles: number;
-  freedBytes: number;
-  olderThanMs: number;
 };
 
 type SessionDiskBudgetLogger = {
@@ -196,17 +183,11 @@ function resolveReferencedSessionArtifactPaths(params: {
     })) {
       referenced.add(resolved);
     }
-    for (const checkpoint of entry.compactionCheckpoints ?? []) {
-      const checkpointFiles = [
-        checkpoint.preCompaction.sessionFile?.trim(),
-        checkpoint.postCompaction.sessionFile?.trim(),
-      ].filter((filePath): filePath is string => Boolean(filePath));
-      for (const checkpointFile of checkpointFiles) {
-        const resolvedCheckpointPath = canonicalizePathForComparison(checkpointFile);
-        const relative = path.relative(resolvedSessionsDir, resolvedCheckpointPath);
-        if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-          referenced.add(resolvedCheckpointPath);
-        }
+    for (const checkpointFile of readLegacyCompactionSnapshotPaths(entry)) {
+      const resolvedCheckpointPath = canonicalizePathForComparison(checkpointFile);
+      const relative = path.relative(resolvedSessionsDir, resolvedCheckpointPath);
+      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+        referenced.add(resolvedCheckpointPath);
       }
     }
   }

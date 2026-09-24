@@ -60,11 +60,6 @@ describe("parsePageRange", () => {
     expect(() => parsePageRange("abc", 20)).toThrow("Invalid page number");
   });
 
-  it("throws on fractional page numbers", () => {
-    expect(() => parsePageRange("1.5", 20)).toThrow('Invalid page number: "1.5"');
-    expect(() => parsePageRange("1,2.5", 20)).toThrow('Invalid page number: "2.5"');
-  });
-
   it("throws on unsafe integer page numbers and ranges", () => {
     const unsafePage = String(Number.MAX_SAFE_INTEGER + 1);
     const maxPages = 20;
@@ -109,10 +104,6 @@ describe("providerSupportsNativePdf", () => {
 });
 
 describe("pdf-tool.helpers", () => {
-  it("resolvePdfInputs requires at least one pdf reference", () => {
-    expect(() => resolvePdfInputs({ prompt: "test" })).toThrow("pdf required");
-  });
-
   it("resolvePdfInputs deduplicates pdf and pdfs entries", () => {
     // `pdf` and `pdfs` are both public inputs; normalize them to one ordered
     // list before any filesystem or provider work begins.

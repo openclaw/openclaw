@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { newSessionModelSearch } from "./model-location.ts";
 import { page } from "./route.ts";
 
 // The loader is exercised through the page contract so route.ts keeps its
@@ -56,6 +57,40 @@ function createContext(params: {
 }
 
 describe("new-session route catalog target", () => {
+  it("carries an explicit model into an unsent draft without creating a session", async () => {
+    const { context, request } = createContext({ assistantAgentId: "main", agentsList: null });
+    const data = await loadNewSessionData(
+      context,
+      newSessionModelSearch("main", "example/model-one"),
+    );
+    expect(data).toMatchObject({
+      agentId: "main",
+      requestedAgentId: "main",
+      requestedModel: "example/model-one",
+      model: "example/model-one",
+      startTerminal: false,
+      catalogId: "",
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "unqualified", model: "unqualified" },
+    { label: "missing model", model: "example/" },
+    { label: "missing provider", model: "/model" },
+    { label: "control character", model: "example/model\n" },
+    { label: "oversized", model: `example/${"x".repeat(2048)}` },
+  ])("ignores $label model intent", async ({ model }) => {
+    const { context, request } = createContext({ assistantAgentId: "main", agentsList: null });
+    const data = await loadNewSessionData(
+      context,
+      `?agent=main&model=${encodeURIComponent(model)}`,
+    );
+    expect(data.model).toBe("");
+    expect(data.requestedModel).toBeUndefined();
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("does not apply group defaults from a retired connection", async () => {
     const context = {
       sessions: {

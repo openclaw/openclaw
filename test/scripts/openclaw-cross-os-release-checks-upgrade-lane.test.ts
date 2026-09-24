@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
+vi.mock("node:net", { spy: true });
+
 const mocks = vi.hoisted(() => ({
   ensureLocalNpmShim: vi.fn(),
   ensureDevUpdateGitInstall: vi.fn(),
@@ -162,6 +164,55 @@ describe("cross-OS manual gateway lane evidence", () => {
     ["upgrade", runUpgradeLane],
     ["dev-update", runDevUpdateSuite],
   ] as const)("%s gateway port ownership", (_name, runLane) => {
+    const listeners: Array<{
+      server: ReturnType<typeof createServer>;
+      closed: ReturnType<typeof vi.fn>;
+      port?: number;
+    }> = [];
+
+    beforeEach(async () => {
+      listeners.length = 0;
+      const actual = await vi.importActual<typeof import("node:net")>("node:net");
+      vi.mocked(createServer).mockImplementation((...args) => {
+        const server = actual.createServer(...args);
+        const closed = vi.fn();
+        const listener: (typeof listeners)[number] = { server, closed };
+        server.on("close", closed);
+        server.once("listening", () => {
+          const address = server.address();
+          if (address && typeof address !== "string") {
+            listener.port = address.port;
+          }
+        });
+        listeners.push(listener);
+        return server;
+      });
+    });
+
+    afterEach(async () => {
+      try {
+        for (const { server } of listeners) {
+          if (server.listening) {
+            await new Promise<void>((resolve, reject) => {
+              server.close((error) => (error ? reject(error) : resolve()));
+            });
+          }
+        }
+      } finally {
+        // restoreAllMocks does not reset module spies' custom implementations.
+        vi.mocked(createServer).mockRestore();
+      }
+    });
+
+    function expectReservationClosed(port: number) {
+      const owners = listeners.filter((listener) => listener.port === port);
+      expect(owners).toHaveLength(1);
+      const owner = owners[0]!;
+      expect(owner.closed).toHaveBeenCalledOnce();
+      expect(owner.server.listening).toBe(false);
+      expect(owner.server.address()).toBeNull();
+    }
+
     it.each(["success", "onboard", "models-set"] as const)(
       "holds the configured port through setup and releases it after %s",
       async (outcome) => {
@@ -186,6 +237,9 @@ describe("cross-OS manual gateway lane evidence", () => {
           if (outcome === "models-set") {
             throw new Error("injected models-set failure");
           }
+          if (_name === "fresh") {
+            writeFileSync(join(lane.stateDir, "openclaw.json"), "{}\n", "utf8");
+          }
         });
         mocks.runInstalledModelsSet.mockImplementation(() =>
           mocks.runModelsSet({ lane: { gatewayPort: port } }),
@@ -193,7 +247,7 @@ describe("cross-OS manual gateway lane evidence", () => {
         mocks.startGateway.mockImplementation(async ({ lane }) => {
           expect(lane.gatewayPort).toBe(port);
           phases.push("start-gateway");
-          expect(await probeBind(port)).toBe("available");
+          expectReservationClosed(port);
           return {
             child: {},
             closeLog: vi.fn(),
@@ -221,10 +275,71 @@ describe("cross-OS manual gateway lane evidence", () => {
         }
         // Failure cleanup and the spawn boundary both relinquish the same port.
         expect(port).toBeGreaterThan(0);
-        expect(await probeBind(port)).toBe("available");
+        expectReservationClosed(port);
       },
     );
   });
+
+  it.each(["retained", "missing", "expanded"] as const)(
+    "checks the authored nested path after fresh Gateway readiness: %s",
+    async (outcome) => {
+      arrangeSuccessfulLane();
+      const authored = {
+        plugins: {
+          enabled: true,
+          allow: ["openai"],
+          deny: ["retired"],
+          slots: { memory: "none" },
+          entries: { openai: { enabled: true, config: { apiKey: "fixture-secret" } } },
+        },
+        agents: { defaults: { model: "openai/gpt-5.6-luna" } },
+        gateway: { mode: "local" },
+      };
+      let configPath = "";
+      mocks.runModelsSet.mockImplementation(async ({ lane }) => {
+        configPath = join(lane.stateDir, "openclaw.json");
+        writeFileSync(configPath, JSON.stringify(authored), "utf8");
+      });
+      mocks.waitForGateway.mockImplementation(async () => {
+        const config = JSON.parse(readFileSync(configPath, "utf8"));
+        expect(config).toEqual({
+          ...authored,
+          plugins: {
+            ...authored.plugins,
+            entries: {
+              ...authored.plugins.entries,
+              wiki: { enabled: false, config: { store: { path: "~/.openclaw/wiki" } } },
+            },
+          },
+        });
+        if (outcome === "missing") {
+          delete config.plugins.entries.wiki.config.store.path;
+        } else if (outcome === "expanded") {
+          config.plugins.entries.wiki.config.store.path = "C:\\Users\\fixture\\.openclaw\\wiki";
+        }
+        writeFileSync(configPath, JSON.stringify(config), "utf8");
+      });
+
+      const result = runFreshLane(upgradeParams());
+      if (outcome === "retained") {
+        await expect(result).resolves.toMatchObject({
+          status: "pass",
+          phaseTimings: expect.arrayContaining([
+            expect.objectContaining({ name: "verify-nested-plugin-path", status: "pass" }),
+          ]),
+        });
+      } else {
+        await expect(result).rejects.toThrow(
+          "Fresh Gateway startup changed the authored nested plugin path.",
+        );
+      }
+      expect(mocks.startGateway).toHaveBeenCalledTimes(1);
+      expect(mocks.waitForGateway).toHaveBeenCalledTimes(1);
+      expect(mocks.runDashboardSmoke).toHaveBeenCalledTimes(outcome === "retained" ? 1 : 0);
+      expect(mocks.runAgentTurn).toHaveBeenCalledTimes(outcome === "retained" ? 1 : 0);
+      expect(mocks.stopGateway).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     ["pass", 15],

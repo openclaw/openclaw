@@ -37,17 +37,25 @@ it("preserves ordered scoped tasks and their exact delivery rows", async () => {
   });
   const direct = record("direct", { createdAt: 50 });
   const runFirst = record("run\0first", {
-    runId: " shared-run ",
-    childSessionKey: " shared-child ",
+    runId: "shared-run",
+    childSessionKey: "shared-child",
   });
   const runSecond = record("run-second", { runId: "shared-run", createdAt: 200 });
   const literalEscape = record("run\\u0000first", { runId: "shared-run" });
-  const child = record("child", { childSessionKey: " shared-child " });
-  const unrelated = record("unrelated", { runId: " ", childSessionKey: " " });
+  const child = record("child", { childSessionKey: "shared-child" });
+  const unrelated = record("unrelated", {
+    requesterSessionKey: "requester-only",
+  });
   const broad = Array.from({ length: 64 }, (_, index) =>
     record(`broad-${String(index).padStart(3, "0")}`, { runId: "broad-run" }),
   );
   const cases: Array<{ scope: TaskRegistryMutationScope; expected: TaskRecord[] }> = [
+    { scope: { taskId: direct.taskId }, expected: [direct] },
+    { scope: { taskId: "absent" }, expected: [] },
+    {
+      scope: { taskId: direct.taskId, runId: " ", childSessionKey: "\t\n" },
+      expected: [direct],
+    },
     { scope: { taskId: "absent", runId: " ", childSessionKey: " " }, expected: [] },
     {
       scope: { taskId: direct.taskId, runId: " shared-run ", childSessionKey: " shared-child " },
@@ -55,6 +63,7 @@ it("preserves ordered scoped tasks and their exact delivery rows", async () => {
     },
     { scope: { taskId: "absent", runId: "broad-run" }, expected: broad },
   ];
+  const prepare = vi.spyOn(db, "prepare");
   try {
     db.exec(OPENCLAW_STATE_SCHEMA_SQL);
     runSqliteImmediateTransactionSync(db, () => {
@@ -80,7 +89,9 @@ it("preserves ordered scoped tasks and their exact delivery rows", async () => {
         );
       }
     });
+    expect(tasks.readTaskRecord(db, runFirst.taskId)).toEqual(runFirst);
     for (const { scope, expected } of cases) {
+      prepare.mockClear();
       const snapshot = tasks.readTaskRegistryMutationSnapshotInDatabase(db, scope);
       expect([...snapshot.tasks.values()]).toEqual(expected);
       expect([...snapshot.deliveryStates.values()]).toEqual(
@@ -91,7 +102,107 @@ it("preserves ordered scoped tasks and their exact delivery rows", async () => {
             left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0,
           ),
       );
+      const taskQueries = prepare.mock.calls
+        .map(([query]) => query)
+        .filter((query) => query.includes('from "task_runs"'));
+      expect(taskQueries.length).toBeGreaterThan(0);
+      for (const query of taskQueries) {
+        const plan = db
+          .prepare(`EXPLAIN QUERY PLAN ${query}`)
+          .all(
+            JSON.stringify([scope.taskId]),
+            ...[scope.runId?.trim(), scope.childSessionKey?.trim()]
+              .filter((value): value is string => Boolean(value))
+              .map((value) => JSON.stringify([value])),
+          )
+          .map((row) => row.detail)
+          .join("\n");
+        expect(plan).toContain("SEARCH task_runs USING INDEX");
+        expect(plan).not.toContain("SCAN task_runs");
+        if (scope.runId?.trim()) {
+          expect(plan).toContain("idx_task_runs_run_id");
+        }
+        if (scope.childSessionKey?.trim()) {
+          expect(plan).toContain("idx_task_runs_child_session_key");
+        }
+      }
     }
+    for (const [key, expected] of [
+      ["requester-only", true],
+      ["agent:main:fixture", true],
+      ["shared-child", true],
+      ["absent", false],
+    ] as const) {
+      prepare.mockClear();
+      expect(tasks.hasTaskSessionOwnerInDatabase(db, key)).toBe(expected);
+      const ownershipQueries = prepare.mock.calls
+        .map(([query]) => query)
+        .filter((query) => query.includes('from "task_runs"'));
+      expect(ownershipQueries).toHaveLength(1);
+      const plan = db
+        .prepare(`EXPLAIN QUERY PLAN ${ownershipQueries[0]}`)
+        .all(key, key, key, 1)
+        .map((row) => row.detail)
+        .join("\n");
+      expect(plan).toContain("SEARCH task_runs USING INDEX");
+      expect(plan).not.toContain("SCAN task_runs");
+    }
+  } finally {
+    prepare.mockRestore();
+    db.close();
+  }
+});
+
+it("reads a large scope union in one query with exact delivery membership and binary ordering", async () => {
+  const [tasks, { OPENCLAW_STATE_SCHEMA_SQL }] = await Promise.all([
+    import("./task-registry.store.kernel.js"),
+    import("../state/openclaw-state-schema.js"),
+  ]);
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    for (const [index, taskId] of ["𐀀", "\ue000", "no-delivery"].entries()) {
+      tasks.upsertTaskWithDeliveryStateInDatabase(
+        { db },
+        {
+          task: {
+            taskId,
+            runtime: "cli",
+            requesterSessionKey: "owner",
+            ownerKey: "owner",
+            scopeKind: "session",
+            task: "Synthetic scoped task",
+            runId: "shared-run",
+            childSessionKey: "shared-child",
+            status: "running",
+            deliveryStatus: "pending",
+            notifyPolicy: "silent",
+            createdAt: index + 1,
+          },
+          ...(taskId === "no-delivery" ? {} : { deliveryState: { taskId } }),
+        },
+      );
+    }
+    const scopes: TaskRegistryMutationScope[] = Array.from({ length: 40_000 }, (_, index) => ({
+      taskId: `absent-${index}`,
+      runId: `absent-run-${index}`,
+      childSessionKey: `absent-child-${index}`,
+    }));
+    scopes.push({ taskId: "𐀀", runId: "shared-run" });
+    scopes.push({ taskId: "𐀀", childSessionKey: "shared-child" });
+    const prepare = vi.spyOn(db, "prepare");
+    const exec = vi.spyOn(db, "exec");
+    const snapshot = tasks.readTaskRegistryMutationSnapshotInDatabase(db, scopes);
+    expect([...snapshot.tasks.keys()]).toEqual(["𐀀", "\ue000", "no-delivery"]);
+    expect([...snapshot.deliveryStates.values()]).toEqual([{ taskId: "\ue000" }, { taskId: "𐀀" }]);
+    expect(prepare.mock.calls.filter(([sql]) => sql.startsWith("select "))).toHaveLength(1);
+    expect(exec.mock.calls).toEqual([["BEGIN"], ["COMMIT"]]);
+    expect(tasks.readTaskRegistryMutationSnapshotInDatabase(db, [])).toEqual({
+      tasks: new Map(),
+      deliveryStates: new Map(),
+    });
+    prepare.mockRestore();
+    exec.mockRestore();
   } finally {
     db.close();
   }

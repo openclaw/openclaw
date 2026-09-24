@@ -760,8 +760,10 @@ describe("scripts/test-docker-all scheduler", () => {
 
       const failureIndexFile = path.join(logDir, "failures.json");
       const failureIndex = JSON.parse(readFileSync(failureIndexFile, "utf8"));
+      expect(failureIndex).not.toHaveProperty("status");
       expect(failureIndex.combinedGhWorkflowCommand).toContain("allow_unreleased_changelog=true");
 
+      const rerunOutputs: string[] = [];
       for (const artifact of [summaryFile, failureIndexFile]) {
         const rerun = spawnSync(
           process.execPath,
@@ -773,9 +775,12 @@ describe("scripts/test-docker-all scheduler", () => {
           },
         );
         expect(rerun.status, rerun.stderr).toBe(0);
+        rerunOutputs.push(rerun.stdout);
         expect(rerun.stdout).toContain(`-f ref='${selectedSha}'`);
+        expect(rerun.stdout).toContain("docker_lanes='install-e2e'");
         expect(rerun.stdout).toContain("allow_unreleased_changelog=true");
       }
+      expect(rerunOutputs[1]).toBe(rerunOutputs[0]);
     } finally {
       rmSync(logDir, { force: true, recursive: true });
     }
@@ -895,7 +900,9 @@ describe("scripts/test-docker-all scheduler", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("Docker lanes omitted");
-      expect(result.stdout).toContain("no selected lane is supported by the frozen target");
+      expect(result.stdout).toContain(
+        "No selected Docker lane is supported by the frozen target; finalizing run summary",
+      );
       const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
       expect(summary.status).toBe("passed");
       expect(summary.lanes).toEqual([]);
@@ -911,7 +918,7 @@ describe("scripts/test-docker-all scheduler", () => {
         "published-upgrade-survivor-versioned-runtime-deps",
       );
       const failures = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
-      expect(failures.status).toBe("passed");
+      expect(failures).not.toHaveProperty("status");
       expect(failures.lanes).toEqual([]);
     } finally {
       rmSync(root, { force: true, recursive: true });
@@ -1054,7 +1061,7 @@ process.exit(0);
       });
 
       const failureIndex = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
-      expect(failureIndex.status).toBe("failed");
+      expect(failureIndex).not.toHaveProperty("status");
       expect(failureIndex.combinedGhWorkflowCommand).toBeUndefined();
       expect(failureIndex.lanes[0]?.ghWorkflowCommand).toBeUndefined();
       expect(failureIndex.lanes).toEqual([

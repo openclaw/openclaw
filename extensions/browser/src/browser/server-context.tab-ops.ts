@@ -211,7 +211,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         webSocketDebuggerUrl?: string;
         type?: string;
       }>
-    >(appendCdpPath(cdpHttpBase, "/json/list"), undefined, undefined, getCdpControlPolicy());
+    >(
+      appendCdpPath(cdpHttpBase, "/json/list"),
+      options?.timeoutMs,
+      options?.signal ? { signal: options.signal } : undefined,
+      getCdpControlPolicy(),
+    );
     const cdpControlPolicy = getCdpControlPolicy();
     const tabs: BrowserTab[] = [];
     for (const t of raw) {
@@ -241,6 +246,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
 
   const listTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
     const tabs = await readTabs(options);
+    options?.signal?.throwIfAborted();
     // Chrome MCP target identity is authoritative. A replacement tab cannot
     // inherit an alias safely, even when its URL matches the closed tab.
     return assignTabAliases(runtime, tabs, !capabilities.usesChromeMcp);
@@ -357,6 +363,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     }
 
     let createdTargetId: string | undefined;
+    let closeCreatedPage: (() => Promise<void>) | undefined;
     try {
       if (capabilities.usesPersistentPlaywright) {
         const mod = await getPwAiModule({ mode: "strict" });
@@ -370,6 +377,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             ...(opts?.signal ? { signal: opts.signal } : {}),
             ...ssrfPolicyOpts,
           });
+          closeCreatedPage = page.close;
           createdTargetId = page.targetId;
           return adoptValidatedTab(
             await withTabOwnership(
@@ -543,7 +551,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         { ...opts, label: normalizedLabel },
       );
     } catch (openError) {
-      if (createdTargetId) {
+      if (closeCreatedPage) {
+        await closeCreatedPage().catch(() => {});
+      } else if (createdTargetId) {
         // Creation owns the target until a successful handoff. Cleanup must not
         // inherit the caller's abort or replace the original open failure.
         await fetchOk(

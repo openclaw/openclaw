@@ -11,7 +11,7 @@ import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
-import { resetConfigRuntimeState } from "../config/config.js";
+import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -21,6 +21,7 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import {
   expectDeclaredHttpOwnerIdentity,
@@ -53,6 +54,7 @@ import {
   startGatewayServerWithRetries,
   testState,
 } from "./test-helpers.js";
+import { startClaimedGateway } from "./test-helpers.listener.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -114,41 +116,16 @@ beforeEach(() => {
   fetchWithSsrFGuardMock.mockClear();
 });
 
-async function startServer(port: number, opts?: { openResponsesEnabled?: boolean }) {
-  const { startGatewayServer } = await import("./server.js");
-  const serverOpts = {
-    host: "127.0.0.1",
-    auth: { mode: "none" as const },
-    controlUiEnabled: false,
-  } as const;
-  return await startGatewayServer(
-    port,
-    opts?.openResponsesEnabled === undefined
-      ? serverOpts
-      : { ...serverOpts, openResponsesEnabled: opts.openResponsesEnabled },
-  );
-}
-
-async function startSharedSecretServer(
-  port: number,
-  mode: "token" | "password",
-  opts?: { openResponsesEnabled?: boolean },
-) {
-  const { startGatewayServer } = await import("./server.js");
-  const serverOpts = {
-    host: "127.0.0.1",
-    auth:
-      mode === "token"
-        ? { mode: "token" as const, token: "secret" }
-        : { mode: "password" as const, password: "secret" },
-    controlUiEnabled: false,
-  } as const;
-  return await startGatewayServer(
-    port,
-    opts?.openResponsesEnabled === undefined
-      ? { ...serverOpts, openResponsesEnabled: true }
-      : { ...serverOpts, openResponsesEnabled: opts.openResponsesEnabled },
-  );
+async function startServer(port: TestPortClaim, auth: GatewayAuthConfig = { mode: "none" }) {
+  return await startClaimedGateway(port, async () => {
+    const { startGatewayServer } = await import("./server.js");
+    return await startGatewayServer(port.port, {
+      host: "127.0.0.1",
+      auth,
+      controlUiEnabled: false,
+      openResponsesEnabled: true,
+    });
+  });
 }
 
 async function writeGatewayConfig(config: Record<string, unknown>) {
@@ -2081,7 +2058,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await withEnvAsync(
       { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
       async () => {
-        const port = await getGatewayTestPort();
         const { startGatewayServer } = await import("./server.js");
         let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
         const previousGatewayAuth = testState.gatewayAuth;
@@ -2102,12 +2078,16 @@ describe("OpenResponses HTTP API (e2e)", () => {
             },
           });
           resetConfigRuntimeState();
-          server = await startGatewayServer(port, {
-            host: "127.0.0.1",
-            auth: trustedProxyAuth,
-            controlUiEnabled: false,
-            openResponsesEnabled: true,
-          });
+          const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+          const port = portClaim.port;
+          server = await startClaimedGateway(portClaim, () =>
+            startGatewayServer(port, {
+              host: "127.0.0.1",
+              auth: trustedProxyAuth,
+              controlUiEnabled: false,
+              openResponsesEnabled: true,
+            }),
+          );
 
           const incognitoSessionKey = "agent:main:dashboard:incognito-openresponses-http";
           await upsertSessionEntryCore(
@@ -2263,8 +2243,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it.each(["token", "password"] as const)(
     "preserves owner identity for streaming and non-streaming %s-authenticated callers",
     async (mode) => {
-      const port = await getGatewayTestPort();
-      const server = await startSharedSecretServer(port, mode);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const port = portClaim.port;
+      const server = await startServer(
+        portClaim,
+        mode === "token" ? { mode, token: "secret" } : { mode, password: "secret" },
+      );
       try {
         await expectSharedSecretHttpOwnerIdentity({
           post: (stream, headers) =>
@@ -3451,8 +3435,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const allowlistConfig = buildResponsesUrlPolicyConfig(1);
     await writeGatewayConfig(allowlistConfig);
 
-    const allowlistPort = await getGatewayTestPort();
-    const allowlistServer = await startServer(allowlistPort, { openResponsesEnabled: true });
+    const allowlistClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const allowlistPort = allowlistClaim.port;
+    const allowlistServer = await startServer(allowlistClaim);
     try {
       agentCommandMock.mockClear();
 
@@ -3472,8 +3457,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const capConfig = buildResponsesUrlPolicyConfig(0);
     await writeGatewayConfig(capConfig);
 
-    const capPort = await getGatewayTestPort();
-    const capServer = await startServer(capPort, { openResponsesEnabled: true });
+    const capClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const capPort = capClaim.port;
+    const capServer = await startServer(capClaim);
     try {
       agentCommandMock.mockClear();
       const maxUrlBlocked = await postResponses(capPort, {

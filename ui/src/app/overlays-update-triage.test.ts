@@ -309,7 +309,7 @@ describe("update failure triage admission", () => {
     });
     const request = vi.fn<RequestFn>(async (method, _params, options) => {
       if (method === "update.run") {
-        options?.onSent?.();
+        options?.onSent?.("update-run-request");
         throw new GatewayRequestError(failure);
       }
       return method === "update.status" ? { lastRun: previous } : {};

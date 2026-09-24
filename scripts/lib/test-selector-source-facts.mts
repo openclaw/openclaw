@@ -3,8 +3,9 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// File URLs also carry fixture dependencies into generated native-child imports.
 const IMPORT_SPECIFIER_PATTERN =
-  /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
+  /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\bnew\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url\s*,?\s*\)/gu;
 type SourceFile = { file: string; parseImports: boolean };
 
 function parseStrings(value: unknown): string[] {
@@ -112,7 +113,7 @@ async function readSourceFacts() {
         ? [
             ...new Set(
               [...source.matchAll(pattern)]
-                .map((match) => match[1] ?? match[2] ?? "")
+                .map((match) => match[1] ?? match[2] ?? match[3]?.replace(/[?#].*$/u, "") ?? "")
                 .filter((specifier) => specifier.startsWith(".")),
             ),
           ]

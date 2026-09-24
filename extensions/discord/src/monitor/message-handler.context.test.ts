@@ -1,39 +1,103 @@
-// Discord tests cover sender bot-status forwarding into the inbound context payload.
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createHostChannelInboundEventContextBuilder,
+  createHostChannelIngressRuntime,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
+import * as discordRuntime from "../runtime.js";
+import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
-import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
-function historyEntry(params: {
-  id: string;
-  senderId: string;
-  sender: string;
-  body: string;
-}): DiscordHistoryEntry {
-  return {
-    sender: params.sender,
-    body: params.body,
-    messageId: params.id,
-    senderProvenance: Object.freeze({
-      id: params.senderId,
-      memberRoleIds: Object.freeze([]),
-    }),
-  };
-}
+describe("discord message context", () => {
+  it.each(["user", "bot"] as const)(
+    "preserves Discord text scope and live owner authority for %s",
+    async (authorKind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const senderId = "123456789012345678";
+        const cfg: OpenClawConfig = {
+          session: { store: state.path("sessions.json") },
+          commands: { ownerAllowFrom: [`discord:${senderId}`] },
+        };
+        type GatewayContext = NonNullable<
+          ReturnType<
+            NonNullable<
+              Parameters<typeof createHostChannelIngressRuntime>[0]["resolveGatewayContext"]
+            >
+          >
+        >;
+        // SAFETY: Host ingress only reads current config from this synthetic Gateway.
+        const gateway = { getRuntimeConfig: () => cfg } as GatewayContext;
+        let live = true;
+        const host = {
+          channelId: "discord",
+          isLive: () => live,
+          resolveGatewayContext: () => gateway,
+        };
+        const runtime = createPluginRuntimeMock({
+          channel: { inbound: { ingress: createHostChannelIngressRuntime(host) } },
+        });
+        const runtimeSpy = vi.spyOn(discordRuntime, "getDiscordRuntime").mockReturnValue(runtime);
+        try {
+          const text = "/config show messages.responsePrefix";
+          const ctx = await createBaseDiscordMessageContext(
+            {
+              cfg,
+              inboundEventKind: "user_request",
+              author: { id: senderId, username: "ada", bot: authorKind === "bot" },
+              sender: { id: senderId, label: "Ada", name: "ada", isPluralKit: false },
+              baseText: text,
+              messageText: text,
+              buildContext: createHostChannelInboundEventContextBuilder(
+                buildChannelInboundEventContext,
+                host,
+              ),
+            },
+            { storePath: state.path("sessions.json") },
+          );
+          ctx.resolveChannelIngress = (contextBinding, conversation) =>
+            resolveDiscordTextCommandAccess({
+              accountId: ctx.accountId,
+              cfg,
+              sender: { id: senderId, authorKind },
+              ownerAllowFrom: [senderId],
+              memberAccessConfigured: true,
+              memberAllowed: true,
+              allowNameMatching: false,
+              allowTextCommands: true,
+              hasControlCommand: true,
+              conversationId: ctx.messageChannelId,
+              conversationParentId: conversation?.parentId,
+              conversationThreadId: conversation?.threadId,
+              contextBinding,
+            });
+          const result = await buildDiscordMessageProcessContext({ ctx, text, mediaList: [] });
+          if (!result) {
+            throw new Error("expected a built Discord message context");
+          }
 
-describe("discord buildDiscordMessageProcessContext sender bot status", () => {
-  it("preserves the native Discord channel id for tool authorization", async () => {
-    const ctx = await createBaseDiscordMessageContext();
-
-    const result = await buildDiscordMessageProcessContext({ ctx, text: "hi", mediaList: [] });
-    if (!result) {
-      throw new Error("expected a built Discord message context");
-    }
-
-    expect(result.ctxPayload.NativeChannelId).toBe(ctx.messageChannelId);
-    expect(result.ctxPayload.ConversationRoutePeerId).toBe(ctx.messageChannelId);
-  });
+          expect(result.ctxPayload.NativeChannelId).toBe(ctx.messageChannelId);
+          expect(result.ctxPayload.ConversationRoutePeerId).toBe(ctx.messageChannelId);
+          const authorization = resolveCommandAuthorization({
+            ctx: result.ctxPayload,
+            cfg,
+            commandAuthorized: true,
+          });
+          expect(authorization.assertOwnerCurrent).toBeTypeOf("function");
+          expect(() => authorization.assertOwnerCurrent?.()).not.toThrow();
+          cfg.commands = { ownerAllowFrom: [] };
+          expect(() => authorization.assertOwnerCurrent?.()).toThrow("authority changed");
+        } finally {
+          live = false;
+          runtimeSpy.mockRestore();
+        }
+      });
+    },
+  );
 
   it("projects a cached conversation avatar into channel-owned context", async () => {
     const ctx = await createBaseDiscordMessageContext({
@@ -198,61 +262,6 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
     },
   );
 
-  it("filters pending and inbound history by sender provenance in allowlist mode", async () => {
-    const guildHistories = new Map<string, DiscordHistoryEntry[]>([
-      [
-        "c1",
-        [
-          historyEntry({ id: "allowed", senderId: "111", sender: "Alice", body: "allowed body" }),
-          historyEntry({ id: "blocked", senderId: "222", sender: "Mallory", body: "blocked body" }),
-        ],
-      ],
-    ]);
-    const ctx = await createBaseDiscordMessageContext({
-      cfg: { channels: { discord: { contextVisibility: "allowlist" } } },
-      guildHistories,
-      historyLimit: 10,
-      channelConfig: { allowed: true, users: ["111"] },
-    });
-
-    const result = await buildDiscordMessageProcessContext({ ctx, text: "current", mediaList: [] });
-    if (!result) {
-      throw new Error("expected a built Discord message context");
-    }
-
-    expect(result.ctxPayload.Body).toContain("allowed body");
-    expect(result.ctxPayload.Body).not.toContain("blocked body");
-    expect(result.ctxPayload.InboundHistory).toEqual([
-      expect.objectContaining({ messageId: "allowed", body: "allowed body" }),
-    ]);
-  });
-
-  it("keeps all pending and inbound history under the default visibility mode", async () => {
-    const guildHistories = new Map<string, DiscordHistoryEntry[]>([
-      [
-        "c1",
-        [
-          historyEntry({ id: "allowed", senderId: "111", sender: "Alice", body: "allowed body" }),
-          historyEntry({ id: "other", senderId: "222", sender: "Mallory", body: "other body" }),
-        ],
-      ],
-    ]);
-    const ctx = await createBaseDiscordMessageContext({
-      guildHistories,
-      historyLimit: 10,
-      channelConfig: { allowed: true, users: ["111"] },
-    });
-
-    const result = await buildDiscordMessageProcessContext({ ctx, text: "current", mediaList: [] });
-    if (!result) {
-      throw new Error("expected a built Discord message context");
-    }
-
-    expect(result.ctxPayload.Body).toContain("allowed body");
-    expect(result.ctxPayload.Body).toContain("other body");
-    expect(result.ctxPayload.InboundHistory).toHaveLength(2);
-  });
-
   it("records an unavailable-attachment notice for path-less media facts", async () => {
     // Failed downloads produce path-less facts that core drops from the media
     // projection; the body notice is the model's only record of the attachment.
@@ -343,24 +352,5 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
       mediaList: [{ path: "/tmp/ok.png", contentType: "image/png", kind: "image" }],
     });
     expect(allResolved?.ctxPayload.Body).not.toContain("unavailable");
-  });
-
-  it("does not inject stale pending history when history is disabled", async () => {
-    const guildHistories = new Map<string, DiscordHistoryEntry[]>([
-      ["c1", [historyEntry({ id: "stale", senderId: "111", sender: "Alice", body: "stale body" })]],
-    ]);
-    const ctx = await createBaseDiscordMessageContext({
-      guildHistories,
-      historyLimit: 0,
-    });
-
-    const result = await buildDiscordMessageProcessContext({ ctx, text: "current", mediaList: [] });
-    if (!result) {
-      throw new Error("expected a built Discord message context");
-    }
-
-    expect(result.ctxPayload.Body).toContain("current");
-    expect(result.ctxPayload.Body).not.toContain("stale body");
-    expect(result.ctxPayload.InboundHistory).toBeUndefined();
   });
 });

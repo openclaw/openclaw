@@ -83,6 +83,20 @@ export function prepareTaskRecordUpdate(
   now?: number,
 ): TaskRecordUpdate {
   const task = applyTaskRecordPatch(current, patch, now);
+  if (isTerminalTaskStatus(current.status)) {
+    const previousEventAt =
+      current.lastEventAt ?? current.endedAt ?? current.startedAt ?? current.createdAt;
+    const nextEventAt = task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
+    if (nextEventAt <= previousEventAt) {
+      // Terminal corrections can carry an earlier execution end time. Keep
+      // their public freshness clock advancing without extending execution.
+      task.lastEventAt = current.lastEventAt;
+      // Retention bookkeeping is persisted but is not new task activity.
+      if (!isEquivalentTaskRecord(current, { ...task, cleanupAfter: current.cleanupAfter })) {
+        task.lastEventAt = Math.max(now ?? Date.now(), previousEventAt + 1);
+      }
+    }
+  }
   return {
     previous: current,
     task,

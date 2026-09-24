@@ -1,6 +1,7 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -293,13 +294,19 @@ export function createTelegramTextSender(config: {
       partialDeliveryResult: delivery.partialDeliveryResult,
     };
     const alreadyUsed = options.replyToAlreadyUsed === true;
-    const maxChars = useRichMessages
-      ? resolveTelegramTextChunkLimit({ cfg, accountId: account.accountId })
-      : 4000;
+    const maxChars = Math.min(
+      opts.textLimit ?? Number.POSITIVE_INFINITY,
+      resolveTelegramTextChunkLimit({
+        cfg,
+        accountId: account.accountId,
+        ...(textMode === "html" ? { formatting: { parseMode: "HTML" } } : {}),
+      }),
+    );
     const pages = planTelegramTextDeliveryPages({
       text: textMode === "html" ? renderHtmlText(rawText) : rawText,
       maxChars,
       tableMode,
+      chunkMode: opts.chunkMode ?? resolveChunkMode(cfg, "telegram", account.accountId),
       richMessages: useRichMessages,
       skipEntityDetection: account.config.linkPreview === false,
       ...(textMode === "html" ? { textMode: "html" as const } : {}),

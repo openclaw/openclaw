@@ -143,7 +143,83 @@ it("shows the git target when no package version is available", async () => {
   const { modal } = await getRenderedModalDialog(document.body);
 
   expect(modal.textContent).toContain("3 commits behind");
+  expect(modal.querySelector(".update-git-revisions code")?.textContent).toBe("abc1234");
 
+  findButton("Cancel").click();
+  await settled;
+});
+
+it.each([false, true])(
+  "shows short git revisions with refreshed metadata: %s",
+  async (refreshed) => {
+    const { settled } = startUpdate({
+      updateAvailable: {
+        channel: "dev",
+        currentVersion: "2026.9.5",
+        latestVersion: "2026.9.5",
+        currentSha: "a".repeat(40),
+        upstreamSha: "b".repeat(40),
+        repositoryUrl: "https://github.com/example/openclaw",
+        commitsBehind: 3,
+      },
+      updateSchedule: refreshed
+        ? {
+            channel: "dev",
+            autoEnabled: false,
+            install: {
+              kind: "git",
+              git: { status: "behind", currentSha: "c".repeat(40), commitsBehind: 1 },
+            },
+            target: {
+              kind: "git",
+              upstreamRef: "origin/main",
+              upstreamSha: "d".repeat(40),
+              commitsBehind: 1,
+            },
+          }
+        : null,
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+    expect(modal.querySelector(".exec-approval-command > div")?.textContent).toBe(
+      refreshed
+        ? "Installed v2026.9.5 · 1 commit behind"
+        : "Installed v2026.9.5 · 3 commits behind",
+    );
+    expect(
+      [...modal.querySelectorAll(".update-git-revisions code")].map((code) => code.textContent),
+    ).toEqual(refreshed ? ["cccccccc", "dddddddd"] : ["aaaaaaaa", "bbbbbbbb"]);
+    expect(modal.querySelector(".update-git-revisions a")?.getAttribute("href")).toBe(
+      refreshed
+        ? undefined
+        : `https://github.com/example/openclaw/compare/${"a".repeat(40)}...${"b".repeat(40)}`,
+    );
+    expect(modal.textContent).not.toContain("a".repeat(40));
+    findButton("Cancel").click();
+    await settled;
+  },
+);
+
+it.each([
+  undefined,
+  "https://gitlab.com/example/openclaw",
+  "https://github.com.evil.invalid/example/openclaw",
+  "https://example-user:example-password@github.com/example/openclaw",
+  "javascript:alert(1)",
+])("keeps revisions readable without a supported GitHub link: %s", async (repositoryUrl) => {
+  const { settled } = startUpdate({
+    updateAvailable: {
+      channel: "dev",
+      currentVersion: "2026.9.5",
+      latestVersion: "2026.9.5",
+      currentSha: "a".repeat(40),
+      upstreamSha: "b".repeat(40),
+      commitsBehind: 3,
+      repositoryUrl,
+    },
+  });
+  const { modal } = await getRenderedModalDialog(document.body);
+  expect(modal.querySelectorAll(".update-git-revisions code")).toHaveLength(2);
+  expect(modal.querySelector(".update-git-revisions a")).toBeNull();
   findButton("Cancel").click();
   await settled;
 });
@@ -234,6 +310,7 @@ it.each(["current", "ahead"] as const)(
 
     expect(modal.textContent).toContain("v2026.9.3");
     expect(modal.textContent).not.toContain("246 commits behind");
+    expect(modal.querySelector(".update-git-revisions")).toBeNull();
 
     findButton("Cancel").click();
     await settled;
@@ -600,9 +677,13 @@ it.each([
       }
       const pendingStatus = createDeferred();
       statusResponse = pendingStatus.promise;
-      const statusReadsBeforeCheck = request.mock.calls.filter(
-        ([method]) => method === "update.status",
-      ).length;
+      const checkoutReads = () =>
+        request.mock.calls.filter(
+          ([method, params]) =>
+            method === "update.status" &&
+            expect.objectContaining({ refreshCheckout: true }).asymmetricMatch(params),
+        );
+      const checkoutReadsBeforeCheck = checkoutReads().length;
       check.click();
       await flushMicrotasks();
       expect(findButton("Checking status…").disabled).toBe(true);
@@ -615,9 +696,7 @@ it.each([
       expect(modal.textContent).not.toContain("Run status read failed");
       expect(modal.querySelector('[role="status"]')?.textContent).toContain("Status refreshed.");
       expect(view.run).toEqual(run);
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
-        statusReadsBeforeCheck + 1,
-      );
+      expect(checkoutReads()).toHaveLength(checkoutReadsBeforeCheck + 1);
 
       statusResponse = Promise.reject(new Error("Status refresh unavailable"));
       findButton("Check status").click();
@@ -641,9 +720,7 @@ it.each([
         expect(findButton("Retry update").disabled).toBe(true);
       }
       findButton("Check status").click();
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
-        statusReadsBeforeCheck + 3,
-      );
+      expect(checkoutReads()).toHaveLength(checkoutReadsBeforeCheck + 3);
       expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(
         entry === "started" ? 1 : 0,
       );

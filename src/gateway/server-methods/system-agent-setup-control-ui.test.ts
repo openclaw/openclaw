@@ -92,7 +92,6 @@ vi.mock("../../system-agent/setup-inference.js", () => ({
     return detectSetupInference(
       {
         detectInferenceBackends: async () => [],
-        probeLocalCommand: async (command) => ({ command, found: false }),
       },
       agentId,
     );

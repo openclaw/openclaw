@@ -67,14 +67,34 @@ describe("resolve-fs-safe-native-contract", () => {
     expect(resolveContract(root, ref)).toBe("not-applicable");
   });
 
-  it("reports the exact 2026.7.34 Python-only 0.4.1 contract as not applicable", () => {
-    const { root, ref } = commitSource(
-      "0.4.1",
-      legacyDefaults,
-      "extended-stable/2026.7.33",
-      "2026.7.34",
-    );
-    expect(resolveContract(root, ref)).toBe("not-applicable");
+  it.each(["2026.7.34", "2026.7.35"])(
+    "reports the exact %s Python-only 0.4.1 contract as not applicable",
+    (productVersion) => {
+      const { root, ref } = commitSource(
+        "0.4.1",
+        legacyDefaults,
+        "extended-stable/2026.7.33",
+        productVersion,
+      );
+      expect(resolveContract(root, ref)).toBe("not-applicable");
+      expect(resolveContract(root, ref, false)).toBe("required");
+      expect(resolveContract(root, ref, true, ref)).toBe("required");
+    },
+  );
+
+  it("keeps changed 2026.7.35 dependency and native contracts strict", () => {
+    for (const { dependency, defaults } of [
+      { dependency: "0.4.2", defaults: legacyDefaults },
+      { dependency: "0.4.1", defaults: `${legacyDefaults}configureFsSafeNative({});\n` },
+    ]) {
+      const { root, ref } = commitSource(
+        dependency,
+        defaults,
+        "extended-stable/2026.7.33",
+        "2026.7.35",
+      );
+      expect(resolveContract(root, ref)).toBe("required");
+    }
   });
 
   it("keeps the current native consumer contract strict", () => {

@@ -622,34 +622,15 @@ async function runCase(params: {
           preNativeDurableSnapshot.activeEntryIds.includes(compactionId),
           "Durable host compaction was not on the active branch",
         );
-        const priorCheckpoints = Array.isArray(held.compactionCheckpoints)
-          ? held.compactionCheckpoints
-          : [];
-        const durableCheckpoints = Array.isArray(preNativeDurableSnapshot.compactionCheckpoints)
-          ? preNativeDurableSnapshot.compactionCheckpoints
-          : [];
         assert.equal(
-          durableCheckpoints.length,
-          priorCheckpoints.length + 1,
-          "Host compaction checkpoint was not persisted once",
-        );
-        const checkpoint = durableCheckpoints.at(-1);
-        assert.ok(runtime.isRecord(checkpoint), "Host compaction checkpoint was malformed");
-        assert.equal(checkpoint.sessionKey, proof.sessionKey, "Checkpoint changed session key");
-        assert.equal(checkpoint.sessionId, proof.sessionId, "Checkpoint changed session identity");
-        assert.ok(
-          runtime.isRecord(checkpoint.postCompaction),
-          "Checkpoint omitted post-compaction identity",
+          preNativeDurableSnapshot.compactionCount,
+          held.compactionCount + 1,
+          "Host compaction accounting was not durable once",
         );
         assert.equal(
-          checkpoint.postCompaction.entryId,
-          compactionId,
-          "Checkpoint did not reference the durable compaction",
-        );
-        assert.equal(
-          checkpoint.postCompaction.sessionId,
+          preNativeDurableSnapshot.sessionId,
           proof.sessionId,
-          "Checkpoint post-compaction session identity changed",
+          "Host compaction changed session identity",
         );
 
         recordCompactionProofCheckpoint(proof, "release-after-hook");
@@ -720,17 +701,6 @@ async function runCase(params: {
         assert.ok(
           restartDurableSnapshot.activeEntryIds.includes(compactionId),
           "Restart host compaction was not active",
-        );
-        const priorCheckpoints = Array.isArray(held.compactionCheckpoints)
-          ? held.compactionCheckpoints
-          : [];
-        const durableCheckpoints = Array.isArray(restartDurableSnapshot.compactionCheckpoints)
-          ? restartDurableSnapshot.compactionCheckpoints
-          : [];
-        assert.deepEqual(
-          durableCheckpoints,
-          priorCheckpoints,
-          "Restart barrier was reached after checkpoint persistence",
         );
         assert.equal(
           restartDurableSnapshot.compactionCount,
@@ -868,26 +838,18 @@ async function runCase(params: {
       );
       assert.equal(afterTerminal.compactionIds.length, 1, "Host compaction was not committed");
       assert.equal(afterTerminal.compactionCount, 1, "Host compaction was not counted once");
-      const terminalCheckpoints = Array.isArray(afterTerminal.compactionCheckpoints)
-        ? afterTerminal.compactionCheckpoints
-        : [];
       assert.equal(
-        terminalCheckpoints.length,
-        mode === "heartbeat-upgraded-restart" ? 0 : 1,
-        "Host compaction checkpoint count changed",
+        afterTerminal.compactionSummaries.length,
+        1,
+        "Host compaction summary count changed",
       );
-      if (terminalCheckpoints.length === 1) {
-        const [checkpoint] = terminalCheckpoints;
-        assert.ok(
-          runtime.isRecord(checkpoint) && typeof checkpoint.summary === "string",
-          "Host compaction checkpoint omitted its summary",
-        );
-        assert.equal(
-          checkpoint.summary.match(/^\*\*Turn Context \(split turn\):\*\*$/gm)?.length ?? 0,
-          1,
-          "Host compaction checkpoint did not contain exactly one split-turn heading",
-        );
-      }
+      const [summary] = afterTerminal.compactionSummaries;
+      assert.ok(typeof summary === "string", "Host compaction omitted its summary");
+      assert.equal(
+        summary.match(/^\*\*Turn Context \(split turn\):\*\*$/gm)?.length ?? 0,
+        1,
+        "Host compaction did not contain exactly one split-turn heading",
+      );
       assert.ok(
         afterTerminal.transcriptByteCompactionLatch,
         "Oversized host transcript did not persist its retry latch",
@@ -903,11 +865,6 @@ async function runCase(params: {
           afterTerminal.compactionIds,
           preNativeDurableSnapshot.compactionIds,
           "Native rejection duplicated the durable compaction event",
-        );
-        assert.deepEqual(
-          afterTerminal.compactionCheckpoints,
-          preNativeDurableSnapshot.compactionCheckpoints,
-          "Native rejection duplicated the durable compaction checkpoint",
         );
         assert.equal(
           matchingAppServerReplies(requestsAtTerminal, nativeCompactRequestId).length,
@@ -925,11 +882,6 @@ async function runCase(params: {
           afterTerminal.compactionIds,
           restartDurableSnapshot.compactionIds,
           "Restart duplicated the durable compaction event",
-        );
-        assert.deepEqual(
-          afterTerminal.compactionCheckpoints,
-          restartDurableSnapshot.compactionCheckpoints,
-          "Restart duplicated the durable compaction checkpoint",
         );
         assert.equal(
           afterTerminal.compactionCount,

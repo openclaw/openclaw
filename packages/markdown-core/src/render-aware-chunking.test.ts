@@ -53,6 +53,29 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
     expect(chunks.every((chunk) => chunk.rendered.endsWith("</b>"))).toBe(true);
   });
 
+  it.each(["A".repeat(128), `${"A".repeat(230)}😀`])(
+    "keeps internal code whitespace away from message edges: %s",
+    (first) => {
+      const second = "B".repeat(128);
+      const chunks = renderMarkdownIRChunksWithinLimit({
+        ir: markdownToIR(`    ${first}\n\n    ${second}`),
+        limit: 256,
+        renderChunk: (source) => ({
+          html: renderEscapedHtml(source),
+          receivedText: source.text.trim(),
+        }),
+        measureRendered: (rendered) => rendered.html.length,
+      });
+
+      expect(chunks.map((chunk) => chunk.rendered.receivedText).join("")).toBe(
+        `${first}\n\n${second}`,
+      );
+      expect(chunks.every((chunk) => chunk.rendered.html.length <= 256)).toBe(true);
+      expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk.source.text))).toBe(true);
+      expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk.source.text))).toBe(true);
+    },
+  );
+
   it("checks exact candidates instead of assuming rendered length is monotonic", () => {
     const ir: MarkdownIR = {
       text: "README.md<",

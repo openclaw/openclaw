@@ -25,6 +25,7 @@ vi.mock("./systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-exec.js")>()),
   assertSystemdAvailable: async () => {},
   execBusctlUser: busctl,
+  execSystemctlUser: async () => ({ code: 0, termination: "exit", stdout: "", stderr: "" }),
 }));
 
 import {
@@ -151,9 +152,9 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect((await fs.readdir(directory)).filter((file) => file.endsWith(".tmp"))).toEqual([]);
   }
 
-  it.each(["unit", "state", "ancestor"])(
+  it.for(["unit", "state", "ancestor"])(
     "publishes a first unit through a %s directory alias discovered by the manager",
-    async (alias) => {
+    async (alias, { signal, onTestFinished }) => {
       const directory =
         alias === "state"
           ? stateDir
@@ -172,15 +173,17 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       await expect(readSystemdDefinitionMutationCapability(env)).resolves.toEqual({
         kind: "writable",
       });
+      signal.throwIfAborted();
       const rename = fs.rename.bind(fs);
       let published = false;
-      vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
         if (destination === unitPath) {
           expect(await fs.readFile(environmentPath, "utf8")).toContain("replacement-secret-canary");
           published = true;
         }
         await rename(source, destination);
       });
+      onTestFinished(() => renameSpy.mockRestore());
       await expect(stage()).resolves.toMatchObject({ unitPath });
       expect(published).toBe(true);
       await expect(readSystemdDefinitionMutationCapability(env)).resolves.toEqual({

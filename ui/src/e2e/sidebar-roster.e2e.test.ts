@@ -1,6 +1,12 @@
 import { expect, it } from "vitest";
-import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import type {
+  AgentsListResult,
+  CronJob,
+  GatewaySessionRow,
+  SessionsListResult,
+} from "../api/types.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
@@ -68,7 +74,7 @@ suite.define(() => {
             ],
           ),
         } satisfies SessionsListResult;
-        const jobs = ["main", "forge"].map((agentId) => ({
+        const jobs = ["main", "forge"].map((agentId): CronJob => ({
           id: `${agentId}-daily`,
           agentId,
           configRevision: `${agentId}-revision`,
@@ -120,15 +126,13 @@ suite.define(() => {
               thinkingLevel: null,
             },
             "sessions.list": sessions,
-            "cron.list": {
-              cases: [
-                ...["main", "forge"].map((agentId) => ({
-                  match: { agentId },
-                  response: jobList(agentId),
-                })),
-                { match: {}, response: jobList() },
-              ],
-            },
+            "cron.list": cronListResponseFixture([
+              ...["main", "forge"].map((agentId) => ({
+                match: { agentId },
+                response: jobList(agentId),
+              })),
+              { match: {}, response: jobList() },
+            ]),
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);

@@ -111,7 +111,10 @@ async function evictOldestSession(
   if (oldestKey !== undefined) {
     const oldest = sessions.get(oldestKey);
     if (oldest?.pendingApproval) {
-      context.systemAgentApprovalManager?.expire(oldest.pendingApproval.id, "session-evicted");
+      await context.systemAgentApprovalManager?.expire(
+        oldest.pendingApproval.id,
+        "session-evicted",
+      );
     }
     await oldest?.engine.dispose();
     sessions.delete(oldestKey);
@@ -124,10 +127,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     respond(
       true,
       manager
-        ? listVisiblePendingApprovalRequests({
+        ? await listVisiblePendingApprovalRequests({
             manager,
             client,
-            ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+            ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
           })
         : [],
       undefined,
@@ -421,7 +424,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         appendTranscriptReset();
         sessions.delete(sessionId);
         if (existing?.pendingApproval) {
-          context.systemAgentApprovalManager?.expire(existing.pendingApproval.id, "session-reset");
+          await context.systemAgentApprovalManager?.expire(
+            existing.pendingApproval.id,
+            "session-reset",
+          );
         }
         await existing?.engine.dispose();
       }
@@ -529,6 +535,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         session = {
           engine,
           welcome,
+          optionalWelcome: params.welcomeVariant === undefined && !persistWelcome,
+          ...(params.welcomeVariant === "new-agent" ? { newAgentWelcome: welcome } : {}),
           ...(welcomeQuestion ? { welcomeQuestion } : {}),
           ...(greetingAuditSequence !== undefined
             ? { welcomeAuditSequence: greetingAuditSequence }
@@ -543,6 +551,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             {
               sessionId,
               reply: session.welcome,
+              optionalWelcome: session.optionalWelcome,
               action: "none",
               ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
             },
@@ -559,11 +568,32 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         params.wizardCancel === undefined &&
         (params.message === undefined || !params.message.trim())
       ) {
+        if (params.welcomeVariant === "new-agent") {
+          const interaction = session.engine.decorateRejoinReply({ text: "", action: "none" });
+          if (
+            !interaction.wizardInputPending &&
+            !interaction.sensitive &&
+            !interaction.step &&
+            !interaction.question &&
+            !session.pendingApproval &&
+            !session.engine.getPendingOperatorProposal()
+          ) {
+            session.newAgentWelcome ??= await buildNewAgentWelcome({ engine: session.engine });
+            respond(
+              true,
+              { sessionId, reply: session.newAgentWelcome, optionalWelcome: false, action: "none" },
+              undefined,
+            );
+            // The caretaker warning was not displayed; its delivery cursor stays pending.
+            return undefined;
+          }
+        }
         respond(
           true,
           buildSystemAgentRejoinResult({
             sessionId,
             welcome: session.welcome,
+            optionalWelcome: session.optionalWelcome,
             ...(session.welcomeQuestion ? { welcomeQuestion: session.welcomeQuestion } : {}),
             engine: session.engine,
           }),

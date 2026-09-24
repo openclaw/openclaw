@@ -21,6 +21,7 @@ import {
   matchesExtraMemoryPathEntry,
   normalizeExtraMemoryPathEntries,
 } from "./internal.js";
+import { getAgentWorkspaceAccess } from "./openclaw-runtime-agent.js";
 import {
   buildMemoryReadResult,
   DEFAULT_MEMORY_READ_LINES,
@@ -205,8 +206,10 @@ export async function readAgentMemoryFile(params: {
     throw new Error("memory search disabled");
   }
   const contextLimits = resolveMemoryHostAgentContextLimits(params.cfg, params.agentId);
-  return await readMemoryFile({
-    workspaceDir: resolveMemoryHostAgentWorkspaceDir(params.cfg, params.agentId),
+  const workspaceDir = resolveMemoryHostAgentWorkspaceDir(params.cfg, params.agentId);
+  const access = getAgentWorkspaceAccess(workspaceDir, "memoryFiles");
+  return await (access?.memoryFiles?.readFile ?? readMemoryFile)({
+    workspaceDir,
     extraPaths: settings.extraPaths,
     relPath: params.relPath,
     from: params.from,

@@ -136,25 +136,6 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       selectWorktree(value === "worktree");
     };
 
-    const focusSelectedMode = (event: Event) => {
-      if (!(event.currentTarget instanceof HTMLElement)) {
-        return;
-      }
-      const items = Array.from(
-        event.currentTarget.querySelectorAll<HTMLElement & { active: boolean }>(
-          "wa-dropdown-item[data-environment-mode]",
-        ),
-      );
-      const selected = items.find((item) => item.hasAttribute("data-selected")) ?? items[0];
-      if (!selected) {
-        return;
-      }
-      for (const item of items) {
-        item.active = item === selected;
-      }
-      selected.focus({ preventScroll: true });
-    };
-
     const handleModeKeydown = (event: KeyboardEvent) => {
       if (!(event.currentTarget instanceof HTMLElement)) {
         return;
@@ -309,7 +290,6 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                               placement="bottom-start"
                               aria-label=${t("sessionsView.groupDefaultsMode")}
                               @wa-select=${handleModeSelect}
-                              @wa-after-show=${focusSelectedMode}
                               @keydown=${handleModeKeydown}
                             >
                               <button
@@ -344,6 +324,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                                     type="checkbox"
                                     .checked=${selected}
                                     ?disabled=${submitting}
+                                    ?autofocus=${selected && !submitting}
                                     ${ref((element) => syncDropdownItemRadio(element, selected))}
                                   >
                                     <span

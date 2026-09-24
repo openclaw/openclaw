@@ -362,8 +362,8 @@ describe("Code Mode agent-loop error recovery", () => {
     }
   });
 
-  afterEach(() => {
-    resetCodeModeTestState();
+  afterEach(async () => {
+    await resetCodeModeTestState();
     vi.useRealTimers();
   });
 

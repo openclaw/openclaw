@@ -22,11 +22,13 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
 import {
+  createConfiguredAcpBinding,
   createMockCommandInteraction as createInteraction,
   type MockCommandInteraction,
 } from "./native-command.test-helpers.js";
@@ -99,25 +101,6 @@ function createConfig(): OpenClawConfig {
       },
     },
   } as OpenClawConfig;
-}
-
-function createConfiguredAcpBinding(params: {
-  channelId: string;
-  peerKind: "channel" | "direct";
-  agentId?: string;
-}) {
-  return {
-    type: "acp",
-    agentId: params.agentId ?? "codex",
-    match: {
-      channel: "discord",
-      accountId: "default",
-      peer: { kind: params.peerKind, id: params.channelId },
-    },
-    acp: {
-      mode: "persistent",
-    },
-  } as const;
 }
 
 function createConfiguredAcpCase(params: {
@@ -221,7 +204,6 @@ function createConfiguredRouteState(params: {
     boundSessionKey: params.sessionKey,
     configuredRoute: null,
     configuredBinding: null,
-    bindingReadiness: { ok: true } as const,
   } satisfies Awaited<
     ReturnType<typeof import("./native-command-route.js").resolveDiscordNativeInteractionRouteState>
   >;
@@ -254,7 +236,6 @@ function createUnboundRouteState(params: {
     boundSessionKey: undefined,
     configuredRoute: null,
     configuredBinding: null,
-    bindingReadiness: null,
   } satisfies Awaited<
     ReturnType<typeof import("./native-command-route.js").resolveDiscordNativeInteractionRouteState>
   >;
@@ -534,7 +515,7 @@ describe("Discord native plugin command dispatch", () => {
     nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurnForTest;
     nativeCommandRuntime.resolveDirectStatusReplyForSession =
       runtimeModuleMocks.resolveDirectStatusReplyForSession as typeof resolveDirectStatusReplyForSession;
-    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async (params) =>
+    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = (params) =>
       createUnboundRouteState({
         sessionKey: params.isDirectMessage
           ? `agent:main:discord:dm:${params.directUserId ?? "owner"}`
@@ -576,7 +557,7 @@ describe("Discord native plugin command dispatch", () => {
       ...sourceCfg,
       session: { dmScope: "per-channel-peer" },
     } as OpenClawConfig;
-    const resolveRouteState = vi.fn(async (params: { cfg: OpenClawConfig }) =>
+    const resolveRouteState = vi.fn((params: { cfg: OpenClawConfig }) =>
       createUnboundRouteState({
         sessionKey:
           params.cfg.session?.dmScope === "per-channel-peer"
@@ -737,7 +718,7 @@ describe("Discord native plugin command dispatch", () => {
     const cfg = createConfig();
     const interaction = createInteraction();
     const pluginSessionKey = "plugin-binding:openclaw-codex-app-server:dm";
-    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async () => ({
+    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = () => ({
       ...createConfiguredRouteState({
         sessionKey: pluginSessionKey,
         agentId: "main",
@@ -1760,7 +1741,7 @@ describe("Discord native plugin command dispatch", () => {
       guildId: "1459246755253325866",
       guildName: "Ops",
     });
-    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async () =>
+    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = () =>
       createConfiguredRouteState({
         sessionKey: "agent:codex:acp:binding:discord:default:guild-channel",
         agentId: "codex",
@@ -1809,7 +1790,7 @@ describe("Discord native plugin command dispatch", () => {
       guildName: "Ops",
     });
 
-    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async () =>
+    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = () =>
       createUnboundRouteState({
         sessionKey: `agent:qwen:discord:channel:${channelId}`,
         agentId: "qwen",
@@ -1817,7 +1798,7 @@ describe("Discord native plugin command dispatch", () => {
     const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher;
     const statusSpy = runtimeModuleMocks.resolveDirectStatusReplyForSession;
     const command = await createStatusCommand(cfg);
-    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async () => ({
+    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = () => ({
       route: {
         agentId: "qwen",
         channel: "discord",
@@ -1839,7 +1820,6 @@ describe("Discord native plugin command dispatch", () => {
       boundSessionKey: undefined,
       configuredRoute: null,
       configuredBinding: null,
-      bindingReadiness: null,
     });
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
@@ -1858,7 +1838,7 @@ describe("Discord native plugin command dispatch", () => {
       channelId: "dm-1",
       peerKind: "direct",
     });
-    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async () =>
+    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = () =>
       createConfiguredRouteState({
         sessionKey: "agent:codex:acp:binding:discord:default:dm",
         agentId: "codex",
@@ -1871,36 +1851,6 @@ describe("Discord native plugin command dispatch", () => {
     });
   });
 
-  it("does not bypass configured ACP readiness for Discord /new", async () => {
-    const { cfg, interaction } = createConfiguredAcpCase({
-      channelType: ChannelType.GuildText,
-      channelId: "1478844424791396446",
-      peerKind: "channel",
-      guildId: "1459246755253325866",
-      guildName: "Ops",
-    });
-    const resolveRouteState = vi.fn(async () =>
-      createConfiguredRouteState({
-        sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
-        agentId: "claude",
-      }),
-    );
-    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = resolveRouteState;
-    const dispatchSpy = createDispatchSpy();
-    const command = await createNativeCommand(cfg, {
-      name: "new",
-      description: "Start a new session.",
-      acceptsArgs: true,
-    });
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
-
-    expectSingleCallFirstArg(resolveRouteState, {
-      enforceConfiguredBindingReadiness: true,
-    });
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-  });
-
   it("allows recovery commands through configured ACP bindings even when ensure fails", async () => {
     const { cfg, interaction } = createConfiguredAcpCase({
       channelType: ChannelType.GuildText,
@@ -1910,7 +1860,7 @@ describe("Discord native plugin command dispatch", () => {
       guildName: "Ops",
       includeChannelAccess: false,
     });
-    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async () =>
+    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = () =>
       createConfiguredRouteState({
         sessionKey: "agent:codex:acp:binding:discord:default:recovery",
         agentId: "codex",
@@ -1942,3 +1892,5 @@ describe("Discord native plugin command dispatch", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+installDiscordIngressTestRuntime();

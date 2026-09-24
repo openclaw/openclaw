@@ -303,9 +303,11 @@ describe("worker task pool", () => {
     const gate = createDeferredCore<PoolFixtureInput>();
     const controller = new AbortController();
     const executionSettled = vi.fn();
+    const disposed = createDeferredCore();
     const first = pool.run(() => gate.promise, {
       signal: controller.signal,
       onExecutionSettled: executionSettled,
+      onInputConsumed: disposed.resolve,
     });
     const settled = Promise.allSettled([first]);
     controller.abort();
@@ -313,7 +315,8 @@ describe("worker task pool", () => {
     expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
     await expect(pool.run({ label: "excess" }, {})).rejects.toMatchObject({ code: "overloaded" });
     gate.resolve({ label: "canceled" });
-    await gate.promise;
+    await disposed.promise;
+    expect(pool.getSnapshot().pendingTasks).toBe(0);
     expect(executionSettled).toHaveBeenCalledOnce();
     expect(await pool.run({ label: "recovered" }, {})).toMatchObject({ label: "recovered" });
   });

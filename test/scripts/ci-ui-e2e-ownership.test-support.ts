@@ -110,6 +110,7 @@ export function assertControlUiE2eOwnership(makeTempDirectory: (prefix: string) 
     "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
     "ui/src/e2e/agent-switch-roster.e2e.test.ts",
     "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",

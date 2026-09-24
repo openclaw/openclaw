@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import { sanitizePendingFinalDeliveryText } from "../../auto-reply/reply/pending-final-delivery-state.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { resolveRestartRecoveryChannelAuthority } from "../../config/sessions/restart-recovery-state.js";
 import {
   applySessionEntryReplacements,
@@ -56,7 +56,10 @@ const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
   "Your previous turn was interrupted by a gateway restart while " +
     "OpenClaw was waiting on tool/model work. The restart did not cancel the user's task. " +
     "Continue from the existing transcript: check the current state, recover interrupted work, " +
-    "and finish the task without asking the user to repeat the request. Treat a tool result " +
+    "and finish the task without asking the user to repeat the request. Interrupted subagents " +
+    "are not automatically relaunched. Inspect their saved results and current status; " +
+    "continue a retained child session or start a replacement when needed, after confirming " +
+    "the previous execution has stopped. Treat a tool result " +
     "marked interrupted or missing as having an unknown outcome; verify what happened before " +
     `repeating an action. ${TOOL_FAILURE_INSTRUCTION}`,
 );
@@ -100,6 +103,15 @@ function buildResumeMessage(
 }
 
 type MainSessionResumeResult = "started" | "settled" | "skipped" | "failed";
+
+function readInterruptedRunId(entry: SessionEntry): string | undefined {
+  const runs = entry.restartRecoveryRuns;
+  return runs?.length === 1
+    ? runs[0]?.runId
+    : !runs?.length
+      ? normalizeOptionalString(entry.lifecycleRunId)
+      : undefined;
+}
 
 async function rollbackRestartRecoveryReservation(
   params: MainSessionRecoveryStoreTarget & {
@@ -213,7 +225,12 @@ async function resumeMainSessionWithinAdmission(
     sessionKey: params.sessionKey,
   });
   const claimedRunId = normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId);
-  const sourceRunId = normalizeOptionalString(params.entry.restartRecoveryDeliverySourceRunId);
+  const claimedSourceRunId = normalizeOptionalString(
+    params.entry.restartRecoveryDeliverySourceRunId,
+  );
+  // Preserve the interrupted turn's identity so its completion observer can
+  // join this successor. Run correlation does not create channel authority.
+  const sourceRunId = claimedSourceRunId ?? readInterruptedRunId(params.entry);
   if (
     requiresRestartRecoveryMessageActionAuthority(params.entry) &&
     !hasRestartRecoveryMessageActionAuthority(params.entry)
@@ -353,7 +370,9 @@ async function resumeMainSessionWithinAdmission(
           entry.status !== "running" ||
           entry.abortedLastRun !== true ||
           normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== claimedRunId ||
-          normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !== sourceRunId
+          normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
+            claimedSourceRunId ||
+          (!claimedSourceRunId && readInterruptedRunId(entry) !== sourceRunId)
         ) {
           return { result: false };
         }
@@ -362,6 +381,7 @@ async function resumeMainSessionWithinAdmission(
           entry.restartRecoveryDeliveryContext = deliveryContext;
         }
         entry.restartRecoveryDeliveryRunId = recoveryRunId;
+        entry.restartRecoveryDeliverySourceRunId = sourceRunId;
         entry.restartRecoveryForceSafeTools = params.forceRestartSafeTools ? true : undefined;
         entry.updatedAt = Date.now();
         return {

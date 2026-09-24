@@ -388,6 +388,7 @@ function renderViewportContent(controller: BrowserPanelController) {
 }
 
 function renderViewport(controller: BrowserPanelController, rendersTabStrip: boolean) {
+  // A native function avoids Chromium's blocked-input diagnostic crash on Lit listeners.
   return html`
     <wa-tab-panel
       id="browser-tab-panel"
@@ -400,7 +401,7 @@ function renderViewport(controller: BrowserPanelController, rendersTabStrip: boo
           : nothing
       }
       tabindex="0"
-      @wheel=${(event: WheelEvent) => controller.handleWheel(event)}
+      .onwheel=${(event: WheelEvent) => controller.handleWheel(event)}
       @keydown=${(event: KeyboardEvent) => controller.handleViewportKeydown(event)}
       @paste=${(event: ClipboardEvent) => controller.handleViewportPaste(event)}
       aria-busy=${controller.loading ? "true" : "false"}

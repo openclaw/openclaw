@@ -8,12 +8,16 @@ export function isAbortError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
     return false;
   }
-  const name = "name" in error ? String(error.name) : "";
-  if (name === "AbortError") {
-    return true;
+  try {
+    const name = "name" in error ? String(error.name) : "";
+    if (name === "AbortError") {
+      return true;
+    }
+    const message = "message" in error && typeof error.message === "string" ? error.message : "";
+    return message === "This operation was aborted";
+  } catch {
+    return false;
   }
-  const message = "message" in error && typeof error.message === "string" ? error.message : "";
-  return message === "This operation was aborted";
 }
 
 export function racePromiseWithAbortSignal<T>(

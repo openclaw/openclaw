@@ -1,6 +1,7 @@
 /** Runs doctor-owned SQLite file compaction for migrated session stores. */
 import fs from "node:fs";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
   clearOpenClawAgentDatabaseOpenFailure,
@@ -52,6 +53,7 @@ export async function compactDoctorSessionSqliteTarget(
     }
   };
   const compactTarget = () => {
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(sqlitePath, databaseOptions.env);
     const compact = compactDoctorSqliteFile({
       operation: options.operation,
       afterSuccess: () => {

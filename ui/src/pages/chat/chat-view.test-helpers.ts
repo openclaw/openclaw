@@ -12,6 +12,22 @@ import {
 } from "./components/chat-message-markdown.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 
+export function requireElement(container: Element, selector: string, label: string): Element {
+  const element = container.querySelector(selector);
+  if (element === null) {
+    throw new Error(`expected ${label}`);
+  }
+  return element;
+}
+
+export function getComposerTextarea(container: Element): HTMLTextAreaElement {
+  return requireElement(
+    container,
+    ".agent-chat__composer-combobox > textarea",
+    "composer textarea",
+  ) as HTMLTextAreaElement;
+}
+
 export function createTestTranscript(): ChatTranscriptController {
   return new ChatTranscriptController({
     addController: () => undefined,
@@ -177,7 +193,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
     onClearHistory: () => undefined,
-    onOpenSessionCheckpoints: () => undefined,
     agentsList: null,
     currentAgentId: "main",
     onAgentChange: () => undefined,

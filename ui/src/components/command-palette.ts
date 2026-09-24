@@ -5,12 +5,17 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
+import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-mentions.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import {
+  HumanMentionMenu,
+  type HumanMentionMenuHost,
+} from "../pages/chat/components/chat-composer-mention-menu.ts";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
   getStaticCommandPaletteCatalogItems,
@@ -32,14 +37,10 @@ import type { OpenClawModalDialog } from "./modal-dialog.ts";
 
 type PaletteItem = CommandPaletteItem;
 
-const SESSION_SEARCH_DEBOUNCE_MS = 50;
+const SEARCH_DEBOUNCE_MS = 200;
 const SESSION_SEARCH_MIN_CHARS = 2;
-// sessions.search caps queries at 4,096 Unicode characters; session prompts are independent.
-const SESSION_SEARCH_MAX_CHARS = 4_096;
-
-function exceedsSessionSearchLimit(query: string): boolean {
-  return Array.from(query).length > SESSION_SEARCH_MAX_CHARS;
-}
+const PROMPT_ENTER_CHARS = 60;
+const PROMPT_EXIT_CHARS = 50;
 const SESSION_SEARCH_SCOPE = {
   includeGlobal: false,
   includeUnknown: false,
@@ -62,6 +63,25 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   private initialInput: CommandPaletteOpenInput | undefined;
   private takeInitialInput: CommandPaletteInputHandoff | undefined;
   private inputElement: HTMLTextAreaElement | undefined;
+  private readonly mentionMenu = new HumanMentionMenu();
+  private mentionInput: HumanMentionInput | undefined;
+  @state() private composing = false;
+  private readonly mentionHost: HumanMentionMenuHost = {
+    paneId: "command-palette",
+    getDraft: () => this.query,
+    getMentions: () => this.draft.mentions,
+    getTextarea: () => this.inputElement ?? null,
+    commitDraft: (value, mentions) => this.draft.setMessage(value, mentions),
+  };
+  private readonly requestMentionUpdate = () => {
+    if (this.mentionMenu.open || this.draft.mentions.length > 0) {
+      this.clearSessionSearch();
+      this.clearCatalogSearch();
+    } else {
+      this.scheduleSessionSearch(this.query);
+    }
+    this.requestUpdate();
+  };
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
   @state() private filter: PaletteFilter = "all";
   private readonly draft = new PaletteSessionDraft(
@@ -70,10 +90,16 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     {
       onClose: () => this.closePalette(),
       onMessageChange: (query) => {
-        if (!query.trim()) {
+        const text = query.trim();
+        const length = Array.from(text).length;
+        // Separate entry/exit thresholds keep edits near the boundary from
+        // repeatedly collapsing and reopening search. Draft resets pass here too.
+        this.promptMode =
+          text.includes("\n") ||
+          (this.promptMode ? length > PROMPT_EXIT_CHARS : length >= PROMPT_ENTER_CHARS);
+        if (!text) {
           this.filter = "all";
         }
-        this.activeId = null;
         this.scheduleSessionSearch(query);
       },
     },
@@ -82,6 +108,9 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   private get query(): string {
     return this.draft.message;
   }
+
+  @state() private searchQuery = "";
+  @state() private promptMode = false;
   @state() private activeId: string | null = null;
   @state() private sessionItems: readonly PaletteItem[] = [];
   @state() private catalogItems: readonly PaletteItem[] = [];
@@ -106,6 +135,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     invalidateRequests: () => {
       this.clearSessionSearch();
       this.clearCatalogSearch();
+      this.scheduleSessionSearch(this.query);
     },
     onSnapshot: () => this.synchronizePresentationScope(),
     ensureInitialData: () => this.scheduleSessionSearch(this.query),
@@ -133,6 +163,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       () => this.context?.agentSelection,
       (selection, notify) => selection.subscribe(notify),
       () => {
+        this.clearSessionSearch();
         this.clearCatalogSearch();
         this.scheduleSessionSearch(this.query);
       },
@@ -151,6 +182,9 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
     this.inputElement = undefined;
     this.open = false;
+    this.mentionMenu.dispose();
+    this.composing = false;
+    this.mentionInput = undefined;
     this.activeId = null;
     this.clearSessionSearch();
     this.clearCatalogSearch();
@@ -161,7 +195,10 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     const returnFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.open = true;
+    this.mentionMenu.close();
     this.draft.open();
+    this.composing = false;
+    this.mentionInput = undefined;
     this.takeInitialInput = typeof input === "function" ? input : undefined;
     this.initialInput =
       typeof input === "function"
@@ -209,6 +246,9 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   };
 
   private closePalette() {
+    this.mentionMenu.close();
+    this.composing = false;
+    this.mentionInput = undefined;
     this.initialInput = undefined;
     this.takeInitialInput = undefined;
     this.open = false;
@@ -252,7 +292,18 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         ?.setReturnFocusTarget(input.returnFocus);
     }
     element.setSelectionRange(input.selectionStart, input.selectionEnd, input.selectionDirection);
-    if (input.submitRequested) {
+    if (
+      !input.submitRequested &&
+      input.mentionTrigger !== undefined &&
+      input.selectionStart === input.selectionEnd &&
+      input.value.slice(0, input.selectionStart).lastIndexOf("@") === input.mentionTrigger
+    ) {
+      this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+      this.mentionMenu.update(element, this.requestMentionUpdate, "trigger");
+    }
+    if (input.imageFiles?.length) {
+      this.draft.adoptImageFiles(input.imageFiles, input.submitRequested);
+    } else if (input.submitRequested) {
       void this.draft.submit();
     }
   };
@@ -263,12 +314,16 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.adoptInitialInput();
   }
 
-  private clearSessionSearch() {
+  private invalidateSessionSearch() {
     if (this.sessionSearchTimer !== null) {
       globalThis.clearTimeout(this.sessionSearchTimer);
       this.sessionSearchTimer = null;
     }
     this.sessionSearchId += 1;
+  }
+
+  private clearSessionSearch() {
+    this.invalidateSessionSearch();
     this.sessionItems = [];
     this.sessionSearchPending = false;
     this.sessionSearchFailed = false;
@@ -287,7 +342,16 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     const context = this.context;
     const gateway = context?.gateway;
     const client = gateway?.snapshot.client;
-    if (!context || !this.gateway.connected || !gateway || !client) {
+    if (
+      !this.open ||
+      this.promptMode ||
+      this.mentionMenu.open ||
+      this.draft.mentions.length > 0 ||
+      !context ||
+      !this.gateway.connected ||
+      !gateway ||
+      !client
+    ) {
       return Promise.resolve();
     }
     const agentId =
@@ -332,31 +396,51 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     return promise;
   }
 
-  private scheduleSessionSearch(query: string) {
-    // Invalidate the previous query immediately so late responses cannot
-    // repopulate selectable stale rows during the debounce window.
-    this.clearSessionSearch();
-    const search = normalizeOptionalString(query);
-    if (
-      !this.open ||
-      !search ||
-      search.length < SESSION_SEARCH_MIN_CHARS ||
-      exceedsSessionSearchLimit(search)
-    ) {
+  private scheduleSessionSearch(query: string, immediate = false) {
+    // Retire in-flight results immediately, but keep the settled search visible
+    // until the typing burst ends. The view disables selection during this pause.
+    this.invalidateSessionSearch();
+    if (this.promptMode || this.mentionMenu.open || this.draft.mentions.length > 0) {
+      // Retire catalog generations too: late results and refresh events must not
+      // revive search while the same field is being used as a session draft.
+      this.clearSessionSearch();
+      this.clearCatalogSearch();
       return;
     }
-    this.sessionSearchPending = Boolean(
-      this.onSelectSession && this.context?.sessions && this.gateway.connected,
-    );
-    this.sessionSearchTimer = globalThis.setTimeout(() => {
-      this.sessionSearchTimer = null;
+    const search = normalizeOptionalString(query);
+    if (!this.open || !search) {
+      this.clearSessionSearch();
+      this.searchQuery = query;
+      this.activeId = null;
+      return;
+    }
+    if (this.composing) {
+      return;
+    }
+    const applySearch = () => {
+      this.clearSessionSearch();
+      if (this.searchQuery !== query) {
+        this.activeId = null;
+      }
+      this.searchQuery = query;
+      if (search.length < SESSION_SEARCH_MIN_CHARS) {
+        return;
+      }
+      this.sessionSearchPending = Boolean(
+        this.onSelectSession && this.context?.sessions && this.gateway.connected,
+      );
       void this.ensureCatalogItems();
       if (this.onSelectSession) {
         void this.searchSessions(search);
       } else {
         this.sessionSearchPending = false;
       }
-    }, SESSION_SEARCH_DEBOUNCE_MS);
+    };
+    if (immediate) {
+      applySearch();
+    } else {
+      this.sessionSearchTimer = globalThis.setTimeout(applySearch, SEARCH_DEBOUNCE_MS);
+    }
   }
 
   private async searchSessions(search: string) {
@@ -428,7 +512,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   }
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
+    if (event.defaultPrevented || this.composing || event.isComposing || event.keyCode === 229) {
       return;
     }
     if (isCommandPaletteShortcut(event)) {
@@ -437,11 +521,71 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     }
   };
 
+  private updateMentionMenu(event?: InputEvent) {
+    this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+    if (!this.mentionMenu.open && !event) {
+      return;
+    }
+    const input = this.inputElement;
+    if (
+      !input ||
+      this.composing ||
+      event?.isComposing ||
+      event?.inputType === "insertFromPaste" ||
+      event?.inputType === "insertFromDrop"
+    ) {
+      this.mentionMenu.close();
+      this.requestMentionUpdate();
+      return;
+    }
+    this.mentionMenu.update(
+      input,
+      this.requestMentionUpdate,
+      !event
+        ? "selection"
+        : event.inputType === "insertText" && event.data?.includes("@") === true
+          ? "trigger"
+          : "input",
+    );
+  }
+
   override render() {
-    return renderCommandPalette({
+    this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+    return renderCommandPalette(() => ({
       basePath: this.context?.basePath ?? "",
       open: this.open,
       query: this.query,
+      searchQuery: this.searchQuery,
+      searchDebouncing: this.composing || this.query !== this.searchQuery,
+      onFlushSearch: () => this.scheduleSessionSearch(this.query, true),
+      promptMode: this.promptMode,
+      mentionMenu: this.mentionMenu,
+      mentionHost: this.mentionHost,
+      requestUpdate: this.requestMentionUpdate,
+      composing: this.composing,
+      onBeforeInput: (event) => {
+        const input = this.inputElement;
+        this.mentionInput = input
+          ? {
+              value: input.value,
+              start: input.selectionStart,
+              end: input.selectionEnd,
+              inputType: event.inputType,
+            }
+          : undefined;
+      },
+      onSelectionChange: () => this.updateMentionMenu(),
+      onCompositionStart: () => {
+        this.composing = true;
+        this.invalidateSessionSearch();
+        this.mentionMenu.close();
+        this.requestUpdate();
+      },
+      onCompositionEnd: () => {
+        this.composing = false;
+        this.updateMentionMenu();
+        this.scheduleSessionSearch(this.query);
+      },
       activeId: this.activeId,
       filter: this.filter,
       onFilterChange: (filter) => {
@@ -465,12 +609,11 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         ...this.catalogItems,
       ],
       sessionSearchPending: this.sessionSearchPending,
-      searchLimitReached: exceedsSessionSearchLimit(this.query.trim()),
       catalogSearchPending: Boolean(
-        normalizeOptionalString(this.query) &&
-        !exceedsSessionSearchLimit(this.query.trim()) &&
-        ((this.sessionSearchTimer !== null && this.gateway.connected) ||
-          (this.catalogLoad && this.catalogLoad.loadedAt === undefined)),
+        normalizeOptionalString(this.searchQuery) &&
+        !this.promptMode &&
+        this.catalogLoad &&
+        this.catalogLoad.loadedAt === undefined,
       ),
       sessionSearchFailed: this.sessionSearchFailed,
       sessionSearchPartial: this.sessionSearchPartial,
@@ -479,8 +622,13 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       desktopAvailable: this.desktopAvailable,
       custodianAvailable: this.custodianAvailable,
       onToggle: this.togglePalette,
-      onQueryChange: (query) => {
-        this.draft.setMessage(query);
+      onQueryChange: (query, event) => {
+        this.draft.setMessage(
+          query,
+          updateHumanMentions(this.query, query, this.draft.mentions, this.mentionInput),
+        );
+        this.mentionInput = undefined;
+        this.updateMentionMenu(event);
       },
       onActiveIdChange: (id) => {
         this.activeId = id;
@@ -490,7 +638,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       onSlashCommand: this.onSlashCommand,
       onInputRef: this.handleInputRef,
       draft: this.draft,
-    });
+    }));
   }
 }
 

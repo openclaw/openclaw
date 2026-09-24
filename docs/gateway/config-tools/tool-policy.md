@@ -122,7 +122,7 @@ Without that sandbox-layer entry, the MCP server can still load successfully whi
 ## `tools.codeMode`
 
 `tools.codeMode` gates the generic OpenClaw code-mode surface. When engaged
-for a run with tools, normal OpenClaw tools move behind the in-sandbox `tools.*`
+for a run with tools, normal OpenClaw tools move behind the guest
 catalog bridge, and MCP tools are available through the generated `MCP`
 namespace. The model normally sees `exec` and `wait`; tools such as `computer`
 whose structured results cannot cross the JSON-only bridge stay direct.
@@ -132,11 +132,18 @@ options. To engage code mode only for models whose catalog entry flags
 `compat.codeMode: "preferred"`, enable `"auto"` explicitly. See
 [Code Mode - automatic per-model activation](/tools/code-mode/configuration#automatic-per-model-activation).
 
+`executor` defaults to `"node"`, which uses `node:vm` for trusted host
+execution, not security isolation. Set `"quickjs"` for the bundled hardened
+guest executor. Agent-level settings override the global choice. See
+[Code Mode executors](/tools/code-mode/executors) for the trust boundary and
+continuation behavior.
+
 ```json5
 {
   tools: {
     codeMode: {
       enabled: "auto",
+      executor: "node",
     },
   },
 }

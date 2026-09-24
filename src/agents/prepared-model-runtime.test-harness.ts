@@ -148,7 +148,6 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
           modelCatalog: catalog,
           runtimeModels: new Map(),
           providerExpiries: new Map(),
-          configuredProviderModelIds: new Map(),
           configuredRuntimeModels: factoryArgs[0].agentFacts.configuredRuntimeModels,
         };
       },

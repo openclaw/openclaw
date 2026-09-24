@@ -12,8 +12,8 @@ import { resolveSubagentThinkingOverride } from "./subagents/spawn/subagent-spaw
 import { supportedSpawnModelChoice } from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
 const modelChoice = vi.hoisted(() => vi.fn<typeof supportedSpawnModelChoice>());
-vi.mock("./subagents/spawn/subagent-spawn-deps.js", () => ({
-  getSubagentSpawnDeps: () => ({ prepareModelChoice: modelChoice }),
+vi.mock("./subagents/spawn/subagent-spawn.runtime.js", () => ({
+  prepareModelChoice: modelChoice,
 }));
 beforeEach(() => {
   modelChoice.mockReset().mockImplementation(supportedSpawnModelChoice);

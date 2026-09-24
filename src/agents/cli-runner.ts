@@ -163,7 +163,10 @@ async function runCliAgentInternal(
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
   // The hook gate must fire before prepareCliRunContext — that call allocates
   // backend resources released only by runPreparedCliAgent's try…finally.
-  params.onExecutionStarted?.();
+  await params.onExecutionStarted?.();
+  assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
+  params.abortSignal?.throwIfAborted();
+  params.assertCurrent?.();
   const hookStartedAt = Date.now();
   // Prompt-only inference cannot enter agent hooks: they may replace the turn
   // or add side effects before the exact zero-tool process even starts.
@@ -218,7 +221,7 @@ async function runCliAgentInternal(
         durationMs: Date.now() - hookStartedAt,
         agentMeta: {
           sessionId: "",
-          provider: params.provider,
+          provider: params.modelProvider ?? params.provider,
           model: params.model ?? "",
           ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
         },

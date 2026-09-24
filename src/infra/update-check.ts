@@ -18,6 +18,7 @@ import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
 } from "./update-check-package-target.js";
+import { resolveGitRepositoryMetadata, type GitTrackingTarget } from "./update-git-metadata.js";
 import { readBuiltRuntimeCommit } from "./update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
@@ -43,6 +44,7 @@ type GitUpdateStatus = {
   upstream: string | null;
   upstreamSource?: "tracking" | "receipt";
   upstreamSha?: string | null;
+  repositoryUrl?: string;
   commitAtMs?: number | null;
   dirty: boolean | null;
   ahead: number | null;
@@ -57,12 +59,6 @@ type GitUpdateStatus = {
 export type UpdateInstallIdentity = {
   installKind: "git" | "package" | "unknown";
   git?: Pick<GitUpdateStatus, "branch" | "tag" | "error">;
-};
-
-type GitTrackingTarget = {
-  revision: string;
-  display: string;
-  fetch: "prune" | { remote: string; mergeRef: string };
 };
 
 type DepsStatus = {
@@ -432,6 +428,7 @@ async function checkGitUpdateStatus(params: {
     upstream,
     ...(upstreamSource ? { upstreamSource } : {}),
     upstreamSha: upstreamCommit,
+    ...(await resolveGitRepositoryMetadata(readGit, tracking, branch)),
     commitAtMs,
     dirty,
     ahead: parsed ? Number(parsed[1]) : null,

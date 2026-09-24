@@ -1,7 +1,8 @@
-import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { create } from "tar";
+import type { CommandFixture } from "../helpers/command-fixture.js";
 
 const owner = ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs";
 const wrapperAnchor =
@@ -10,10 +11,10 @@ const nativeAnchor =
   "490560464711e17caa7fcf9535bb58d2bb5c1277c3ab8f11847df41d6a36fd47ea2847e57b6ace3321993a63750db330e19cc6e66598a02f353bb66a1c565c3f";
 
 export function createPnpmArchiveFixture(
-  tempDirs: { make(prefix: string): string },
+  command: CommandFixture,
   options: { platform?: string; arch?: string; glibc?: boolean } = {},
 ) {
-  const root = tempDirs.make("pnpm-verified-download-");
+  const root = command.createTempDir("pnpm-verified-download-");
   const image = path.join(root, "image");
   const registry = path.join(root, "registry");
   const runner = path.join(root, "runner");
@@ -29,7 +30,7 @@ export function createPnpmArchiveFixture(
     fs.writeFileSync(path.join(stage, "package.json"), JSON.stringify({ version: "12.4.0" }));
     fs.writeFileSync(path.join(stage, "pnpm"), native ? "native-fixture\n" : "wrapper-fixture\n");
     const dest = path.join(registry, name);
-    execFileSync("tar", ["-czf", dest, "-C", root, path.basename(stage)]);
+    create({ cwd: root, file: dest, gzip: true, sync: true }, [path.basename(stage)]);
     return createHash("sha512").update(fs.readFileSync(dest)).digest("hex");
   }
   const wrapperHash = archive("pnpm-12.4.0.tgz", false);
@@ -79,8 +80,8 @@ cp "$FIXTURE_REGISTRY/$name" "$out"
     store,
     calls,
     spec,
-    run(extraEnv: NodeJS.ProcessEnv = {}, selected = spec) {
-      return spawnSync(process.execPath, [scriptPath, selected], {
+    async run(extraEnv: NodeJS.ProcessEnv = {}, selected = spec) {
+      const result = await command.run(process.execPath, [scriptPath, selected], {
         encoding: "utf8",
         env: {
           PATH: `${bin}${path.delimiter}${process.env.PATH}`,
@@ -91,6 +92,10 @@ cp "$FIXTURE_REGISTRY/$name" "$out"
           ...extraEnv,
         },
       });
+      if (result.error) {
+        throw new Error("Pinned pnpm archive fixture subprocess failed", { cause: result.error });
+      }
+      return result;
     },
   };
 }

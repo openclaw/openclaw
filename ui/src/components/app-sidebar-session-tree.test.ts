@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import {
+  SIDEBAR_SESSION_NO_ATTENTION,
+  type SidebarRecentSession,
+} from "./app-sidebar-session-types.ts";
 
 const homeKey = "agent:main:main";
 const conversationKey = "agent:main:dashboard:conversation";
@@ -49,7 +52,7 @@ describe("Home-linked conversation placement", () => {
       roots: rows,
       rowsByKey: new Map(rows.map((row) => [row.key, row])),
       loadingChildKeys: new Set<string>(),
-      knownSessionAttention: [],
+      resolveAttention: () => SIDEBAR_SESSION_NO_ATTENTION,
       toSidebarSession: present,
     };
     const tree = projectSessionTree(options);
@@ -160,7 +163,7 @@ describe("Home-linked conversation placement", () => {
         rowsByKey: new Map(rows.map((row) => [row.key, row])),
         mainSessionKeys: new Set([homeKey]),
         loadingChildKeys: new Set<string>(),
-        knownSessionAttention: [],
+        resolveAttention: () => SIDEBAR_SESSION_NO_ATTENTION,
         toSidebarSession: present,
       };
       const tree = projectSessionTree(options);
@@ -201,7 +204,7 @@ describe("Home-linked conversation placement", () => {
       ]),
       mainSessionKeys: new Set([homeKey]),
       loadingChildKeys: new Set<string>(),
-      knownSessionAttention: [],
+      resolveAttention: () => SIDEBAR_SESSION_NO_ATTENTION,
       toSidebarSession: present,
     };
     const tree = projectSessionTree(options);

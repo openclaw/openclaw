@@ -370,6 +370,38 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.hasDeliveredSourceReply()).toBe(true);
   });
 
+  it("refreshes replacement permissions while replay preparation waits", async () => {
+    const fixture = createInput();
+    fixture.input.onSystemPromptChanged = vi.fn();
+    const entered = createDeferredCore();
+    const release = createDeferredCore<() => void>();
+    const originalAdmission = vi.fn();
+    const currentAdmission = vi.fn();
+    const prepareReplay = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        entered.resolve();
+        return release.promise;
+      })
+      .mockResolvedValue(currentAdmission);
+    const prepared = await prepareEmbeddedAttemptAgentSession({
+      ...fixture.input,
+      prepareInitialUserTurnReplay: prepareReplay,
+    });
+    prepared.setPermissionPromptPreparation(async () => () => "old permissions");
+    const preparation = fixture.setPromptPreparation.mock.lastCall?.[0];
+    const pending = preparation!();
+    await entered.promise;
+    prepared.setPermissionPromptPreparation(async () => () => "current permissions");
+    release.resolve(originalAdmission);
+    const admit = await pending;
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe("current permissions");
+    expect(originalAdmission).not.toHaveBeenCalled();
+    expect(currentAdmission).not.toHaveBeenCalled();
+    admit?.();
+    expect(currentAdmission).toHaveBeenCalledOnce();
+  });
+
   it.each(["replace", "replace-reject", "replace-pending", "abort", "current-error"] as const)(
     "discards permission prompt preparation after %s",
     async (closure) => {
@@ -432,7 +464,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       await prepareEmbeddedAttemptAgentSession({
         ...fixture.input,
         runAbortSignal: controller.signal,
-        assertInitialUserTurnReplay,
+        prepareInitialUserTurnReplay: async () => assertInitialUserTurnReplay,
       });
       const admit = await fixture.setPromptPreparation.mock.lastCall?.[0]?.();
       expect(assertInitialUserTurnReplay).not.toHaveBeenCalled();

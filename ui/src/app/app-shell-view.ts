@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
+import { renderGatewayStatus } from "../components/gateway-status.ts";
 import { icons } from "../components/icons.ts";
 import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { renderNewSessionLink } from "../components/new-session-link.ts";
@@ -9,6 +10,7 @@ import { renderLazySettingsSidebar } from "../components/settings-sidebar-lazy.t
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
@@ -32,6 +34,7 @@ import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
+  APP_SIDEBAR_ELEMENT,
   isOptionalElementDefined,
   MACOS_TITLEBAR_ELEMENT,
   type OptionalCustomElement,
@@ -112,6 +115,16 @@ export function renderApplicationShell(host: ShellViewHost) {
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
   const controlUiRefreshRequired = overlaySnapshot.controlUiRefreshRequired;
+  const connectionStatus = resolveGatewayStatus(gatewaySnapshot, controlUiRefreshRequired);
+  const presentationScope = gatewayPresentationScope(context.gateway);
+  // Initial hello can paint the shell before recovery finishes. Keep that brief
+  // startup state in existing chrome rather than inserting and removing a row.
+  const initialConnection =
+    !presentationScope.readyOnce &&
+    !gatewaySnapshot.offlineStable &&
+    (connectionStatus === "connecting" ||
+      connectionStatus === "starting" ||
+      connectionStatus === "restoring");
   // The install keeps running after `update.run` answers, so the reconciliation
   // — not the request — decides how long the update surfaces stay busy.
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
@@ -240,10 +253,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       enabledRouteIds: host.enabledRouteIds(),
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
-      offline: gatewaySnapshot.offlineStable,
-      restartPending: gatewaySnapshot.restartPending === true,
-      suspensionPhase: gatewaySnapshot.suspensionPhase,
-      queuedOutboxCount: storedOutboxes?.total ?? 0,
+      connectionStatus,
       lastError: gatewaySnapshot.lastError,
       outboxAttentionCountForSession: storedOutboxes?.attentionCountForSession ?? (() => 0),
       hasSessionDraft: storedOutboxes?.hasSessionDraft ?? EMPTY_SESSION_HAS_DRAFT,
@@ -260,7 +270,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
       devGitBranch: config.devGitBranch,
       watchUpdateProgress,
-      onOpenApprovals: () => host.openApprovals(),
       onOpenPalette: () => host.openPalette(),
       onRetryConnect: () => context.gateway.connect(),
       onToggleSidebar: () => host.toggleNavigationSurface(),
@@ -286,26 +295,9 @@ export function renderApplicationShell(host: ShellViewHost) {
           activePathname: host.routeState.location?.pathname ?? "",
           activeSearch: host.routeState.location?.search ?? "",
           activeHash: host.routeState.location?.hash ?? "",
-          offline: gatewaySnapshot.offlineStable,
-          phase: gatewaySnapshot.phase,
-          restartPending: gatewaySnapshot.restartPending,
-          suspensionPhase: gatewaySnapshot.suspensionPhase,
-          queuedOutboxCount: storedOutboxes?.total ?? 0,
+          connectionStatus,
           lastError: gatewaySnapshot.lastError,
           gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
-          updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
-          updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
-          heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
-          updateBusy,
-          updateStatusBanner: overlaySnapshot.updateStatusBanner,
-          watchUpdateProgress,
-          canUpdate,
-          canHoldUpdate,
-          onUpdate: () => void context.overlays.runUpdate(),
-          refreshRequired: navigationSurfaceHidden ? false : controlUiRefreshRequired,
-          onRefresh: host.refreshControlUi,
-          onHoldUpdate: () => context.overlays.holdUpdate(),
-          onReviewUpdate: () => host.navigate("updates"),
           searchQuery: embedSettingsRoot ? "" : host.settingsSearchQuery,
           searchParams: {
             query: host.settingsSearchQuery,
@@ -330,7 +322,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           },
           onRetryConnect: () => context.gateway.connect(),
           onNavigate: (routeId, options) => host.navigate(routeId, options),
-          onOpenApprovals: () => host.openApprovals(),
           onPreload: (routeId) => context.preload(routeId),
           onSearchQueryChange: (nextQuery) => void host.handleSettingsSearchQueryChange(nextQuery),
           preloadTimers: host.settingsPreloadTimers,
@@ -430,6 +421,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                   agentId: selectedAgentId,
                   className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
                   label: t("chat.runControls.newSession"),
+                  showShortcut: true,
                   disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
                   onOpen: openNewSession,
                 })}
@@ -538,7 +530,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           onRefresh: host.refreshControlUi,
           onHoldUpdate: () => context.overlays.holdUpdate(),
           onReviewUpdate: () => host.navigate("updates"),
-          onNavigate: (routeId) => host.navigate(routeId),
+          onNavigate: (routeId, options) => host.navigate(routeId, options),
           onOpenApprovals: () => host.openApprovals(),
         })}
         ${nativeEmbed ? navigationContent : nothing}
@@ -547,11 +539,29 @@ export function renderApplicationShell(host: ShellViewHost) {
           aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
-          .retentionScope=${gatewayPresentationScope(context.gateway)}
+          .retentionScope=${presentationScope}
           .onNotFound=${host.recoverNotFoundRoute}
           .notFoundRecoveryReady=${gatewayConnected}
         ></openclaw-router-outlet>
       </main>
+      ${
+        (navigationSurfaceHidden ||
+          (settingsTakeover
+            ? host.settingsSidebarRenderer === null
+            : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
+        !nativeEmbed &&
+        !onboarding &&
+        connectionStatus &&
+        !initialConnection
+          ? html`<div class="shell-connection-status">
+              ${renderGatewayStatus({
+                kind: connectionStatus,
+                lastError: gatewaySnapshot.lastError,
+                onRetry: () => context.gateway.connect(),
+              })}
+            </div>`
+          : nothing
+      }
       <openclaw-terminal-panel
         ?inert=${navDrawerOpen}
         .client=${gatewayConnected ? gatewaySnapshot.client : null}

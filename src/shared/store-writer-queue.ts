@@ -230,27 +230,3 @@ export function clearStoreWriterQueuesForTest(queues: StoreWriterQueues, message
   }
   queues.clear();
 }
-
-/** Waits for active drains to settle while rejecting still-pending test writes. */
-export async function drainStoreWriterQueuesForTest(
-  queues: StoreWriterQueues,
-  message: string,
-): Promise<void> {
-  while (queues.size > 0) {
-    const activeQueues = [...queues.values()];
-    for (const queue of activeQueues) {
-      for (const task of queue.pending) {
-        task.reject(new Error(message));
-      }
-      queue.pending.length = 0;
-    }
-    const activeDrains = activeQueues.flatMap((queue) =>
-      queue.drainPromise ? [queue.drainPromise] : [],
-    );
-    if (activeDrains.length === 0) {
-      queues.clear();
-      return;
-    }
-    await Promise.allSettled(activeDrains);
-  }
-}

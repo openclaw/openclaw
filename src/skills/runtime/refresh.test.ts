@@ -18,7 +18,8 @@ import {
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
 
-const { createdWatchers, watchMock, watchForSkillRoot } = createSkillsWatcherMock();
+const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
+  createSkillsWatcherMock();
 
 const pluginSkillsMocks = vi.hoisted(() => ({
   resolvePluginSkillRoots: vi.fn((): Array<{ dir: string; rejectHardlinks: boolean }> => []),
@@ -32,6 +33,9 @@ let fixtureWorkspaceDir: string;
 
 vi.mock("chokidar", () => ({
   default: { watch: watchMock },
+}));
+vi.mock("./refresh-ancestor-native.js", () => ({
+  createNativeSkillsAncestorWatcher: nativeWatchMock,
 }));
 
 vi.mock("../loading/plugin-skills.js", () => ({

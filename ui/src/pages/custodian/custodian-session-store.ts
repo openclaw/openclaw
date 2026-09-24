@@ -103,8 +103,7 @@ export class CustodianSessionStore {
 
   connect(context: ApplicationContext, variant: CustodianSessionVariant): void {
     const contextChanged = this.context !== context;
-    const variantChanged = this.variant !== variant;
-    if (!contextChanged && !variantChanged) {
+    if (!contextChanged && this.variant === variant) {
       return;
     }
     if (contextChanged) {
@@ -266,7 +265,7 @@ export class CustodianSessionStore {
   ): Promise<eventNudgeState.CustodianSendOutcome> {
     const questionState = [this.answeredQuestions, this.questionReplyUncertain] as const;
     let replyEpoch: number | undefined;
-    const reply = this.requestReply(client, params, () => {
+    const outcome = await this.requestReply(client, params, () => {
       const ordinaryDraft = this.inputDrafts.ordinary;
       if (admit && !admit()) {
         return false;
@@ -289,7 +288,6 @@ export class CustodianSessionStore {
         }
       };
     });
-    const outcome = await reply;
     if (questionReply && this.requestEpoch === replyEpoch) {
       this.questionReplyUncertain = eventNudgeState.questionUncertainty(questionState[1], outcome);
       if (outcome === "rejected") {
@@ -419,7 +417,7 @@ export class CustodianSessionStore {
   }
 
   private emit(): void {
-    this.inputDrafts.reconcile(this.inferenceState === "ready", this);
+    this.inputDrafts.reconcile(this);
     this.transcript.settleRecovery(
       this.transcriptBlocked,
       () => void this.refreshTranscriptIfIdle(),
@@ -582,7 +580,7 @@ export class CustodianSessionStore {
       }
       return;
     }
-    this.clearConversation();
+    this.clearConversation(true);
     this.startSession(client, true);
   }
 
@@ -633,7 +631,7 @@ export class CustodianSessionStore {
     return true;
   }
 
-  private clearConversation(): void {
+  private clearConversation(preserveDraft = false): void {
     this.messages = [];
     this.dismissedQuestions = new Set();
     this.answeredQuestions = new Set();
@@ -641,7 +639,10 @@ export class CustodianSessionStore {
     this.error = null;
     this.transcript.reset();
     this.inferenceState = "unverified";
-    this.inputDrafts.ordinary = { value: "" };
+    // Initial metadata may arrive after a local draft; only replacement owners clear it.
+    if (!preserveDraft) {
+      this.inputDrafts.ordinary = { value: "" };
+    }
     this.inputDrafts.resetPrompt(this, false);
     this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;

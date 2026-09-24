@@ -44,6 +44,8 @@ const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
 const CLAW_STARTUP_ADDITIVE_STATE_TABLE_SET = new Set<string>(CLAW_STARTUP_ADDITIVE_STATE_TABLES);
 const CLAW_READONLY_OPTIONAL_STATE_INDEXES = [
   "idx_operator_approvals_source_run_resolved",
+  "idx_task_runs_requester_session_key",
+  "idx_worker_session_placements_environment",
 ] as const;
 let openClawStateCanonicalNamedIndexSet: ReadonlySet<string> | undefined;
 

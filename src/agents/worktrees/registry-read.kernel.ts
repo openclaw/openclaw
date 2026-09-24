@@ -94,3 +94,11 @@ export function listRegistryWorktreesInDatabase(db: DatabaseSync): ManagedWorktr
     .orderBy("id", "asc");
   return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
 }
+
+export function listLiveRegistryWorktreeIdsInDatabase(db: DatabaseSync): string[] {
+  const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+    .selectFrom("worktrees")
+    .select("id")
+    .where("removed_at", "is", null);
+  return executeSqliteQuerySync(db, query).rows.map((row) => row.id);
+}

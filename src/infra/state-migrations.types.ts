@@ -27,7 +27,7 @@ export type SessionStoreAliasPlan = {
   hasUnresolvedIdentity: boolean;
 };
 
-export type LegacyStateDetection = {
+export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" | "outcome"> & {
   doctorOnlyStateMigrations?: boolean;
   targetAgentId: string;
   targetMainKey: string;
@@ -215,6 +215,8 @@ export const LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION =
 
 export type LegacyStateMigrationMode = "automatic" | "doctor";
 
+export type LegacyStateMigrationInvocationPurpose = "startup" | "doctor";
+
 export type LegacyStateMigrationEndpoint =
   | { kind: "path"; path: string }
   | { kind: "sqlite"; path: string }
@@ -242,7 +244,7 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
   recoveredAgentDatabasePaths?: readonly string[];
   rehearsal?: MigrationMessages["rehearsal"];
   refusal?: { code: string; message: string };
-  /** The first refused step that prevented this step from running. */
+  /** The first refused step that prevented this step's mutation. */
   originatingRefusal?: { stepId: string; code: string; message: string };
 };
 
@@ -286,6 +288,8 @@ export type LegacyStateMigrationPlan = {
 };
 
 export type LegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outcome"> & {
+  /** Read-only input validation may explain an independently refused, blocked writer. */
+  inspectRefusal?: () => LegacyStateMigrationStepPlan["refusal"];
   runWithoutFileDetection?: boolean;
   collectNotices?: boolean;
   deferredExecution?: {

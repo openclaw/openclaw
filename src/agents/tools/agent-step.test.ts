@@ -5,6 +5,8 @@ import type { CallGatewayOptions } from "../../gateway/call.js";
 import { runAgentStep } from "./agent-step.js";
 import { testing } from "./agent-step.test-support.js";
 
+vi.mock("../../commands/agent.js", () => ({ agentCommandFromIngress: vi.fn() }));
+
 const recordParticipant = vi.hoisted(() => vi.fn());
 vi.mock("../../sessions/session-participant-recording.js", () => ({
   recordSessionParticipantBestEffort: recordParticipant,
@@ -21,8 +23,8 @@ vi.mock("../agent-bundle-mcp-tools.js", () => ({
 }));
 
 describe("runAgentStep", () => {
-  afterEach(() => {
-    testing.setDepsForTest();
+  afterEach(async () => {
+    await testing.setDepsForTest();
     agentWaitMock.mockReset();
     vi.clearAllMocks();
   });
@@ -115,7 +117,7 @@ describe("runAgentStep", () => {
       payloads: [{ text: "done", mediaUrl: null }],
       meta: { durationMs: 1 },
     }));
-    testing.setDepsForTest({
+    await testing.setDepsForTest({
       agentCommandFromIngress,
     });
     await runAgentStep({
@@ -155,7 +157,7 @@ describe("runAgentStep", () => {
         },
       },
     }));
-    testing.setDepsForTest({
+    await testing.setDepsForTest({
       agentCommandFromIngress,
     });
 
@@ -187,7 +189,7 @@ describe("runAgentStep", () => {
         },
       },
     }));
-    testing.setDepsForTest({
+    await testing.setDepsForTest({
       agentCommandFromIngress,
     });
 

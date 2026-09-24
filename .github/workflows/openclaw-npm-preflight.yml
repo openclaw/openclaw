@@ -145,6 +145,12 @@ jobs:
             .github/actions/git-owner
             scripts
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - &validate_npm_source
         name: Validate npm package source metadata
         env:
@@ -239,6 +245,12 @@ jobs:
         run: |
           exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \
             --policy .release-harness/.github/actions/git-owner/release-ancestry.py
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - *validate_npm_source
       - name: Setup Node environment
