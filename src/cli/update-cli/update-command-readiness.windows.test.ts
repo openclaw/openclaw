@@ -90,7 +90,11 @@ beforeEach(() => {
   native.reachable.mockReset().mockResolvedValue(unreachable);
   native.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
   native.command.mockReset().mockImplementation(async (argv: string[]) => {
-    const command = argv[0].toLowerCase();
+    const executable = argv[0];
+    if (!executable) {
+      throw new Error("Expected a native census command");
+    }
+    const command = executable.toLowerCase();
     const stdout = command.endsWith("netstat.exe")
       ? "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"
       : command.endsWith("tasklist.exe")
