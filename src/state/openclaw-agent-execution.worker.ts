@@ -261,6 +261,7 @@ function openAgentDatabaseBackend(
   let replacements:
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
+  let trajectory: typeof import("../trajectory/runtime-store.sqlite.js") | undefined;
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
     assertCurrent() {
@@ -280,6 +281,11 @@ function openAgentDatabaseBackend(
   };
   return {
     prepare(command) {
+      if (command.type === "trajectory.events.append") {
+        return import("../trajectory/runtime-store.sqlite.js").then((module) => {
+          trajectory = module;
+        });
+      }
       if (
         command.type === "session.archives.preparePublication" ||
         command.type === "session.archives.recordPublication"
@@ -358,6 +364,23 @@ function openAgentDatabaseBackend(
       if (command.type === "database.prepareWrite") {
         openWriter();
         return undefined;
+      }
+      if (command.type === "trajectory.events.append" && trajectory) {
+        const opened = openWriter();
+        const append = trajectory.appendSqliteTrajectoryRuntimeEventsInTransaction;
+        return runOpenClawAgentWriteTransaction(
+          (current) => {
+            if (current.db !== opened.db) {
+              throw new Error("Trajectory append lost its canonical database owner");
+            }
+            admit("transaction");
+            append(current, command.input);
+            deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
+            admit("commit");
+          },
+          options,
+          { operationLabel: "trajectory.runtime.append" },
+        );
       }
       if (
         (command.type === "session.archives.preparePublication" ||

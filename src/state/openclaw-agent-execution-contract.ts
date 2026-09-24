@@ -18,6 +18,7 @@ import type {
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import type { SqliteTrajectoryRuntimeAppend } from "../trajectory/runtime-store.sqlite.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
 
 /** Recorded by the native owner; a descriptor never grants access to that owner. */
@@ -43,6 +44,7 @@ export type AgentDatabaseExecutionOpen = {
 };
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
+  "trajectory.events.append": { input: SqliteTrajectoryRuntimeAppend; output: void };
   "session.archives.preparePublication": {
     input: {
       archiveDirectory: string;

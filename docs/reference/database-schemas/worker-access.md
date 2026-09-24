@@ -116,6 +116,17 @@ stores, already executing workers, Doctor maintenance,
 and prepared native deletion rollback closures retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.
 
+Durable trajectory flushes use the same agent database executor for sequence
+allocation, event insertion, and retention. The recorder captures its pending
+prefix inside the physical store's writer FIFO and retains the host metadata
+handle while its live source authority is checked at transaction admission and
+commit. It joins native settlement before releasing that FIFO turn: a retained
+commit receipt retires the prefix even if the reply is lost, a proven rollback
+leaves it retryable, and an unknown outcome fences replay. Events recorded during
+the write remain queued for the next flush. Incognito and maintenance scopes and
+already executing workers keep their native kernel. Event bytes, ordering,
+retention limits, schemas, and update behavior are unchanged.
+
 Disk-budget historical discovery reads reference, recent-history, and admitted-key
 protection in the existing maintenance read worker. It returns candidate IDs;
 the host captures live admission identities and rechecks protection before each

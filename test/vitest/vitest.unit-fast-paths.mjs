@@ -141,7 +141,6 @@ export const forcedUnitFastTestFiles = [
   "src/trajectory/cleanup.test.ts",
   "src/trajectory/export.test.ts",
   "src/trajectory/metadata.test.ts",
-  "src/trajectory/runtime.test.ts",
   "src/tts/openai-compatible-speech-provider.test.ts",
   "src/tts/tts.test.ts",
   "src/tts/status-config.test.ts",

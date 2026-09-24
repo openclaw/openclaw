@@ -1,5 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/trajectory/runtime-store-writer.test.ts",
+  "src/trajectory/runtime.test.ts",
   "src/agents/tools/pdf-tool.auth-routing.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-system-prompt.sandbox-info.test.ts",
