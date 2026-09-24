@@ -2,6 +2,7 @@
 export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-system-prompt.sandbox-info.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-session.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-tool-search-prompt.test.ts",
   "src/config/sessions/session-entry-readonly.worker.test.ts",
   "src/cli/daemon-cli/restart-health-client.test.ts",

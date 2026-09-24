@@ -429,6 +429,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
           if (params.isRawModelRun) {
             return currentSystemPrompt;
           }
+          policyPreparation.signal?.throwIfAborted();
+          policyPreparation.assertCurrent?.();
           const systemPrompt = nextSystemPrompt.refreshSystemPrompt(
             currentSystemPrompt,
             permissionNotice,
