@@ -144,6 +144,47 @@ describe("conversation delivery store", () => {
     });
   });
 
+  it("updates an older progress snapshot with a command item and preserves its classification", async () => {
+    await withConversationStore(({ scope, conversationRef }) => {
+      const operationId = "command-progress";
+      const oldSnapshot: ChannelProgressDraftCompositorSnapshot = {
+        lines: [{ id: "old", kind: "item", text: "Old work", label: "Old work" }],
+      };
+      recordConversationProgressReceipt(scope, {
+        operationId,
+        conversationRef,
+        sourceSessionKey: "agent:main:reef:direct:peer-agent",
+        message: "Working",
+        platformMessageId: "card-message",
+        progressSnapshot: oldSnapshot,
+        assertCurrent: () => {},
+      });
+      closeOpenClawAgentDatabasesForTest();
+      expect(getConversationProgressSnapshot(scope, operationId)).toEqual(oldSnapshot);
+
+      const updatedSnapshot: ChannelProgressDraftCompositorSnapshot = {
+        lines: [
+          ...oldSnapshot.lines,
+          {
+            id: "command",
+            kind: "item",
+            text: "Command failed",
+            label: "Command",
+            status: "failed",
+            toolName: "exec",
+          },
+        ],
+      };
+      updateConversationProgressSnapshot(scope, {
+        operationId,
+        progressSnapshot: updatedSnapshot,
+        assertCurrent: () => {},
+      });
+      closeOpenClawAgentDatabasesForTest();
+      expect(getConversationProgressSnapshot(scope, operationId)).toEqual(updatedSnapshot);
+    });
+  });
+
   it("fences progress receipt identity and rolls back stale writes", async () => {
     await withConversationStore(({ scope, conversationRef }) => {
       const input = {
