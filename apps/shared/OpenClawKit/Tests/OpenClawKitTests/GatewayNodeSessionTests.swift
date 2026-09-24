@@ -617,13 +617,30 @@ private actor AsyncGate {
     private var started = false
     private var released = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    private let startSignal = AsyncStream<Void>.makeStream()
 
     func wait() async {
-        self.started = true
+        self.markStarted()
         guard !self.released else { return }
         await withCheckedContinuation { continuation in
             self.waiters.append(continuation)
         }
+    }
+
+    func markStarted() {
+        self.started = true
+        self.startSignal.continuation.finish()
+    }
+
+    func waitUntilStarted() async throws {
+        guard !self.started else { return }
+        let stream = self.startSignal.stream
+        try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { URLError(.timedOut) }) {
+            for await _ in stream {}
+            try Task.checkCancellation()
+        }
+        // A cancelled observer also finishes the stream; only the owner can mark a start.
+        guard self.started else { throw CancellationError() }
     }
 
     func hasStarted() -> Bool {
@@ -794,8 +811,8 @@ extension GatewayNodeSession {
 }
 
 extension GatewayChannelActor {
-    fileprivate func recordConnectRunCompletion(_ capture: StringCapture) {
-        self.testConnectRunFinishedHandler = { Task { await capture.set("finished") } }
+    fileprivate func recordConnectRunCompletion(_ signal: AsyncGate) {
+        self.testConnectRunFinishedHandler = { Task { await signal.markStarted() } }
     }
 }
 #endif
@@ -2268,7 +2285,7 @@ struct GatewayNodeSessionTests {
         }
         var retiring: Task<Void, Error>?
         do {
-            try await waitUntil("native authorization suspended") { await authorizationGate.hasStarted() }
+            try await authorizationGate.waitUntilStarted()
             #expect(oldSession.snapshotMakeCount() == 0)
             retiring = Task {
                 switch retirement {
@@ -2280,7 +2297,7 @@ struct GatewayNodeSessionTests {
                         extraHeadersProvider: { ["Cf-Access-Token": "test-only-new-grant"] })
                 }
             }
-            try await waitUntil("retired route shutdown queued") { await shutdownGate.hasStarted() }
+            try await shutdownGate.waitUntilStarted()
             // The owner has retired the route, but shutdown has not changed channel-local
             // flags. Authorization must settle without creating or resuming a socket.
             await authorizationGate.release()
@@ -2327,7 +2344,7 @@ struct GatewayNodeSessionTests {
                 })
         }
         do {
-            try await waitUntil("active native authorization suspended") { await gate.hasStarted() }
+            try await gate.waitUntilStarted()
             #expect(session.snapshotMakeCount() == 0)
             await gate.release()
             try await AsyncTimeout.withTimeout(
@@ -2351,7 +2368,7 @@ struct GatewayNodeSessionTests {
     func `disconnect fences a suspended upgrade authorization before creating a socket`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gate = AsyncGate()
-        let finished = StringCapture()
+        let finished = AsyncGate()
         let channel = try GatewayChannelActor(
             url: testURL("wss://gateway.example.invalid"), token: nil,
             session: WebSocketSessionBox(session: session), connectOptions: nodeConnectOptions(),
@@ -2362,12 +2379,12 @@ struct GatewayNodeSessionTests {
         await channel.recordConnectRunCompletion(finished)
         let pending = Task { try await channel.connect() }
         do {
-            try await waitUntil("upgrade authorization is suspended") { await gate.hasStarted() }
+            try await gate.waitUntilStarted()
             await channel.shutdown()
             await gate.release()
             // shutdown releases the public waiter first. Observe the owning run after
             // the cancellation-ignoring provider returns before asserting no socket.
-            try await waitUntil("owning connect run finished") { await finished.get() == "finished" }
+            try await finished.waitUntilStarted()
             let result = await pending.result
             if case .success = result { Issue.record("disconnected authorization unexpectedly connected") }
             #expect(session.snapshotMakeCount() == 0)
