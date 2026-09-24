@@ -28,7 +28,8 @@ vi.mock("./browser-control-state.js", () => ({
     forProfile: () => ({ profile: mocked.profile, ensureBrowserAvailable: mocked.ensure }),
   }),
 }));
-vi.mock("./browser/control-service.js", () => ({
+vi.mock("./control-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-service.js")>()),
   startBrowserControlServiceFromConfig: mocked.start,
 }));
 vi.mock("./browser/pw-ai-module.js", () => ({

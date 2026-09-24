@@ -204,7 +204,18 @@ describe("Gateway external shared-state ownership", () => {
         status: "ok",
         mode: "repair",
         restart: false,
-        reconciledRuns: [],
+        reconciledRuns: [runId],
+      });
+      const repaired = database
+        .prepare("SELECT steps_json FROM update_runs WHERE run_id = ?")
+        .get(runId);
+      expect(JSON.parse(String(repaired?.steps_json))).toContainEqual(
+        expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+      );
+      expect(readUpdateOutcome(database, runId)).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason: "abandoned",
       });
       await expectGatewayStillServing(instance, child);
       expectGatewayOwnsState(instance, databasePath);

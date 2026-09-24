@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
-import { getImageMetadata } from "../media/media-services.js";
 import { captureScreenshot } from "./cdp.js";
 import { resolveBrowserConfig } from "./config.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";

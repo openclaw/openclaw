@@ -24,7 +24,10 @@ import {
   getOpenClawStateDatabaseTerminalFailureAsync,
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
+  recordOpenClawStateDatabaseOpenFailure,
+  openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
+import { findOpenClawStateDatabaseFailure } from "./openclaw-state-db-failure.js";
 import {
   getExistingOpenClawStateSchemaPath,
   isExistingOpenClawStateSchema,
@@ -38,6 +41,7 @@ import type {
 } from "./openclaw-state-worker-contract.js";
 import { hydrateOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import {
+  captureOpenClawStateWorkerOpeningGuard,
   runWithCapturedWorkerContext,
   runWithOpenClawStateWorkerStore,
 } from "./openclaw-state-worker-operation.js";
@@ -56,7 +60,7 @@ function createSharedStateWorkerOwner() {
     source: ReturnType<typeof captureRuntimeWorkerSource>;
     context: OpenClawStateWorkerContext;
     opening: Promise<Store | undefined>;
-    openingAdmission: { assertCurrent?: () => void; refusal?: { error: unknown } };
+    openingAdmission: ReturnType<typeof captureOpenClawStateWorkerOpeningGuard>["admission"];
     existingOnly: boolean;
     store?: Store;
     actor?: object;
@@ -454,41 +458,36 @@ function createSharedStateWorkerOwner() {
         }
       }
       if (!entry) {
-        const openingAdmission: Entry["openingAdmission"] = { assertCurrent };
-        const assertOpeningAdmission = () => {
-          admission.assertCurrent();
-          try {
-            assertCurrent?.();
-          } catch (error) {
-            openingAdmission.refusal = { error };
-            throw error;
-          }
-        };
+        const openingGuard = captureOpenClawStateWorkerOpeningGuard(context, assertCurrent);
         const admitted: Entry = {
           source,
           context,
-          openingAdmission,
+          openingAdmission: openingGuard.admission,
           existingOnly,
           activeOperations: 0,
           operationGeneration: 0,
-          opening: runInDetachedAsyncContext(() =>
-            openSharedStateSqliteWorkerStore<StoreOperations>(
-              {
-                ...source,
-                databasePath: admission.databasePath,
-                existingOnly,
-              },
-              context,
-              assertOpeningAdmission,
-              {
-                maintenanceScope: context.maintenanceScope,
-                preparation,
-                retainCleanup: (cleanup) => {
-                  admitted.cleanup = cleanup;
+          opening: runInDetachedAsyncContext(async () => {
+            try {
+              return await openSharedStateSqliteWorkerStore<StoreOperations>(
+                {
+                  ...source,
+                  databasePath: admission.databasePath,
+                  existingOnly,
                 },
-              },
-            ),
-          ),
+                context,
+                openingGuard.assertCurrent,
+                {
+                  maintenanceScope: context.maintenanceScope,
+                  preparation,
+                  retainCleanup: (cleanup) => {
+                    admitted.cleanup = cleanup;
+                  },
+                },
+              );
+            } finally {
+              openingGuard.releaseContext();
+            }
+          }),
         };
         entry = admitted;
         admitted.opening = admitted.opening.then((store) => {
@@ -654,7 +653,23 @@ async function runAdmittedOpenClawStateWorkerOperation<T>(
     }
   } catch (error) {
     if (error instanceof Error) {
-      throw hydrateOpenClawStateWorkerError(error);
+      const hydrated = hydrateOpenClawStateWorkerError(error);
+      const failure = findOpenClawStateDatabaseFailure(hydrated, context.admission.databasePath);
+      if (
+        failure &&
+        !openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(
+          context.admission.databasePath,
+        )
+      ) {
+        try {
+          context.admission.assertCurrent();
+        } catch {
+          // A retired generation cannot publish a refusal against its replacement.
+          throw hydrated;
+        }
+        recordOpenClawStateDatabaseOpenFailure(context.admission.databasePath, failure);
+      }
+      throw hydrated;
     }
     throw error;
   }

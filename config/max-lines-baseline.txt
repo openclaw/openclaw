@@ -116,7 +116,6 @@ extensions/matrix/src/cli.test.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
-extensions/matrix/src/matrix/sdk/verification-manager.ts
 extensions/matrix/src/matrix/send.test.ts
 extensions/mattermost/src/channel.test.ts
 extensions/mattermost/src/channel.ts
@@ -219,7 +218,6 @@ extensions/telegram/src/channel.ts
 extensions/telegram/src/draft-stream.test.ts
 extensions/telegram/src/draft-stream.ts
 extensions/telegram/src/fetch.ts
-extensions/telegram/src/format.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/thread-bindings.ts

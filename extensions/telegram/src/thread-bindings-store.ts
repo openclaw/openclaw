@@ -13,7 +13,7 @@ export const TELEGRAM_THREAD_BINDINGS_NAMESPACE = "telegram.thread-bindings";
 export const TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES = 5_000;
 const TELEGRAM_THREAD_BINDINGS_STORE_VERSION = 1;
 
-export type TelegramBindingTargetKind = "subagent" | "acp";
+type TelegramBindingTargetKind = "subagent" | "acp";
 
 export type TelegramThreadBindingRecord = {
   accountId: string;

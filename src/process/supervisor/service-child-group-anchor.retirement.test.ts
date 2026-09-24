@@ -134,6 +134,15 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
               acknowledgement === "stale-generation" ? `${generation}-stale` : generation,
               acknowledgement === "non-monotonic" ? 0 : ++outboundSequence,
             );
+            if (
+              acknowledgement === "stale-generation" ||
+              acknowledgement === "wrong-receipt" ||
+              acknowledgement === "malformed-receipt" ||
+              acknowledgement === "non-monotonic"
+            ) {
+              // EOF follows the invalid frame on the same ordered control pipe.
+              control.end();
+            }
           }
         }
       });

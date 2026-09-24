@@ -168,7 +168,7 @@ describe("combined security review entry point", () => {
       [`GET ${pullPath}/files`]: { responses: [initialFiles, files] },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.waits).toHaveLength(1);
+    expect(result.waits).toEqual([30_000, 30_000]);
     expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(2);
     expect(result.combined.at(-1)).toBe("success");
     expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
@@ -222,7 +222,7 @@ describe("combined security review entry point", () => {
       },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.waits).toHaveLength(1);
+    expect(result.waits).toEqual([30_000, 30_000]);
     const afterWait = result.requests.slice(
       result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
     );
@@ -245,7 +245,7 @@ describe("combined security review entry point", () => {
       [rolePath]: { role_name: "read" },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.waits).toHaveLength(1);
+    expect(result.waits).toEqual([30_000, 30_000]);
     expect(result.combined.at(-1)).toBe("failure");
     expect(result.reviews.some((entry) => entry.body?.state === "success")).toBe(false);
     const notices = result.requests.map((entry) => entry.body?.body ?? "").join("\n");
@@ -274,10 +274,121 @@ describe("combined security review entry point", () => {
     expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
   });
 
+  it.each(["detect", "autoscrub", "enforce"])(
+    "stops superseded diff recovery at its first checkpoint in %s mode",
+    (mode) => {
+      const result = evaluate(
+        {
+          [`GET ${pullPath}`]: {
+            settlesAt: "2026-01-02T00:00:30Z",
+            before: pr,
+            after: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } },
+          },
+          [`GET ${pullPath}/files`]: files.slice(0, 1),
+        },
+        mode,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Superseded");
+      expect(result.waits).toEqual([30_000]);
+      expect(result.requests.filter((entry) => entry.path === pullPath + "/files")).toHaveLength(1);
+      const afterWait = result.requests.slice(
+        result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+      );
+      expect(afterWait).toEqual([{ method: "GET", path: pullPath }]);
+      expect(result.combined).not.toContain("success");
+    },
+  );
+
+  it.each([false, true])(
+    "checks the head before more slow file pages (superseded=%s)",
+    (superseded) => {
+      const firstPage = Array.from({ length: 100 }, (_, index) => ({
+        filename: "docs/page-" + index + ".md",
+        status: "modified",
+      }));
+      const original = { ...pr, changed_files: 202 };
+      const result = evaluate({
+        [`GET ${pullPath}`]: {
+          settlesAt: "2026-01-02T00:00:30Z",
+          before: original,
+          after: superseded ? { ...original, head: { ...pr.head, sha: "d".repeat(40) } } : original,
+        },
+        [`GET ${pullPath}/files`]: {
+          responses: [
+            { advanceMs: 15_000, response: firstPage },
+            { advanceMs: 15_000, response: firstPage },
+            files,
+          ],
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.requests.filter((entry) => entry.path === pullPath + "/files")).toHaveLength(
+        superseded ? 2 : 3,
+      );
+      if (superseded) {
+        expect(result.stdout).toContain("Superseded");
+        expect(result.requests.at(-1)).toEqual({ method: "GET", path: pullPath });
+        expect(result.requests.some((entry) => entry.path.endsWith("/comments"))).toBe(false);
+        expect(result.combined).not.toContain("success");
+      } else {
+        expect(result.combined.at(-1)).toBe("success");
+      }
+    },
+  );
+
+  it("keeps checkpoint reads inside the original backoff interval", () => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: { responses: [pr, pr, { advanceMs: 20_000, response: pr }, pr] },
+      [`GET ${pullPath}/files`]: { responses: [files.slice(0, 1), files] },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([30_000, 10_000]);
+    expect(result.combined.at(-1)).toBe("success");
+  });
+
+  it("honors a rate limit from a recovery checkpoint before observing supersession", () => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: {
+        responses: [
+          pr,
+          pr,
+          { httpError: 429, headers: { "retry-after": "180" } },
+          { ...pr, head: { ...pr.head, sha: "d".repeat(40) } },
+        ],
+      },
+      [`GET ${pullPath}/files`]: files.slice(0, 1),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Superseded");
+    expect(result.waits).toHaveLength(2);
+    expect(result.waits[0]).toBe(30_000);
+    expect(result.waits[1]).toBeGreaterThanOrEqual(180_000);
+    const checkpoint = result.requests.findIndex((entry) => entry.method === "WAIT");
+    expect(result.requests.slice(checkpoint).map((entry) => entry.method)).toEqual([
+      "WAIT",
+      "GET",
+      "WAIT",
+      "GET",
+    ]);
+    expect(result.combined).not.toContain("success");
+  });
+
+  it("fails closed when a recovery checkpoint cannot read the PR", () => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: { responses: [pr, pr, { httpError: 403 }] },
+      [`GET ${pullPath}/files`]: files.slice(0, 1),
+    });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([30_000]);
+    expect(result.stderr).toContain("Fixture API failure");
+    expect(result.combined.at(-1)).toBe("failure");
+  });
+
   it("bounds file-list recovery across both guards and reports the conflicting counts", () => {
     const result = evaluate({ [`GET ${pullPath}/files`]: files.slice(0, 1) });
     expect(result.status).toBe(1);
-    expect(result.waits).toEqual([60_000, 120_000, 240_000]);
+    expect(result.waits).toEqual(Array<number>(14).fill(30_000));
     expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(4);
     expect(result.stderr).toContain("expected 2, received 1, current count 2");
     expect(result.stderr).toContain("recovery budget exhausted");

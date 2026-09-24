@@ -10,4 +10,7 @@ export function installGuardClock(logPath, now = Date.parse("2026-01-02T00:00:00
     now += delay;
   };
   syncBuiltinESMExports();
+  return (elapsed) => {
+    now += elapsed;
+  };
 }

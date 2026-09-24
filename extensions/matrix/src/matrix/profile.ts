@@ -27,11 +27,11 @@ export type MatrixProfileSyncResult = {
 };
 
 function isMatrixMxcUri(value: string): boolean {
-  return normalizeLowercaseStringOrEmpty(normalizeOptionalString(value)).startsWith("mxc://");
+  return normalizeLowercaseStringOrEmpty(value).startsWith("mxc://");
 }
 
 function isMatrixHttpAvatarUri(value: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(normalizeOptionalString(value));
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   return normalized.startsWith("https://") || normalized.startsWith("http://");
 }
 
@@ -83,15 +83,7 @@ async function resolveAvatarUrl(params: {
   }
 
   const avatarUrl = normalizeOptionalString(params.avatarUrl) ?? null;
-  if (!avatarUrl) {
-    return {
-      resolvedAvatarUrl: null,
-      uploadedAvatarSource: null,
-      convertedAvatarFromHttp: false,
-    };
-  }
-
-  if (isMatrixMxcUri(avatarUrl)) {
+  if (!avatarUrl || isMatrixMxcUri(avatarUrl)) {
     return {
       resolvedAvatarUrl: avatarUrl,
       uploadedAvatarSource: null,
@@ -145,9 +137,8 @@ export async function syncMatrixOwnProfile(params: {
       skipped: true,
       displayNameUpdated: false,
       avatarUpdated: false,
+      ...avatar,
       resolvedAvatarUrl: null,
-      uploadedAvatarSource: avatar.uploadedAvatarSource,
-      convertedAvatarFromHttp: avatar.convertedAvatarFromHttp,
     };
   }
 
@@ -177,8 +168,6 @@ export async function syncMatrixOwnProfile(params: {
     skipped: false,
     displayNameUpdated,
     avatarUpdated,
-    resolvedAvatarUrl: desiredAvatarUrl,
-    uploadedAvatarSource: avatar.uploadedAvatarSource,
-    convertedAvatarFromHttp: avatar.convertedAvatarFromHttp,
+    ...avatar,
   };
 }

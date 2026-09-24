@@ -13,10 +13,6 @@ import {
 } from "./browser-cli-shared.js";
 import { danger, defaultRuntime, inheritOptionFromParent } from "./core-api.js";
 
-function resolveUrl(opts: { url?: string }): string | undefined {
-  return normalizeOptionalString(opts.url);
-}
-
 function resolveTargetId(rawTargetId: unknown, command: Command): string | undefined {
   return (
     normalizeOptionalString(rawTargetId) ??
@@ -54,7 +50,7 @@ export function registerBrowserCookiesAndStorageCommands(
     .action(async (name: string, value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const targetId = resolveTargetId(opts.targetId, cmd);
-      const url = resolveUrl(opts);
+      const url = normalizeOptionalString(opts.url);
       if (!url) {
         defaultRuntime.error(danger("Missing required --url option for cookies set"));
         defaultRuntime.exit(1);

@@ -700,18 +700,15 @@ export const chatOutboxDrainDependencies: ChatOutboxDrainDependencies = {
       undefined,
       reconnectSafeQueuedSendState(host),
     );
-    const item = pending?.item;
-    if (item) {
-      publishPendingSendMessage(host, item);
-    }
-    if (!pending || !admitQueuedMessageForSession(host, pending.admission, pending.item)) {
+    const item = pending ? publishPendingSendMessage(host, pending.item) : undefined;
+    if (!pending || !item || !admitQueuedMessageForSession(host, pending.admission, item)) {
       if (item) {
         cancelChatDelivery(host, item, { previousDraft: options.previousDraft });
       }
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       return;
     }
-    await deliverChatQueueItem(host, pending.item, {
+    await deliverChatQueueItem(host, item, {
       previousDraft: options.previousDraft,
       restoreDraft: options.restoreDraft,
       routingSessionKey: host.sessionKey,
