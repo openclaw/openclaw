@@ -678,7 +678,7 @@ private fun VoicePage(
   onRealtimeTalk: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
-  val colors = OpenClawWearTheme.colors
+  val colors = OpenClawWearTheme.canvasColors
   val voicePagerScope = rememberCoroutineScope()
   val view = LocalView.current
   var previousMode by remember { mutableIntStateOf(voicePagerState.currentPage) }
@@ -812,7 +812,7 @@ private fun VoiceHomeMode(
   onStopSpeaking: () -> Unit,
   onOpenThread: () -> Unit,
 ) {
-  val colors = OpenClawWearTheme.colors
+  val colors = OpenClawWearTheme.canvasColors
   val realtimeActive = realtimeTalk.active || realtimeCapturing
   val ttsOnly = speaking && !realtimeActive
   val recoverMicrophone = microphonePermissionRequired && !realtimeActive && !ttsOnly
@@ -1079,7 +1079,7 @@ private fun VoiceGestureLabel(
     )
     Text(
       text = detail,
-      color = OpenClawWearTheme.colors.textMuted,
+      color = OpenClawWearTheme.canvasColors.textMuted,
       fontSize = 12.sp,
       lineHeight = 14.sp,
       textAlign = TextAlign.Center,
@@ -1157,7 +1157,7 @@ private fun ThreadVoiceMode(
         item {
           Text(
             text = stringResource(R.string.no_live_conversation),
-            color = colors.textMuted,
+            color = OpenClawWearTheme.canvasColors.textMuted,
             fontSize = 12.sp,
             lineHeight = 16.sp,
             textAlign = TextAlign.Center,
@@ -2010,7 +2010,7 @@ internal fun WearPage(
 
 @Composable
 private fun OpenClawHeader(pageLabel: String) {
-  val colors = OpenClawWearTheme.colors
+  val colors = OpenClawWearTheme.canvasColors
   Column(
     modifier =
       Modifier
@@ -2252,7 +2252,7 @@ private fun ContextPickerOverlay(
 private fun PickerQueryLabel(query: String) {
   Text(
     text = query,
-    color = OpenClawWearTheme.colors.textMuted,
+    color = OpenClawWearTheme.canvasColors.textMuted,
     fontSize = 11.sp,
     maxLines = 1,
     overflow = TextOverflow.Ellipsis,
@@ -2263,7 +2263,7 @@ private fun PickerQueryLabel(query: String) {
 private fun PickerEmptyResult() {
   Text(
     text = stringResource(R.string.no_matches),
-    color = OpenClawWearTheme.colors.textMuted,
+    color = OpenClawWearTheme.canvasColors.textMuted,
     fontSize = 12.sp,
     textAlign = TextAlign.Center,
   )
@@ -2278,7 +2278,7 @@ private fun ContextPickerOption(
   enabled: Boolean,
   onClick: () -> Unit,
 ) {
-  val colors = OpenClawWearTheme.colors
+  val colors = OpenClawWearTheme.canvasColors
   Column(
     modifier =
       Modifier
@@ -2617,7 +2617,7 @@ private fun ThemeModeSelector(
   ) {
     Text(
       text = localizedWearUppercase(stringResource(R.string.appearance)),
-      color = colors.textMuted,
+      color = OpenClawWearTheme.canvasColors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.SemiBold,
       letterSpacing = 1.sp,
@@ -2831,7 +2831,7 @@ private fun EmptyPanel(
 
 @Composable
 private fun InlineError(text: String) {
-  val colors = OpenClawWearTheme.colors
+  val colors = OpenClawWearTheme.canvasColors
   Text(
     text = text,
     color = colors.danger,

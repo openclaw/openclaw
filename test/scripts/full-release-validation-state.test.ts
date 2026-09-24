@@ -48,6 +48,7 @@ import {
   updateReleaseTransportEpisode,
 } from "../../scripts/full-release-validation-state.mjs";
 import {
+  canonicalTestSha256,
   fullReleaseCandidateBindingFixture,
   fullReleaseCandidateManifestFixture,
 } from "../helpers/full-release-candidate.js";
@@ -4009,13 +4010,14 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
   });
 
   it.each([
-    { dockerPreflightResult: "success", packagePublished: false },
-    { dockerPreflightResult: "success", packagePublished: true },
-    { dockerPreflightResult: "failure", packagePublished: false },
-    { dockerPreflightResult: "failure", packagePublished: true },
+    { dockerPreflightResult: "success", packagePublished: false, retiredScenario: false },
+    { dockerPreflightResult: "success", packagePublished: true, retiredScenario: false },
+    { dockerPreflightResult: "failure", packagePublished: false, retiredScenario: false },
+    { dockerPreflightResult: "failure", packagePublished: true, retiredScenario: false },
+    { dockerPreflightResult: "success", packagePublished: false, retiredScenario: true },
   ])(
-    "restores packagePublished=$packagePublished and the legacy $dockerPreflightResult Docker gate",
-    ({ dockerPreflightResult, packagePublished }) => {
+    "restores packagePublished=$packagePublished, retiredScenario=$retiredScenario and the legacy $dockerPreflightResult Docker gate",
+    ({ dockerPreflightResult, packagePublished, retiredScenario }) => {
       const root = mkdtempSync(join(tmpdir(), "frv-plan-restore-"));
       const output = join(root, "full-release-execution-plan.json");
       const githubOutput = join(root, "github-output");
@@ -4042,6 +4044,25 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
           candidateRequest: candidate.request,
         },
       );
+      if (retiredScenario) {
+        const retainedManifest = fullReleaseCandidateManifestFixture(
+          candidateRequestInput({ packagePublished }),
+        );
+        retainedManifest.request.upgradeSurvivorScenarios = ["base", "msteams-polls"];
+        retainedManifest.requestSha256 = canonicalTestSha256(retainedManifest.request);
+        candidate.request = retainedManifest.request;
+        candidate.requestSha256 = retainedManifest.requestSha256;
+        candidate.manifestSha256 = canonicalTestSha256(retainedManifest);
+        candidate.evidenceArtifact.name = `full-release-candidate-v2-${candidate.requestSha256}`;
+        sealed.candidate = candidate;
+        sealed.candidateRequest = candidate.request;
+        expect(() =>
+          executionPlan(
+            { childPhaseVersion: 3 },
+            { attemptEvidenceVersion: 3, candidate, candidateRequest: candidate.request },
+          ),
+        ).toThrow("invalid published upgrade survivor scenario");
+      }
       // Earlier producers required this gate for regular releases too. A collector
       // retry must preserve that recorded policy, including a failed gate.
       const legacyDockerGate = sealed.gates.find(

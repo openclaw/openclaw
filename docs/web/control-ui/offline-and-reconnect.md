@@ -147,6 +147,9 @@ When the Gateway confirms that it holds the same pending input, the Control UI c
 uncertain-delivery warning without sending the message again. The browser keeps its retry
 payload until consumption or cancellation is confirmed. If delivery is still unknown,
 the review warning remains.
+If the Gateway is holding that input for a later turn, it appears in the queue
+above the composer. Canceling that row withdraws the exact queued message without
+stopping the active turn. Server-held messages cannot be edited or reordered.
 
 If automatic restart recovery is interrupted or cancelled before the agent resumes,
 the **System · restart recovery** notice shows that outcome and asks you to send a

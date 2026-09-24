@@ -302,6 +302,13 @@ first. The default mock provider needs no key. Dreaming is disabled in this
 isolated benchmark; ordinary indexing, recaps, and database idle retention keep
 their normal settings.
 
+If a sample fails, `--output` and `--json` retain completed measured runs,
+completed `warmupRuns`, and a `failedAttempt` with its phase, one-based index,
+available observations, and workload, diagnostics, or cleanup errors. Failed
+attempts and warmups do not enter aggregate summaries. Null or absent partial
+measurements mean unavailable, not zero. The command still exits with status 1;
+live and activity-summary diagnostic failure sidecars remain available.
+
 ```bash
 pnpm test:gateway:concurrency -- --concurrency 16 --tool-events --workspace-fanout --session-count 100 --history-messages 20 --history-clients 4 --subscribers 4 --visible-observer --control-plane --heap-prof-dir .artifacts/gateway-heap --output .artifacts/gateway-concurrency.json
 pnpm test:gateway:concurrency -- --concurrency 64 --turns-per-session 8 --tool-events --timeout-ms 600000 --heap-prof-dir .artifacts/gateway-sustained-heap --output .artifacts/gateway-sustained.json

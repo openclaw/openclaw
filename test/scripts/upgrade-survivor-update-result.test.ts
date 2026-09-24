@@ -456,8 +456,11 @@ describe("published upgrade survivor consent recovery", () => {
   });
 
   it("repairs capability deferrals even when retaining the old plugin makes core update successful", () => {
-    const result = check(deferredUpdate());
+    const update = deferredUpdate();
+    const result = check(update);
     expect(result.status, result.stderr).toBe(0);
+    update.steps.pop();
+    expect(check(update).status).not.toBe(0);
   });
 
   it.each(["INSTALL_FAILED", undefined])("rejects unrelated plugin outcome %s", (code) => {

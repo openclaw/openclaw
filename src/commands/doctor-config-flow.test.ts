@@ -50,19 +50,6 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
   const { asNullableRecord: readNullableRecord } =
     await import("@openclaw/normalization-core/record-coerce");
 
-  function migrateThreadBinding(value: unknown, changes: string[], pathLabel: string): void {
-    const record = readNullableRecord(value);
-    const bindings = readNullableRecord(record?.threadBindings);
-    if (!bindings || !("ttlHours" in bindings)) {
-      return;
-    }
-    if (!("idleHours" in bindings)) {
-      bindings.idleHours = bindings.ttlHours;
-    }
-    delete bindings.ttlHours;
-    changes.push(`Moved ${pathLabel}.threadBindings.ttlHours to idleHours.`);
-  }
-
   function migrateStreamingAlias(channel: Record<string, unknown>): boolean {
     if (
       !("streamMode" in channel) &&
@@ -122,7 +109,6 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
       changes.push("Normalized gateway.bind host alias.");
     }
 
-    migrateThreadBinding(next.session, changes, "session");
     const sessionMaintenance = readNullableRecord(readNullableRecord(next.session)?.maintenance);
     if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
       delete sessionMaintenance.rotateBytes;
@@ -137,7 +123,6 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
       if (!channel) {
         continue;
       }
-      migrateThreadBinding(channel, changes, `channels.${channelId}`);
       if (migrateStreamingAlias(channel)) {
         changes.push(`Normalized channels.${channelId} streaming aliases.`);
       }
@@ -145,7 +130,6 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
         readNullableRecord(channel.accounts) ?? {},
       )) {
         const account = readNullableRecord(accountRaw);
-        migrateThreadBinding(account, changes, `channels.${channelId}.accounts.${accountId}`);
         if (account && migrateStreamingAlias(account)) {
           changes.push(`Normalized channels.${channelId}.accounts.${accountId} streaming aliases.`);
         }
@@ -323,16 +307,6 @@ vi.mock("../config/legacy.js", async () => {
           'gateway.bind host aliases are legacy; use the canonical bind mode. Run "openclaw doctor --fix".',
         );
       }
-      const sessionThreadBindings = readNullableRecord(
-        readNullableRecord(root.session)?.threadBindings,
-      );
-      if (sessionThreadBindings && "ttlHours" in sessionThreadBindings) {
-        addIssue(
-          issues,
-          ["session", "threadBindings", "ttlHours"],
-          'session.threadBindings.ttlHours is legacy; use session.threadBindings.idleHours. Run "openclaw doctor --fix".',
-        );
-      }
       const sessionMaintenance = readNullableRecord(readNullableRecord(root.session)?.maintenance);
       if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
         addIssue(
@@ -377,27 +351,6 @@ vi.mock("../config/legacy.js", async () => {
               ? `channels.${channelId}.streamMode is legacy and no longer used. Run "openclaw doctor --fix".`
               : `channels.${channelId}.streamMode, channels.${channelId}.streaming aliases are legacy. Run "openclaw doctor --fix".`,
           );
-        }
-        const threadBindings = readNullableRecord(channel.threadBindings);
-        if (threadBindings && "ttlHours" in threadBindings) {
-          addIssue(
-            issues,
-            ["channels", channelId, "threadBindings", "ttlHours"],
-            'channels.<id>.threadBindings.ttlHours is legacy; use channels.<id>.threadBindings.idleHours. Run "openclaw doctor --fix".',
-          );
-        }
-        for (const [accountId, accountRaw] of Object.entries(
-          readNullableRecord(channel.accounts) ?? {},
-        )) {
-          const account = readNullableRecord(accountRaw);
-          const accountThreadBindings = readNullableRecord(account?.threadBindings);
-          if (accountThreadBindings && "ttlHours" in accountThreadBindings) {
-            addIssue(
-              issues,
-              ["channels", channelId, "accounts", accountId, "threadBindings", "ttlHours"],
-              'channels.<id>.threadBindings.ttlHours is legacy; use channels.<id>.threadBindings.idleHours. Run "openclaw doctor --fix".',
-            );
-          }
         }
       }
 
@@ -3046,18 +2999,6 @@ describe("doctor config flow", () => {
             telegram: {
               groupMentionsOnly: true,
             },
-            discord: {
-              threadBindings: {
-                ttlHours: 12,
-              },
-              accounts: {
-                alpha: {
-                  threadBindings: {
-                    ttlHours: 6,
-                  },
-                },
-              },
-            },
           },
           tools: {
             web: {
@@ -3074,9 +3015,6 @@ describe("doctor config flow", () => {
           session: {
             maintenance: {
               rotateBytes: "10mb",
-            },
-            threadBindings: {
-              ttlHours: 24,
             },
           },
           talk: {
@@ -3104,12 +3042,8 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("HOOK.md + handler file");
       expect(legacyMessages).toContain("before running");
       expect(legacyMessages).toContain("does not materialize executable files");
-      expect(legacyMessages).toContain("session.threadBindings.ttlHours");
-      expect(legacyMessages).toContain("session.threadBindings.idleHours");
       expect(legacyMessages).toContain("session.maintenance.rotateBytes");
       expect(legacyMessages).toContain("deprecated and ignored");
-      expect(legacyMessages).toContain("channels.<id>.threadBindings.ttlHours");
-      expect(legacyMessages).toContain("channels.<id>.threadBindings.idleHours");
       expect(legacyMessages).toContain("talk:");
       expect(legacyMessages).toContain(
         "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey",
