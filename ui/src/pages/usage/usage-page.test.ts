@@ -244,7 +244,7 @@ describe("UsagePage cache convergence", () => {
       await vi.advanceTimersByTimeAsync(0);
       await page.updateComplete;
       expect(
-        request.mock.calls.filter(([method]) => method === "sessions.usage").at(-1)?.[1],
+        request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1],
       ).toMatchObject(scopeId ? { agentId: scopeId } : { agentScope: "all" });
       expect(Boolean(page.querySelector(".usage-cache-warning.warning"))).toBe(paused);
     }
