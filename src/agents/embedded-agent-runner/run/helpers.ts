@@ -37,6 +37,12 @@ export type RuntimeAuthState = {
 export const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
+// Longest a run waits on one auth step (credential resolution or the runtime
+// auth exchange); the work itself keeps running. Credential resolution can make
+// two OAuth manager attempts (the profile, then its legacy-default fallback),
+// each up to 20 lock retries x 10s plus the 120s owner observation deadline:
+// 2 x 320s, plus a minute so the OAuth owner's own timeout surfaces first.
+export const RUNTIME_AUTH_HARD_TIMEOUT_MS = 700 * 1000;
 
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "[redacted]";
