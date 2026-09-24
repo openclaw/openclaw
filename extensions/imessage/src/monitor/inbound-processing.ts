@@ -255,7 +255,13 @@ async function hasIMessageEchoMatch(params: {
     has: (
       scope: string,
       lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
+      options?:
+        | boolean
+        | {
+            skipIdShortCircuit?: boolean;
+            includePendingText?: boolean;
+            requireMessageIdTextMatch?: boolean;
+          },
     ) => boolean | Promise<boolean>;
   };
   scope: string | readonly string[];
@@ -264,6 +270,7 @@ async function hasIMessageEchoMatch(params: {
   messageIds: string[];
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
+  replyToGuid?: string;
 }): Promise<boolean> {
   // Outbound sends persist echo scopes keyed by whichever target shape was
   // used (chat_id, chat_guid, chat_identifier, or imessage:<handle>). Inbound
@@ -280,6 +287,25 @@ async function hasIMessageEchoMatch(params: {
     }
     for (const messageId of params.messageIds) {
       if (await params.echoCache.has(scope, { messageId })) {
+        return true;
+      }
+    }
+    // Paired mirror rows carry a distinct GUID but reference the outbound
+    // GUID via reply_to_guid. The messageId short-circuit above cannot cover
+    // this — reply_to_guid is not the inbound row's own GUID. Probe the
+    // cache with reply_to_guid as the lookup ID and requireMessageIdTextMatch
+    // so the cache does not short-circuit on ID alone; text must also match
+    // the same cached outbound entry, preventing legitimate inline replies
+    // with different body text from being dropped.
+    if (params.replyToGuid && params.text) {
+      const matchedReplyParent = await params.echoCache.has(
+        scope,
+        { messageId: params.replyToGuid, text: params.text },
+        {
+          requireMessageIdTextMatch: true,
+        },
+      );
+      if (matchedReplyParent) {
         return true;
       }
     }
@@ -398,7 +424,13 @@ export async function resolveIMessageInboundDecision(params: {
     has: (
       scope: string,
       lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
+      options?:
+        | boolean
+        | {
+            skipIdShortCircuit?: boolean;
+            includePendingText?: boolean;
+            requireMessageIdTextMatch?: boolean;
+          },
     ) => boolean | Promise<boolean>;
   };
   selfChatCache?: SelfChatCache;
@@ -481,6 +513,7 @@ export async function resolveIMessageInboundDecision(params: {
   const inboundMessageIds = resolveInboundEchoMessageIds(params.message);
   const inboundMessageId = inboundMessageIds[0];
   const hasInboundGuid = Boolean(normalizeReplyField(params.message.guid));
+  const replyToGuid = normalizeReplyField(params.message.reply_to_guid) ?? undefined;
 
   if (params.message.is_from_me) {
     if (isAmbiguousSelfThread) {
@@ -518,6 +551,60 @@ export async function resolveIMessageInboundDecision(params: {
   }
   if (isGroup && !chatId) {
     return { kind: "drop", reason: "group without chat_id" };
+  }
+
+  // Early reply_to_guid echo probe: paired mirror rows carry a distinct GUID
+  // but reference the outbound GUID via reply_to_guid. Check this before
+  // access/pairing so a mirror from an unpaired or blocked sender is still
+  // suppressed as an echo rather than triggering pairing or access handling.
+  // Skip authored (is_from_me=true) rows — those are self-chat echoes handled
+  // by the self-chat cache above, not paired mirrors from the database.
+  //
+  // Restrict suppression to a verified reflection context. A genuine recipient
+  // can reply to an outbound message with the same text within the reflection
+  // window; that row carries reply_to_guid + matching body just like a mirror,
+  // but is a real user message. Only drop when isSelfChat is true or the
+  // self-chat cache confirms the row as a duplicate of a remembered outbound
+  // send (mirrors share createdAt with their outbound row; real replies do
+  // not). Otherwise fall through to access handling and agent dispatch.
+  if (params.echoCache && !params.message.is_from_me && replyToGuid && bodyText) {
+    const earlyEchoScope = buildIMessageEchoScope({
+      accountId: params.accountId,
+      isGroup,
+      chatId,
+      chatGuid,
+      chatIdentifier,
+      sender,
+    });
+    if (
+      await hasIMessageEchoMatch({
+        echoCache: params.echoCache,
+        scope: earlyEchoScope,
+        text: bodyText,
+        messageIds: inboundMessageIds,
+        replyToGuid,
+      })
+    ) {
+      // isSelfChat requires destination_caller_id, but the self-chat cache can
+      // recognize duplicates without that field by matching the remembered
+      // outbound row's createdAt (mirrors share it; real replies do not).
+      const isSelfChatMirror =
+        isSelfChat ||
+        Boolean(
+          params.selfChatCache?.has({
+            ...selfChatLookup,
+            text: bodyText,
+          }),
+        );
+      if (isSelfChatMirror) {
+        params.logVerbose?.(
+          describeIMessageEchoDropLog({ messageText: bodyText, messageId: inboundMessageId }),
+        );
+        return { kind: "drop", reason: "self-chat echo" };
+      }
+      // Not a verified reflection: a recipient may have replied with the same
+      // text. Do not drop; continue to access handling and agent dispatch.
+    }
   }
 
   const groupId = isGroup ? groupIdCandidate : undefined;
@@ -705,6 +792,10 @@ export async function resolveIMessageInboundDecision(params: {
         media: mediaFacts[0],
         messageIds: inboundMessageIds,
         includePendingText: isSelfChat,
+        // reply_to_guid echo suppression is handled by the early probe above,
+        // which gates on a verified reflection context. The late check must
+        // not re-apply that heuristic here, or a genuine same-text inline
+        // reply in an ordinary direct chat is dropped without that gate.
       })
     ) {
       params.logVerbose?.(
@@ -1099,12 +1190,15 @@ function buildIMessageEchoScope(params: {
   // annotates the inbound row with chat_id+chat_identifier (or any other
   // permutation).
   const scopes: string[] = [];
-  if (params.isGroup) {
-    const chatIdScope = formatIMessageChatTarget(params.chatId);
-    if (chatIdScope) {
-      scopes.push(`${params.accountId}:${chatIdScope}`);
-    }
-  } else {
+  // resolveOutboundEchoScope persists accountId:chat_id:<id> for BOTH groups
+  // and direct chats whenever the send target is a chat_id (the production
+  // direct-reply shape). Probe it in both shapes so a direct reflection
+  // cached under chat_id is suppressed instead of re-dispatched.
+  const chatIdScope = formatIMessageChatTarget(params.chatId);
+  if (chatIdScope) {
+    scopes.push(`${params.accountId}:${chatIdScope}`);
+  }
+  if (!params.isGroup) {
     scopes.push(`${params.accountId}:imessage:${params.sender}`);
   }
   if (params.chatGuid) {
