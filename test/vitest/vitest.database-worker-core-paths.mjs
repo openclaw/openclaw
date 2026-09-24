@@ -232,6 +232,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/compact.foreground-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.hooks.test.ts",
   "src/agents/embedded-agent-runner/compact.queued-successor.test.ts",
+  "src/agents/embedded-agent-runner/compact.queued-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.terminal-metadata.test.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite-notifications.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
