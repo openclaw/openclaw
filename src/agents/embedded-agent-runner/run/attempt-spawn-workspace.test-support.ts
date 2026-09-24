@@ -1293,7 +1293,7 @@ export async function createContextEngineAttemptRunner(params: {
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessagesAfterRepair ?? seedMessages });
 
-  const modelRegistry = {};
+  const modelRegistry = { getApiKeyAndHeaders: async () => ({ ok: true as const }) };
   initializeModelRegistryRuntime(modelRegistry);
   const modelRuntime = getModelRegistryRuntime(modelRegistry).llmRuntime;
   hoisted.createAgentSessionMock.mockImplementation(async (options) => {

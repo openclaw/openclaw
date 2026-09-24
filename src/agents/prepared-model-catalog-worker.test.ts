@@ -101,6 +101,7 @@ describe("prepared model catalog worker input", () => {
       agentFacts: {
         input: {
           agentDir: "/tmp/agent",
+          fallbackAgentDir: "/tmp/default-agent",
           config: {},
           workspaceDir: "/tmp/workspace",
           loadRuntimePlugins: true,
@@ -141,6 +142,7 @@ describe("prepared model catalog worker input", () => {
     expect(cloned.input.runtimePluginSelections).toEqual([
       { provider: "selected", modelId: "model" },
     ]);
+    expect(cloned.input.fallbackAgentDir).toBe("/tmp/default-agent");
     expect(cloned.input).not.toHaveProperty("inheritedAuthDir");
     expect(cloned.input).not.toHaveProperty("loadRuntimePlugins");
     const builtInput = structuredClone(

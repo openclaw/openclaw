@@ -114,6 +114,7 @@ export function resolveEmbeddedAgentStream(
     signal?: AbortSignal;
     model: EmbeddedRunAttemptParams["model"];
     resolvedApiKey?: string;
+    requestHeaders?: Record<string, string>;
     transportAuthAvailable?: boolean;
     authProfileId?: string;
     authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
@@ -124,6 +125,7 @@ export function resolveEmbeddedAgentStream(
   const wrapOptions = {
     runSignal: params.signal,
     resolvedApiKey: params.resolvedApiKey,
+    requestHeaders: params.requestHeaders,
     authProfileId: params.authProfileId,
     authStorage: params.authStorage,
     providerId: params.model.provider,
@@ -151,6 +153,7 @@ export function resolveEmbeddedAgentStream(
           ? wrapEmbeddedAgentStreamFn(vertexStreamFn, {
               runSignal: params.signal,
               providerId: params.model.provider,
+              requestHeaders: params.requestHeaders,
               assertCurrent: params.assertCurrent,
             })
           : vertexStreamFn,
@@ -202,7 +205,7 @@ export function resolveEmbeddedAgentStream(
   const promptCacheKey = params.promptCacheKey?.trim();
   return {
     streamFn:
-      !promptCacheKey && !params.signal && !params.assertCurrent
+      !promptCacheKey && !params.signal && !params.requestHeaders && !params.assertCurrent
         ? currentStreamFn
         : wrapEmbeddedAgentStreamFn(currentStreamFn, {
             runSignal: params.signal,
@@ -232,6 +235,7 @@ function wrapEmbeddedAgentStreamFn(
   params: {
     runSignal: AbortSignal | undefined;
     resolvedApiKey?: string;
+    requestHeaders?: Record<string, string>;
     authProfileId?: string;
     authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
     providerId: string;
@@ -260,6 +264,12 @@ function wrapEmbeddedAgentStreamFn(
     }
     if (params.authProfileId && !merged?.authProfileId) {
       merged = { ...merged, authProfileId: params.authProfileId };
+    }
+    if (params.requestHeaders) {
+      merged = {
+        ...merged,
+        headers: { ...params.requestHeaders, ...merged?.headers },
+      };
     }
     return signal ? { ...merged, signal } : merged;
   };

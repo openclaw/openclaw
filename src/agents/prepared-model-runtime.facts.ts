@@ -63,6 +63,7 @@ import {
   prepareWorkspacePluginRegistries,
   type PreparedInboundRegistryLoader,
 } from "./prepared-model-runtime.inbound-registry.js";
+import { sanitizeInheritedModelsJsonContents } from "./prepared-model-runtime.inherited-catalog.js";
 import { hasSameOAuthProviderGeneration } from "./prepared-model-runtime.oauth-providers.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { createPreparedPluginGeneration } from "./prepared-model-runtime.plugin-generation.js";
@@ -551,7 +552,7 @@ export async function prepareWorkspaceBuildGroup(
   }
 }
 
-export function captureModelsJsonContents(agentDir: string): string | null {
+function readModelsJsonContents(agentDir: string): string | null {
   try {
     return fs.readFileSync(path.join(agentDir, "models.json"), "utf8");
   } catch (error) {
@@ -561,6 +562,23 @@ export function captureModelsJsonContents(agentDir: string): string | null {
     throw error;
   }
 }
+
+export function captureModelsJsonSource(
+  input: Pick<PreparedModelRuntimeInput, "agentDir" | "fallbackAgentDir">,
+): Readonly<{ contents: string | null; sanitizedFallback: boolean }> {
+  const localContents = readModelsJsonContents(input.agentDir);
+  if (localContents !== null || !input.fallbackAgentDir) {
+    return { contents: localContents, sanitizedFallback: false };
+  }
+  const inheritedContents = readModelsJsonContents(input.fallbackAgentDir);
+  return inheritedContents === null
+    ? { contents: null, sanitizedFallback: false }
+    : {
+        contents: sanitizeInheritedModelsJsonContents(inheritedContents),
+        sanitizedFallback: true,
+      };
+}
+
 export const fingerprintPreparedRuntimeFacts = (value: unknown): string =>
   sha256Base64Url(stableStringify(value));
 
@@ -605,7 +623,8 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
   for (const facts of params.agentFacts) {
     await nextTurn();
     params.assertCurrent?.(facts.input);
-    const modelsJsonContents = captureModelsJsonContents(facts.input.agentDir);
+    const modelsJsonSource = captureModelsJsonSource(facts.input);
+    const modelsJsonContents = modelsJsonSource.contents;
     const oauthProviders = facts.templateAuthStorage.getOAuthProviders();
     // Root files remain authored inventory even when static preparation returned an empty result.
     const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(
@@ -617,6 +636,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
       sourceModels: projectConfigOntoRuntimeSourceSnapshot(facts.input.config).models,
       credentials: facts.credentials,
       modelsJsonContents,
+      modelsJsonSanitizedFallback: modelsJsonSource.sanitizedFallback,
       pluginCatalogs,
       staticProviderConfigs,
     });
@@ -631,6 +651,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
           config: facts.input.config,
           includePluginCatalogs: true,
           modelsJsonContents,
+          modelsJsonSanitizedFallback: modelsJsonSource.sanitizedFallback,
           pluginCatalogs,
           staticProviderConfigs,
           pluginMetadataSnapshot,

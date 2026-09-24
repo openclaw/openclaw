@@ -152,6 +152,8 @@ export type PreparedModelRuntimeStores = {
 export type PreparedModelRuntimeInput = {
   agentId?: string;
   agentDir: string;
+  /** System-agent catalog used only when this agent has no local models.json. */
+  fallbackAgentDir?: string;
   inheritedAuthDir?: string;
   workspaceDir?: string;
   preserveWorkspaceDirOnRefresh?: boolean;

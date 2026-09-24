@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 /** Exact header names that always carry credential material for model provider requests. */
 const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
   "authorization",
+  "cookie",
   "proxy-authorization",
   "x-api-key",
   "api-key",

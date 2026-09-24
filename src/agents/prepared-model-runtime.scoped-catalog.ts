@@ -11,7 +11,7 @@ import type {
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
 import {
-  captureModelsJsonContents,
+  captureModelsJsonSource,
   prepareWorkspaceBuildGroup,
 } from "./prepared-model-runtime.facts.js";
 import {
@@ -137,8 +137,13 @@ export async function prepareAgentCatalogSource(
         ...(sourceOptions.authStore ? { authStore: sourceOptions.authStore } : {}),
         ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
       });
+      const captured = captureModelsJsonSource(input);
+      const usesCapturedSource = source.modelsJsonContents === null;
       return {
-        modelsJsonContents: source.modelsJsonContents,
+        modelsJsonContents: source.modelsJsonContents ?? captured.contents,
+        ...(usesCapturedSource && captured.sanitizedFallback
+          ? { modelsJsonSanitizedFallback: true }
+          : {}),
         pluginCatalogs: source.pluginCatalogs,
         providerOutcomes: resultOutcomes(),
       };
@@ -151,8 +156,10 @@ export async function prepareAgentCatalogSource(
     }
     // Capture immediately after the serialized write. Another owner may share this directory and
     // publish a different workspace generation before full-catalog parsing begins.
+    const captured = captureModelsJsonSource(input);
     return {
-      modelsJsonContents: captureModelsJsonContents(input.agentDir),
+      modelsJsonContents: captured.contents,
+      ...(captured.sanitizedFallback ? { modelsJsonSanitizedFallback: true } : {}),
       pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(input.agentDir),
       providerOutcomes: resultOutcomes(),
     };

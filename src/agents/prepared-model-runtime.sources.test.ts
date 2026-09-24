@@ -12,6 +12,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
+  captureModelsJsonSource,
   prepareConfiguredRuntimeFactsBatch,
   type PreparedConfiguredModelRegistries,
 } from "./prepared-model-runtime.facts.js";
@@ -19,6 +20,7 @@ import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
 } from "./prepared-model-runtime.full-catalog.js";
+import { normalizePreparedModelRuntimeInput } from "./prepared-model-runtime.owner.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
@@ -270,6 +272,143 @@ describe("prepared catalog source composition", () => {
     expect(
       result.catalogs.get(sibling.input)!.templateModelRegistry.find(providerId, "configured-only"),
     ).toBeUndefined();
+  });
+
+  it("reads the isolated system-agent catalog when a secondary catalog is missing", async () => {
+    const { facts, generation, modelsJsonContents } = fixture();
+    const stateDir = tempDirs.make("openclaw-prepared-system-catalog-");
+    const systemAgentDir = path.join(stateDir, "agents", "main", "agent");
+    const secondaryAgentDir = path.join(stateDir, "agents", "ops", "agent");
+    fs.mkdirSync(systemAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(systemAgentDir, "models.json"), modelsJsonContents);
+    const input = normalizePreparedModelRuntimeInput({
+      ...facts.input,
+      agentId: "ops",
+      agentDir: secondaryAgentDir,
+      config: {
+        ...facts.input.config,
+        agents: { defaults: { systemAgent: { agentId: "main" } } },
+      },
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const secondaryFacts = { ...facts, input };
+
+    const result = await prepareConfiguredRuntimeFactsBatch({
+      agentFacts: [secondaryFacts],
+      pluginGeneration: generation,
+    });
+
+    expect(
+      result.catalogs.get(input)?.templateModelRegistry.find(providerId, "authored-only"),
+    ).toMatchObject({ id: "authored-only" });
+    expect(fs.existsSync(path.join(secondaryAgentDir, "models.json"))).toBe(false);
+  });
+
+  it("keeps an existing secondary catalog authoritative", () => {
+    const { facts, modelsJsonContents } = fixture();
+    const stateDir = tempDirs.make("openclaw-prepared-local-catalog-");
+    const systemAgentDir = path.join(stateDir, "agents", "main", "agent");
+    const secondaryAgentDir = path.join(stateDir, "agents", "ops", "agent");
+    fs.mkdirSync(systemAgentDir, { recursive: true });
+    fs.mkdirSync(secondaryAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(systemAgentDir, "models.json"), modelsJsonContents);
+    fs.writeFileSync(path.join(secondaryAgentDir, "models.json"), "{ malformed");
+    const input = normalizePreparedModelRuntimeInput({
+      ...facts.input,
+      agentId: "ops",
+      agentDir: secondaryAgentDir,
+      config: {
+        ...facts.input.config,
+        agents: { defaults: { systemAgent: { agentId: "main" } } },
+      },
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(captureModelsJsonSource(input).contents).toBe("{ malformed");
+  });
+
+  it("uses secondary auth with safe transport headers from an inherited catalog", async () => {
+    const { configured, facts, generation } = fixture();
+    const stateDir = tempDirs.make("openclaw-prepared-inherited-auth-boundary-");
+    const systemAgentDir = path.join(stateDir, "agents", "main", "agent");
+    const secondaryAgentDir = path.join(stateDir, "agents", "ops", "agent");
+    fs.mkdirSync(systemAgentDir, { recursive: true });
+    const inheritedCatalog = JSON.stringify(
+      {
+        providers: {
+          [providerId]: {
+            ...configured,
+            apiKey: "system-agent-key",
+            headers: {
+              Authorization: "Bearer system-agent",
+              Cookie: "provider-session=system-agent",
+              "X-Catalog-Route": "keep-provider-route",
+            },
+            models: [
+              {
+                ...model("authored-only"),
+                headers: {
+                  cookie: "model-session=system-agent",
+                  "X-Auth-Token": "system-agent-token",
+                  "X-Model-Route": "keep-model-route",
+                },
+              },
+            ],
+          },
+        },
+      },
+      null,
+      2,
+    )
+      .replace('"providers": {', '"providers": {\n    // Supported catalog comment.')
+      .replace('"X-Model-Route": "keep-model-route"', '"X-Model-Route": "keep-model-route",');
+    fs.writeFileSync(path.join(systemAgentDir, "models.json"), inheritedCatalog);
+    const input = normalizePreparedModelRuntimeInput({
+      ...facts.input,
+      agentId: "ops",
+      agentDir: secondaryAgentDir,
+      config: {
+        ...facts.input.config,
+        agents: { defaults: { systemAgent: { agentId: "main" } } },
+      },
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    const inherited = JSON.parse(captureModelsJsonSource(input).contents ?? "null");
+    expect(inherited.providers[providerId]).not.toHaveProperty("apiKey");
+    expect(inherited.providers[providerId].headers).toEqual({
+      "X-Catalog-Route": "keep-provider-route",
+    });
+    expect(inherited.providers[providerId].models[0].headers).toEqual({
+      "X-Model-Route": "keep-model-route",
+    });
+
+    const result = await prepareConfiguredRuntimeFactsBatch({
+      agentFacts: [
+        {
+          ...facts,
+          input,
+          templateAuthStorage: AuthStorage.inMemory({
+            [providerId]: { type: "api_key", key: "secondary-agent-key" },
+          }),
+        },
+      ],
+      pluginGeneration: generation,
+    });
+    const selected = result.catalogs
+      .get(input)
+      ?.templateModelRegistry.find(providerId, "authored-only");
+    expect(selected).toBeDefined();
+    await expect(
+      result.catalogs.get(input)?.templateModelRegistry.getApiKeyAndHeaders(selected!),
+    ).resolves.toEqual({
+      ok: true,
+      apiKey: "secondary-agent-key",
+      headers: {
+        "X-Catalog-Route": "keep-provider-route",
+        "X-Model-Route": "keep-model-route",
+      },
+    });
   });
 
   it.each(["same", "static route", "credentials", "metadata"] as const)(

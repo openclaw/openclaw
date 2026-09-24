@@ -57,6 +57,12 @@ import {
   type ModelsConfig,
   type ProviderAuthMode,
 } from "./model-registry-schema.js";
+import {
+  applySanitizedFallbackRequestHeaders,
+  getModelRequestKey,
+  type ProviderRequestConfig,
+  type RegistryProviderSources,
+} from "./model-registry.catalog-composition.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
   resolveConfigValueOrThrow,
@@ -67,13 +73,6 @@ import {
 const log = createSubsystemLogger("agents/model-registry");
 
 type MaxTokensSource = "configured" | "discovered";
-type RegistryProviderSources = Record<
-  string,
-  ProviderModelCatalog &
-    Pick<ModelsConfig["providers"][string], "apiKey" | "auth" | "authHeader"> & {
-      headers?: Record<string, string>;
-    }
->;
 
 function captureInventoryProvider(
   provider: ProviderModelCatalog,
@@ -91,14 +90,6 @@ function captureInventoryProvider(
       compat: source === "static" ? mergeCompat(provider.compat, model.compat) : model.compat,
     })),
   };
-}
-
-interface ProviderRequestConfig {
-  baseUrls?: readonly string[];
-  apiKey?: string;
-  auth?: ProviderAuthMode;
-  headers?: Record<string, string>;
-  authHeader?: boolean;
 }
 
 export type ResolvedRequestAuth =
@@ -126,6 +117,7 @@ type ModelRegistryOptions = {
   config?: OpenClawConfig;
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
+  modelsJsonSanitizedFallback?: boolean;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
@@ -191,6 +183,7 @@ export class ModelRegistry {
   readonly authStorage: AuthStorage;
   private modelsJsonPath: string | undefined;
   private modelsJsonContents: string | null | undefined;
+  private modelsJsonSanitizedFallback = false;
   private pluginCatalogs: readonly PersistedPluginModelCatalog[] | undefined;
   private staticProviderConfigs: Readonly<Record<string, ModelProviderConfig>> | undefined;
   private pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
@@ -237,6 +230,7 @@ export class ModelRegistry {
     }
     this.modelsJsonPath = modelsJsonPath;
     this.modelsJsonContents = options.modelsJsonContents;
+    this.modelsJsonSanitizedFallback = options.modelsJsonSanitizedFallback === true;
     this.pluginCatalogs = options.pluginCatalogs;
     this.staticProviderConfigs = options.staticProviderConfigs;
     this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
@@ -442,6 +436,14 @@ export class ModelRegistry {
       });
     }
     let combined = this.parseModels(providers);
+    if (this.modelsJsonSanitizedFallback) {
+      applySanitizedFallbackRequestHeaders({
+        fallbackProviders: customResult.providers,
+        models: combined,
+        providerRequestConfigs: this.providerRequestConfigs,
+        modelRequestHeaders: this.modelRequestHeaders,
+      });
+    }
 
     // Let OAuth providers modify their models (e.g., update baseUrl)
     for (const oauthProvider of this.authStorage.getOAuthProviders()) {
@@ -760,10 +762,6 @@ export class ModelRegistry {
     return config;
   }
 
-  private getModelRequestKey(provider: string, modelId: string): string {
-    return JSON.stringify([provider, modelId]);
-  }
-
   private storeProviderRequestConfig(
     providerName: string,
     config: {
@@ -797,7 +795,7 @@ export class ModelRegistry {
     modelId: string,
     headers?: Record<string, string>,
   ): void {
-    const key = this.getModelRequestKey(providerName, modelId);
+    const key = getModelRequestKey(providerName, modelId);
     if (!headers || Object.keys(headers).length === 0) {
       this.modelRequestHeaders.delete(key);
       return;
@@ -832,7 +830,7 @@ export class ModelRegistry {
         `provider "${model.provider}"`,
       );
       const modelHeaders = resolveHeadersOrThrow(
-        this.modelRequestHeaders.get(this.getModelRequestKey(model.provider, model.id)),
+        this.modelRequestHeaders.get(getModelRequestKey(model.provider, model.id)),
         `model "${model.provider}/${model.id}"`,
       );
 
