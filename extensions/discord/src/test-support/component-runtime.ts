@@ -1,10 +1,12 @@
+import { readChannelIngressStoreAllowFromForDmPolicy } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Discord plugin module implements component runtime behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   parsePluginBindingApprovalCustomId,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import { vi, type Mock } from "vitest";
 import { setDiscordRuntime } from "../runtime.js";
 
@@ -13,13 +15,20 @@ type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyMock = Mock<DispatchReplyWithBufferedBlockDispatcherFn>;
+type ReadAllowFromStore = NonNullable<
+  Parameters<typeof readChannelIngressStoreAllowFromForDmPolicy>[0]["readStore"]
+>;
+type ReadAllowFromStoreMock = Mock<ReadAllowFromStore>;
+type ComponentContext = Parameters<
+  (typeof import("../monitor/agent-components.js").createDiscordComponentControls)[number]
+>[0];
 
 type DiscordComponentRuntimeMocks = {
   buildPluginBindingResolvedTextMock: UnknownMock;
   dispatchPluginInteractiveHandlerMock: AsyncUnknownMock;
   dispatchReplyMock: DispatchReplyMock;
   enqueueSystemEventMock: UnknownMock;
-  readAllowFromStoreMock: AsyncUnknownMock;
+  readAllowFromStoreMock: ReadAllowFromStoreMock;
   readSessionUpdatedAtMock: UnknownMock;
   recordInboundSessionMock: AsyncUnknownMock;
   resolveStorePathMock: UnknownMock;
@@ -32,7 +41,7 @@ const runtimeMocks = vi.hoisted((): DiscordComponentRuntimeMocks => ({
   dispatchPluginInteractiveHandlerMock: vi.fn(),
   dispatchReplyMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(),
   enqueueSystemEventMock: vi.fn(),
-  readAllowFromStoreMock: vi.fn(),
+  readAllowFromStoreMock: vi.fn<ReadAllowFromStore>(),
   readSessionUpdatedAtMock: vi.fn(),
   recordInboundSessionMock: vi.fn(),
   resolveStorePathMock: vi.fn(),
@@ -40,7 +49,7 @@ const runtimeMocks = vi.hoisted((): DiscordComponentRuntimeMocks => ({
   upsertPairingRequestMock: vi.fn(),
 }));
 
-export const readAllowFromStoreMock: AsyncUnknownMock = runtimeMocks.readAllowFromStoreMock;
+export const readAllowFromStoreMock: ReadAllowFromStoreMock = runtimeMocks.readAllowFromStoreMock;
 export const dispatchPluginInteractiveHandlerMock: AsyncUnknownMock =
   runtimeMocks.dispatchPluginInteractiveHandlerMock;
 export const dispatchReplyMock: DispatchReplyMock = runtimeMocks.dispatchReplyMock;
@@ -79,25 +88,12 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
     },
   };
 });
-async function readChannelIngressStoreAllowFromForDmPolicy(params: {
-  provider: string;
-  accountId: string;
-  dmPolicy?: string | null;
-  shouldRead?: boolean | null;
-}) {
-  if (
-    params.shouldRead === false ||
-    params.dmPolicy === "allowlist" ||
-    params.dmPolicy === "open"
-  ) {
-    return [];
-  }
-  return await readAllowFromStoreMock(params.provider, params.accountId);
-}
-
 vi.mock("../monitor/agent-components-helpers.runtime.js", () => {
   return {
-    readChannelIngressStoreAllowFromForDmPolicy,
+    readChannelIngressStoreAllowFromForDmPolicy: (
+      params: Parameters<typeof readChannelIngressStoreAllowFromForDmPolicy>[0],
+    ) =>
+      readChannelIngressStoreAllowFromForDmPolicy({ ...params, readStore: readAllowFromStoreMock }),
     resolvePinnedMainDmOwnerFromAllowlist,
     upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
   };
@@ -107,37 +103,7 @@ vi.mock("../monitor/agent-components.runtime.js", () => {
   return {
     buildPluginBindingResolvedText: (...args: unknown[]) =>
       buildPluginBindingResolvedTextMock(...args),
-    createReplyReferencePlanner: vi.fn(
-      (params: {
-        existingId?: string;
-        hasReplied?: boolean;
-        replyToMode?: "off" | "first" | "all" | "batched";
-        startId?: string;
-      }) => {
-        let hasReplied = params.hasReplied ?? false;
-        let nextId = params.existingId ?? params.startId;
-        return {
-          hasReplied() {
-            return hasReplied;
-          },
-          markSent() {
-            hasReplied = true;
-          },
-          use() {
-            if (params.replyToMode === "off") {
-              return undefined;
-            }
-            if (isSingleUseReplyToMode(params.replyToMode ?? "off") && hasReplied) {
-              return undefined;
-            }
-            const value = nextId;
-            hasReplied = true;
-            nextId = undefined;
-            return value;
-          },
-        };
-      },
-    ),
+    createReplyReferencePlanner,
     dispatchPluginInteractiveHandler: (...args: unknown[]) =>
       dispatchPluginInteractiveHandlerMock(...args),
     dispatchReplyWithBufferedBlockDispatcher: dispatchReplyMock,
@@ -148,13 +114,6 @@ vi.mock("../monitor/agent-components.runtime.js", () => {
     resolvePluginConversationBindingApproval: (...args: unknown[]) =>
       resolvePluginConversationBindingApprovalMock(...args),
     resolveTextChunkLimit: vi.fn(() => 2000),
-  };
-});
-
-vi.mock("../interactive-dispatch.js", () => {
-  return {
-    dispatchDiscordPluginInteractiveHandler: (...args: unknown[]) =>
-      dispatchPluginInteractiveHandlerMock(...args),
   };
 });
 
@@ -180,6 +139,40 @@ vi.mock("../interactive-dispatch.js", async () => {
       dispatchPluginInteractiveHandlerMock(...args),
   };
 });
+
+export const createDiscordComponentTestConfig = (): OpenClawConfig => ({
+  channels: { discord: { replyToMode: "first" } },
+});
+
+export const createDiscordComponentTestAccountConfig = (
+  overrides?: Partial<DiscordAccountConfig>,
+): DiscordAccountConfig => ({ replyToMode: "first", ...overrides });
+
+export const createDiscordComponentTestContext = (
+  overrides?: Partial<ComponentContext>,
+): ComponentContext => ({
+  cfg: createDiscordComponentTestConfig(),
+  accountId: "default",
+  dmPolicy: "allowlist",
+  allowFrom: ["123456789"],
+  discordConfig: createDiscordComponentTestAccountConfig(),
+  token: "token",
+  ...overrides,
+});
+
+export function installDiscordMonitorReplyDispatcher(params: {
+  onContext: (ctx: Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0]["ctx"]) => void;
+  texts?: readonly string[];
+}): void {
+  dispatchReplyMock.mockImplementation(async (input) => {
+    params.onContext(input.ctx);
+    const texts = params.texts ?? ["ok"];
+    for (const text of texts) {
+      await input.dispatcherOptions.deliver({ text }, { kind: "final" });
+    }
+    return { queuedFinal: false, counts: { block: 0, final: texts.length, tool: 0 } };
+  });
+}
 
 export function resetDiscordComponentRuntimeMocks() {
   setDiscordRuntime(createPluginRuntimeMock());

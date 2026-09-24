@@ -68,6 +68,17 @@ class FakeSocket extends EventEmitter {
   readyState = 1;
   send = vi.fn();
   close = vi.fn();
+
+  receiveHello() {
+    this.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOpcodes.Hello,
+        d: { heartbeat_interval: 45_000 },
+        s: null,
+      }),
+    );
+  }
 }
 
 class TestGatewayPlugin extends GatewayPlugin {
@@ -174,14 +185,7 @@ describe("GatewayPlugin", () => {
     gateway.connect(false);
     const socket = gateway.sockets[0];
     socket?.emit("open");
-    socket?.emit(
-      "message",
-      JSON.stringify({
-        op: GatewayOpcodes.Hello,
-        d: { heartbeat_interval: 45_000 },
-        s: null,
-      }),
-    );
+    socket?.receiveHello();
     if (socket) {
       socket.readyState = 3;
     }
@@ -206,14 +210,7 @@ describe("GatewayPlugin", () => {
     gateway.connect(false);
     const originalSocket = gateway.sockets[0];
     originalSocket?.emit("open");
-    originalSocket?.emit(
-      "message",
-      JSON.stringify({
-        op: GatewayOpcodes.Hello,
-        d: { heartbeat_interval: 45_000 },
-        s: null,
-      }),
-    );
+    originalSocket?.receiveHello();
     originalSocket?.emit("close", 1006);
 
     await vi.advanceTimersByTimeAsync(2_000);
@@ -226,14 +223,7 @@ describe("GatewayPlugin", () => {
       expect.stringContaining(`"op":${GatewayOpcodes.Identify}`),
     );
 
-    replacementSocket?.emit(
-      "message",
-      JSON.stringify({
-        op: GatewayOpcodes.Hello,
-        d: { heartbeat_interval: 45_000 },
-        s: null,
-      }),
-    );
+    replacementSocket?.receiveHello();
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(replacementSocket?.send).toHaveBeenCalledWith(
@@ -677,14 +667,7 @@ describe("GatewayPlugin", () => {
     expect(gateway.sockets).toHaveLength(2);
     const reconnectSocket = gateway.sockets[1];
     reconnectSocket?.emit("open");
-    reconnectSocket?.emit(
-      "message",
-      JSON.stringify({
-        op: GatewayOpcodes.Hello,
-        d: { heartbeat_interval: 45_000 },
-        s: null,
-      }),
-    );
+    reconnectSocket?.receiveHello();
     await vi.advanceTimersByTimeAsync(0);
     expect(sentGatewayOpcodes(reconnectSocket?.send ?? vi.fn())).toContain(GatewayOpcodes.Identify);
     expect(sentGatewayOpcodes(reconnectSocket?.send ?? vi.fn())).not.toContain(
@@ -709,14 +692,7 @@ describe("GatewayPlugin", () => {
     gateway.connect(false);
     const initialSocket = gateway.sockets[0];
     initialSocket?.emit("open");
-    initialSocket?.emit(
-      "message",
-      JSON.stringify({
-        op: GatewayOpcodes.Hello,
-        d: { heartbeat_interval: 45_000 },
-        s: null,
-      }),
-    );
+    initialSocket?.receiveHello();
     await vi.advanceTimersByTimeAsync(0);
     expect(sentGatewayOpcodes(initialSocket?.send ?? vi.fn())).toContain(GatewayOpcodes.Identify);
     initialSocket?.emit(
@@ -739,14 +715,7 @@ describe("GatewayPlugin", () => {
       const resumeSocket = gateway.sockets.at(-1);
       expect(gateway.urls.at(-1)).toMatch(/^wss:\/\/resume\.example\.test\//);
       resumeSocket?.emit("open");
-      resumeSocket?.emit(
-        "message",
-        JSON.stringify({
-          op: GatewayOpcodes.Hello,
-          d: { heartbeat_interval: 45_000 },
-          s: null,
-        }),
-      );
+      resumeSocket?.receiveHello();
       expect(sentGatewayOpcodes(resumeSocket?.send ?? vi.fn())).toContain(GatewayOpcodes.Resume);
       expect(debugSpy).toHaveBeenCalledWith(
         `Gateway reconnect scheduled in ${delayMs}ms (close, resume=true)`,
@@ -765,14 +734,7 @@ describe("GatewayPlugin", () => {
     const freshSocket = gateway.sockets.at(-1);
     expect(gateway.urls.at(-1)).toMatch(/^wss:\/\/gateway\.example\.test\//);
     freshSocket?.emit("open");
-    freshSocket?.emit(
-      "message",
-      JSON.stringify({
-        op: GatewayOpcodes.Hello,
-        d: { heartbeat_interval: 45_000 },
-        s: null,
-      }),
-    );
+    freshSocket?.receiveHello();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(sentGatewayOpcodes(freshSocket?.send ?? vi.fn())).toContain(GatewayOpcodes.Identify);
@@ -792,13 +754,46 @@ describe("GatewayPlugin", () => {
         url: "wss://gateway.example.test",
       });
 
+      (gateway as unknown as { client: unknown }).client = {
+        options: { token: "token" },
+        dispatchGatewayEvent: vi.fn(async () => {}),
+      };
       gateway.connect(false);
-      gateway.sockets[0]?.emit("open");
-      gateway.sockets[0]?.emit("close", closeCode);
+      const initialSocket = expectDefined(gateway.sockets[0]);
+      initialSocket.emit("open");
+      initialSocket.emit(
+        "message",
+        JSON.stringify({
+          op: GatewayOpcodes.Dispatch,
+          t: GatewayDispatchEvents.Ready,
+          s: 42,
+          d: { session_id: "session-1", resume_gateway_url: "wss://resume.example.test" },
+        }),
+      );
+      expect(gatewaySessionState(gateway)).toMatchObject({
+        sessionId: "session-1",
+        sequence: 42,
+      });
+      initialSocket.emit("close", closeCode);
       await vi.advanceTimersByTimeAsync(2_000);
 
       expect(gateway.connectCalls).toEqual([false, false]);
       expect(gateway.sockets).toHaveLength(2);
+      expect(gatewaySessionState(gateway)).toMatchObject({
+        sessionId: null,
+        resumeGatewayUrl: null,
+        sequence: null,
+      });
+      const freshSocket = expectDefined(gateway.sockets[1]);
+      freshSocket.emit("open");
+      freshSocket.receiveHello();
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(sentGatewayOpcodes(freshSocket.send)).toContain(GatewayOpcodes.Identify);
+        expect(sentGatewayOpcodes(freshSocket.send)).not.toContain(GatewayOpcodes.Resume);
+      } finally {
+        gateway.disconnect();
+      }
     },
   );
 
@@ -905,7 +900,7 @@ describe("GatewayPlugin", () => {
     ["a negative interval", { heartbeat_interval: -1 }, 45_000],
     ["a sub-second interval a compatible gateway may negotiate", { heartbeat_interval: 500 }, 500],
     ["the smallest positive interval", { heartbeat_interval: 1 }, 1],
-    ["a stringified interval", { heartbeat_interval: "45000" }, 45_000],
+    ["a stringified interval", { heartbeat_interval: "41250" }, 45_000],
     ["an interval past the timer ceiling", { heartbeat_interval: Number.MAX_SAFE_INTEGER }, 45_000],
   ])(
     "survives a HELLO with %s and schedules the first heartbeat accordingly",

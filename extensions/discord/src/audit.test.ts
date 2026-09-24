@@ -6,6 +6,7 @@ import {
   auditDiscordChannelPermissionsWithFetcher,
   collectDiscordAuditChannelIdsForAccount,
 } from "./audit-core.js";
+import { collectDiscordAuditChannelIds } from "./audit.js";
 
 const fetchChannelPermissionsDiscordMock = vi.fn();
 
@@ -142,7 +143,7 @@ describe("discord audit", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const collected = collectDiscordAuditChannelIdsForAccount({ guilds: readDiscordGuilds(cfg) });
+    const collected = collectDiscordAuditChannelIds({ cfg, accountId: "default" });
     expect(collected.channelIds).toEqual(["111"]);
     expect(collected.unresolvedChannels).toBe(1);
   });

@@ -32,7 +32,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 const hoisted = createDiscordOutboundHoisted();
 await installDiscordOutboundModuleSpies(hoisted);
 
-let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDiscordOutboundTarget;
 let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
 let discordInboundEventDelivery: typeof import("./inbound-event-delivery.js").discordInboundEventDelivery;
 
@@ -60,48 +59,56 @@ function mockObjectArg(
 }
 
 beforeAll(async () => {
-  ({ normalizeDiscordOutboundTarget } = await import("./normalize.js"));
   ({ discordOutbound } = await import("./outbound-adapter.js"));
   ({ discordInboundEventDelivery } = await import("./inbound-event-delivery.js"));
 });
 
-describe("normalizeDiscordOutboundTarget", () => {
-  it("normalizes bare numeric IDs to channel: prefix", () => {
-    expect(normalizeDiscordOutboundTarget("1470130713209602050")).toEqual({
-      ok: true,
-      to: "channel:1470130713209602050",
-    });
+describe("discordOutbound target resolution", () => {
+  it.each([
+    { name: "bare numeric ID", to: "1470130713209602050", expected: "channel:1470130713209602050" },
+    { name: "explicit channel", to: "channel:123", expected: "channel:123" },
+    { name: "explicit user", to: "user:123", expected: "user:123" },
+    { name: "channel name", to: "general", expected: "general" },
+    { name: "trimmed numeric ID", to: "  123  ", expected: "channel:123" },
+    {
+      name: "bare allowFrom user",
+      to: "1470130713209602050",
+      allowFrom: ["1470130713209602050"],
+      expected: "user:1470130713209602050",
+    },
+    {
+      name: "prefixed allowFrom user",
+      to: "2345678901",
+      allowFrom: ["user:2345678901"],
+      expected: "user:2345678901",
+    },
+    {
+      name: "mentioned allowFrom user",
+      to: "3456789012",
+      allowFrom: ["<@3456789012>"],
+      expected: "user:3456789012",
+    },
+    {
+      name: "wildcard without DM disambiguation",
+      to: "4567890123",
+      allowFrom: ["*"],
+      expected: "channel:4567890123",
+    },
+  ])("resolves $name", ({ to, allowFrom, expected }) => {
+    expect(discordOutbound.resolveTarget?.({ to, allowFrom })).toEqual({ ok: true, to: expected });
   });
 
-  it("passes through channel: prefixed targets", () => {
-    expect(normalizeDiscordOutboundTarget("channel:123")).toEqual({ ok: true, to: "channel:123" });
-  });
-
-  it("passes through user: prefixed targets", () => {
-    expect(normalizeDiscordOutboundTarget("user:123")).toEqual({ ok: true, to: "user:123" });
-  });
-
-  it("passes through channel name strings", () => {
-    expect(normalizeDiscordOutboundTarget("general")).toEqual({ ok: true, to: "general" });
-  });
-
-  it("returns error for empty target", () => {
-    expect(normalizeDiscordOutboundTarget("").ok).toBe(false);
-  });
-
-  it("returns error for undefined target", () => {
-    expect(normalizeDiscordOutboundTarget(undefined).ok).toBe(false);
-  });
-
-  it("trims whitespace", () => {
-    expect(normalizeDiscordOutboundTarget("  123  ")).toEqual({ ok: true, to: "channel:123" });
-  });
-
-  it("normalizes bare IDs in allowFrom to user: targets", () => {
-    expect(normalizeDiscordOutboundTarget("1470130713209602050", ["1470130713209602050"])).toEqual({
-      ok: true,
-      to: "user:1470130713209602050",
-    });
+  it.each([
+    { name: "empty", to: "" },
+    { name: "missing", to: undefined },
+    { name: "whitespace", to: "   " },
+  ])("rejects $name recipients", ({ to }) => {
+    const result = discordOutbound.resolveTarget?.({ to });
+    expect(result?.ok).toBe(false);
+    if (!result || result.ok) {
+      throw new Error("expected Discord recipient rejection");
+    }
+    expect(result.error.message).toContain("Discord recipient is required");
   });
 });
 
@@ -124,18 +131,6 @@ describe("discordOutbound", () => {
       hoisted,
       text: "hello",
       result,
-    });
-  });
-
-  it("uses allowFrom to disambiguate bare numeric DM delivery targets", () => {
-    expect(
-      discordOutbound.resolveTarget?.({
-        to: "1470130713209602050",
-        allowFrom: ["1470130713209602050"],
-      }),
-    ).toEqual({
-      ok: true,
-      to: "user:1470130713209602050",
     });
   });
 
@@ -508,31 +503,62 @@ describe("discordOutbound", () => {
     expect(voiceOptions.mediaAccess).not.toHaveProperty("readFile");
   });
 
-  it("uses a single implicit reply on audioAsVoice sends when replyToMode is batched", async () => {
-    await discordOutbound.sendPayload?.({
-      cfg: {},
-      to: "channel:123456",
-      text: "",
-      payload: {
-        text: "voice note",
-        mediaUrls: ["https://example.com/voice.ogg", "https://example.com/extra.png"],
-        audioAsVoice: true,
-      },
-      accountId: "default",
+  it.each([
+    {
+      name: "implicit batched",
       replyToId: "reply-1",
       replyToIdSource: "implicit",
       replyToMode: "batched",
-    });
+      expectedReplies: [{ messageId: "reply-1", scope: "first" }, undefined, undefined],
+    },
+    {
+      name: "all",
+      replyToId: "reply-1",
+      replyToIdSource: undefined,
+      replyToMode: "all",
+      expectedReplies: [
+        { messageId: "reply-1", scope: "all" },
+        { messageId: "reply-1", scope: "all" },
+        { messageId: "reply-1", scope: "all" },
+      ],
+    },
+    {
+      name: "explicit off-mode",
+      replyToId: "explicit-reply-1",
+      replyToIdSource: undefined,
+      replyToMode: "off",
+      expectedReplies: [
+        { messageId: "explicit-reply-1", scope: "all" },
+        { messageId: "explicit-reply-1", scope: "all" },
+        { messageId: "explicit-reply-1", scope: "all" },
+      ],
+    },
+  ] as const)(
+    "preserves $name reply policy across audio, caption, and remaining media",
+    async ({ replyToId, replyToIdSource, replyToMode, expectedReplies }) => {
+      await discordOutbound.sendPayload?.({
+        cfg: {},
+        to: "channel:123456",
+        text: "",
+        payload: {
+          text: "voice note",
+          mediaUrls: ["https://example.com/voice.ogg", "https://example.com/extra.png"],
+          audioAsVoice: true,
+        },
+        accountId: "default",
+        replyToId,
+        replyToIdSource,
+        replyToMode,
+      });
 
-    expect(
-      mockObjectArg(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0, 2).reply,
-    ).toEqual({ messageId: "reply-1", scope: "first" });
-    expect(
-      hoisted.sendMessageDiscordMock.mock.calls.map(
-        (call) => (call[2] as { reply?: unknown } | undefined)?.reply,
-      ),
-    ).toEqual([undefined, undefined]);
-  });
+      expect([
+        mockObjectArg(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0, 2).reply,
+        ...hoisted.sendMessageDiscordMock.mock.calls.map(
+          (call) => (call[2] as { reply?: unknown } | undefined)?.reply,
+        ),
+      ]).toEqual(expectedReplies);
+    },
+  );
 
   it.each([
     {
@@ -639,62 +665,6 @@ describe("discordOutbound", () => {
 
     expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledOnce();
     expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps replyToId on every internal audioAsVoice send when replyToMode is all", async () => {
-    await discordOutbound.sendPayload?.({
-      cfg: {},
-      to: "channel:123456",
-      text: "",
-      payload: {
-        text: "voice note",
-        mediaUrls: ["https://example.com/voice.ogg", "https://example.com/extra.png"],
-        audioAsVoice: true,
-      },
-      accountId: "default",
-      replyToId: "reply-1",
-      replyToMode: "all",
-    });
-
-    expect(
-      mockObjectArg(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0, 2).reply,
-    ).toEqual({ messageId: "reply-1", scope: "all" });
-    expect(
-      hoisted.sendMessageDiscordMock.mock.calls.map(
-        (call) => (call[2] as { reply?: unknown } | undefined)?.reply,
-      ),
-    ).toEqual([
-      { messageId: "reply-1", scope: "all" },
-      { messageId: "reply-1", scope: "all" },
-    ]);
-  });
-
-  it("preserves explicit audioAsVoice payload replies when replyToMode is off", async () => {
-    await discordOutbound.sendPayload?.({
-      cfg: {},
-      to: "channel:123456",
-      text: "",
-      payload: {
-        text: "voice note",
-        mediaUrls: ["https://example.com/voice.ogg", "https://example.com/extra.png"],
-        audioAsVoice: true,
-      },
-      accountId: "default",
-      replyToId: "explicit-reply-1",
-      replyToMode: "off",
-    });
-
-    expect(
-      mockObjectArg(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0, 2).reply,
-    ).toEqual({ messageId: "explicit-reply-1", scope: "all" });
-    expect(
-      hoisted.sendMessageDiscordMock.mock.calls.map(
-        (call) => (call[2] as { reply?: unknown } | undefined)?.reply,
-      ),
-    ).toEqual([
-      { messageId: "explicit-reply-1", scope: "all" },
-      { messageId: "explicit-reply-1", scope: "all" },
-    ]);
   });
 
   it.each([
@@ -963,22 +933,7 @@ describe("discordOutbound", () => {
     expect(markDelivered).toHaveBeenCalledTimes(1);
   });
 
-  it("sends component payload media sequences with the component message first", async () => {
-    const mediaReadFile = vi.fn(async () => Buffer.from("trusted component media"));
-    const mediaAccess = {
-      localRoots: ["/tmp/media"],
-      readFile: mediaReadFile,
-      workspaceDir: "/tmp/media",
-    };
-    hoisted.sendDiscordComponentMessageMock.mockResolvedValueOnce({
-      messageId: "component-1",
-      channelId: "ch-1",
-    });
-    hoisted.sendMessageDiscordMock.mockResolvedValueOnce({
-      messageId: "msg-2",
-      channelId: "ch-1",
-    });
-
+  async function createComponentMediaPayload() {
     const payload = await discordOutbound.renderPresentation?.({
       payload: {
         text: "hello",
@@ -996,6 +951,27 @@ describe("discordOutbound", () => {
     if (!payload) {
       throw new Error("expected Discord presentation payload");
     }
+
+    return payload;
+  }
+
+  it("sends component payload media sequences with the component message first", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("trusted component media"));
+    const mediaAccess = {
+      localRoots: ["/tmp/media"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/media",
+    };
+    hoisted.sendDiscordComponentMessageMock.mockResolvedValueOnce({
+      messageId: "component-1",
+      channelId: "ch-1",
+    });
+    hoisted.sendMessageDiscordMock.mockResolvedValueOnce({
+      messageId: "msg-2",
+      channelId: "ch-1",
+    });
+
+    const payload = await createComponentMediaPayload();
 
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
@@ -1259,43 +1235,33 @@ describe("discordOutbound", () => {
     expect(overLimit).toBeNull();
   });
 
-  it("keeps replyToId on every internal component media send when replyToMode is all", async () => {
-    const payload = await discordOutbound.renderPresentation?.({
-      payload: {
-        text: "hello",
-        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
-      },
-      presentation: {
-        blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
-      },
-      ctx: {
+  it.each([
+    { name: "all", replyToId: "reply-1", replyToMode: "all" },
+    { name: "explicit off-mode", replyToId: "explicit-reply-1", replyToMode: "off" },
+  ] as const)(
+    "preserves $name replies across component media sends",
+    async ({ replyToId, replyToMode }) => {
+      const payload = await createComponentMediaPayload();
+
+      await discordOutbound.sendPayload?.({
         cfg: {},
         to: "channel:123456",
-      },
-    } as never);
+        text: "",
+        payload,
+        accountId: "default",
+        replyToId,
+        replyToMode,
+      });
 
-    if (!payload) {
-      throw new Error("expected Discord presentation payload");
-    }
-
-    await discordOutbound.sendPayload?.({
-      cfg: {},
-      to: "channel:123456",
-      text: "",
-      payload,
-      accountId: "default",
-      replyToId: "reply-1",
-      replyToMode: "all",
-    });
-
-    expect(
-      mockObjectArg(hoisted.sendDiscordComponentMessageMock, "sendDiscordComponentMessage", 0, 2)
-        .reply,
-    ).toEqual({ messageId: "reply-1", scope: "all" });
-    expect(mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).reply).toEqual(
-      { messageId: "reply-1", scope: "all" },
-    );
-  });
+      expect(
+        mockObjectArg(hoisted.sendDiscordComponentMessageMock, "sendDiscordComponentMessage", 0, 2)
+          .reply,
+      ).toEqual({ messageId: replyToId, scope: "all" });
+      expect(
+        mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).reply,
+      ).toEqual({ messageId: replyToId, scope: "all" });
+    },
+  );
 
   it("sends prepared native Discord payload data through outbound delivery", async () => {
     await discordOutbound.sendPayload?.({
@@ -1327,44 +1293,6 @@ describe("discordOutbound", () => {
     expect(options.filename).toBe("photo.png");
     expect(options.accountId).toBe("default");
     expect(options.reply).toEqual({ messageId: "reply-1", scope: "first" });
-  });
-
-  it("preserves explicit component payload replies when replyToMode is off", async () => {
-    const payload = await discordOutbound.renderPresentation?.({
-      payload: {
-        text: "hello",
-        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
-      },
-      presentation: {
-        blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
-      },
-      ctx: {
-        cfg: {},
-        to: "channel:123456",
-      },
-    } as never);
-
-    if (!payload) {
-      throw new Error("expected Discord presentation payload");
-    }
-
-    await discordOutbound.sendPayload?.({
-      cfg: {},
-      to: "channel:123456",
-      text: "",
-      payload,
-      accountId: "default",
-      replyToId: "explicit-reply-1",
-      replyToMode: "off",
-    });
-
-    expect(
-      mockObjectArg(hoisted.sendDiscordComponentMessageMock, "sendDiscordComponentMessage", 0, 2)
-        .reply,
-    ).toEqual({ messageId: "explicit-reply-1", scope: "all" });
-    expect(mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).reply).toEqual(
-      { messageId: "explicit-reply-1", scope: "all" },
-    );
   });
 
   it("uses explicit maxLinesPerMessage in its adapter chunker", () => {

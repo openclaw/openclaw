@@ -4,11 +4,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, fetchDiscord } from "./api.js";
 import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
-import {
-  buildDiscordUnresolvedResults,
-  filterDiscordGuilds,
-  resolveDiscordAllowlistToken,
-} from "./resolve-allowlist-common.js";
+import { filterDiscordGuilds } from "./resolve-allowlist-common.js";
+import { normalizeDiscordToken } from "./token.js";
 
 type DiscordUser = {
   id: string;
@@ -90,9 +87,9 @@ export async function resolveDiscordUserAllowlist(params: {
   entries: string[];
   fetcher?: typeof fetch;
 }): Promise<DiscordUserResolution[]> {
-  const token = resolveDiscordAllowlistToken(params.token);
+  const token = normalizeDiscordToken(params.token, "channels.discord.token");
   if (!token) {
-    return buildDiscordUnresolvedResults(params.entries, (input) => ({
+    return params.entries.map((input) => ({
       input,
       resolved: false,
     }));

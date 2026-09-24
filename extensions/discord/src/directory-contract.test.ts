@@ -102,6 +102,7 @@ describe("Discord directory contract", () => {
               channels: {
                 "555": {},
                 "666": {},
+                "6667": {},
                 "777": {},
               },
             },
@@ -114,7 +115,7 @@ describe("Discord directory contract", () => {
       cfg,
       accountId: "default",
       query: "666",
-      limit: 5,
+      limit: 1,
     });
     expect(groups.map((entry) => entry.id)).toEqual(["channel:666"]);
   });

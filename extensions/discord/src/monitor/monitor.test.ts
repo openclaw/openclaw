@@ -4,7 +4,7 @@ installDiscordIngressTestRuntime();
 // Discord tests cover monitor plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildPluginBindingApprovalCustomId,
   registerSessionBindingAdapter,
@@ -27,9 +27,13 @@ import {
   createModalInteraction,
 } from "../test-support/component-interactions.test-support.js";
 import {
+  createDiscordComponentTestAccountConfig as createDiscordConfig,
+  createDiscordComponentTestConfig as createCfg,
+  createDiscordComponentTestContext as createComponentContext,
   dispatchPluginInteractiveHandlerMock,
   dispatchReplyMock,
   enqueueSystemEventMock,
+  installDiscordMonitorReplyDispatcher,
   readSessionUpdatedAtMock,
   recordInboundSessionMock,
   resetDiscordComponentRuntimeMocks,
@@ -44,9 +48,6 @@ type CreateDiscordComponentModal =
 type CreateDiscordComponentStringSelect = CreateDiscordComponentButton;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
-type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
-  ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
->;
 
 let createDiscordComponentButton: CreateDiscordComponentButton;
 let createDiscordComponentStringSelect: CreateDiscordComponentStringSelect;
@@ -55,6 +56,7 @@ let registerDiscordComponentEntries: typeof import("../components-registry.js").
 let resolveDiscordComponentEntryWithPersistence: typeof import("../components-registry.js").resolveDiscordComponentEntryWithPersistence;
 let resolveDiscordModalEntryWithPersistence: typeof import("../components-registry.js").resolveDiscordModalEntryWithPersistence;
 let sendComponents: typeof import("../send.components.js");
+let replyDelivery: typeof import("./reply-delivery.js");
 let buildDiscordComponentMessage: typeof import("../components.js").buildDiscordComponentMessage;
 let buildDiscordPresentationComponents: typeof import("../shared-interactive.js").buildDiscordPresentationComponents;
 
@@ -119,35 +121,7 @@ function discordTestSendResult(messageId: string, channelId = "dm-channel") {
 
 describe("discord component interactions", () => {
   let editDiscordComponentMessageMock: ReturnType<typeof vi.spyOn>;
-  const createCfg = (): OpenClawConfig =>
-    ({
-      channels: {
-        discord: {
-          replyToMode: "first",
-        },
-      },
-    }) as OpenClawConfig;
-
-  const createDiscordConfig = (overrides?: Partial<DiscordAccountConfig>): DiscordAccountConfig =>
-    ({
-      replyToMode: "first",
-      ...overrides,
-    }) as DiscordAccountConfig;
-
   type DispatchParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
-
-  type ComponentContext = Parameters<CreateDiscordComponentButton>[0];
-
-  const createComponentContext = (overrides?: Partial<ComponentContext>) =>
-    ({
-      cfg: createCfg(),
-      accountId: "default",
-      dmPolicy: "allowlist",
-      allowFrom: ["123456789"],
-      discordConfig: createDiscordConfig(),
-      token: "token",
-      ...overrides,
-    }) as ComponentContext;
 
   const createGuildComponentContext = (allowFrom: string[]) =>
     createComponentContext({ cfg: createCfg(), allowFrom });
@@ -275,6 +249,7 @@ describe("discord component interactions", () => {
       resolveDiscordModalEntryWithPersistence,
     } = await import("../components-registry.js"));
     sendComponents = await import("../send.components.js");
+    replyDelivery = await import("./reply-delivery.js");
     ({ buildDiscordComponentMessage } = await import("../components.js"));
     ({ buildDiscordPresentationComponents } = await import("../shared-interactive.js"));
   });
@@ -287,22 +262,11 @@ describe("discord component interactions", () => {
     resetDiscordComponentRuntimeMocks();
     lastDispatchCtx = undefined;
     enqueueSystemEventMock.mockClear();
-    dispatchReplyMock
-      .mockClear()
-      .mockImplementation(
-        async (params: DispatchParams): Promise<DispatchReplyWithBufferedBlockDispatcherResult> => {
-          lastDispatchCtx = params.ctx;
-          await params.dispatcherOptions.deliver({ text: "ok" }, { kind: "final" });
-          return {
-            queuedFinal: false,
-            counts: {
-              block: 0,
-              final: 1,
-              tool: 0,
-            },
-          };
-        },
-      );
+    installDiscordMonitorReplyDispatcher({
+      onContext: (ctx) => {
+        lastDispatchCtx = ctx;
+      },
+    });
     recordInboundSessionMock.mockClear().mockResolvedValue(undefined);
     readSessionUpdatedAtMock.mockClear().mockReturnValue(undefined);
     resolveStorePathMock.mockClear().mockReturnValue("/tmp/openclaw-sessions-test.json");
@@ -313,27 +277,64 @@ describe("discord component interactions", () => {
     });
   });
 
-  it("routes button clicks with reply references", async () => {
+  it.each<[ReplyToMode, [string | undefined, string | undefined]]>([
+    ["off", [undefined, undefined]],
+    ["first", ["msg-1", undefined]],
+    ["batched", ["msg-1", undefined]],
+    ["all", ["msg-1", "msg-1"]],
+  ])("routes button clicks with %s reply references", async (replyToMode, expectedReplyToIds) => {
     await registerDiscordComponentEntries({
       entries: [createButtonEntry()],
       modals: [],
     });
 
-    const button = createDiscordComponentButton(createComponentContext());
+    const button = createDiscordComponentButton(
+      createComponentContext({ discordConfig: createDiscordConfig({ replyToMode }) }),
+    );
     const { interaction, reply } = createComponentButtonInteraction();
+    const post = vi
+      .mocked(interaction.client.rest.post)
+      .mockResolvedValueOnce({ id: "reply-1", channel_id: "dm-channel" })
+      .mockResolvedValueOnce({ id: "reply-2", channel_id: "dm-channel" });
+    installDiscordMonitorReplyDispatcher({
+      onContext: (ctx) => {
+        lastDispatchCtx = ctx;
+      },
+      texts: ["first reply", "second reply"],
+    });
+    const deliverySpy = vi.spyOn(replyDelivery, "deliverDiscordReply");
+    try {
+      await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    await button.run(interaction, { cid: "btn_1" } as ComponentData);
-
-    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
-    expect(lastDispatchCtx?.CommandSource).toBe("text");
-    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    const dispatchParams = firstMockArg(dispatchReplyMock, "dispatchReplyMock") as
-      | DispatchParams
-      | undefined;
-    expect(typeof dispatchParams?.dispatcherOptions.responsePrefixContextProvider).toBe("function");
-    expect(typeof dispatchParams?.replyOptions?.onModelSelected).toBe("function");
-    await expect(resolveDiscordComponentEntryWithPersistence({ id: "btn_1" })).resolves.toBeNull();
+      expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+      expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
+      expect(lastDispatchCtx?.CommandSource).toBe("text");
+      expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+      const dispatchParams = firstMockArg(dispatchReplyMock, "dispatchReplyMock") as
+        | DispatchParams
+        | undefined;
+      expect(typeof dispatchParams?.dispatcherOptions.responsePrefixContextProvider).toBe(
+        "function",
+      );
+      expect(typeof dispatchParams?.replyOptions?.onModelSelected).toBe("function");
+      await expect(
+        resolveDiscordComponentEntryWithPersistence({ id: "btn_1" }),
+      ).resolves.toBeNull();
+      expect(post).toHaveBeenCalledTimes(2);
+      expect(deliverySpy.mock.calls).toMatchObject(
+        expectedReplyToIds.map((replyToId) => [
+          { accountId: "default", target: "channel:dm-channel", replyToMode, replyToId },
+        ]),
+      );
+      await expect(
+        Promise.all(deliverySpy.mock.results.map(({ value }) => value)),
+      ).resolves.toMatchObject([
+        { visibleReplySent: true, messageIds: ["reply-1"] },
+        { visibleReplySent: true, messageIds: ["reply-2"] },
+      ]);
+    } finally {
+      deliverySpy.mockRestore();
+    }
   });
 
   it("records DM component interactions with user originating targets", async () => {

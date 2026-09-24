@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordMessageActions } from "../channel-actions.js";
 import { RequestClient } from "../internal/rest.js";
+import * as requestClient from "../proxy-request-client.js";
 import { sendPollDiscord, sendStickerDiscord } from "../send.outbound.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 import { handleDiscordAction } from "./runtime.js";
@@ -14,14 +15,7 @@ vi.mock("./runtime.messaging.runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./runtime.messaging.runtime.js")>();
   return {
     ...actual,
-    editMessageDiscord: vi.fn(actual.editMessageDiscord),
-    deleteMessageDiscord: vi.fn(actual.deleteMessageDiscord),
     fetchChannelInfoDiscord: vi.fn(actual.fetchChannelInfoDiscord),
-    fetchGuildInfoDiscord: vi.fn(actual.fetchGuildInfoDiscord),
-    sendMessageDiscord: vi.fn(actual.sendMessageDiscord),
-    sendDiscordComponentMessage: vi.fn(actual.sendDiscordComponentMessage),
-    sendStickerDiscord: vi.fn(actual.sendStickerDiscord),
-    createThreadDiscord: vi.fn(actual.createThreadDiscord),
   };
 });
 
@@ -31,6 +25,8 @@ const guildId = "323456789012345678";
 const threadId = "623456789012345678";
 const token = "synthetic-message-body-token";
 const attachment = { id: "423456789012345678", filename: "example.txt", size: 4 };
+const mediaPath = "/tmp/discord-actions/report.txt";
+const mediaContent = "Synthetic attachment\n";
 const cfg: OpenClawConfig = {
   channels: { discord: { token, groupPolicy: "open" } },
 };
@@ -41,6 +37,7 @@ const originalFetch = globalThis.fetch;
 let server: Server;
 let rest: RequestClient;
 let requests: { method: string; path: string; body: Record<string, unknown> }[];
+let uploads: { field: string; name: string; content: string }[];
 let current: { content: string; attachments: (typeof attachment)[] };
 let unexpectedUrls: string[];
 let parentChannelType: number;
@@ -54,7 +51,25 @@ beforeAll(async () => {
       for await (const part of request) {
         parts.push(Buffer.from(part));
       }
-      const body = JSON.parse(Buffer.concat(parts).toString() || "{}") as Record<string, unknown>;
+      const data = Buffer.concat(parts);
+      const contentType = request.headers["content-type"] ?? "";
+      let payload = data.toString();
+      if (contentType.startsWith("multipart/form-data")) {
+        const form = await new Response(data, {
+          headers: { "content-type": contentType },
+        }).formData();
+        const payloadJson = form.get("payload_json");
+        if (typeof payloadJson !== "string") {
+          throw new Error("Multipart fixture expected a string payload_json field");
+        }
+        payload = payloadJson;
+        for (const [field, value] of form.entries()) {
+          if (typeof value !== "string") {
+            uploads.push({ field, name: value.name, content: await value.text() });
+          }
+        }
+      }
+      const body = JSON.parse(payload || "{}") as Record<string, unknown>;
       const method = request.method ?? "";
       const path = request.url ?? "";
       requests.push({ method, path, body });
@@ -118,34 +133,15 @@ beforeAll(async () => {
     return originalFetch(input, init);
   });
   rest = new RequestClient(token, { baseUrl, timeout: 5000 });
-  vi.mocked(runtime.editMessageDiscord).mockImplementation((channel, id, payload, opts) =>
-    original.editMessageDiscord(channel, id, payload, { ...opts, rest }),
-  );
-  vi.mocked(runtime.deleteMessageDiscord).mockImplementation((channel, id, opts) =>
-    original.deleteMessageDiscord(channel, id, { ...opts, rest }),
-  );
-  vi.mocked(runtime.fetchChannelInfoDiscord).mockImplementation((channel, opts) =>
-    original.fetchChannelInfoDiscord(channel, { ...opts, rest }),
-  );
-  vi.mocked(runtime.fetchGuildInfoDiscord).mockImplementation((guild, opts) =>
-    original.fetchGuildInfoDiscord(guild, { ...opts, rest }),
-  );
-  vi.mocked(runtime.sendMessageDiscord).mockImplementation((to, content, opts) =>
-    original.sendMessageDiscord(to, content, { ...opts, rest }),
-  );
-  vi.mocked(runtime.sendDiscordComponentMessage).mockImplementation((to, spec, opts) =>
-    original.sendDiscordComponentMessage(to, spec, { ...opts, rest }),
-  );
-  vi.mocked(runtime.sendStickerDiscord).mockImplementation((to, ids, opts) =>
-    original.sendStickerDiscord(to, ids, { ...opts, rest }),
-  );
-  vi.mocked(runtime.createThreadDiscord).mockImplementation((channel, payload, opts) =>
-    original.createThreadDiscord(channel, payload, { ...opts, rest }),
-  );
+  vi.spyOn(requestClient, "createDiscordRequestClient").mockImplementation((requestToken) => {
+    expect(requestToken).toBe(token);
+    return rest;
+  });
 });
 
 beforeEach(() => {
   requests = [];
+  uploads = [];
   unexpectedUrls = [];
   parentChannelType = 0;
   threadMessageIds = [];
@@ -157,18 +153,7 @@ afterEach(() => {
 });
 
 afterAll(async () => {
-  for (const mock of [
-    runtime.editMessageDiscord,
-    runtime.deleteMessageDiscord,
-    runtime.fetchChannelInfoDiscord,
-    runtime.fetchGuildInfoDiscord,
-    runtime.sendMessageDiscord,
-    runtime.sendDiscordComponentMessage,
-    runtime.sendStickerDiscord,
-    runtime.createThreadDiscord,
-  ]) {
-    vi.mocked(mock).mockReset();
-  }
+  vi.mocked(runtime.fetchChannelInfoDiscord).mockReset();
   vi.restoreAllMocks();
   rest?.abortAllRequests();
   server?.closeAllConnections();
@@ -180,6 +165,116 @@ afterAll(async () => {
 });
 
 const writes = () => requests.filter((request) => request.method !== "GET");
+
+function createMediaAccess() {
+  const readFile = vi.fn(async () => Buffer.from(mediaContent));
+  return { localRoots: ["/tmp/discord-actions"], readFile };
+}
+
+describe("Discord registered attachment actions", () => {
+  it.each([
+    { name: "caption", params: { caption: "chart attached" }, expected: "chart attached" },
+    {
+      name: "message before caption",
+      params: { message: "message text", caption: "caption text" },
+      expected: "message text",
+    },
+    {
+      name: "empty message before caption",
+      params: { message: "", caption: "caption text" },
+      expected: undefined,
+    },
+    {
+      name: "caption whitespace",
+      params: { caption: "    example();\n" },
+      expected: "    example();\n",
+    },
+    {
+      name: "message whitespace before caption",
+      params: { message: "    example();\n", caption: "caption text" },
+      expected: "    example();\n",
+    },
+    {
+      name: "content alias before caption",
+      params: { content: "    example();\n", caption: "caption text" },
+      expected: "    example();\n",
+    },
+  ])("uploads exact content from $name", async ({ params, expected }) => {
+    const mediaAccess = createMediaAccess();
+    await discordMessageActions.handleAction?.({
+      channel: "discord",
+      action: "upload-file",
+      params: { target: `channel:${channelId}`, media: mediaPath, ...params },
+      cfg,
+      mediaAccess,
+    });
+
+    expect(mediaAccess.readFile).toHaveBeenCalledExactlyOnceWith(mediaPath);
+    expect(uploads).toEqual([{ field: "files[0]", name: "report.txt", content: mediaContent }]);
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0]).toMatchObject({
+      method: "POST",
+      path: `/v10/channels/${channelId}/messages`,
+      body: { attachments: [{ id: 0, filename: "report.txt" }] },
+    });
+    expect(writes()[0]?.body.content).toBe(expected);
+  });
+  it.each([
+    {
+      name: "caption with split host authority",
+      content: "hello",
+      extra: {},
+      filename: "report.txt",
+      splitAuthority: true,
+    },
+    { name: "media only", content: undefined, extra: {}, filename: "report.txt" },
+    {
+      name: "empty components",
+      content: "hello",
+      extra: { components: {} },
+      filename: "report.txt",
+    },
+    {
+      name: "explicit filename",
+      content: "hello",
+      extra: { filename: "renamed.txt" },
+      filename: "renamed.txt",
+    },
+  ])(
+    "delivers $name with trusted media access",
+    async ({ content, extra, filename, splitAuthority }) => {
+      const mediaAccess = createMediaAccess();
+      const forgedReadFile = vi.fn(async () => Buffer.from("forged attachment"));
+      await discordMessageActions.handleAction?.({
+        channel: "discord",
+        action: "send",
+        params: {
+          to: `channel:${channelId}`,
+          message: content,
+          media: mediaPath,
+          mediaAccess: { ...mediaAccess, readFile: forgedReadFile },
+          ...extra,
+        },
+        cfg,
+        ...(splitAuthority
+          ? { mediaLocalRoots: mediaAccess.localRoots, mediaReadFile: mediaAccess.readFile }
+          : { mediaAccess }),
+      });
+
+      expect(mediaAccess.readFile).toHaveBeenCalledExactlyOnceWith(mediaPath);
+      expect(forgedReadFile).not.toHaveBeenCalled();
+      expect(uploads).toEqual([{ field: "files[0]", name: filename, content: mediaContent }]);
+      expect(writes()).toHaveLength(1);
+      expect(writes()[0]).toMatchObject({
+        method: "POST",
+        path: `/v10/channels/${channelId}/messages`,
+        body: { attachments: [{ id: 0, filename }] },
+      });
+      expect(writes()[0]?.body.content).toBe(content);
+      expect(writes()[0]?.body).not.toHaveProperty("components");
+    },
+  );
+});
 
 describe("Discord retained progress edits", () => {
   it("edits the same checklist with account-scoped rendering and inert mentions", async () => {
@@ -310,7 +405,7 @@ describe("Discord retained progress edits", () => {
     const started = createDeferred<void>();
     const resume = createDeferred<void>();
     vi.mocked(runtime.fetchChannelInfoDiscord).mockImplementationOnce(async (id, options) => {
-      const channel = await original.fetchChannelInfoDiscord(id, { ...options, rest });
+      const channel = await original.fetchChannelInfoDiscord(id, options);
       started.resolve();
       await resume.promise;
       return channel;

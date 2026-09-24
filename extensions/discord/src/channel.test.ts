@@ -834,54 +834,39 @@ describe("discordPlugin outbound", () => {
     expect(objectArgAt(monitorDiscordProviderMock, 0, 0).commandDeployHashStore).toBeUndefined();
   });
 
-  it("clears stale Discord probe metadata when the async startup probe degrades", async () => {
-    probeDiscordMock.mockResolvedValue({
-      ok: false,
-      status: 401,
-      error: "getMe failed (401)",
-      elapsedMs: 1,
-    });
-    monitorDiscordProviderMock.mockResolvedValue(undefined);
+  it.each(["degrades", "throws"])(
+    "clears stale Discord probe metadata when the async startup probe %s",
+    async (outcome) => {
+      if (outcome === "throws") {
+        probeDiscordMock.mockRejectedValue(new Error("probe timed out"));
+      } else {
+        probeDiscordMock.mockResolvedValue({
+          ok: false,
+          status: 401,
+          error: "getMe failed (401)",
+          elapsedMs: 1,
+        });
+      }
+      monitorDiscordProviderMock.mockResolvedValue(undefined);
 
-    const cfg = createCfg();
-    const statusPatches: Array<Record<string, unknown>> = [];
-    const ctx = createStartAccountContext({
-      account: resolveAccount(cfg),
-      cfg,
-      statusPatchSink: (next) => statusPatches.push({ ...next }),
-    });
-    ctx.setStatus({
-      accountId: "default",
-      bot: { username: "OldBot" },
-      application: { intents: { messageContent: "enabled" } },
-    });
+      const cfg = createCfg();
+      const statusPatches: Array<Record<string, unknown>> = [];
+      const ctx = createStartAccountContext({
+        account: resolveAccount(cfg),
+        cfg,
+        statusPatchSink: (next) => statusPatches.push({ ...next }),
+      });
+      ctx.setStatus({
+        accountId: "default",
+        bot: { username: "OldBot" },
+        application: { intents: { messageContent: "enabled" } },
+      });
 
-    await discordPlugin.gateway!.startAccount!(ctx);
+      await discordPlugin.gateway!.startAccount!(ctx);
 
-    await expectStaleProbeMetadataCleared(statusPatches);
-  });
-
-  it("clears stale Discord probe metadata when the async startup probe throws", async () => {
-    probeDiscordMock.mockRejectedValue(new Error("probe timed out"));
-    monitorDiscordProviderMock.mockResolvedValue(undefined);
-
-    const cfg = createCfg();
-    const statusPatches: Array<Record<string, unknown>> = [];
-    const ctx = createStartAccountContext({
-      account: resolveAccount(cfg),
-      cfg,
-      statusPatchSink: (next) => statusPatches.push({ ...next }),
-    });
-    ctx.setStatus({
-      accountId: "default",
-      bot: { username: "OldBot" },
-      application: { intents: { messageContent: "enabled" } },
-    });
-
-    await discordPlugin.gateway!.startAccount!(ctx);
-
-    await expectStaleProbeMetadataCleared(statusPatches);
-  });
+      await expectStaleProbeMetadataCleared(statusPatches);
+    },
+  );
 
   it("stagger starts later accounts in multi-bot setups", async () => {
     prepareDiscordStartupMocks();

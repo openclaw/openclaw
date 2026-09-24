@@ -166,7 +166,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await secondRun.promise;
 
     await flushQueueWork();
-    expectStatusPatch(setStatus, { activeRuns: 1, busy: true });
+    expect(statusPatches(setStatus).at(-1)).toMatchObject({ activeRuns: 1, busy: true });
 
     firstRun.resolve();
     await firstRun.promise;

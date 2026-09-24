@@ -64,34 +64,89 @@ describe("discord config schema", () => {
     ).toBe(!legacy);
   });
 
-  it('rejects dmPolicy="open" without allowFrom "*"', () => {
-    const issues = expectInvalidDiscordConfig({
-      dmPolicy: "open",
-      allowFrom: ["123"],
-    });
-
-    expect(issues[0]?.path.join(".")).toBe("allowFrom");
-  });
-
-  it('rejects dmPolicy="open" with empty allowFrom', () => {
-    const issues = expectInvalidDiscordConfig({
-      dmPolicy: "open",
-      allowFrom: [],
-    });
-
-    expect(issues[0]?.path.join(".")).toBe("allowFrom");
-  });
-
-  it('rejects dmPolicy="allowlist" without allowFrom', () => {
-    const issues = expectInvalidDiscordConfig({ dmPolicy: "allowlist" });
-    expect(issues.some((issue) => issue.path.includes("allowFrom"))).toBe(true);
-  });
-
-  it("accepts account allowlist policy inherited from the channel", () => {
-    expectValidDiscordConfig({
-      allowFrom: ["123456789"],
-      accounts: { work: { dmPolicy: "allowlist" } },
-    });
+  it.each([
+    { name: "root wildcard", config: { dmPolicy: "open", allowFrom: ["*"] }, issues: [] },
+    {
+      name: "root open without wildcard",
+      config: { dmPolicy: "open", allowFrom: ["123"] },
+      issues: [
+        {
+          path: ["allowFrom"],
+          message:
+            'channels.discord.dmPolicy="open" requires channels.discord.allowFrom to include "*"',
+        },
+      ],
+    },
+    {
+      name: "root empty allowlist",
+      config: { dmPolicy: "allowlist", allowFrom: [" "] },
+      issues: [
+        {
+          path: ["allowFrom"],
+          message:
+            'channels.discord.dmPolicy="allowlist" requires channels.discord.allowFrom to contain at least one sender ID',
+        },
+      ],
+    },
+    {
+      name: "inherited account allowance",
+      config: { allowFrom: ["123"], accounts: { work: { dmPolicy: "allowlist" } } },
+      issues: [],
+    },
+    {
+      name: "explicit empty account override",
+      config: { allowFrom: ["123"], accounts: { work: { dmPolicy: "allowlist", allowFrom: [] } } },
+      issues: [
+        {
+          path: ["accounts", "work", "allowFrom"],
+          message:
+            'channels.discord.accounts.*.dmPolicy="allowlist" requires channels.discord.accounts.*.allowFrom (or channels.discord.allowFrom) to contain at least one sender ID',
+        },
+      ],
+    },
+    {
+      name: "inherited account open policy",
+      config: { dmPolicy: "open", allowFrom: ["*"], accounts: { work: { allowFrom: ["123"] } } },
+      issues: [
+        {
+          path: ["accounts", "work", "allowFrom"],
+          message:
+            'channels.discord.accounts.*.dmPolicy="open" requires channels.discord.accounts.*.allowFrom (or channels.discord.allowFrom) to include "*"',
+        },
+      ],
+    },
+    {
+      name: "omitted account",
+      config: { dmPolicy: "pairing", accounts: { work: undefined } },
+      issues: [],
+    },
+    {
+      name: "root open with empty allowance",
+      config: { dmPolicy: "open", allowFrom: [] },
+      issues: [
+        {
+          path: ["allowFrom"],
+          message:
+            'channels.discord.dmPolicy="open" requires channels.discord.allowFrom to include "*"',
+        },
+      ],
+    },
+    {
+      name: "root allowlist without allowance",
+      config: { dmPolicy: "allowlist" },
+      issues: [
+        {
+          path: ["allowFrom"],
+          message:
+            'channels.discord.dmPolicy="allowlist" requires channels.discord.allowFrom to contain at least one sender ID',
+        },
+      ],
+    },
+  ])("preserves $name DM validation", ({ config, issues }) => {
+    const parsed = DiscordConfigSchema.safeParse(config);
+    expect(
+      parsed.success ? [] : parsed.error.issues.map(({ path, message }) => ({ path, message })),
+    ).toEqual(issues);
   });
 
   it("accepts progress commentary in streaming config", () => {

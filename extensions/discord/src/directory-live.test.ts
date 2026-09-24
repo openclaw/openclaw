@@ -99,7 +99,10 @@ describe("discord directory live lookups", () => {
         ]);
       }
       if (url.endsWith("/guilds/g2/channels")) {
-        return Response.json([{ id: "c3", name: "announcements" }]);
+        return Response.json([
+          { id: "c3", name: "announcements" },
+          { id: "c4", name: "announcements-extra" },
+        ]);
       }
       return Response.json([]);
     });

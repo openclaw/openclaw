@@ -2,11 +2,8 @@ import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, DiscordApiError, fetchDiscord } fr
 import { isDiscordThreadChannelType } from "./channel-type.js";
 import { listGuilds } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
-import {
-  buildDiscordUnresolvedResults,
-  filterDiscordGuilds,
-  resolveDiscordAllowlistToken,
-} from "./resolve-allowlist-common.js";
+import { filterDiscordGuilds } from "./resolve-allowlist-common.js";
+import { normalizeDiscordToken } from "./token.js";
 
 type DiscordChannelSummary = {
   id: string;
@@ -159,9 +156,9 @@ export async function resolveDiscordChannelAllowlist(params: {
   entries: string[];
   fetcher?: typeof fetch;
 }): Promise<DiscordChannelResolution[]> {
-  const token = resolveDiscordAllowlistToken(params.token);
+  const token = normalizeDiscordToken(params.token, "channels.discord.token");
   if (!token) {
-    return buildDiscordUnresolvedResults(params.entries, (input) => ({
+    return params.entries.map((input) => ({
       input,
       resolved: false,
     }));

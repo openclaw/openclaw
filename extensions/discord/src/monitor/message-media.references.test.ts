@@ -2,30 +2,23 @@ import { MessageReferenceType } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "../internal/discord.js";
 
-const readRemoteMediaBuffer = vi.fn();
-const saveMediaBuffer = vi.fn();
+const saveRemoteMedia = vi.fn<typeof import("openclaw/plugin-sdk/media-runtime").saveRemoteMedia>();
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
     "openclaw/plugin-sdk/media-runtime",
   );
-  return {
-    ...actual,
-    readRemoteMediaBuffer: (...args: unknown[]) => readRemoteMediaBuffer(...args),
-    saveRemoteMedia: async (...args: unknown[]) => {
-      const fetched = await readRemoteMediaBuffer(...args);
-      const options = (args[0] ?? {}) as { maxBytes?: number; originalFilename?: string };
-      return await saveMediaBuffer(
-        Buffer.from((fetched as { buffer?: Uint8Array }).buffer ?? new Uint8Array()),
-        (fetched as { contentType?: string }).contentType,
-        "inbound",
-        options.maxBytes,
-        options.originalFilename,
-      );
-    },
-    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
-  };
+  return { ...actual, saveRemoteMedia };
 });
+
+function mockSavedImage(path: string): void {
+  saveRemoteMedia.mockResolvedValueOnce({
+    id: "saved-media",
+    path,
+    size: 5,
+    contentType: "image/png",
+  });
+}
 
 let resolveMediaList: typeof import("./message-media.js").resolveMediaList;
 let resolveReferencedReplyMediaList: typeof import("./message-media.js").resolveReferencedReplyMediaList;
@@ -35,8 +28,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  readRemoteMediaBuffer.mockReset();
-  saveMediaBuffer.mockReset();
+  saveRemoteMedia.mockReset();
 });
 
 function asMessage(payload: Record<string, unknown>): Message {
@@ -61,14 +53,7 @@ describe("resolveReferencedReplyMediaList", () => {
       filename: "reply-image.png",
       content_type: "image/png",
     };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("image"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/reply-image.png",
-      contentType: "image/png",
-    });
+    mockSavedImage("/tmp/reply-image.png");
 
     const result = await resolveReferencedReplyMediaList(
       asReferencedMessage({
@@ -81,7 +66,7 @@ describe("resolveReferencedReplyMediaList", () => {
     expect(result).toEqual([
       { path: "/tmp/reply-image.png", contentType: "image/png", fileName: "reply-image.png" },
     ]);
-    expect(readRemoteMediaBuffer).toHaveBeenCalledWith(
+    expect(saveRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         url: attachment.url,
         filePathHint: attachment.filename,
@@ -107,17 +92,13 @@ describe("resolveReferencedReplyMediaList", () => {
     );
 
     expect(result).toEqual([]);
-    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 });
 
 describe("Discord media SSRF policy", () => {
   it("passes Discord CDN hostname allowlist with RFC2544 enabled", async () => {
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({ path: "/tmp/a.png", contentType: "image/png" });
+    mockSavedImage("/tmp/a.png");
 
     await resolveMediaList(
       asMessage({
@@ -126,9 +107,7 @@ describe("Discord media SSRF policy", () => {
       1024,
     );
 
-    const call = readRemoteMediaBuffer.mock.calls[0]?.[0] as
-      | { ssrfPolicy?: Record<string, unknown> }
-      | undefined;
+    const call = saveRemoteMedia.mock.calls[0]?.[0];
     expect(call?.ssrfPolicy?.allowRfc2544BenchmarkRange).toBe(true);
     expect(call?.ssrfPolicy?.hostnameAllowlist).toEqual(
       expect.arrayContaining(["cdn.discordapp.com", "media.discordapp.net"]),
@@ -136,11 +115,7 @@ describe("Discord media SSRF policy", () => {
   });
 
   it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({ path: "/tmp/b.png", contentType: "image/png" });
+    mockSavedImage("/tmp/b.png");
 
     await resolveMediaList(
       asMessage({
@@ -156,9 +131,7 @@ describe("Discord media SSRF policy", () => {
       },
     );
 
-    const call = readRemoteMediaBuffer.mock.calls[0]?.[0] as
-      | { ssrfPolicy?: Record<string, unknown> }
-      | undefined;
+    const call = saveRemoteMedia.mock.calls[0]?.[0];
     expect(call?.ssrfPolicy).toMatchObject({
       allowPrivateNetwork: true,
       allowRfc2544BenchmarkRange: true,

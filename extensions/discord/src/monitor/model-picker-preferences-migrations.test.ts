@@ -103,7 +103,10 @@ describe("Discord model picker preference migration", () => {
     });
   });
 
-  it("plans legacy JSON import with max Date timestamps", async () => {
+  it.each([
+    { scope: "max-date", updatedAt: "+275760-09-13T00:00:00.000Z" },
+    { scope: "near-max-date", updatedAt: "+275760-09-12T23:59:59.999Z" },
+  ])("preserves legacy JSON import order at $scope", async ({ scope, updatedAt }) => {
     const stateDir = stateWorkspace.dir;
     const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -112,9 +115,9 @@ describe("Discord model picker preference migration", () => {
       JSON.stringify({
         version: 1,
         entries: {
-          "discord:default:dm:user:max-date": {
+          [`discord:default:dm:user:${scope}`]: {
             recent: ["openai/gpt-5", "openai/gpt-4.1"],
-            updatedAt: "+275760-09-13T00:00:00.000Z",
+            updatedAt,
           },
         },
       }),
@@ -136,55 +139,13 @@ describe("Discord model picker preference migration", () => {
     const entries = await plan.readEntries();
     expect(
       entries.map((entry) => {
-        const value = entry.value as { updatedAt?: unknown };
-        return value.updatedAt;
+        const value = entry.value as { modelRef?: unknown; updatedAt?: unknown };
+        return { modelRef: value.modelRef, updatedAt: value.updatedAt };
       }),
-    ).toEqual(["+275760-09-13T00:00:00.000Z", "+275760-09-12T23:59:59.999Z"]);
-  });
-
-  it("keeps legacy JSON import order near max Date", async () => {
-    const stateDir = stateWorkspace.dir;
-    const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        entries: {
-          "discord:default:dm:user:near-max-date": {
-            recent: ["openai/gpt-5", "openai/gpt-4.1"],
-            updatedAt: "+275760-09-12T23:59:59.999Z",
-          },
-        },
-      }),
-    );
-
-    const plans = await Promise.resolve(
-      detectDiscordLegacyStateMigrations({
-        cfg: {},
-        env: {},
-        oauthDir: path.join(stateDir, "credentials"),
-        stateDir,
-      }),
-    );
-
-    const plan = plans?.[0];
-    if (plan?.kind !== "plugin-state-import") {
-      throw new Error("expected plugin-state import plan");
-    }
-    const entries = await plan.readEntries();
-    expect(
-      entries.map((entry) => {
-        const value = entry.value as { modelRef?: unknown };
-        return value.modelRef;
-      }),
-    ).toEqual(["openai/gpt-5", "openai/gpt-4.1"]);
-    expect(
-      entries.map((entry) => {
-        const value = entry.value as { updatedAt?: unknown };
-        return value.updatedAt;
-      }),
-    ).toEqual(["+275760-09-13T00:00:00.000Z", "+275760-09-12T23:59:59.999Z"]);
+    ).toEqual([
+      { modelRef: "openai/gpt-5", updatedAt: "+275760-09-13T00:00:00.000Z" },
+      { modelRef: "openai/gpt-4.1", updatedAt: "+275760-09-12T23:59:59.999Z" },
+    ]);
   });
 
   it("plans legacy thread bindings JSON import into plugin state", async () => {

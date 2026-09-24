@@ -3,7 +3,6 @@ import { GatewayDispatchEvents } from "discord-api-types/v10";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { createRequireRecord, typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Guild } from "./internal/discord.js";
@@ -108,119 +107,6 @@ describe("registerDiscordListener", () => {
     expect(registerDiscordListener(listeners, new FakeListener())).toBe(true);
     expect(registerDiscordListener(listeners, new FakeListener())).toBe(false);
     expect(listeners).toHaveLength(1);
-  });
-});
-
-describe("DiscordMessageListener", () => {
-  async function flushAsyncWork() {
-    await Promise.resolve();
-    await Promise.resolve();
-  }
-
-  it("waits for the durable handler handoff", async () => {
-    let handlerResolved = false;
-    const deferred = createDeferred<void>();
-    const handler = vi.fn(async () => {
-      await deferred.promise;
-      handlerResolved = true;
-    });
-    const listener = new DiscordMessageListener(handler);
-
-    const handlePromise = listener.handle(
-      {} as unknown as Parameters<
-        import("./monitor/listeners.js").DiscordMessageListener["handle"]
-      >[0],
-      {} as unknown as import("./internal/discord.js").Client,
-    );
-
-    await flushAsyncWork();
-    expect(handler).toHaveBeenCalledOnce();
-    expect(handlerResolved).toBe(false);
-
-    deferred.resolve();
-    await expect(handlePromise).resolves.toBeUndefined();
-    expect(handlerResolved).toBe(true);
-  });
-
-  it("dispatches subsequent events concurrently without blocking on prior handler", async () => {
-    const first = createDeferred<void>();
-    const second = createDeferred<void>();
-    let runCount = 0;
-    const handler = vi.fn(async () => {
-      runCount += 1;
-      if (runCount === 1) {
-        await first.promise;
-        return;
-      }
-      await second.promise;
-    });
-    const listener = new DiscordMessageListener(handler);
-
-    const firstHandle = listener.handle(
-      {} as unknown as Parameters<
-        import("./monitor/listeners.js").DiscordMessageListener["handle"]
-      >[0],
-      {} as unknown as import("./internal/discord.js").Client,
-    );
-    const secondHandle = listener.handle(
-      {} as unknown as Parameters<
-        import("./monitor/listeners.js").DiscordMessageListener["handle"]
-      >[0],
-      {} as unknown as import("./internal/discord.js").Client,
-    );
-
-    await flushAsyncWork();
-    expect(handler).toHaveBeenCalledTimes(2);
-
-    first.resolve();
-    second.resolve();
-    await Promise.all([firstHandle, secondHandle]);
-  });
-
-  it("logs handler failures", async () => {
-    const logger = {
-      warn: vi.fn(),
-      error: vi.fn(),
-    } as unknown as ReturnType<
-      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
-    >;
-    const handler = vi.fn(async () => {
-      throw new Error("boom");
-    });
-    const listener = new DiscordMessageListener(handler, logger);
-
-    await listener.handle(
-      {} as unknown as Parameters<
-        import("./monitor/listeners.js").DiscordMessageListener["handle"]
-      >[0],
-      {} as unknown as import("./internal/discord.js").Client,
-    );
-    await flushAsyncWork();
-    expect(logger.error).toHaveBeenCalledWith(danger("discord handler failed: Error: boom"));
-  });
-
-  it("does not apply its own slow-listener logging", async () => {
-    const deferred = createDeferred<void>();
-    const handler = vi.fn(() => deferred.promise);
-    const logger = {
-      warn: vi.fn(),
-      error: vi.fn(),
-    } as unknown as ReturnType<
-      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
-    >;
-    const listener = new DiscordMessageListener(handler, logger);
-
-    const handlePromise = listener.handle(
-      {} as unknown as Parameters<
-        import("./monitor/listeners.js").DiscordMessageListener["handle"]
-      >[0],
-      {} as unknown as import("./internal/discord.js").Client,
-    );
-    deferred.resolve();
-    await expect(handlePromise).resolves.toBeUndefined();
-    expect(handler).toHaveBeenCalledOnce();
-    // The listener no longer wraps message handlers with slow-listener logging.
-    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
 
@@ -925,12 +811,8 @@ vi.spyOn(channelRuntimeModule, "enqueueRoutedSystemEvent").mockImplementation(
 const routingModule = await import("openclaw/plugin-sdk/routing");
 vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
 
-const {
-  DiscordMessageListener,
-  DiscordReactionListener,
-  DiscordReactionRemoveListener,
-  registerDiscordListener,
-} = await import("./monitor/listeners.js");
+const { DiscordReactionListener, DiscordReactionRemoveListener, registerDiscordListener } =
+  await import("./monitor/listeners.js");
 
 const requireRecord = createRequireRecord("object", "expected-label-object");
 

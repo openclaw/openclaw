@@ -34,12 +34,20 @@ describe("createDiscordRestClient proxy support", () => {
     vi.unstubAllEnvs();
   });
 
-  it("injects a custom fetch into RequestClient when a Discord proxy is configured", () => {
+  it.each([
+    ["IPv4 loopback", "http://127.0.0.1:8080"],
+    ["DNS", "http://mitm-proxy:8080"],
+    ["HTTPS", "https://proxy.example:8443"],
+    ["credentials", "http://user:secret@mitm-proxy:8080"],
+    ["arbitrary DNS", "http://proxy.test:8080"],
+    ["private IPv4", "http://10.0.0.10:8080"],
+    ["IPv6 loopback", "http://[::1]:8080"],
+  ])("injects the configured %s proxy fetch into RequestClient", (_kind, proxy) => {
     const cfg = {
       channels: {
         discord: {
           token: "Bot test-token",
-          proxy: "http://127.0.0.1:8080",
+          proxy,
         },
       },
     } as OpenClawConfig;
@@ -50,89 +58,9 @@ describe("createDiscordRestClient proxy support", () => {
       options?: { fetch?: typeof fetch };
     };
 
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://127.0.0.1:8080");
+    expect(makeProxyFetchMock).toHaveBeenCalledWith(proxy);
     expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
     expect(requestClient.customFetch).toBe(requestClient.options?.fetch);
-  });
-
-  it("accepts configured DNS proxy hosts", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-          proxy: "http://mitm-proxy:8080",
-        },
-      },
-    } as OpenClawConfig;
-
-    const { rest } = createDiscordRestClient({ cfg });
-    const requestClient = rest as unknown as {
-      customFetch?: typeof fetch;
-      options?: { fetch?: typeof fetch };
-    };
-
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://mitm-proxy:8080");
-    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
-    expect(requestClient.customFetch).toBe(requestClient.options?.fetch);
-  });
-
-  it("accepts configured HTTPS proxy hosts", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-          proxy: "https://proxy.example:8443",
-        },
-      },
-    } as OpenClawConfig;
-
-    const { rest } = createDiscordRestClient({ cfg });
-    const requestClient = rest as unknown as {
-      customFetch?: typeof fetch;
-      options?: { fetch?: typeof fetch };
-    };
-
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("https://proxy.example:8443");
-    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
-    expect(requestClient.customFetch).toBe(requestClient.options?.fetch);
-  });
-
-  it("accepts configured proxy URLs with credentials", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-          proxy: "http://user:secret@mitm-proxy:8080",
-        },
-      },
-    } as OpenClawConfig;
-
-    const { rest } = createDiscordRestClient({ cfg });
-    const requestClient = rest as unknown as {
-      options?: { fetch?: typeof fetch };
-    };
-
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://user:secret@mitm-proxy:8080");
-    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
-  });
-
-  it("accepts arbitrary configured DNS proxy hosts", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-          proxy: "http://proxy.test:8080",
-        },
-      },
-    } as OpenClawConfig;
-
-    const { rest } = createDiscordRestClient({ cfg });
-    const requestClient = rest as unknown as {
-      options?: { fetch?: typeof fetch };
-    };
-
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://proxy.test:8080");
-    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
   });
 
   it("does not inject fetch when no proxy is configured", () => {
@@ -169,44 +97,6 @@ describe("createDiscordRestClient proxy support", () => {
 
     expect(makeProxyFetchMock).not.toHaveBeenCalledWith("bad-proxy");
     expect(requestClient.options?.fetch).toBeUndefined();
-  });
-
-  it("accepts configured non-loopback IP proxy URLs", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-          proxy: "http://10.0.0.10:8080",
-        },
-      },
-    } as OpenClawConfig;
-
-    const { rest } = createDiscordRestClient({ cfg });
-    const requestClient = rest as unknown as {
-      options?: { fetch?: typeof fetch };
-    };
-
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://10.0.0.10:8080");
-    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
-  });
-
-  it("accepts IPv6 loopback Discord proxy URLs", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-          proxy: "http://[::1]:8080",
-        },
-      },
-    } as OpenClawConfig;
-
-    const { rest } = createDiscordRestClient({ cfg });
-    const requestClient = rest as unknown as {
-      options?: { fetch?: typeof fetch };
-    };
-
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://[::1]:8080");
-    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
   });
 
   it("serializes multipart media with undici-compatible FormData for proxy fetches", async () => {

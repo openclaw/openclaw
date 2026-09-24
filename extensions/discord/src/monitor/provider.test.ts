@@ -502,72 +502,27 @@ describe("monitorDiscordProvider", () => {
     expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not load the Discord voice runtime when voice is disabled", async () => {
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
-
-    expect(voiceRuntimeModuleLoadedMock).not.toHaveBeenCalled();
-  });
-
-  it("does not load the Discord voice runtime for text-only default config", async () => {
+  it.each([
+    { name: "disabled", voice: { enabled: false }, loads: 0 },
+    { name: "absent", voice: undefined, loads: 0 },
+    { name: "enabled", voice: { enabled: true }, loads: 1 },
+    { name: "existing block", voice: {}, loads: 1 },
+  ])("loads the voice runtime according to $name voice config", async ({ voice, loads }) => {
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
       token: "MTIz.abc.def",
       config: {
         commands: { native: true, nativeSkills: false },
+        ...(voice === undefined ? {} : { voice }),
         agentComponents: { enabled: false },
         execApprovals: { enabled: false },
       },
     });
-
     await monitorDiscordProvider({
       config: baseConfig(),
       runtime: baseRuntime(),
     });
-
-    expect(voiceRuntimeModuleLoadedMock).not.toHaveBeenCalled();
-  });
-
-  it("loads the Discord voice runtime only when voice is enabled", async () => {
-    resolveDiscordAccountMock.mockReturnValue({
-      accountId: "default",
-      token: "MTIz.abc.def",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: { enabled: true },
-        agentComponents: { enabled: false },
-        execApprovals: { enabled: false },
-      },
-    });
-
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
-
-    expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("loads the Discord voice runtime for existing voice config blocks", async () => {
-    resolveDiscordAccountMock.mockReturnValue({
-      accountId: "default",
-      token: "MTIz.abc.def",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: {},
-        agentComponents: { enabled: false },
-        execApprovals: { enabled: false },
-      },
-    });
-
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
-
-    expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
+    expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(loads);
   });
 
   it("keeps forwarded approval actions live when native delivery is disabled", async () => {
