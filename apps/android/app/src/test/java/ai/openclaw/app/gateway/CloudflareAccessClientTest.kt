@@ -59,7 +59,16 @@ class CloudflareAccessClientTest {
           assertEquals(expected, actual)
           assertEquals(expected.hashCode(), actual.hashCode())
           assertEquals("https://$canonical", actual.uri.toString())
-          assertTrue(actual.contains(Request.Builder().url(url).build().url.toString()))
+          assertTrue(
+            actual.contains(
+              Request
+                .Builder()
+                .url(url)
+                .build()
+                .url
+                .toString(),
+            ),
+          )
           assertTrue(actual.contains("$url?query=allowed"))
         }
       }
