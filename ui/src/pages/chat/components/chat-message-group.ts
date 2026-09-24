@@ -24,6 +24,7 @@ import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
+import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { TurnRecap } from "../chat-progress.ts";
@@ -376,7 +377,7 @@ export function renderActivityGroup(
     ? content
     : html`
         <div
-          class="chat-group tool chat-group--activity chat-group--with-footer"
+          class="chat-group tool chat-group--turn-block chat-group--activity chat-group--with-footer"
           data-chat-row-key=${firstGroup.key}
         >
           <div class="chat-group-messages">${content}</div>
@@ -511,6 +512,14 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   }
 
   const ownsRunFrame = opts.frameContent !== undefined;
+  // Tool activity and live narration are blocks of the turn whose answer follows:
+  // no identity, footer or actions of their own, only the run-block gap.
+  const isTurnBlock =
+    normalizedRole === "tool" ||
+    (normalizedRole === "assistant" &&
+      !ownsRunFrame &&
+      !isForwarded &&
+      resolveAssistantReplyPhase(group.messages[0]?.message) === "commentary");
   const actionOwners = ownsRunFrame
     ? opts.frameActionOwner
       ? [opts.frameActionOwner]
@@ -568,7 +577,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown);
   const avatar =
     !sourceOnly &&
-    normalizedRole !== "tool" &&
+    !isTurnBlock &&
     avatarPlacement === "gutter" &&
     (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
       ? isForwarded
@@ -589,6 +598,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   return html`
     <div
       class="chat-group ${roleClass} chat-group--with-footer${
+        isTurnBlock ? " chat-group--turn-block" : ""
+      }${
         opts.latestAssistant ? " chat-group--latest-assistant" : ""
       }${isPeerGroup ? " chat-group--peer" : ""}${
         isForwarded ? " chat-group--forwarded" : ""
@@ -622,7 +633,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   actionDetails &&
                   (actionDetails.markdown || (actionDetails.replyTarget && opts.onReply)) &&
                   index < lastMessageIndex &&
-                  !ownsRunFrame
+                  !ownsRunFrame &&
+                  !isTurnBlock
                     ? html`
                         <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
                           ${renderMessageActionButtons(actionDetails, opts)}
@@ -652,7 +664,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         }
       </div>
       ${
-        normalizedRole === "tool"
+        isTurnBlock
           ? nothing
           : group.isStreaming || opts.activeContinuation
             ? emptyGroupFooter

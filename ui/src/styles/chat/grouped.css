@@ -108,12 +108,15 @@
   margin-block-start: calc(var(--chat-run-block-gap) - 2px);
 }
 
-/* Tool, activity and completed-work groups are blocks inside a turn, not turn
-   ends: no footer row, and the inline run-frame gap to the answer they precede. */
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
   padding-inline-start: var(--chat-avatar-gutter);
+}
+
+/* Tool activity, completed work and live narration are blocks inside a turn,
+   not turn ends: no footer row, and the inline run-frame gap to what follows. */
+.chat-group.chat-group--turn-block {
   margin-block-end: var(--chat-run-block-gap);
 }
 

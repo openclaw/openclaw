@@ -222,7 +222,10 @@ export function renderWorkGroupSummary(
   return opts.presentation === "continuation"
     ? content
     : html`
-        <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
+        <div
+          class="chat-group tool chat-group--turn-block chat-group--work"
+          data-chat-row-key=${item.key}
+        >
           <div class="chat-group-messages">${content}</div>
         </div>
       `;

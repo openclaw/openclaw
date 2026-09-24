@@ -397,8 +397,9 @@ type AvatarPlacement = "gutter" | "footer" | "none";
 
 // Mirrors every group shape the transcript renders: turn-ending own/peer user and
 // assistant groups (hidden, revealed, persistent footers, and a streaming reply
-// whose footer row is still empty), plus work and activity blocks that belong to
-// the turn of the answer after them and therefore have no footer row. Each avatar
+// whose footer row is still empty), plus work, activity and live narration blocks
+// that belong to the turn of the answer after them and therefore have no footer
+// row. Each avatar
 // placement renders the same turns: gutter avatars, footer avatars in direct
 // threads, or none for subagent sessions.
 function uniformTurnSpacingHtml(placement: AvatarPlacement) {
@@ -419,13 +420,18 @@ function uniformTurnSpacingHtml(placement: AvatarPlacement) {
   const persistent = (inner: string) =>
     `<div class="chat-group-footer chat-group-footer--persistent-identity">${inner}</div>`;
   const tool = (classes: string, summary: string) => `
-    <div class="chat-group tool ${classes}">
+    <div class="chat-group tool chat-group--turn-block ${classes}">
       <div class="chat-group-messages">
         <div class="chat-activity-group chat-work-group">
           <button class="chat-inline-disclosure chat-activity-group__summary" type="button">${summary}</button>
           <div class="chat-work-group__separator"></div>
         </div>
       </div>
+    </div>`;
+  // Live narration renders as an assistant group marked as a turn block.
+  const narration = (text: string) => `
+    <div class="chat-group assistant chat-group--turn-block chat-group--with-footer">
+      <div class="chat-group-messages"><div class="chat-bubble"><div class="chat-text">${text}</div></div></div>
     </div>`;
   return `
     <div class="chat-thread${placement === "footer" ? " chat-thread--direct" : ""}" role="log">
@@ -460,6 +466,9 @@ function uniformTurnSpacingHtml(placement: AvatarPlacement) {
                 "Revealed own prompt",
                 persistent(`${copy}${meta("You", "user")}`),
               ),
+              narration("Checking the footer layout first."),
+              tool("chat-group--activity chat-group--with-footer", "Activity: 1 tool"),
+              narration("Comparing the two layouts."),
               message(
                 "assistant",
                 "",
@@ -1350,7 +1359,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                   .querySelector<HTMLElement>(":scope > .chat-group-footer")
                   ?.getBoundingClientRect();
                 return {
-                  inTurnBlock: group.classList.contains("tool"),
+                  inTurnBlock: group.classList.contains("chat-group--turn-block"),
                   top: box.top,
                   bottom: box.bottom,
                   contentTop: content.top,
@@ -1368,12 +1377,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             ),
           );
 
-          expect(layout).toHaveLength(8);
+          expect(layout).toHaveLength(11);
           for (const [index, group] of layout.entries()) {
             const next = layout[index + 1];
             if (group.inTurnBlock) {
-              // Work/activity blocks belong to the answer's turn: no footer row,
-              // only the inline run-frame gap before the answer.
+              // Work, activity and live narration blocks belong to the answer's
+              // turn: no footer row, only the inline run-frame gap to what follows.
               expect(group.footer).toBeNull();
               expect(group.gapAfter).toBe(8);
               expect(next!.contentTop - group.contentBottom).toBeCloseTo(8, 1);
