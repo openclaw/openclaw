@@ -5,7 +5,7 @@ import {
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { icons } from "../../components/icons.ts";
-import { imageWithFallback } from "../../components/image-with-fallback.ts";
+import { imageWithFallback, type ImageLoadingState } from "../../components/image-with-fallback.ts";
 import "../../components/modal-dialog.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import {
@@ -50,6 +50,7 @@ type PluginConsentDialogProps = {
   loading: boolean;
   error: string | null;
   iconUrl?: string;
+  iconLoading?: boolean;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   busy: boolean;
@@ -61,31 +62,47 @@ type PluginConsentDialogProps = {
 export function renderArtTile(
   slug: string,
   name: string,
-  iconUrl?: string,
-  onIconError?: () => void,
-  className = "plugins-tile",
-  authorIconUrl?: string,
+  options: {
+    iconUrl?: string;
+    onIconError?: () => void;
+    authorIconUrl?: string;
+    loading?: boolean;
+  } = {},
 ): TemplateResult {
-  const renderTile = (url: string | null, onError: () => void) => {
-    if (url) {
-      return html`<span class=${className} data-plugin-icon-id=${slug}>
-        <img
-          class="plugins-icon"
-          src=${url}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          @error=${() => {
-            onError();
-            onIconError?.();
-          }}
-        />
+  const { iconUrl, onIconError, authorIconUrl, loading = false } = options;
+  // Fetch admission already limits requests to rendered tiles. Eager loading
+  // lets the hidden image finish before replacing its skeleton.
+  const renderTile = (url: string | null, onError: () => void, image: ImageLoadingState) => {
+    const pending = url ? image.loading : loading;
+    if (url || pending) {
+      return html`<span
+        class=${`plugins-tile${pending ? " skeleton" : ""}`}
+        data-plugin-icon-id=${slug}
+        aria-hidden="true"
+      >
+        ${
+          url
+            ? html`<img
+                class="plugins-icon"
+                src=${url}
+                alt=""
+                loading="eager"
+                decoding="async"
+                ?hidden=${pending}
+                @load=${image.onLoad}
+                @error=${() => {
+                  onError();
+                  onIconError?.();
+                }}
+              />`
+            : nothing
+        }
       </span>`;
     }
     const [from, to] = pluginFallbackGradient(slug);
     const monogram = pluginMonogram(name);
     return html`<span
-      class=${`${className} ${className}--fallback`}
+      class="plugins-tile plugins-tile--fallback"
       data-plugin-icon-id=${slug}
       style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
       aria-hidden="true"
@@ -93,8 +110,8 @@ export function renderArtTile(
       ${monogram ? html`<span>${monogram}</span>` : icons.plug}
     </span>`;
   };
-  return html`${imageWithFallback(iconUrl, (url, onError) =>
-    url ? renderTile(url, onError) : html`${imageWithFallback(authorIconUrl, renderTile)}`,
+  return html`${imageWithFallback(iconUrl, (url, onError, image) =>
+    url ? renderTile(url, onError, image) : html`${imageWithFallback(authorIconUrl, renderTile)}`,
   )}`;
 }
 
@@ -398,7 +415,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
     >
       <section class="plugins-consent oc-card" data-plugin-consent=${consent.intent.kind}>
         <header class="plugins-consent__header">
-          ${renderArtTile(slug, name, props.iconUrl)}
+          ${renderArtTile(slug, name, { iconUrl: props.iconUrl, loading: props.iconLoading })}
           <div>
             <div class="plugins-detail__title">
               <h2>${name}</h2>
