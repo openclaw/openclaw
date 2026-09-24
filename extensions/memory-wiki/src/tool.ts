@@ -83,12 +83,31 @@ const WikiClaimSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const WikiRelationshipSchema = Type.Object(
+  {
+    targetId: Type.Optional(Type.String({ minLength: 1 })),
+    targetPath: Type.Optional(Type.String({ minLength: 1 })),
+    targetTitle: Type.Optional(Type.String({ minLength: 1 })),
+    kind: Type.Optional(Type.String({ minLength: 1 })),
+    weight: optionalFiniteNumberSchema({ minimum: 0 }),
+    confidence: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
+    evidenceKind: Type.Optional(Type.String({ minLength: 1 })),
+    privacyTier: Type.Optional(Type.String({ minLength: 1 })),
+    note: Type.Optional(Type.String({ minLength: 1 })),
+    updatedAt: Type.Optional(Type.String({ minLength: 1 })),
+  },
+  { additionalProperties: false },
+);
 const WikiApplySchema = Type.Object(
   {
     op: Type.Union([
       Type.Literal("create_synthesis"),
+      Type.Literal("create_concept"),
+      Type.Literal("create_entity"),
       Type.Literal("update_metadata"),
       Type.Literal("synthesis"),
+      Type.Literal("concept"),
+      Type.Literal("entity"),
       Type.Literal("metadata"),
     ]),
     title: Type.Optional(Type.String({ minLength: 1 })),
@@ -100,6 +119,10 @@ const WikiApplySchema = Type.Object(
     questions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     confidence: Type.Optional(Type.Union([Type.Number({ minimum: 0, maximum: 1 }), Type.Null()])),
     status: Type.Optional(Type.String({ minLength: 1 })),
+    entityType: Type.Optional(Type.String({ minLength: 1 })),
+    canonicalId: Type.Optional(Type.String({ minLength: 1 })),
+    aliases: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+    relationships: Type.Optional(Type.Array(WikiRelationshipSchema)),
   },
   { additionalProperties: false },
 );
@@ -233,7 +256,7 @@ export function createWikiApplyTool(
     name: "wiki_apply",
     label: "Wiki Apply",
     description:
-      "Apply narrow wiki mutations for syntheses and page metadata without freeform markdown surgery.",
+      "Apply narrow wiki mutations without freeform markdown surgery: create or refresh synthesis, concept, or entity pages (create_synthesis, create_concept, create_entity; entity pages accept entityType, canonicalId, aliases, relationships) or update metadata on an existing page (update_metadata).",
     parameters: WikiApplySchema,
     execute: async (_toolCallId, rawParams) => {
       const mutation = normalizeMemoryWikiMutationInput(rawParams);

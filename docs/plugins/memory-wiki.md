@@ -151,6 +151,10 @@ systems, projects, or any other entity type:
 - `personCard`: optional person-specific routing card (handles, socials, emails, timezone, lane, ask-for, avoid-asking-for, confidence, privacy tier)
 - `relationships`: typed edges to related pages (target, kind, weight, confidence, evidence kind, privacy tier, note)
 
+Through `wiki_apply` (`create_entity`), omitted entity fields preserve the
+stored values on refresh, while a supplied `aliases` or `relationships` list
+replaces the stored list — an explicit empty array clears it.
+
 For a people wiki, start with `reports/person-agent-directory.md`, then open
 the person page with `wiki_get` before using contact details or inferred
 facts.
@@ -286,13 +290,13 @@ includes compact `Claim:` and `Evidence:` lines when available.
 
 ## Agent tools
 
-| Tool          | Purpose                                                                                                                                                       |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wiki_status` | current vault mode and scope, resolved agent, health, Obsidian CLI availability                                                                               |
-| `wiki_search` | search wiki pages and, when configured, the shared memory corpus; accepts `mode` for person lookup, question routing, source evidence, or raw claim drilldown |
-| `wiki_get`    | read a wiki page by id/path, falling back to the shared memory corpus when shared search is enabled and the lookup misses                                     |
-| `wiki_apply`  | narrow synthesis/metadata mutations without freeform page surgery                                                                                             |
-| `wiki_lint`   | structural checks, provenance gaps, contradictions, open questions                                                                                            |
+| Tool          | Purpose                                                                                                                                                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wiki_status` | current vault mode and scope, resolved agent, health, Obsidian CLI availability                                                                                                                            |
+| `wiki_search` | search wiki pages and, when configured, the shared memory corpus; accepts `mode` for person lookup, question routing, source evidence, or raw claim drilldown                                              |
+| `wiki_get`    | read a wiki page by id/path, falling back to the shared memory corpus when shared search is enabled and the lookup misses                                                                                  |
+| `wiki_apply`  | narrow mutations without freeform page surgery: create or refresh synthesis, concept, and entity pages (`create_synthesis`, `create_concept`, `create_entity`) or update page metadata (`update_metadata`) |
+| `wiki_lint`   | structural checks, provenance gaps, contradictions, open questions                                                                                                                                         |
 
 The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory
@@ -534,6 +538,8 @@ openclaw wiki lint
 openclaw wiki search "alpha"
 openclaw wiki get entity.alpha
 openclaw wiki apply synthesis "Alpha Summary" --body "..." --source-id source.alpha
+openclaw wiki apply concept "Alpha Pattern" --body "..." --source-id source.alpha
+openclaw wiki apply entity "Alpha Service" --body "..." --source-id source.alpha --entity-type system
 openclaw wiki bridge import
 openclaw wiki obsidian status
 ```
@@ -569,8 +575,8 @@ Start with `isolated` mode unless you explicitly want bridge mode.
 <Step title="Use wiki_search / wiki_get when provenance matters">
 Prefer these over `memory_search` when you want wiki-specific ranking or page-level belief structure.
 </Step>
-<Step title="Use wiki_apply for narrow syntheses or metadata updates">
-Avoid hand-editing managed generated blocks.
+<Step title="Use wiki_apply for narrow page creation or metadata updates">
+Create synthesis, concept, or entity pages with `create_synthesis`, `create_concept`, or `create_entity`, and refine them with `update_metadata`. Avoid hand-editing managed generated blocks.
 </Step>
 <Step title="Run wiki_lint after meaningful changes">
 Catches contradictions, open questions, and provenance gaps.

@@ -35,6 +35,18 @@ openclaw wiki apply synthesis "Alpha Summary" \
   --body "Short synthesis body" \
   --source-id source.alpha
 
+openclaw wiki apply concept "Alpha Pattern" \
+  --body "Short concept body" \
+  --source-id source.alpha \
+  --status seed
+
+openclaw wiki apply entity "Alpha Service" \
+  --body "Short entity body" \
+  --source-id source.alpha \
+  --entity-type system \
+  --canonical-id system.alpha \
+  --alias alpha-svc
+
 openclaw wiki apply metadata entity.alpha \
   --source-id source.alpha \
   --status review \
@@ -193,9 +205,11 @@ openclaw wiki get syntheses/alpha-summary.md --from 1 --lines 80
 Apply narrow mutations without freeform page surgery:
 
 - `apply synthesis <title>`: create or refresh a synthesis page with a managed summary body
+- `apply concept <title>`: create or refresh a concept page under `concepts/` with a managed summary body
+- `apply entity <title>`: create or refresh an entity page under `entities/` with a managed summary body; also accepts `--entity-type <type>`, `--canonical-id <id>`, and repeatable `--alias <name>`
 - `apply metadata <lookup>`: update metadata on an existing page
 
-Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
+All accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. The page-creating commands require `--body` or `--body-file` and at least one `--source-id`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
 
 ### `wiki bridge import`
 
