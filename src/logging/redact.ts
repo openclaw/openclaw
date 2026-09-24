@@ -184,6 +184,11 @@ type ResolvedRedactOptions = {
   patterns: ResolvedRedactPattern[];
 };
 
+type PreparedStructuredRedaction = {
+  ordinary?: ResolvedRedactOptions;
+  sensitive?: ResolvedRedactOptions;
+};
+
 function normalizeMode(value?: string): RedactSensitiveMode {
   return value === "off" ? "off" : DEFAULT_REDACT_MODE;
 }
@@ -1001,6 +1006,7 @@ function redactSensitiveFieldValueWithOptions(
   options: RedactOptions,
   path: readonly string[] = [key],
   objectPath = true,
+  prepared?: PreparedStructuredRedaction,
 ): string {
   const exactRedacted = redactRegisteredSecretValues(value, maskToken);
   if (isPublicShareIdPath(path)) {
@@ -1011,7 +1017,10 @@ function redactSensitiveFieldValueWithOptions(
     sensitiveKey && options.sensitiveFieldPatterns
       ? { ...options, patterns: options.sensitiveFieldPatterns }
       : options;
-  const resolved = resolveRedactOptions(fieldOptions);
+  const resolved = prepared
+    ? (prepared[fieldOptions === options ? "ordinary" : "sensitive"] ??=
+        resolveRedactOptions(fieldOptions))
+    : resolveRedactOptions(fieldOptions);
   if (resolved.mode === "off") {
     return exactRedacted;
   }
@@ -1090,11 +1099,12 @@ function redactStructuredSecretValue(
   value: unknown,
   seen: WeakSet<object>,
   options: RedactOptions,
+  prepared?: PreparedStructuredRedaction,
   path: readonly string[] = key ? [key] : [],
   objectPath = true,
 ): unknown {
   if (typeof value === "string") {
-    return redactSensitiveFieldValueWithOptions(key, value, options, path, objectPath);
+    return redactSensitiveFieldValueWithOptions(key, value, options, path, objectPath, prepared);
   }
   if (value === null || value === undefined) {
     return value;
@@ -1108,7 +1118,7 @@ function redactStructuredSecretValue(
     }
     seen.add(value);
     const out = value.map((entry) =>
-      redactStructuredSecretValue(key, entry, seen, options, path, false),
+      redactStructuredSecretValue(key, entry, seen, options, prepared, path, false),
     );
     seen.delete(value);
     return out;
@@ -1129,6 +1139,7 @@ function redactStructuredSecretValue(
         child,
         seen,
         options,
+        prepared,
         [...path, name],
         objectPath,
       );
@@ -1150,7 +1161,8 @@ function redactSecretsWithOptions<T>(value: T, options: RedactOptions): T {
   if (typeof value !== "object") {
     return value;
   }
-  return redactStructuredSecretValue("", value, new WeakSet<object>(), options) as T;
+  const prepared = usesBuiltInRedactPatterns(options.patterns) ? undefined : {};
+  return redactStructuredSecretValue("", value, new WeakSet<object>(), options, prepared) as T;
 }
 
 export function redactSecrets<T>(value: T): T {

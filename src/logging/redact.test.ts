@@ -2113,12 +2113,20 @@ describe("redactSensitiveText", () => {
   });
 
   it("keeps custom redaction patterns active for structured sensitive fields", () => {
+    let sensitivePatternReads = 0;
     expect(
       redactSensitiveFieldValue("TOKEN", "${TOKEN}", {
         mode: "tools",
         patterns: [/TOKEN/g],
+        get sensitiveFieldPatterns() {
+          if (++sensitivePatternReads > 1) {
+            throw new Error("sensitive field patterns must not be reread");
+          }
+          return undefined;
+        },
       }),
     ).toBe("${***}");
+    expect(sensitivePatternReads).toBe(1);
   });
 
   it("keeps configured redaction patterns active for text outside default markers", () => {
