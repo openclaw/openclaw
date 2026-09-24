@@ -29,9 +29,15 @@ const pluginPackagingHintItems = pluginPackagingRecoveryHints.map((text) => ({
   text,
 }));
 
-function expectLatestRuntimeJson(payload: unknown) {
+function expectLatestRuntimeJson(payload: Record<string, unknown>) {
   const calls = lifecycleTestRuntime.writeJson.mock.calls;
-  expect(calls[calls.length - 1]?.[0]).toEqual(payload);
+  expect(calls[calls.length - 1]?.[0]).toEqual({
+    ok: false,
+    hints: undefined,
+    hintItems: undefined,
+    warnings: undefined,
+    ...payload,
+  });
 }
 
 vi.mock("../../config/config.js", () => ({
@@ -103,23 +109,25 @@ function createServiceRunArgs() {
   };
 }
 
+let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
+let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
+let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
+
+beforeAll(async () => {
+  ({ runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js"));
+});
+
+beforeEach(() => {
+  resetLifecycleRuntimeLogs();
+  readConfigFileSnapshotMock.mockReset();
+  setConfigSnapshot({ exists: true, valid: true });
+  loadConfig.mockReset();
+  loadConfig.mockReturnValue({});
+  resetLifecycleServiceMocks();
+  stubEmptyGatewayEnv();
+});
+
 describe("runServiceRestart config pre-flight (#35862)", () => {
-  let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
-
-  beforeAll(async () => {
-    ({ runServiceRestart } = await import("./lifecycle-core.js"));
-  });
-
-  beforeEach(() => {
-    resetLifecycleRuntimeLogs();
-    readConfigFileSnapshotMock.mockReset();
-    setConfigSnapshot({ exists: true, valid: true });
-    loadConfig.mockReset();
-    loadConfig.mockReturnValue({});
-    resetLifecycleServiceMocks();
-    stubEmptyGatewayEnv();
-  });
-
   it("aborts restart when config is invalid", async () => {
     setConfigSnapshot({
       exists: true,
@@ -132,11 +140,7 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     expect(service.restart).not.toHaveBeenCalled();
     expectLatestRuntimeJson({
       action: "restart",
-      ok: false,
       error: `Gateway aborted: config is invalid.\nagents.defaults.pdfModel: Unrecognized key\n${invalidConfigRecoveryHint}`,
-      hints: undefined,
-      hintItems: undefined,
-      warnings: undefined,
     });
   });
 
@@ -148,11 +152,9 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     expect(service.restart).not.toHaveBeenCalled();
     expectLatestRuntimeJson({
       action: "restart",
-      ok: false,
       error: "Gateway restart blocked: plugins.slots.memory: plugin not found: source-only-pack",
       hints: pluginPackagingRecoveryHints,
       hintItems: pluginPackagingHintItems,
-      warnings: undefined,
     });
   });
 
@@ -164,11 +166,9 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     expect(service.restart).not.toHaveBeenCalled();
     expectLatestRuntimeJson({
       action: "restart",
-      ok: false,
       error: `Gateway restart blocked: Refusing to restart the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
       hints: newerConfigHints,
       hintItems: newerConfigHintItems,
-      warnings: undefined,
     });
   });
 
@@ -201,19 +201,6 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
 });
 
 describe("runServiceStart config pre-flight (#35862)", () => {
-  let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
-
-  beforeAll(async () => {
-    ({ runServiceStart } = await import("./lifecycle-core.js"));
-  });
-
-  beforeEach(() => {
-    resetLifecycleRuntimeLogs();
-    readConfigFileSnapshotMock.mockReset();
-    setConfigSnapshot({ exists: true, valid: true });
-    resetLifecycleServiceMocks();
-  });
-
   it("aborts start when config is invalid", async () => {
     setConfigSnapshot({
       exists: true,
@@ -226,11 +213,7 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     expect(service.start).not.toHaveBeenCalled();
     expectLatestRuntimeJson({
       action: "start",
-      ok: false,
       error: `Gateway aborted: config is invalid.\nagents.defaults.pdfModel: Unrecognized key\n${invalidConfigRecoveryHint}`,
-      hints: undefined,
-      hintItems: undefined,
-      warnings: undefined,
     });
   });
 
@@ -242,11 +225,9 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     expect(service.start).not.toHaveBeenCalled();
     expectLatestRuntimeJson({
       action: "start",
-      ok: false,
       error: "Gateway start blocked: plugins.slots.memory: plugin not found: source-only-pack",
       hints: pluginPackagingRecoveryHints,
       hintItems: pluginPackagingHintItems,
-      warnings: undefined,
     });
   });
 
@@ -282,19 +263,6 @@ describe("runServiceStart config pre-flight (#35862)", () => {
 });
 
 describe("runServiceStop future-config guard", () => {
-  let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
-
-  beforeAll(async () => {
-    ({ runServiceStop } = await import("./lifecycle-core.js"));
-  });
-
-  beforeEach(() => {
-    resetLifecycleRuntimeLogs();
-    readConfigFileSnapshotMock.mockReset();
-    setConfigSnapshot({ exists: true, valid: true });
-    resetLifecycleServiceMocks();
-  });
-
   it("blocks stop from an older binary when config was written by a newer one", async () => {
     setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
 
@@ -309,11 +277,9 @@ describe("runServiceStop future-config guard", () => {
     expect(service.stop).not.toHaveBeenCalled();
     expectLatestRuntimeJson({
       action: "stop",
-      ok: false,
       error: `Gateway stop blocked: Refusing to stop the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
       hints: newerConfigHints,
       hintItems: newerConfigHintItems,
-      warnings: undefined,
     });
   });
 });
