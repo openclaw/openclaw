@@ -133,7 +133,9 @@ requires a running Gateway and waits for the replacement to finish without
 restarting it. Configured enablement is preserved, and unchanged
 plugins keep their runtime instances. JSON output includes `pluginIds`,
 `restartRequired`, and the applied runtime receipt with its generation
-and source digests when available. Multiple IDs use one Gateway reload request
+and source digests when available. The receipt's `selectedEntries` names the files
+the loader selected. CLI and tool output remind you to rebuild compiled output
+after editing its source; reload does not run the build. Multiple IDs use one Gateway reload request
 and one applied runtime generation. Repeated IDs are collapsed, and the Gateway
 resolves package siblings together. The request supports up to 64 distinct IDs.
 

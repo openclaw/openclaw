@@ -110,8 +110,13 @@ async function verifyInstalledPackageRetention(
     fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
     fs.writeFileSync(
       path.join(packageDir, "package.json"),
-      JSON.stringify({ name: id, version: "1.0.0", openclaw: { extensions: ["./dist/index.js"] } }),
+      JSON.stringify({
+        name: id,
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.ts"], runtimeExtensions: ["./dist/index.js"] },
+      }),
     );
+    fs.writeFileSync(path.join(packageDir, "index.ts"), "throw new Error('unselected source');");
     fs.writeFileSync(
       path.join(packageDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -433,6 +438,17 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     expect(await probe("sibling")).toEqual(sibling);
     if (workspacePlugin) {
       expect(await probe("workspace-probe")).toEqual(workspacePlugin);
+    }
+    if (settings === "empty" && !cleanupRetry) {
+      fs.appendFileSync(path.join(packageDir, "index.ts"), "\n// edited without rebuilding dist\n");
+      const unbuilt = await reload();
+      expect((await probe("installed-probe")).helper).toBe("A");
+      expect(unbuilt.runtime.restartRequired ?? false).toBe(false);
+      expect(unbuilt.runtime.generation).toBeGreaterThan(firstReceipt.runtime.generation);
+      expect(unbuilt.runtime.sourceDigests).not.toEqual(firstReceipt.runtime.sourceDigests);
+      expect(unbuilt.runtime.selectedEntries).toEqual({
+        "installed-probe": path.join(packageDir, "dist", "index.js"),
+      });
     }
     const first = await probe("installed-probe");
     expect(first.helper).toBe("A");

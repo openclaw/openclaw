@@ -613,6 +613,7 @@ export const PluginRuntimeApplicationSchema = closedObject({
   generation: Type.Integer({ minimum: 0 }),
   pluginIds: Type.Array(NonEmptyString),
   sourceDigests: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+  selectedEntries: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
 });
 
 export const PluginsChangedEventSchema = closedObject({
