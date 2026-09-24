@@ -205,12 +205,19 @@ export async function runAgentsApiAttempt(
     );
     toolSurface = surface;
     const fingerprint = createHash("sha256")
-      .update(JSON.stringify([params.model.id, params.resolvedApiKey, surface.declarations]))
+      .update(JSON.stringify([params.model.id, params.resolvedApiKey]))
       .digest("hex");
     if (binding && binding.authFingerprint !== fingerprint) {
-      throw new Error(
-        "Agents API model, credential, or tool surface changed; reset the OpenClaw session before continuing",
-      );
+      // Normalize bindings created by the unmerged tools implementation.
+      const toolsFingerprint = createHash("sha256")
+        .update(JSON.stringify([params.model.id, params.resolvedApiKey, surface.declarations]))
+        .digest("hex");
+      if (binding.authFingerprint !== toolsFingerprint) {
+        throw new Error(
+          "Agents API model or credential changed; reset the OpenClaw session before continuing",
+        );
+      }
+      await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
     }
     const client = new AgentsApiClient(params.resolvedApiKey!, assertOwnerCurrent);
     const reasoningEffort = resolveAgentsApiReasoningEffort(params);

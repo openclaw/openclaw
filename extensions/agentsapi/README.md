@@ -4,6 +4,11 @@ The `agentsapi` harness uses API-key authentication and an OpenAI-hosted Linux
 environment. Select it through `agents.defaults.agentRuntime.id` or an agent's
 `agentRuntime.id`. See the [harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
 
+Saved sessions keep their hosted conversation, workspace, and original tool
+declarations when Gateway tools are added. Fresh sessions receive the current
+Gateway tool declarations. Reset an existing session to adopt the new tool
+surface; changing its model or API key still requires a reset.
+
 Token accounting reads canonical native turn records after settlement, since
 completion stream events can omit usage. Each OpenClaw attempt counts its new
 coordinator turns once, including work superseded by steering. Earlier turns in
