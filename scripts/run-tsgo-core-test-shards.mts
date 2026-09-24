@@ -81,7 +81,14 @@ async function runTsgoCoreTestShards(
 }
 
 /** Owns one changed-check execution; plans never retain compiler inventories. */
-export function createChangedCoreTestCheck(paths: readonly string[], env: NodeJS.ProcessEnv) {
+export function createChangedCoreTestCheck(
+  paths: readonly string[],
+  env: NodeJS.ProcessEnv,
+  stripeSpec?: string,
+) {
+  if (stripeSpec !== undefined && !selectTsgoCoreTestStripe(stripeSpec)) {
+    throw new Error(`Invalid core test stripe (expected i/n or first-last/n): ${stripeSpec}`);
+  }
   let graphs: CoreTsgoGraph[] | undefined;
   return {
     async checkBoundary(): Promise<number> {
@@ -103,7 +110,11 @@ export function createChangedCoreTestCheck(paths: readonly string[], env: NodeJS
       const inspected = graphs;
       graphs = undefined;
       const shards = inspected && selectChangedTsgoCoreTestShards(paths, inspected);
-      const selected = shards ?? TSGO_CORE_TEST_SHARDS;
+      const selected =
+        stripeSpec === undefined
+          ? (shards ?? TSGO_CORE_TEST_SHARDS)
+          : // SAFETY: the captured stripeSpec was validated before boundary discovery; selection cannot change its syntax.
+            selectTsgoCoreTestStripe(stripeSpec, shards ?? TSGO_CORE_TEST_SHARDS)!;
       console.error(
         `[check:changed] core test graphs: ${selected.map((shard) => shard.name).join(", ")}`,
       );
@@ -137,7 +148,9 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     ) {
       throw new Error("--changed-paths-json requires a nonempty JSON string array");
     }
-    const check = createChangedCoreTestCheck(paths, process.env);
+    const stripeFlagIndex = process.argv.indexOf("--stripe");
+    const stripeSpec = stripeFlagIndex >= 0 ? (process.argv[stripeFlagIndex + 1] ?? "") : undefined;
+    const check = createChangedCoreTestCheck(paths, process.env, stripeSpec);
     process.exitCode = (await check.checkBoundary()) || (await check.checkTypes(concurrency));
   } else {
     // CI stripes split the serial shard sequence across parallel jobs; the

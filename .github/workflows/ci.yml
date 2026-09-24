@@ -2313,7 +2313,7 @@ jobs:
           // The measured check rows consume only remaining hosted capacity.
           // Keep the original UI/security decision and all test-runner labels intact.
           const hybridHostedCheckRows = (manifest.run_check ? 1 : 0) +
-            (manifest.run_check && !manifest.changed_core_test_paths_json && usesHostedRunnerProfile ? 5 : 0) +
+            (manifest.run_check && usesHostedRunnerProfile ? 5 : 0) +
             (manifest.run_check_additional ? manifest.check_additional_matrix.include.filter(
               (row) => ["extension-package-boundary", "runtime-topology-architecture"].includes(row.group),
             ).length : 0);
@@ -4666,16 +4666,16 @@ jobs:
               # Frozen targets retain their paired stripes and central fifth;
               # targets without stripe support keep the whole lane here.
               root_covered=false
-              if [ -n "${CHANGED_CORE_TEST_PATHS_JSON:-}" ]; then
-                # This owner validates the complete boundary once, then checks
-                # every compiler-resolved consumer (or all graphs on ambiguity).
-                env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json "$CHANGED_CORE_TEST_PATHS_JSON" --concurrency 2
-                pnpm tsgo:extensions:test
-              elif [ "$HOSTED_RUNNER_STRIPES" = "true" ] &&
+              if [ "$HOSTED_RUNNER_STRIPES" = "true" ] &&
                 grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
                 if [ "$FROZEN_TARGET" = "true" ]; then
                   env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --stripe "5/5" --concurrency 2
                 fi
+                pnpm tsgo:extensions:test
+              elif [ -n "${CHANGED_CORE_TEST_PATHS_JSON:-}" ]; then
+                # Non-striped profiles retain the consumer selector and
+                # complete boundary check, with full fallback on ambiguity.
+                env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json "$CHANGED_CORE_TEST_PATHS_JSON" --concurrency 2
                 pnpm tsgo:extensions:test
               else
                 pnpm check:test-types
@@ -4868,7 +4868,7 @@ jobs:
       contents: read
     name: check-test-types-core-${{ matrix.stripe }}
     needs: [preflight]
-    if: ${{ needs.preflight.outputs.run_check == 'true' && !needs.preflight.outputs.changed_core_test_paths_json && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
+    if: ${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
     # Healthy, budgeted hybrid checks use hosted capacity with unchanged compiler children.
     runs-on: ${{ (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true') && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 15
@@ -4900,6 +4900,7 @@ jobs:
         env:
           CORE_STRIPE: ${{ matrix.stripe }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
+          CHANGED_CORE_TEST_PATHS_JSON: ${{ needs.preflight.outputs.changed_core_test_paths_json }}
         shell: bash
         run: |
           set -euo pipefail
@@ -4916,7 +4917,13 @@ jobs:
               node scripts/run-tsgo-core-test-shards.mjs --stripe "$stripe/5" --concurrency 2
             done
           else
-            node scripts/run-tsgo-core-test-shards.mjs --stripe "$CORE_STRIPE/5" --concurrency 2
+            changed_args=()
+            if [ -n "${CHANGED_CORE_TEST_PATHS_JSON:-}" ]; then
+              # Each stripe validates the boundary and intersects the complete
+              # consumer plan with its stable canonical graph assignments.
+              changed_args=(--changed-paths-json "$CHANGED_CORE_TEST_PATHS_JSON")
+            fi
+            node scripts/run-tsgo-core-test-shards.mjs --stripe "$CORE_STRIPE/5" --concurrency 2 "${changed_args[@]}"
           fi
 
       - name: Save core test-type incremental state
@@ -6816,7 +6823,7 @@ jobs:
             check-shard=${{ needs.check-shard.result }}|${{ needs.preflight.outputs.run_check }}
             check-lint-hosted-core-shard=${{ needs.check-lint-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
             check-lint-hosted-extension-shard=${{ needs.check-lint-hosted-extension-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && (!inputs.release_gate || needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') }}
-            check-test-types-hosted-core-shard=${{ needs.check-test-types-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && !needs.preflight.outputs.changed_core_test_paths_json && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
+            check-test-types-hosted-core-shard=${{ needs.check-test-types-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
             check-additional-shard=${{ needs.check-additional-shard.result }}|${{ needs.preflight.outputs.run_check_additional }}
             check-docs=${{ needs.check-docs.result }}|${{ needs.preflight.outputs.run_check_docs }}
             skills-python=${{ needs.skills-python.result }}|${{ needs.preflight.outputs.run_skills_python_job }}

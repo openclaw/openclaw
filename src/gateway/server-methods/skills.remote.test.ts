@@ -128,7 +128,7 @@ it("reads remote skill status, cards and binary requirements through the workspa
   }
 });
 
-it.each(["unchanged", "revoked", "replaced"] as const)(
+it.each(["unchanged", "revoked", "replaced", "workspace-changed"] as const)(
   "checks session access after remote discovery: %s",
   async (change) => {
     await withOpenClawTestState({ label: "remote-skill-session-access" }, async (state) => {
@@ -197,7 +197,11 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         await entered.promise;
         if (change !== "unchanged") {
           await patchSessionEntryCore({ agentId: "main", sessionKey }, () =>
-            change === "revoked" ? { visibility: "draft" } : { sessionId: "replacement" },
+            change === "revoked"
+              ? { visibility: "draft" }
+              : change === "workspace-changed"
+                ? { spawnedCwd: path.join(state.root, "replacement-project") }
+                : { sessionId: "replacement" },
           );
         }
         resume.resolve();

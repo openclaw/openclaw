@@ -17,6 +17,7 @@ import {
 import { isGatewayAdmin, resolveSessionVisibility } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { respondChatHistoryUnavailable, type ChatHistoryMethod } from "./chat-history-recovery.js";
+import { commandProjectionKey } from "./chat-metadata-command-projection.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Select and revalidate history metadata through its prepared row and sharing owners. */
@@ -141,6 +142,14 @@ export async function prepareChatHistorySessionRead({
     const { agentId: sessionAgentId, storePath, canonicalKey } = selectedSession;
     // The response owns nested values; resident metadata must survive caller mutation.
     const entry = selectedSession.entry ? structuredClone(selectedSession.entry) : undefined;
+    const commandScope =
+      method === "chat.startup"
+        ? commandProjectionKey({
+            agentId: sessionAgentId,
+            sessionKey: canonicalKey,
+            sessionEntry: entry,
+          })
+        : undefined;
     const readCurrentSharing = (read: SessionRowReadView) => {
       const current = selectSession(read);
       if (!current) {
@@ -177,6 +186,13 @@ export async function prepareChatHistorySessionRead({
           current.agentId !== sessionAgentId ||
           current.canonicalKey !== canonicalKey ||
           current.storePath !== storePath ||
+          // Startup commands must still describe the selected project and eligibility inputs.
+          (commandScope !== undefined &&
+            commandProjectionKey({
+              agentId: current.agentId,
+              sessionKey: current.canonicalKey,
+              sessionEntry: currentEntry,
+            }) !== commandScope) ||
           (!retainedSessionId &&
             (!read.describe(
               { key: canonicalKey, agentId: sessionAgentId, storePath },

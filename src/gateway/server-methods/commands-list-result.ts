@@ -18,6 +18,7 @@ import {
   COMMAND_LIST_MAX_ITEMS,
   COMMAND_NAME_MAX_LENGTH,
 } from "../../../packages/gateway-protocol/src/schema/commands.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { listChatCommandsForConfig } from "../../auto-reply/commands-registry.js";
 import type {
   ChatCommandDefinition,
@@ -25,7 +26,6 @@ import type {
   CommandArgDefinition,
 } from "../../auto-reply/commands-registry.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getPluginCommandEntrySpecs,
@@ -33,6 +33,8 @@ import {
 } from "../../plugins/command-specs.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { prepareSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
+import { resolveSessionSkillWorkspaceDir } from "../../skills/loading/workspace-skill-roots.js";
+import { ensureSkillsWatcher } from "../../skills/runtime/refresh.js";
 
 type SerializedArg = NonNullable<CommandEntry["args"]>[number];
 type CommandNameSurface = "text" | "native";
@@ -201,7 +203,7 @@ function buildPluginCommandEntries(params: {
 
 /** Builds the public commands.list payload for an agent/provider/scope view. */
 export async function buildCommandsListResult(params: {
-  sessionEntry?: SessionEntry;
+  sessionEntry?: Parameters<typeof prepareSkillCommandsForAgents>[0]["sessionEntry"];
   sessionKey?: string;
   cfg: OpenClawConfig;
   agentId: string;
@@ -214,6 +216,15 @@ export async function buildCommandsListResult(params: {
   const nameSurface: CommandNameSurface = scopeFilter === "text" ? "text" : "native";
   const provider = normalizeOptionalLowercaseString(params.provider);
 
+  const executionWorkspaceDir = resolveSessionSkillWorkspaceDir(params.sessionEntry);
+  if (executionWorkspaceDir) {
+    ensureSkillsWatcher({
+      workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+      executionWorkspaceDir,
+      config: params.cfg,
+      agentId: params.agentId,
+    });
+  }
   const skillCommands = await prepareSkillCommandsForAgents({
     cfg: params.cfg,
     agentIds: [params.agentId],

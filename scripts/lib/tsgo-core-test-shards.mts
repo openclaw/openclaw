@@ -151,6 +151,7 @@ export function selectTsgoCoreTestShards(
  */
 export function selectTsgoCoreTestStripe(
   stripeSpec: string,
+  selected: readonly { name: string; config: string }[] = TSGO_CORE_TEST_SHARDS,
 ): readonly { name: string; config: string }[] | undefined {
   const match = /^([1-9]\d*)(?:-([1-9]\d*))?\/([1-9]\d*)$/u.exec(stripeSpec);
   if (!match) {
@@ -166,9 +167,12 @@ export function selectTsgoCoreTestStripe(
   ) {
     return undefined;
   }
-  return TSGO_CORE_TEST_SHARDS.filter((_, index) => {
+  // Narrow only after assigning canonical ordinals, preserving each graph
+  // and incremental cache owner even when other selected graphs disappear.
+  const configs = new Set(selected.map((shard) => shard.config));
+  return TSGO_CORE_TEST_SHARDS.filter((shard, index) => {
     const owner = (index % stripeCount) + 1;
-    return owner >= stripe && owner <= lastStripe;
+    return owner >= stripe && owner <= lastStripe && configs.has(shard.config);
   });
 }
 

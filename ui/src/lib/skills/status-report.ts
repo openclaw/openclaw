@@ -4,6 +4,10 @@ import type { SkillStatusReport } from "../../api/types.ts";
 export async function loadSkillStatusReport(
   client: GatewayBrowserClient,
   agentId: string,
+  sessionKey?: string,
 ): Promise<SkillStatusReport | undefined> {
-  return client.request<SkillStatusReport | undefined>("skills.status", { agentId });
+  return client.request<SkillStatusReport | undefined>("skills.status", {
+    agentId,
+    ...(sessionKey ? { sessionKey } : {}),
+  });
 }

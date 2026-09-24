@@ -19,6 +19,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveSessionSkillWorkspaceDir } from "../loading/workspace-skill-roots.js";
 import { prepareRemoteSkillConnections } from "../runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
@@ -41,7 +42,14 @@ type WorkspaceSkillCommandParams = {
   agentId?: string;
   skillFilter?: string[];
   sessionEntry?: ExecSessionDefaults &
-    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
+    Pick<
+      SessionEntry,
+      | "skillLibrarySelections"
+      | "skillsSnapshot"
+      | "worktree"
+      | "spawnedCwd"
+      | "spawnedWorkspaceDir"
+    >;
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
   includeAllowlistHidden?: boolean;
@@ -62,6 +70,7 @@ function resolveWorkspaceSkillCommandOptions(params: WorkspaceSkillCommandParams
   };
   return {
     config: params.cfg,
+    executionWorkspaceDir: resolveSessionSkillWorkspaceDir(params.sessionEntry),
     agentId: params.agentId,
     skillFilter: params.skillFilter,
     includeAllowlistHidden: params.includeAllowlistHidden,
@@ -141,7 +150,14 @@ type AgentSkillCommandParams = {
   cfg: OpenClawConfig;
   agentIds?: string[];
   sessionEntry?: ExecSessionDefaults &
-    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
+    Pick<
+      SessionEntry,
+      | "skillLibrarySelections"
+      | "skillsSnapshot"
+      | "worktree"
+      | "spawnedCwd"
+      | "spawnedWorkspaceDir"
+    >;
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
 };
@@ -197,6 +213,9 @@ function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, al
       options: {
         gatewayOnly,
         config: params.cfg,
+        executionWorkspaceDir: hasSingleAgentContext
+          ? resolveSessionSkillWorkspaceDir(params.sessionEntry)
+          : undefined,
         agentId,
         skillFilter,
         librarySelections: hasSingleAgentContext

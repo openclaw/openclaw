@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expect, test } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
 
 test.each(["metadata", "startup"] as const)(
@@ -104,6 +105,78 @@ test("bounds retained commands and neutral projections instead of warming the fl
     expect(harness.buildCommands).toHaveBeenCalledTimes(agentIds.length + 1);
     expect(harness.buildProjection).toHaveBeenCalledTimes(agentIds.length + 1);
   } finally {
+    await harness.runtime.stop();
+  }
+});
+
+test("keeps project command catalogs separate while sharing model projections", async () => {
+  const harness = createChatMetadataHarness();
+  harness.buildCommands.mockImplementation(async ({ sessionEntry }) => ({
+    commands: [{ name: sessionEntry?.spawnedCwd ?? "agent-only" }],
+  }));
+  const project = {
+    agentId: "main",
+    sessionKey: "agent:main:project",
+    sessionEntry: { spawnedCwd: "/projects/first" },
+  };
+  const other = {
+    agentId: "main",
+    sessionKey: "agent:main:other",
+    sessionEntry: { spawnedCwd: "/projects/second" },
+  };
+  try {
+    await harness.runtime.refresh();
+    await harness.runtime.read({ agentId: "main" });
+    expect((await harness.runtime.readStartup(project))?.metadata?.commands).toEqual([
+      { name: "/projects/first" },
+    ]);
+    expect((await harness.runtime.read(other)).commands).toEqual([{ name: "/projects/second" }]);
+    expect((await harness.runtime.read({ agentId: "main" })).commands).toEqual([
+      { name: "agent-only" },
+    ]);
+    expect((await harness.runtime.readStartup(project))?.metadata?.commands).toEqual([
+      { name: "/projects/first" },
+    ]);
+    expect((await harness.runtime.read(project)).commands).toEqual([{ name: "/projects/first" }]);
+    expect(harness.buildProjection).toHaveBeenCalledOnce();
+    expect(harness.buildCommands).toHaveBeenCalledTimes(3);
+    project.sessionEntry.spawnedCwd = "/projects/rebound";
+    expect((await harness.runtime.read(project)).commands).toEqual([{ name: "/projects/rebound" }]);
+    expect(harness.buildCommands).toHaveBeenCalledTimes(4);
+    harness.setSkillsVersion(2);
+    await harness.runtime.refresh();
+    expect((await harness.runtime.read(project)).commands).toEqual([{ name: "/projects/rebound" }]);
+    expect(harness.buildCommands).toHaveBeenCalledTimes(5);
+  } finally {
+    await harness.runtime.stop();
+  }
+});
+
+test("omits neutral startup metadata invalidated during project command preparation", async () => {
+  const harness = createChatMetadataHarness();
+  const entered = createDeferred();
+  const release = createDeferred();
+  try {
+    await harness.runtime.refresh();
+    await harness.runtime.read({ agentId: "main" });
+    harness.buildCommands.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return { commands: [{ name: "retired-project" }] };
+    });
+    const startup = harness.runtime.readStartup({
+      agentId: "main",
+      sessionKey: "agent:main:project",
+      sessionEntry: { spawnedCwd: "/projects/first" },
+    });
+    await entered.promise;
+    harness.runtime.invalidate();
+    release.resolve();
+    await expect(startup).resolves.toBeUndefined();
+    expect(harness.buildProjection).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    harness.runtime.fail(new Error("test cleanup"));
     await harness.runtime.stop();
   }
 });

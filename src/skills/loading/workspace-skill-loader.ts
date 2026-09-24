@@ -260,7 +260,7 @@ export function readWorkspaceSkillSources(
     ...(request.status
       ? {
           status: readWorkspaceSkillStatusFacts({
-            entries,
+            entries: entries.concat(executionEntries),
             workspaceDir: request.sourcePlan.workspaceDir,
             managedSkillsDir: request.sourcePlan.managedSkillsDir,
             skillCardKey: request.status.skillCardKey,
@@ -582,7 +582,7 @@ function resolveWorkspaceSkillLoad(
     entries,
     effectiveSkillFilter,
     shouldFilter:
-      Boolean(roots.executionWorkspaceDir) ||
+      (Boolean(roots.executionWorkspaceDir) && opts?.agentSkillFilter !== "ignore") ||
       effectiveSkillFilter !== undefined ||
       opts?.skillOverrides !== undefined ||
       opts?.eligibility !== undefined,
@@ -651,6 +651,7 @@ export function loadWorkspaceSkills(
 export function loadVisibleSkills(
   workspaceDir: string,
   opts?: {
+    executionWorkspaceDir?: string;
     gatewayOnly?: boolean;
     config?: OpenClawConfig;
     managedSkillsDir?: string;

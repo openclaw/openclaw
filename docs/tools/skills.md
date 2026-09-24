@@ -54,6 +54,12 @@ workspace, `skills/` wins over `.agents/skills/`. Both directories participate i
 snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
+Chat skill menus and skill commands use that session's workspace, including its
+project skills. The global Skills page remains an agent-level inventory; it does
+not combine skills from unrelated project sessions. Session-scoped
+`skills.status`, `commands.list`, and `chat.metadata` requests include the
+selected project's skill roots.
+
 Managed worktree sessions keep their recorded canonical workspace as the skill
 source. A selected nested workspace stays nested: discovery does not walk up to
 its parent repository. Installing OpenClaw from a repository does not make that

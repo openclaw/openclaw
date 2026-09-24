@@ -7,7 +7,9 @@ import {
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { prepareWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { resolveSessionSkillWorkspaceDir } from "../../skills/loading/workspace-skill-roots.js";
 import { ensureSkillsWatcher } from "../../skills/runtime/refresh.js";
 import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
@@ -21,18 +23,26 @@ import { assertValidParams } from "./validation.js";
 
 export async function buildRemoteAwareWorkspaceSkillStatus(
   resolved: ResolvedSkillsWorkspace,
-  selections?: SkillLibrarySelection[],
-  skillCardKey?: string,
+  options: {
+    librarySelections?: SkillLibrarySelection[];
+    skillCardKey?: string;
+    sessionEntry?: SessionEntry;
+    sessionKey?: string;
+  } = {},
 ) {
+  const { librarySelections, skillCardKey, sessionEntry, sessionKey } = options;
   await prepareRemoteSkillConnections();
   // Remote skill availability depends on the agent's executable-node surface,
   // not only the workspace contents, so status reports include live eligibility.
   const nodeSkills = resolveNodeExecEligibility({
     cfg: resolved.cfg,
     agentId: resolved.agentId,
+    sessionEntry,
+    sessionKey,
   });
   return prepareWorkspaceSkillStatus(resolved.workspaceDir, {
-    librarySelections: selections,
+    executionWorkspaceDir: resolveSessionSkillWorkspaceDir(sessionEntry),
+    librarySelections,
     skillCardKey,
     config: resolved.cfg,
     agentId: resolved.agentId,
@@ -77,15 +87,20 @@ export const handleSkillsStatus: GatewayRequestHandler = async ({
     }
   }
   const sessionId = target?.entry.sessionId;
+  const executionWorkspaceDir = resolveSessionSkillWorkspaceDir(target?.entry);
+  const lifecycleRevision = target?.entry.lifecycleRevision;
+  const librarySelectionsKey = JSON.stringify(target?.entry.skillLibrarySelections);
   ensureSkillsWatcher({
     workspaceDir: resolved.workspaceDir,
+    executionWorkspaceDir,
     config: resolved.cfg,
     agentId: resolved.agentId,
   });
-  const { report } = await buildRemoteAwareWorkspaceSkillStatus(
-    resolved,
-    target?.entry.skillLibrarySelections,
-  );
+  const { report } = await buildRemoteAwareWorkspaceSkillStatus(resolved, {
+    librarySelections: target?.entry.skillLibrarySelections,
+    sessionEntry: target?.entry,
+    sessionKey: params.sessionKey,
+  });
   if (target && params.sessionKey) {
     // Remote discovery can yield while sharing access or the session changes.
     const cfg = context.getRuntimeConfig();
@@ -98,7 +113,10 @@ export const handleSkillsStatus: GatewayRequestHandler = async ({
       !current ||
       current.entry.sessionId !== sessionId ||
       current.storePath !== target.storePath ||
-      current.storeKey !== target.storeKey
+      current.storeKey !== target.storeKey ||
+      current.entry.lifecycleRevision !== lifecycleRevision ||
+      resolveSessionSkillWorkspaceDir(current.entry) !== executionWorkspaceDir ||
+      JSON.stringify(current.entry.skillLibrarySelections) !== librarySelectionsKey
     ) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Session changed; retry."));
       return;

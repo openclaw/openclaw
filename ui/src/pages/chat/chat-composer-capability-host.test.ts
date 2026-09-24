@@ -542,9 +542,9 @@ describe("ChatComposerCapabilityHost", () => {
     reconnected.onLoadSkills?.();
     expect(statusRequest).toHaveBeenCalledTimes(2);
     expect(request.mock.calls).toEqual([
-      ["skills.status", { agentId: "main" }],
+      ["skills.status", { agentId: "main", sessionKey: "main" }],
       ["skills.library.list", { sessionKey: "main" }],
-      ["skills.status", { agentId: "main" }],
+      ["skills.status", { agentId: "main", sessionKey: "main" }],
       ["skills.library.list", { sessionKey: "main" }],
     ]);
 
@@ -561,6 +561,143 @@ describe("ChatComposerCapabilityHost", () => {
       ]);
     });
   });
+
+  it("retires completed and pending skill reports when the same session changes project", async () => {
+    const context = createContext({ runtimeConfig: {} });
+    const state = createState();
+    let session = { key: "main", spawnedCwd: "/projects/first" } as GatewaySessionRow;
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const third = deferred<unknown>();
+    const firstLoaded = deferred();
+    const thirdLoaded = deferred();
+    const statusRequest = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValueOnce(third.promise);
+    const request = vi.fn((method: string) => {
+      if (method === "skills.status") {
+        return statusRequest();
+      }
+      if (method === "skills.library.list") {
+        return Promise.resolve({
+          entries: [],
+          profileId: null,
+          multipleProfiles: false,
+          defaultTarget: "workspace",
+          canManageWorkspace: true,
+          defaultSelectionLimit: 64,
+          session: { sessionKey: "main", selections: [], attachable: [] },
+        } satisfies SkillsLibraryListResult);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const host = new ChatComposerCapabilityHost(() => {
+      const rows = host.props(context, state, session, "main").skills;
+      if (rows?.some(({ name }) => name === "first-project")) {
+        firstLoaded.resolve();
+      }
+      if (rows?.some(({ name }) => name === "third-project")) {
+        thirdLoaded.resolve();
+      }
+    });
+    const skillReport = (name: string) => ({
+      skills: [
+        {
+          name,
+          skillKey: name,
+          disabled: false,
+          blockedByAllowlist: false,
+          missing: { bins: [], env: [], config: [], os: [] },
+        },
+      ],
+    });
+    host.props(context, state, session, "main").onLoadSkills?.();
+    first.resolve(skillReport("first-project"));
+    await firstLoaded.promise;
+    expect(host.props(context, state, session, "main").skills?.map(({ name }) => name)).toEqual([
+      "first-project",
+    ]);
+    session = { ...session, spawnedCwd: "/projects/second" };
+    const rebound = host.props(context, state, session, "main", false, true);
+    expect(rebound.skills).toBeNull();
+    expect(rebound.skillsLoading).toBe(true);
+    session = { ...session, spawnedCwd: "/projects/third" };
+    host.props(context, state, session, "main", false, true);
+    third.resolve(skillReport("third-project"));
+    await thirdLoaded.promise;
+    second.resolve(skillReport("second-project"));
+    await second.promise;
+    expect(host.props(context, state, session, "main").skills?.map(({ name }) => name)).toEqual([
+      "third-project",
+    ]);
+    expect(statusRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["explicit retry", "workspace change"] as const)(
+    "preserves a skill failure across rerenders until %s",
+    async (retry) => {
+      const context = createContext({ runtimeConfig: {} });
+      const state = createState();
+      let session = { key: "main", spawnedCwd: "/project/first" } as GatewaySessionRow;
+      const first = deferred<unknown>();
+      const recovery = deferred<unknown>();
+      const failed = deferred();
+      const loaded = deferred();
+      const statusRequest = vi
+        .fn()
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(recovery.promise);
+      const request = vi.fn((method: string) =>
+        method === "skills.status"
+          ? statusRequest()
+          : Promise.resolve({
+              entries: [],
+              profileId: null,
+              multipleProfiles: false,
+              defaultTarget: "workspace",
+              canManageWorkspace: true,
+              defaultSelectionLimit: 64,
+              session: { sessionKey: "main", selections: [], attachable: [] },
+            } satisfies SkillsLibraryListResult),
+      );
+      state.client = { request } as unknown as GatewayBrowserClient;
+      const host = new ChatComposerCapabilityHost(() => {
+        const props = host.props(context, state, session, "main");
+        if (props.skillsError && !props.skillsLoading) {
+          failed.resolve();
+        }
+        if (props.skills) {
+          loaded.resolve();
+        }
+      });
+      try {
+        host.props(context, state, session, "main", false, true);
+        first.reject(new Error("synthetic skill discovery failure"));
+        await failed.promise;
+        for (let renderPass = 0; renderPass < 3; renderPass += 1) {
+          const props = host.props(context, state, session, "main", false, true);
+          expect(props.skillsError).toBe(true);
+          expect(props.skillsLoading).toBe(false);
+          expect(statusRequest).toHaveBeenCalledTimes(1);
+        }
+        if (retry === "explicit retry") {
+          host.props(context, state, session, "main").onLoadSkills?.();
+        } else {
+          session = { ...session, spawnedCwd: "/project/second" };
+          host.props(context, state, session, "main", false, true);
+        }
+        expect(statusRequest).toHaveBeenCalledTimes(2);
+        recovery.resolve({ skills: [] });
+        await loaded.promise;
+        expect(host.props(context, state, session, "main").skillsError).toBe(false);
+      } finally {
+        recovery.resolve({ skills: [] });
+      }
+    },
+  );
 
   it("records an unexpected effective-tools loader rejection", async () => {
     const notify = vi.fn();

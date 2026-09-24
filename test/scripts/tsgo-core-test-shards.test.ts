@@ -266,6 +266,44 @@ describe("changed core test graph selection", () => {
     ]);
   });
 
+  it.each(["narrow", "broad", "fallback"])(
+    "partitions the %s consumer plan exactly once without reassigning graphs",
+    (scope) => {
+      const graphs = inventory();
+      const source = "src/shared/public.ts";
+      if (scope === "broad") {
+        for (const graph of graphs) {
+          graph.files.push(source);
+        }
+      }
+      const paths = scope === "narrow" ? [leaf] : [source];
+      const selected = selectChangedTsgoCoreTestShards(paths, graphs) ?? TSGO_CORE_TEST_SHARDS;
+      expect(selected).toHaveLength(scope === "narrow" ? 1 : TSGO_CORE_TEST_SHARDS.length);
+      const stripes = Array.from({ length: 5 }, (_, index) => {
+        const stripe = `${index + 1}/5`;
+        const assigned = selectTsgoCoreTestStripe(stripe, selected)!;
+        expect(assigned).toEqual(
+          selectTsgoCoreTestStripe(stripe)!.filter((shard) =>
+            selected.some((candidate) => candidate.config === shard.config),
+          ),
+        );
+        return assigned;
+      });
+      expect(
+        stripes
+          .flat()
+          .map((shard) => shard.config)
+          .toSorted(),
+      ).toEqual(selected.map((shard) => shard.config).toSorted());
+      expect(Math.max(...stripes.map((stripe) => stripe.length))).toBeLessThanOrEqual(
+        Math.ceil(TSGO_CORE_TEST_SHARDS.length / 5),
+      );
+      if (scope === "narrow") {
+        expect(stripes.filter((stripe) => stripe.length === 0)).toHaveLength(4);
+      }
+    },
+  );
+
   it("rejects a plugin browser test even when the inventory claims core ownership", () => {
     const pluginTest = "extensions/example/browser/page.test.ts";
     const graphs = inventory();
@@ -429,7 +467,7 @@ process.exit(result.status??1);
         ],
       );
       const changedArgs = (paths: string[]) => ["--changed-paths-json", JSON.stringify(paths)];
-      const check = async (paths = [leaf]) => {
+      const check = async (paths = [leaf], stripe?: string) => {
         write("compiler-events.jsonl", "");
         const result = await lifetime.track(
           runNodeScript(
@@ -438,6 +476,7 @@ process.exit(result.status??1);
               pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
               driver,
               ...changedArgs(paths),
+              ...(stripe === undefined ? [] : ["--stripe", stripe]),
             ],
             env,
             undefined,
@@ -465,18 +504,42 @@ process.exit(result.status??1);
         consumer,
         "import type {Value} from '../nested/leaf.test.js';\nconst value: Value = 1;\n",
       );
-      const validConsumer = await check([helper]);
+      const validConsumer = await check([helper], "3/5");
       expect(validConsumer.result.status, validConsumer.result.stderr).toBe(0);
-      expect(validConsumer.builds).toEqual([
-        "test/tsconfig/tsconfig.core.test.agents-other.json",
-        "test/tsconfig/tsconfig.core.test.agents-tools.json",
-      ]);
+      expect(validConsumer.builds).toEqual(["test/tsconfig/tsconfig.core.test.agents-tools.json"]);
       // A removed rename source has no current root: keep the full canonical check.
-      const renamed = await check([leaf, "src/agents/old.test.ts"]);
+      const renamed = await check([leaf, "src/agents/old.test.ts"], "1/5");
       expect(renamed.result.status, renamed.result.stderr).toBe(0);
-      expect(renamed.builds).toEqual(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
+      expect(renamed.builds).toEqual(selectTsgoCoreTestStripe("1/5")!.map((shard) => shard.config));
+      const empty = await check([helper], "5/5");
+      expect(empty.result.status, empty.result.stderr).toBe(0);
+      expect(empty.builds).toEqual([]);
+      // Invalid combined flags must fail before any compiler inventory or build.
+      for (const args of [
+        [...changedArgs([helper]), "--stripe", "0/5"],
+        [...changedArgs([helper]), "--stripe"],
+        [...changedArgs([helper]), "--stripe", "1/5", "--concurrency", "0"],
+        ["--changed-paths-json", "[]", "--stripe", "1/5"],
+      ]) {
+        write("compiler-events.jsonl", "");
+        const invalid = await lifetime.track(
+          runNodeScript(
+            [
+              "--import",
+              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+              driver,
+              ...args,
+            ],
+            env,
+            undefined,
+            { cwd: root, signal, requireProcessTreeExit: true },
+          ),
+        );
+        expect(invalid.status).not.toBe(0);
+        expect(fs.readFileSync(path.join(root, "compiler-events.jsonl"), "utf8")).toBe("");
+      }
       write(helper, "export type Value = string;\n");
-      const brokenConsumer = await check([helper]);
+      const brokenConsumer = await check([helper], "3/5");
       expect(brokenConsumer.result.status).not.toBe(0);
       expect(brokenConsumer.builds).toEqual(validConsumer.builds);
       expect(brokenConsumer.result.stdout + brokenConsumer.result.stderr).toContain(

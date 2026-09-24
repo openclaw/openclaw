@@ -5,6 +5,7 @@ import {
   errorShape,
   validateCommandsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveSessionSkillWorkspaceDir } from "../../skills/loading/workspace-skill-roots.js";
 import { authorizeSessionSharingTarget, resolveSessionSharingTarget } from "../session-sharing.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { buildCommandsListResult } from "./commands-list-result.js";
@@ -46,6 +47,7 @@ export const commandsHandlers: GatewayRequestHandlers = {
           return;
         }
       }
+      const executionWorkspaceDir = resolveSessionSkillWorkspaceDir(target?.entry);
       const result = await buildCommandsListResult({
         cfg: resolved.cfg,
         agentId: resolved.agentId,
@@ -68,6 +70,7 @@ export const commandsHandlers: GatewayRequestHandlers = {
           current.storeKey !== target.storeKey ||
           current.entry.sessionId !== target.entry.sessionId ||
           current.entry.lifecycleRevision !== target.entry.lifecycleRevision ||
+          resolveSessionSkillWorkspaceDir(current.entry) !== executionWorkspaceDir ||
           JSON.stringify(current.entry.skillLibrarySelections) !==
             JSON.stringify(target.entry.skillLibrarySelections)
         ) {

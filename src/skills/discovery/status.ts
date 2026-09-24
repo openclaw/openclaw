@@ -304,6 +304,7 @@ function buildSkillStatus(entry: SkillEntry, context: BuildSkillStatusContext): 
 }
 
 type WorkspaceSkillStatusOptions = {
+  executionWorkspaceDir?: string;
   config?: OpenClawConfig;
   managedSkillsDir?: string;
   entries?: SkillEntry[];
@@ -332,6 +333,7 @@ function prepareWorkspaceSkillRequirements(
     opts?.entries ??
       loadWorkspaceSkills(workspaceDir, {
         config: opts?.config,
+        executionWorkspaceDir: opts?.executionWorkspaceDir,
         // agentId scopes custodian-source discovery only; the "ignore" mode
         // keeps the entry list unfiltered per the invariant above.
         agentId: opts?.agentId,

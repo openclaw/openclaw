@@ -819,7 +819,13 @@ describe("gateway chat metadata runtime", () => {
     const overriddenSettled = vi.fn();
     void read.then(settled, settled);
     void overriddenStartup.then(overriddenSettled, overriddenSettled);
-    await expect(harness.runtime.readStartup({ agentId: "main" })).resolves.toBeUndefined();
+    for (const scope of [
+      { agentId: "main" },
+      { agentId: "main", sessionKey: "agent:main:project" },
+      { agentId: "main", sessionEntry: { spawnedCwd: "/projects/first" } },
+    ]) {
+      await expect(harness.runtime.readStartup(scope)).resolves.toBeUndefined();
+    }
     await Promise.resolve();
     expect(settled).not.toHaveBeenCalled();
     expect(overriddenSettled).not.toHaveBeenCalled();

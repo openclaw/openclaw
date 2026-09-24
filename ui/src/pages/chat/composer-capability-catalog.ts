@@ -5,6 +5,7 @@ import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { readOwnEntry } from "../../lib/sessions/tool-overrides.ts";
 import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 import type { ChatComposerMenuSkill } from "./components/chat-composer-plus-menu.ts";
+import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 export function composerWebSearchBaseEnabled(config: Record<string, unknown> | null): boolean {
   return asRecord(asRecord(asRecord(config?.tools)?.web)?.search)?.enabled !== false;
@@ -24,12 +25,17 @@ function toComposerSkill(skill: SkillStatusEntry): ChatComposerMenuSkill {
   };
 }
 
+function catalogKey(agentId: string, sessionKey?: string): string {
+  return JSON.stringify([agentId, sessionKey ?? null]);
+}
+
 export class ComposerSkillCatalog {
   private readonly skills = new Map<string, ChatComposerMenuSkill[]>();
   private readonly loading = new Set<string>();
   private readonly loadErrors = new Set<string>();
   private client: GatewayBrowserClient | null = null;
   private connectionEpoch: number | undefined;
+  private generation = 0;
 
   constructor(private readonly notify: () => void) {}
 
@@ -39,6 +45,11 @@ export class ComposerSkillCatalog {
     }
     this.client = client;
     this.connectionEpoch = connectionEpoch;
+    this.invalidate();
+  }
+
+  invalidate(): void {
+    this.generation += 1;
     this.skills.clear();
     this.loading.clear();
     this.loadErrors.clear();
@@ -49,26 +60,28 @@ export class ComposerSkillCatalog {
     connectionEpoch: number | undefined,
     agentId: string,
     isCurrentConnection: () => boolean,
+    sessionKey?: string,
   ): void {
+    const key = catalogKey(agentId, sessionKey);
     this.synchronize(client, connectionEpoch);
-    if (
-      !client ||
-      !isCurrentConnection() ||
-      this.skills.has(agentId) ||
-      this.loading.has(agentId)
-    ) {
+    if (!client || !isCurrentConnection() || this.skills.has(key) || this.loading.has(key)) {
       return;
     }
+    const generation = this.generation;
     const isCurrent = () =>
-      this.client === client && this.connectionEpoch === connectionEpoch && isCurrentConnection();
-    this.loadErrors.delete(agentId);
-    this.loading.add(agentId);
+      this.generation === generation &&
+      this.client === client &&
+      this.connectionEpoch === connectionEpoch &&
+      isCurrentConnection();
+    this.loadErrors.delete(key);
+    this.loading.add(key);
     this.notify();
-    void loadSkillStatusReport(client, agentId)
+    void loadSkillStatusReport(client, agentId, sessionKey)
       .then((report) => {
         if (report && isCurrent()) {
-          this.skills.set(
-            agentId,
+          setSessionCacheValue(
+            this.skills,
+            key,
             report.skills
               .map(toComposerSkill)
               .toSorted((left, right) => left.name.localeCompare(right.name)),
@@ -77,20 +90,24 @@ export class ComposerSkillCatalog {
       })
       .catch(() => {
         if (isCurrent()) {
-          this.loadErrors.add(agentId);
+          this.loadErrors.add(key);
         }
       })
       .finally(() => {
         if (isCurrent()) {
-          this.loading.delete(agentId);
+          this.loading.delete(key);
           this.notify();
         }
       });
   }
 
-  rows(agentId: string, toolOverrides: SessionToolOverrides | null | undefined) {
+  rows(
+    agentId: string,
+    toolOverrides: SessionToolOverrides | null | undefined,
+    sessionKey?: string,
+  ) {
     return (
-      this.skills.get(agentId)?.map((skill) =>
+      getSessionCacheValue(this.skills, catalogKey(agentId, sessionKey))?.map((skill) =>
         Object.assign({}, skill, {
           enabled:
             skill.missingDeps || skill.blocked
@@ -101,11 +118,11 @@ export class ComposerSkillCatalog {
     );
   }
 
-  isLoading(agentId: string): boolean {
-    return this.loading.has(agentId);
+  isLoading(agentId: string, sessionKey?: string): boolean {
+    return this.loading.has(catalogKey(agentId, sessionKey));
   }
 
-  hasError(agentId: string): boolean {
-    return this.loadErrors.has(agentId);
+  hasError(agentId: string, sessionKey?: string): boolean {
+    return this.loadErrors.has(catalogKey(agentId, sessionKey));
   }
 }

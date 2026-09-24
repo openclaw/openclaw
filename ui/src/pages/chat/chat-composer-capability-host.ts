@@ -12,6 +12,7 @@ import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective,
 } from "../../lib/agents/tools-effective.ts";
+import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import {
   buildAddMcpServerPatch,
   MCP_SERVER_NAME_PATTERN,
@@ -60,6 +61,7 @@ function activeConfigFingerprint(snapshot: ConfigSnapshot | null): string {
 export class ChatComposerCapabilityHost {
   private readonly skillCatalog: ComposerSkillCatalog;
   private readonly library: ComposerLibrarySession;
+  private skillScope: { key: string; metadata: ReturnType<typeof peekChatMetadata> } | null = null;
   private readonly patchTokens = new Map<string, symbol>();
   private effectiveTools: { key: string; result: ToolsEffectiveResult } | null = null;
   private effectiveToolsErrorKey: string | null = null;
@@ -154,6 +156,7 @@ export class ChatComposerCapabilityHost {
       connectionEpoch,
       agentId,
       () => state.connected && state.client === client && state.connectionEpoch === connectionEpoch,
+      state.sessionKey,
     );
   }
 
@@ -539,6 +542,22 @@ export class ChatComposerCapabilityHost {
     const client = state.client;
     const connectionEpoch = state.connectionEpoch;
     const sessionKey = state.sessionKey;
+    const skillScopeKey = JSON.stringify([
+      agentId,
+      sessionKey,
+      session?.sessionId,
+      session?.workspaceDir,
+      session?.spawnedCwd,
+      session?.spawnedWorkspaceDir,
+      session?.worktree,
+      session?.repositoryWorkspaceId,
+    ]);
+    const metadata = client ? peekChatMetadata(client, { agentId, sessionKey }) : undefined;
+    if (this.skillScope?.key !== skillScopeKey || this.skillScope.metadata !== metadata) {
+      // Follow the existing session/metadata owner, including project watcher refreshes.
+      this.skillScope = { key: skillScopeKey, metadata };
+      this.skillCatalog.invalidate();
+    }
     const current = () =>
       state.connected &&
       state.client === client &&
@@ -549,6 +568,9 @@ export class ChatComposerCapabilityHost {
         ? { client, connectionEpoch, sessionKey, agentId, isCurrent: current }
         : null,
     );
+    if (skillsOpen && !this.skillCatalog.hasError(agentId, sessionKey)) {
+      this.loadSkills(context, state, agentId);
+    }
     if (skillsOpen && !this.library.result && !this.library.loading && !this.library.error) {
       void this.library.load();
     }
@@ -609,9 +631,9 @@ export class ChatComposerCapabilityHost {
         : null;
     return {
       basePath: state.basePath,
-      skills: this.skillCatalog.rows(agentId, session?.toolOverrides),
-      skillsLoading: this.skillCatalog.isLoading(agentId),
-      skillsError: this.skillCatalog.hasError(agentId),
+      skills: this.skillCatalog.rows(agentId, session?.toolOverrides, state.sessionKey),
+      skillsLoading: this.skillCatalog.isLoading(agentId, state.sessionKey),
+      skillsError: this.skillCatalog.hasError(agentId, state.sessionKey),
       mcpServers: summarizeMcpServers(runtimeConfig) ?? [],
       toolsEffectiveResult,
       toolsEffectiveLoading,

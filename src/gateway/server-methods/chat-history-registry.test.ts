@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
@@ -14,6 +15,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as sharingPreparation from "../session-sharing-preparation.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
+import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
 import type { RespondFn } from "./types.js";
 
 describe("chat history registry projection", () => {
@@ -195,3 +197,100 @@ describe("chat history registry projection", () => {
     },
   );
 });
+
+it.each(["workspace", "library", "label"] as const)(
+  "rechecks startup skill scope after a same-session %s update during discovery",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:startup-scope",
+        sessionId: "startup-scope",
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        lifecycleRevision: "same-lifecycle",
+        updatedAt: 1,
+        spawnedCwd: "/projects/first",
+      });
+      await appendTranscriptMessage(scope, {
+        message: { role: "user", content: "History remains in this session" },
+      });
+      const harness = createChatMetadataHarness();
+      const entered = createDeferred();
+      const release = createDeferred();
+      let startup: Promise<void> | undefined;
+      try {
+        await harness.runtime.refresh();
+        await harness.runtime.read({ agentId: "main" });
+        harness.buildCommands.mockImplementationOnce(async ({ sessionEntry }) => {
+          expect(sessionEntry?.spawnedCwd).toBe("/projects/first");
+          entered.resolve();
+          await release.promise;
+          return { commands: [{ name: "old-project-skill" }] };
+        });
+        const context = await createHistoryReadContext({
+          readChatStartupProjection: harness.runtime.readStartup,
+        });
+        const respond = vi.fn<RespondFn>();
+        startup = Promise.resolve(
+          expectDefined(
+            chatHistoryHandlers["chat.startup"],
+            "startup handler",
+          )({
+            params: { sessionKey: scope.sessionKey },
+            respond,
+            req: { type: "req", id: "startup-rebind", method: "chat.startup" },
+            client: null,
+            isWebchatConnect: () => false,
+            context,
+          }),
+        );
+        await entered.promise;
+        const updated = await upsertSessionEntryCore(
+          scope,
+          change === "workspace"
+            ? { spawnedCwd: "/projects/second" }
+            : change === "library"
+              ? {
+                  skillLibrarySelections: [
+                    {
+                      skillId: "00000000-0000-4000-8000-000000000001",
+                      revision: "a".repeat(64),
+                      name: "new-library-skill",
+                      ownerProfileId: null,
+                    },
+                  ],
+                }
+              : { label: "New display label" },
+        );
+        expect(updated).toMatchObject({
+          sessionId: scope.sessionId,
+          lifecycleRevision: "same-lifecycle",
+        });
+        release.resolve();
+        await startup;
+        expect(respond).toHaveBeenCalledOnce();
+        if (change === "label") {
+          expect(respond.mock.calls[0]).toMatchObject([
+            true,
+            {
+              metadata: { commands: [{ name: "old-project-skill" }] },
+              sessionInfo: { label: "New display label" },
+            },
+          ]);
+        } else {
+          expect(respond.mock.calls[0]).toMatchObject([
+            false,
+            undefined,
+            { code: "UNAVAILABLE", retryable: true },
+          ]);
+        }
+      } finally {
+        release.resolve();
+        await startup;
+        await harness.runtime.stop();
+      }
+    });
+  },
+);

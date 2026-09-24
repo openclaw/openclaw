@@ -2,6 +2,7 @@ import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { GetPublishedPreparedModelCatalogOwnerParams } from "../../agents/prepared-model-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import type {
   ChatMetadataProjectionFacts,
   prepareChatMetadataModelProjection,
@@ -12,6 +13,7 @@ export type PreparedAgentFacts = ChatMetadataProjectionFacts & {
   authStoreRevision: string;
   catalogRefreshFailed: boolean;
   skillsVersion: number;
+  swarmEnabled: boolean;
 };
 
 export type PreparedGenerationFacts = {
@@ -37,6 +39,8 @@ export type ChatMetadataRuntimeDeps = {
   buildCommands: (params: {
     cfg: OpenClawConfig;
     agentId: string;
+    sessionKey?: string;
+    sessionEntry?: ChatMetadataReadParams["sessionEntry"];
   }) => Promise<{ commands?: unknown[] }>;
   buildProjection: typeof prepareChatMetadataModelProjection;
 };

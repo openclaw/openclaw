@@ -235,11 +235,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, resolved.error);
       return;
     }
-    const { report, files } = await buildRemoteAwareWorkspaceSkillStatus(
-      resolved,
-      undefined,
-      params.skillKey,
-    );
+    const { report, files } = await buildRemoteAwareWorkspaceSkillStatus(resolved, {
+      skillCardKey: params.skillKey,
+    });
     const skill = report.skills.find((candidate) => candidate.skillKey === params.skillKey);
     if (!skill?.skillCard) {
       respond(
