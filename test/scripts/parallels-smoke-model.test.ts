@@ -2289,6 +2289,8 @@ if (commandArgs[0] === "list") {
     async () => {
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-pipes-");
       const grandchildPidPath = join(tempDir, "grandchild.pid");
+      const deadlineFile = join(tempDir, "deadline");
+      const preload = writeDrainDeadlinePreload(tempDir, 200);
       let grandchildPid = 0;
       // Outlive the assertion bound, but self-clean if PID setup fails.
       const grandchildScript = "setTimeout(() => process.exit(0), 3_000);";
@@ -2314,6 +2316,9 @@ if (commandArgs[0] === "list") {
           env: {
             ...process.env,
             GRANDCHILD_PID_PATH: grandchildPidPath,
+            READY_FILE: grandchildPidPath,
+            DEADLINE_FILE: deadlineFile,
+            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
           },
           quiet: true,
           // Let the command spawn its pipe holder before exercising timeout settlement.
@@ -2328,6 +2333,7 @@ if (commandArgs[0] === "list") {
         expect(Number.isInteger(grandchildPid)).toBe(true);
         expect(grandchildPid).toBeGreaterThan(1);
         expect(result.status).toBe(124);
+        expect(readFileSync(deadlineFile, "utf8")).toBe("elapsed");
         expect(durationMs).toBeLessThan(2_000);
       } finally {
         if (Number.isInteger(grandchildPid) && grandchildPid > 1 && isProcessAlive(grandchildPid)) {
