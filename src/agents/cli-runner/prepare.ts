@@ -941,7 +941,9 @@ async function prepareCliRunContextWithinReadFence(
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     workspaceDir,
-    modelProviderId: params.provider,
+    // Report the logical model provider (e.g. `anthropic`), not the CLI execution
+    // backend, matching what the embedded runner reports to hooks.
+    modelProviderId: params.modelProvider ?? params.provider,
     modelId,
     trigger: params.trigger,
     inputProvenance: params.inputProvenance,

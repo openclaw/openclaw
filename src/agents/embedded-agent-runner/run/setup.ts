@@ -35,6 +35,8 @@ type HookContext = {
   sessionKey?: string;
   sessionId: string;
   workspaceDir: string;
+  /** Logical model provider reported to hooks (e.g. `anthropic`, not a CLI backend). */
+  modelProviderId?: string;
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
