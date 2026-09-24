@@ -2129,6 +2129,7 @@
                     ]
                   },
                   "tools/swarm",
+                  "tools/swarm-dynamics",
                   "tools/acp-agents",
                   {
                     "group": "ACP agents",

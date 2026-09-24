@@ -467,6 +467,57 @@ function createMcpNamespaceModel(
 
 const SWARM_AGENTS_API_CONTENT = `type AgentJsonSchema = Record<string, unknown>;
 
+type DynamicsBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
+type DynamicsRequirement = "optional" | "required";
+
+interface DynamicsHandoff {
+  candidateDigest?: string;
+  artifactRefs?: string[];
+  evidenceRefs?: string[];
+  summary?: string;
+}
+
+interface DynamicsCandidate {
+  version: 1;
+  candidateDigest: string;
+  sourceDigest: string;
+  recipeDigest: string;
+  policyDigest: string;
+}
+
+interface DynamicsEnergeticState {
+  energy?: number | null;
+  temperature?: number | null;
+  mobility?: number | null;
+  noveltyRate?: number | null;
+  evidenceCompleteness?: number | null;
+  verifierDisagreement?: number | null;
+  correlation?: number | null;
+  susceptibility?: number | null;
+  resourcePressure?: number | null;
+}
+
+interface DynamicsEnergetics extends DynamicsEnergeticState {
+  peers?: Array<DynamicsEnergeticState & { replicaId: string }>;
+}
+
+interface DynamicsOptions {
+  boundary: DynamicsBoundary;
+  requirements?: {
+    sandbox?: "inherit" | "require";
+    candidateDigest?: DynamicsRequirement;
+    artifactRefs?: DynamicsRequirement;
+  };
+  handoff?: DynamicsHandoff;
+  candidate?: DynamicsCandidate;
+  /**
+   * Measured search state. When supplied, OpenClaw actuates the next child:
+   * energy changes thinking/fastMode; temperature/regime changes its task posture;
+   * a jammed target is not launched.
+   */
+  energetics?: DynamicsEnergetics;
+}
+
 interface AgentRunOptions {
   label?: string;
   model?: string;
@@ -475,6 +526,7 @@ interface AgentRunOptions {
   agentId?: string;
   schema?: AgentJsonSchema;
   phase?: string;
+  dynamics?: DynamicsOptions;
 }
 
 interface AgentsApi {
