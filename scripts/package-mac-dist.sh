@@ -205,7 +205,10 @@ audit_app_async_frames() {
     *" arm64 "*)
       python3 "$ROOT_DIR/apps/macos/scripts/audit-async-sleep-frames.py" "$executable"
       ;;
-    *) echo "ARM64 async sleep frame audit: not applicable to this architecture." ;;
+    *)
+      echo "Error: release executable has no arm64 slice; audit cannot run: $executable" >&2
+      return 1
+      ;;
   esac
 }
 

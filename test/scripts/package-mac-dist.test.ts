@@ -700,17 +700,30 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
     },
   );
 
-  it("rejects a failed async frame audit before archiving or notarizing", () => {
+  it.each(["undersized frame", "missing ARM64 slice"])("rejects %s before archiving", (failure) => {
     const fixture = makeDistributionFixture("native");
-    writeFileSync(
-      fixture.auditScript,
-      'import sys\nsys.stderr.write("async frame allocation is undersized\\n")\nsys.exit(1)\n',
-    );
+    const missingArm64 = failure === "missing ARM64 slice";
+    if (missingArm64) {
+      copyFileSync(
+        path.join(fixture.root, "apps/macos/.build/x86_64/release/OpenClaw"),
+        path.join(fixture.root, "dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
+      );
+      rmSync(fixture.auditScript);
+    } else {
+      writeFileSync(
+        fixture.auditScript,
+        'import sys\nsys.stderr.write("async frame allocation is undersized\\n")\nsys.exit(1)\n',
+      );
+    }
 
-    const result = fixture.run({ notarize: true });
+    const result = fixture.run({ notarize: !missingArm64 });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("async frame allocation is undersized");
+    expect(result.stderr).toContain(
+      missingArm64
+        ? "release executable has no arm64 slice; audit cannot run"
+        : "async frame allocation is undersized",
+    );
     for (const artifact of [
       "OpenClaw-2026.8.2.zip",
       "OpenClaw-2026.8.2.dSYM.zip",
