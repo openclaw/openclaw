@@ -571,3 +571,286 @@ describe("captured outbox scope review regressions", () => {
     },
   );
 });
+
+describe("optimistic local bubble canonical attachment and fail-sticky retention (#156051)", () => {
+  it("projects canonical durable row matching by sendRunId even when item ids differ", () => {
+    const host = { ...state, hello: null, chatQueue: new Array<ChatQueueItem>() };
+    const owner = chatOutboxOwner(host);
+    const scope = resolveUiConversationIdentity(host, host.sessionKey);
+
+    owner.keep(host, scope, {
+      id: "local-temp-id",
+      text: "Optimistic message",
+      createdAt: 100,
+      sendRunId: "run-xyz-123",
+      sendAttempts: 0,
+      sendState: "sending",
+    });
+
+    const durableRow: ChatQueueItem = {
+      id: "canonical-persisted-id",
+      text: "Optimistic message",
+      createdAt: 100,
+      sendRunId: "run-xyz-123",
+      sendAttempts: 1,
+      sendState: "sending",
+      sessionKey: scope.sessionKey,
+      agentId: scope.agentId,
+    };
+
+    expect(
+      admitStoredChatComposerQueueItem(
+        host,
+        captureChatOutboxAdmission(host, scope.sessionKey),
+        durableRow,
+      ),
+    ).toBe(true);
+
+    const snapshot = owner.snapshot(host, scope, [durableRow]);
+    expect(snapshot).toHaveLength(1);
+    expect(snapshot[0]!.id).toBe("canonical-persisted-id");
+    expect(snapshot[0]!.sendRunId).toBe("run-xyz-123");
+
+    const all = owner.allItems(host);
+    const matching = all.filter((item) => item.sendRunId === "run-xyz-123");
+    expect(matching).toHaveLength(1);
+    expect(matching[0]!.id).toBe("canonical-persisted-id");
+  });
+
+  it("retains local optimistic bubble fail-sticky when neither id nor sendRunId matches durable", () => {
+    const host = { ...state, hello: null, chatQueue: new Array<ChatQueueItem>() };
+    const owner = chatOutboxOwner(host);
+    const scope = resolveUiConversationIdentity(host, host.sessionKey);
+
+    const localItem: ChatQueueItem = {
+      id: "local-bubble-1",
+      text: "Pending message text",
+      createdAt: 200,
+      sendRunId: "run-unmatched",
+      sendAttempts: 0,
+      sendState: "sending",
+    };
+    owner.keep(host, scope, localItem);
+
+    const otherDurable: ChatQueueItem = {
+      id: "durable-other",
+      text: "Unrelated persisted message",
+      createdAt: 150,
+      sendRunId: "run-other",
+      sendAttempts: 1,
+      sendState: "sending",
+      sessionKey: scope.sessionKey,
+      agentId: scope.agentId,
+    };
+
+    const snapshot = owner.snapshot(host, scope, [otherDurable]);
+    expect(snapshot).toHaveLength(2);
+    expect(snapshot.some((item) => item.id === "local-bubble-1")).toBe(true);
+    expect(snapshot.some((item) => item.id === "durable-other")).toBe(true);
+
+    const emptySnapshot = owner.snapshot(host, scope, []);
+    expect(emptySnapshot).toHaveLength(1);
+    expect(emptySnapshot[0]!.id).toBe("local-bubble-1");
+  });
+
+  it("removes aliased queued row when local waiting-model item has provisional id and durable has canonical id with matching sendRunId", () => {
+    const host = { ...state, hello: null, chatQueue: new Array<ChatQueueItem>() };
+    const owner = chatOutboxOwner(host);
+    const scope = resolveUiConversationIdentity(host, host.sessionKey);
+
+    const durableRow: ChatQueueItem = {
+      id: "canonical-durable-id",
+      text: "Waiting model message",
+      createdAt: 100,
+      sendRunId: "run-aliased-123",
+      sendAttempts: 1,
+      sendState: "waiting-model",
+      sessionKey: scope.sessionKey,
+      agentId: scope.agentId,
+    };
+
+    expect(
+      admitStoredChatComposerQueueItem(
+        host,
+        captureChatOutboxAdmission(host, scope.sessionKey),
+        durableRow,
+      ),
+    ).toBe(true);
+
+    const localWaiting: ChatQueueItem = {
+      id: "provisional-local-id",
+      text: "Waiting model message",
+      createdAt: 100,
+      sendRunId: "run-aliased-123",
+      sendAttempts: 1,
+      sendState: "waiting-model",
+    };
+    owner.keep(host, scope, localWaiting);
+
+    const located = owner.locate(host, "provisional-local-id");
+    expect(located).toBeDefined();
+    expect(located?.item.id).toBe("provisional-local-id");
+    expect(located?.durable?.id).toBe("canonical-durable-id");
+
+    const removed = owner.remove(host, "provisional-local-id");
+    expect(removed).toBeDefined();
+
+    const outboxes = listStoredChatOutboxes(host);
+    const queue = outboxes.find((o) => o.sessionKey === scope.sessionKey)?.queue ?? [];
+    expect(queue).toHaveLength(0);
+  });
+
+  it("rejects cross-conversation alias lookup and preserves other conversation stored row on removal", () => {
+    const host = { ...state, hello: null, chatQueue: new Array<ChatQueueItem>() };
+    const owner = chatOutboxOwner(host);
+    const scopeA = resolveUiConversationIdentity(host, host.sessionKey);
+    const scopeB = { sessionKey: "agent:other-conversation:workspace", agentId: "other" };
+
+    // Durable row belongs to conversation B
+    const durableB: ChatQueueItem = {
+      id: "stored-b-id",
+      text: "Message in conversation B",
+      createdAt: 100,
+      sendRunId: "shared-run-id-777",
+      sendAttempts: 1,
+      sendState: "waiting-model",
+      sessionKey: scopeB.sessionKey,
+      agentId: scopeB.agentId,
+    };
+    expect(
+      admitStoredChatComposerQueueItem(
+        host,
+        captureChatOutboxAdmission(host, scopeB.sessionKey, scopeB.agentId),
+        durableB,
+      ),
+    ).toBe(true);
+
+    // Provisional local item in conversation A shares the same sendRunId
+    const localA: ChatQueueItem = {
+      id: "provisional-a-id",
+      text: "Message in conversation A",
+      createdAt: 100,
+      sendRunId: "shared-run-id-777",
+      sendAttempts: 0,
+      sendState: "sending",
+    };
+    owner.keep(host, scopeA, localA);
+
+    // locate in conversation A must NOT select durableB from conversation B
+    const located = owner.locate(host, "provisional-a-id");
+    expect(located).toBeDefined();
+    expect(located?.scope.sessionKey).toBe(scopeA.sessionKey);
+    expect(located?.durable).toBeUndefined();
+
+    // remove in conversation A must NOT delete durableB from conversation B
+    owner.remove(host, "provisional-a-id");
+    const outboxes = listStoredChatOutboxes(host);
+    const queueB = outboxes.find((o) => o.sessionKey === scopeB.sessionKey)?.queue ?? [];
+    expect(queueB).toHaveLength(1);
+    expect(queueB[0]!.id).toBe("stored-b-id");
+  });
+
+  it("updates aliased queued row in durable storage using canonical stored row", () => {
+    const host = { ...state, hello: null, chatQueue: new Array<ChatQueueItem>() };
+    const owner = chatOutboxOwner(host);
+    const scope = resolveUiConversationIdentity(host, host.sessionKey);
+
+    const durableRow: ChatQueueItem = {
+      id: "canonical-durable-id",
+      text: "Queued message",
+      createdAt: 100,
+      sendRunId: "run-update-alias-888",
+      sendAttempts: 1,
+      sendState: "waiting-model",
+      sessionKey: scope.sessionKey,
+      agentId: scope.agentId,
+    };
+    expect(
+      admitStoredChatComposerQueueItem(
+        host,
+        captureChatOutboxAdmission(host, scope.sessionKey),
+        durableRow,
+      ),
+    ).toBe(true);
+
+    const localWaiting: ChatQueueItem = {
+      id: "provisional-local-id",
+      text: "Queued message",
+      createdAt: 100,
+      sendRunId: "run-update-alias-888",
+      sendAttempts: 1,
+      sendState: "waiting-model",
+    };
+    owner.keep(host, scope, localWaiting);
+
+    // update called with provisional ID updates durable storage successfully
+    const results = owner.update(host, [
+      {
+        id: "provisional-local-id",
+        update: (item) => ({ ...item, sendState: "failed", sendError: "Network failure" }),
+      },
+    ]);
+    expect(results).toBeDefined();
+    expect(results?.[0]?.sendState).toBe("failed");
+    expect(results?.[0]?.id).toBe("canonical-durable-id");
+
+    // verify durable storage has the updated state
+    const outboxes = listStoredChatOutboxes(host);
+    const queue = outboxes.find((o) => o.sessionKey === scope.sessionKey)?.queue ?? [];
+    expect(queue).toHaveLength(1);
+    expect(queue[0]!.id).toBe("canonical-durable-id");
+    expect(queue[0]!.sendState).toBe("failed");
+    expect(queue[0]!.sendError).toBe("Network failure");
+  });
+
+  it("does not suppress local queued item in conversation A when conversation B has a durable row with the same sendRunId during snapshot, reconcile, or allItems", () => {
+    const host = { ...state, hello: null, chatQueue: new Array<ChatQueueItem>() };
+    const owner = chatOutboxOwner(host);
+    const scopeA = resolveUiConversationIdentity(host, host.sessionKey);
+    const scopeB = { sessionKey: "agent:other-conversation:workspace", agentId: "other" };
+
+    const sharedRunId = "cross-scope-collision-run-id";
+
+    // Conversation B has an admitted durable row
+    const durableB: ChatQueueItem = {
+      id: "durable-b-row",
+      text: "Message in B",
+      createdAt: 100,
+      sendRunId: sharedRunId,
+      sendAttempts: 1,
+      sendState: "waiting-model",
+      sessionKey: scopeB.sessionKey,
+      agentId: scopeB.agentId,
+    };
+    expect(
+      admitStoredChatComposerQueueItem(
+        host,
+        captureChatOutboxAdmission(host, scopeB.sessionKey, scopeB.agentId),
+        durableB,
+      ),
+    ).toBe(true);
+
+    // Conversation A has a local pending item with the same sendRunId
+    const localA: ChatQueueItem = {
+      id: "local-a-item",
+      text: "Message in A",
+      createdAt: 200,
+      sendRunId: sharedRunId,
+      sendAttempts: 0,
+      sendState: "sending",
+    };
+    owner.keep(host, scopeA, localA);
+
+    // 1. Snapshot in conversation A must retain localA and not drop it due to conversation B's durable row
+    const snapshotA = owner.snapshot(host, scopeA);
+    expect(snapshotA).toHaveLength(1);
+    expect(snapshotA[0]!.id).toBe("local-a-item");
+    expect(snapshotA[0]!.text).toBe("Message in A");
+
+    // 2. allItems must include localA alongside durableB without suppressing localA
+    const all = owner.allItems(host);
+    expect(all.some((item) => item.id === "local-a-item")).toBe(true);
+    expect(all.some((item) => item.id === "durable-b-row")).toBe(true);
+    expect(all).toHaveLength(2);
+  });
+});
