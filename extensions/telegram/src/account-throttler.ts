@@ -24,7 +24,7 @@ type TelegramApiSignal = Parameters<ApiThrottlerTransformer>[3];
 // owner: every call for the token waits for the deadline, non-replaceable calls
 // (final replies, deletes, reactions) retry within this budget, and replaceable
 // calls (stream previews, typing) yield instead of queueing behind the penalty.
-export const TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS = 5 * 60_000;
+const TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS = 5 * 60_000;
 const FLOOD_BACKOFF_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 30_000,
