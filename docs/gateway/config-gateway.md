@@ -1,5 +1,5 @@
 ---
-summary: "Gateway config: bind, auth, roles, Control UI, terminal, remote, nodes, TLS, and reload"
+summary: "Gateway config: bind, auth, roles, Control UI, file roots, terminal, remote, nodes, TLS, and reload"
 read_when:
   - Binding or authenticating the gateway
   - Assigning gateway roles or node pairing
@@ -76,6 +76,13 @@ For the full key index and the other top-level config domains, see [Configuratio
     terminal: {
       enabled: false,
       // shell: "/bin/zsh",
+    },
+    fileRoots: {
+      obsidian: {
+        label: "Obsidian Vault",
+        path: "/home/you/Obsidian",
+        readOnly: true,
+      },
     },
     remote: {
       url: "ws://127.0.0.1:18789",
@@ -190,6 +197,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 
   Catalog providers can also advertise terminal-based session creation. The method is available only when `cliAgents.enabled` is on, the Gateway terminal is available, and the selected provider exposes the capability. Callers supply `cwd`; create a fresh worktree first with `worktrees.create` when needed, because terminal start does not provision one.
 
+- `fileRoots`: optional named, read-only filesystem roots for the Gateway file-root RPC surface. Each entry has a stable lowercase `id`, a display `label`, and an absolute host `path`; the path is never returned to clients. Listing and preview reject traversal, symlink/hardlink escapes, and dot-prefixed metadata such as `.obsidian` and `.git`. This is the Gateway API foundation for a later Control UI vault browser; it does not yet add editing, automatic vault discovery, or an Obsidian protocol handoff. **Access is Gateway-wide: every authenticated client with the existing `operator.read` scope can browse and preview every configured root. This setting provides no per-user or per-root ACLs, so configure roots only on Gateways whose operator clients are trusted to share them.**
 - `terminal.enabled`: the admin-scoped operator terminal. Default: `true`; set `false` to opt out. The terminal starts a host PTY in the selected agent workspace, inherits the Gateway process environment, and is refused for agents with `sandbox.mode: "all"`. Changes hot-apply: disabling closes attached, detached, and conversation-owned sessions and cancels pending opens; re-enabling allows fresh sessions. Reload open Control UI pages to pick up the updated content security policy.
 - `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows. Changes hot-apply to newly opened terminals; existing terminals keep running their original shell.
 - `terminal.detachedSessionTimeoutSeconds`: how long a terminal session survives after its connection drops (page reload, laptop sleep), staying reattachable via `terminal.attach` with its recent output replayed. Default: `300`. Set `0` to kill sessions the moment their connection drops. Changes hot-apply to existing detached sessions using their original disconnect time; expired sessions close immediately, while attached terminals keep running. Detached sessions keep running their commands, so shorten this on shared or exposed hosts.

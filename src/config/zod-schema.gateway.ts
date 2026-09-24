@@ -82,6 +82,16 @@ function validateGatewayPublicOrigin(value: string): boolean {
   return url.protocol === "https:" || GATEWAY_HTTP_LOOPBACK_HOSTS.has(url.hostname);
 }
 
+const GatewayFileRootIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
+const GatewayFileRootSchema = z.strictObject({
+  /** Operator-facing label shown to clients; the host path is never returned. */
+  label: z.string().trim().min(1).max(64),
+  /** Absolute filesystem path on the Gateway host. */
+  path: z.string().refine((value) => value.trim().length > 0, "path must not be blank"),
+  /** The first file-root API is intentionally read-only. */
+  readOnly: z.literal(true).optional(),
+});
+
 export const GatewayConfigSchema = z
   .strictObject({
     /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
@@ -200,6 +210,8 @@ export const GatewayConfigSchema = z
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
       })
       .optional(),
+    /** Explicit, named filesystem roots exposed through the read-only Gateway file-root API. */
+    fileRoots: z.record(GatewayFileRootIdSchema, GatewayFileRootSchema).optional(),
     cliAgents: z
       .strictObject({
         /** Show catalog-backed CLI agents in the new-session model picker. Default: true. */

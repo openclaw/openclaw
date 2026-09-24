@@ -121,6 +121,10 @@ export type GatewayTerminalConfig = NonNullable<GatewayConfigInput["terminal"]>;
 /** External CLI session targets in the Control UI. */
 export type GatewayCliAgentsConfig = NonNullable<GatewayConfigInput["cliAgents"]>;
 
+/** One explicitly configured, read-only filesystem root exposed by the Gateway. */
+export type GatewayFileRootConfig = NonNullable<GatewayConfigInput["fileRoots"]>[string];
+export type GatewayFileRootsConfig = NonNullable<GatewayConfigInput["fileRoots"]>;
+
 /** Gateway config reload strategy for managed installs. */
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 

@@ -9,6 +9,11 @@ import type {
   EnvironmentsSessionDestroyParams,
   EnvironmentsSessionExecParams,
 } from "./schema/environments.js";
+import type {
+  FilesRootGetParams,
+  FilesRootListParams,
+  FilesRootsListParams,
+} from "./schema/file-roots.js";
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
 import type * as PortalSchema from "./schema/portals.js";
@@ -48,6 +53,9 @@ export type GatewayCoreRequestParams = {
   "conversations.turn": AgentSchema.ConversationTurnParams;
   "conversations.turn.cancel": AgentSchema.ConversationTurnCancelParams;
   "logs.tail": LogsTailParams;
+  "files.roots.list": FilesRootsListParams;
+  "files.root.list": FilesRootListParams;
+  "files.root.get": FilesRootGetParams;
   "mentions.list": HumanMentionsSchema.MentionsListParams;
   "mentions.dismiss": HumanMentionsSchema.MentionsDismissParams;
   "portal.close": PortalSchema.PortalCloseParams;
