@@ -4,6 +4,12 @@ This gate starts only after stable publication. It is a narrow shipped-state
 closeout, not permission to heal broader `main`. Stable publication is not
 complete until `main` carries the actual shipped release state.
 
+Closeout applies the current publication gates, including any approved waiver
+recorded for the exact release. Keep the operator's reason with the release
+evidence. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
+replay the recorded closeout to regenerate identical bytes; do not manufacture
+new evidence. Invalid or mismatched assets remain blocking.
+
 1. Start from fresh latest `main`. Use a same-repository PR targeting `main`,
    with branch `release/<version>-main-closeout` and exact title
    `chore(release): close out <version> on main`. `<version>` is the published
@@ -60,16 +66,15 @@ complete until `main` carries the actual shipped release state.
    recovery, and asset fields byte-for-byte while recomputing authoritative
    release fields. Do not declare stable complete until it writes the immutable
    closeout manifest to the GitHub release. The drill must be within 90 days;
-   manual dispatch is only for repair/replay, and private rollback commands
-   remain in the maintainer-only runbook.
-   Manual replay needs only `tag` when repository drill variables are configured.
-   Replay requires successful stable/full evidence with soak and blocking
-   performance; historical publication waivers do not authorize closeout.
-   Complete manifest/checksum pairs remain recorded without rewriting. Historical
-   waiver-bearing receipt replay and repair are intentionally unsupported: the
-   original postpublish evidence binds its validation run, which a fresh run
-   cannot replace. Preserve those artifacts and stop instead of overwriting
-   them or publishing again to repair a receipt.
+   private rollback commands remain in the maintainer-only runbook.
+   When the main forward-port preceded publication, start initial closeout after
+   Release Publish succeeds with `pnpm release:stable YYYY.M.PATCH --from closeout`
+   using the saved orchestrator state, or dispatch
+   `gh workflow run openclaw-stable-main-closeout.yml --ref main -f tag=vYYYY.M.PATCH`
+   after a direct Actions publication. Unrelated source pushes do not poll for
+   publication completion. Manual initial closeout or replay needs only `tag`: it reuses publish-accepted sealed waiver text
+   (only new operator text needs the version prefix) and repository drill variables;
+   failed non-proof lanes without a sealed lane waiver still need `lane_waiver`.
    Push runs are never cancelled by later `main` pushes; verification serializes
    per resolved stable tag.
 7. A macOS build pulled from Sparkle on purpose (for example a crashing

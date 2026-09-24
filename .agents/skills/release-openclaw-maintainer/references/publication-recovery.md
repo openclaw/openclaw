@@ -33,7 +33,7 @@ Classify a failure before changing Git state:
   downstream evidence; after npm publication use a new beta/version.
 - Changelog-only defect: replace Release SHA and reuse Code SHA evidence only
   after proving the exact changelog delta.
-- Tooling/provenance, credential/infrastructure, wrapper, approval, or selector
+- Tooling, source mismatch, credential, infrastructure, wrapper, approval, or selector
   failure: keep the candidate and recover the smallest failed surface. Change
   Tooling SHA only when needed and record the invalidated evidence.
 
@@ -61,18 +61,22 @@ Use the original successful child run IDs and evidence output path with the
 beta verifier. Restore the draft, dependency evidence asset, proof section and
 finalization from that evidence. Never rerun publication for bytes already
 published. A failed postpublish confidence lane does not authorize unpublishing.
-Do not leave the GitHub release drafted while you recover: once npm is out, run
-`gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`
-first (see [regular release](regular-release.md#publish-and-verify)), then repair
-the parent: run the beta-to-stable dist-tag sync, sweep the failed parent's
-stale `waiting`/`queued` children (reject their gate and cancel them, per
-`$release-openclaw-ci` Publish children), and dispatch a new parent with the
-same inputs. It recognizes published bytes and only runs ClawHub, GitHub
-release evidence, and Docker. Never approve a ClawHub child by hand; without
-the parent's recovery-approval artifact its publish jobs fail
-`Artifact not found`.
+Keep the selected publisher's finalization checks intact while recovering.
+The normal direct route verifies npm and Docker before activation; the prepared
+button also verifies ClawHub downloads. Do not manually un-draft a release to
+bypass a failed gate. The direct publisher's explicit `finalize_release_before_docker=true`
+option changes that ordering, not the validation requirements.
 
-Follow `docs/reference/RELEASING.md`: once a beta tag has been pushed, use the
+Repair a stale beta floor through the dist-tag owner and inspect the failed
+parent's exact children before rejecting stale gates or canceling them. Resume
+through the selected route with the same qualified bytes and inputs; direct
+publication uses the successful original core run, while prepared publication
+uses a new button run with the same readiness artifact. Keep the original run
+attempts and required approvals. Do not substitute a manual child approval for
+the parent's authorization. See `$release-openclaw-ci` Publish children for
+stale-child cleanup.
+
+Follow the [release policy](../../../../docs/reference/RELEASING.md): once a beta tag has been pushed, use the
 next beta number rather than deleting or recreating it, even before npm
 publication. Published npm versions and final stable/extended-stable tags remain
 immutable. Routine release authority does not authorize destructive tag
@@ -152,3 +156,14 @@ npm view openclaw@latest version dist.tarball --json --prefer-online
 
 An existing tag may still receive validation-only `preflight_only=true` to
 verify packaging after publish; it does not authorize republishing.
+
+## Check the bootstrap token
+
+Before publishing a never-published npm package, check the repository's actual
+`NPM_TOKEN` in an approved GitHub Actions job. Disable shell tracing, write the
+token to a private temporary npmrc, and run `npm whoami` against
+`https://registry.npmjs.org` with that file and an otherwise clean environment.
+Suppress account output, remove the temporary file, and retain the run URL.
+Never print or upload the token. A local login or secret update time is not a
+substitute for this check. Successful authentication does not establish package
+permissions or approve publication; failures go to the credential owner.

@@ -30,8 +30,10 @@ release readiness. Real publish reuses the successful notarized preflight and
 validation for the same tag/source SHA.
 
 The real publish (`openclaw-macos-publish.yml` in `openclaw/releases`) attaches
-assets to the GitHub release whether it is still a draft or public; still flip
-it as soon as core npm is visible. A re-dispatched preflight for the same tag
+assets to the GitHub release whether it is still a draft or public. Let the
+selected publisher activate the release after its required checks; do not
+make a draft public to bypass a failed gate. See
+[publication recovery](publication-recovery.md). A re-dispatched preflight for the same tag
 and source resumes every variant from its newest checkpoint without rebuilding;
 `ignore_checkpoints=true` forces a rebuild and `resume_notarization_run_id`,
 `resume_notarization_run_attempt`, `resume_notarization_variant` only pin one
@@ -108,8 +110,7 @@ after preparatory reads, including after a deletion and before its replacement.
 Verify both canonical and legacy endpoints after publication, including when a
 newer Gateway release appeared during the Linux build. If canonical metadata is
 missing after an interrupted deletion, normal publication refuses recovery.
-Use the explicit owner reconciliation procedure in
-`docs/reference/RELEASING.md` under **Linux companion publication**: preserve the
+Have the release owner reconcile it explicitly: preserve the
 last verified Linux floor and all intervening publication evidence, exclude
 other writers, revalidate release/source/inventory and immutable bytes, and
 read back both endpoints. Version/hash inputs or current Gateway `latest` alone
