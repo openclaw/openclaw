@@ -1,4 +1,4 @@
-// Legacy runtime agent config migrations for memory, heartbeat, sandbox, and runtime policy keys.
+// Legacy runtime agent config migrations for memory, sandbox, and runtime policy keys.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -25,8 +25,6 @@ import {
   selectedCanonicalModelRefsForRuntimePolicy,
 } from "./legacy-runtime-model-policy.js";
 import { resolveLegacyCliRuntimeAlias } from "./legacy-runtime-model-providers.js";
-
-const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
 
 const LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS = [
   { legacyKey: "chunkSize", parentKey: "chunking", canonicalKey: "tokens" },
@@ -142,27 +140,6 @@ function someAgentEntry(
   return matched;
 }
 
-const HEARTBEAT_RULE: LegacyConfigRule = {
-  path: ["heartbeat"],
-  message:
-    "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
-};
-
-const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
-  {
-    path: ["agents", "defaults", "sandbox"],
-    message:
-      'agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope instead. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacySandboxPerSession(value),
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.sandbox.perSession is legacy; use agents.entries.*.sandbox.scope instead. Run "openclaw doctor --fix".',
-    match: (value) => someAgentEntry(value, (agent) => hasLegacySandboxPerSession(agent.sandbox)),
-  },
-];
-
 const UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES: LegacyConfigRule[] = [
   {
     path: ["agents", "defaults", "sandbox", "browser", "network"],
@@ -188,12 +165,6 @@ const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
       'agents.defaults.agentRuntime is ignored; set models.providers.<provider>.agentRuntime or a model-scoped agentRuntime instead. Run "openclaw doctor --fix".',
   },
   {
-    path: ["agents", "defaults", "embeddedHarness"],
-    message:
-      'agents.defaults.embeddedHarness is legacy and ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
-    match: (value) => getRecord(value) !== null,
-  },
-  {
     path: ["agents", "defaults", "agentRuntime"],
     message:
       'agents.defaults.agentRuntime is ignored; set models.providers.<provider>.agentRuntime or a model-scoped agentRuntime instead. Run "openclaw doctor --fix".',
@@ -204,36 +175,6 @@ const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
     message:
       'agents.entries.*.agentRuntime is ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
     match: (value) => someAgentEntry(value, (agent) => getRecord(agent.agentRuntime) !== null),
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.embeddedHarness is legacy and ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
-    match: (value) => someAgentEntry(value, (agent) => getRecord(agent.embeddedHarness) !== null),
-  },
-];
-
-const DEPRECATED_EMBEDDED_AGENT_KEY_RULES: LegacyConfigRule[] = [
-  {
-    path: ["agents", "defaults", "embeddedPi"],
-    message:
-      'agents.defaults.embeddedPi is legacy; use agents.defaults.embeddedAgent instead. Run "openclaw doctor --fix".',
-    match: (value) => getRecord(value) !== null,
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.embeddedPi is legacy; use agents.entries.*.embeddedAgent instead. Run "openclaw doctor --fix".',
-    match: (value) => someAgentEntry(value, (agent) => getRecord(agent.embeddedPi) !== null),
-  },
-];
-
-const LEGACY_AGENT_LLM_TIMEOUT_RULES: LegacyConfigRule[] = [
-  {
-    path: ["agents", "defaults", "llm"],
-    message:
-      'agents.defaults.llm is legacy; use models.providers.<id>.timeoutSeconds for slow model/provider timeouts. Run "openclaw doctor --fix".',
-    match: (value) => getRecord(value) !== null,
   },
 ];
 
@@ -334,85 +275,9 @@ const SYSTEM_PROMPT_OVERRIDE_LEGACY_RULES: LegacyConfigRule[] = [
   },
 ];
 
-function splitLegacyHeartbeat(legacyHeartbeat: Record<string, unknown>): {
-  agentHeartbeat: Record<string, unknown> | null;
-  channelHeartbeat: Record<string, unknown> | null;
-} {
-  const agentHeartbeat: Record<string, unknown> = {};
-  const channelHeartbeat: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(legacyHeartbeat)) {
-    if (isBlockedObjectKey(key)) {
-      continue;
-    }
-    if (CHANNEL_HEARTBEAT_KEYS.has(key)) {
-      channelHeartbeat[key] = value;
-      continue;
-    }
-    agentHeartbeat[key] = value;
-  }
-
-  return {
-    agentHeartbeat: Object.keys(agentHeartbeat).length > 0 ? agentHeartbeat : null,
-    channelHeartbeat: Object.keys(channelHeartbeat).length > 0 ? channelHeartbeat : null,
-  };
-}
-
-function mergeLegacyIntoDefaults(params: {
-  raw: Record<string, unknown>;
-  rootKey: "agents" | "channels";
-  fieldKey: string;
-  legacyValue: Record<string, unknown>;
-  changes: string[];
-  movedMessage: string;
-  mergedMessage: string;
-}) {
-  const root = ensureRecord(params.raw, params.rootKey);
-  const defaults = ensureRecord(root, "defaults");
-  const existing = getRecord(defaults[params.fieldKey]);
-  if (!existing) {
-    defaults[params.fieldKey] = params.legacyValue;
-    params.changes.push(params.movedMessage);
-  } else {
-    const merged = structuredClone(existing);
-    mergeMissing(merged, params.legacyValue);
-    defaults[params.fieldKey] = merged;
-    params.changes.push(params.mergedMessage);
-  }
-}
-
-function hasLegacySandboxPerSession(value: unknown): boolean {
-  const sandbox = getRecord(value);
-  return Boolean(sandbox && Object.hasOwn(sandbox, "perSession"));
-}
-
 function hasOwnTimeoutMs(value: unknown): boolean {
   const record = getRecord(value);
   return Boolean(record && Object.hasOwn(record, "timeoutMs"));
-}
-
-function migrateLegacyEmbeddedAgentKey(
-  container: Record<string, unknown>,
-  pathLabel: string,
-  changes: string[],
-): void {
-  const legacy = getRecord(container.embeddedPi);
-  if (!legacy) {
-    return;
-  }
-  const existing = getRecord(container.embeddedAgent);
-  if (!existing) {
-    container.embeddedAgent = legacy;
-    changes.push(`Moved ${pathLabel}.embeddedPi → ${pathLabel}.embeddedAgent.`);
-  } else {
-    const merged = structuredClone(existing);
-    mergeMissing(merged, legacy);
-    container.embeddedAgent = merged;
-    changes.push(
-      `Merged ${pathLabel}.embeddedPi → ${pathLabel}.embeddedAgent (filled missing fields from legacy; kept explicit embeddedAgent values).`,
-    );
-  }
-  delete container.embeddedPi;
 }
 
 function isLegacyMemorySearchAutoProvider(value: unknown): boolean {
@@ -499,27 +364,6 @@ function migrateCanonicalMemorySearches(
       changes,
     );
   });
-}
-
-function migrateLegacySandboxPerSession(
-  sandbox: Record<string, unknown>,
-  pathLabel: string,
-  changes: string[],
-): void {
-  if (!Object.hasOwn(sandbox, "perSession")) {
-    return;
-  }
-  const rawPerSession = sandbox.perSession;
-  if (typeof rawPerSession !== "boolean") {
-    return;
-  }
-  if (sandbox.scope === undefined) {
-    sandbox.scope = rawPerSession ? "session" : "shared";
-    changes.push(`Moved ${pathLabel}.perSession → ${pathLabel}.scope (${String(sandbox.scope)}).`);
-  } else {
-    changes.push(`Removed ${pathLabel}.perSession (${pathLabel}.scope already set).`);
-  }
-  delete sandbox.perSession;
 }
 
 function getSandboxBrowserConfig(container: unknown): Record<string, unknown> | null {
@@ -616,10 +460,6 @@ function removeLegacyAgentRuntimePolicy(
   pathLabel: string,
   changes: string[],
 ): void {
-  if (getRecord(container.embeddedHarness) !== null) {
-    delete container.embeddedHarness;
-    changes.push(`Removed ${pathLabel}.embeddedHarness; runtime is now provider/model scoped.`);
-  }
   if (getRecord(container.agentRuntime) !== null) {
     preserveLegacyWholeAgentRuntimePolicy(container, pathLabel, changes);
     delete container.agentRuntime;
@@ -1261,36 +1101,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     apply: removeLegacySystemPromptOverride,
   }),
   defineLegacyConfigMigration({
-    id: "agents.defaults.llm->models.providers.timeoutSeconds",
-    describe: "Remove legacy agents.defaults.llm timeout config",
-    legacyRules: LEGACY_AGENT_LLM_TIMEOUT_RULES,
-    apply: (raw, changes) => {
-      const defaults = getRecord(getRecord(raw.agents)?.defaults);
-      if (!defaults || getRecord(defaults.llm) === null) {
-        return;
-      }
-      delete defaults.llm;
-      changes.push(
-        "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds within the agent/run timeout ceiling.",
-      );
-    },
-  }),
-  defineLegacyConfigMigration({
     id: "agents.model.timeoutMs-ignored",
     describe: "Remove ignored timeoutMs keys from agent model selection config",
     legacyRules: IGNORED_AGENT_MODEL_TIMEOUT_RULES,
     apply: (raw, changes) =>
       visitAgentConfigScopes(raw, (agent, path) =>
         removeIgnoredAgentModelTimeouts(agent, path, changes),
-      ),
-  }),
-  defineLegacyConfigMigration({
-    id: "agents.embeddedPi->embeddedAgent",
-    describe: "Move legacy embedded agent config key to embeddedAgent",
-    legacyRules: DEPRECATED_EMBEDDED_AGENT_KEY_RULES,
-    apply: (raw, changes) =>
-      visitAgentConfigScopes(raw, (agent, path) =>
-        migrateLegacyEmbeddedAgentKey(agent, path, changes),
       ),
   }),
   defineLegacyConfigMigration({
@@ -1301,18 +1117,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
       visitAgentConfigScopes(raw, (agent, path) =>
         removeLegacyAgentRuntimePolicy(agent, path, changes),
       ),
-  }),
-  defineLegacyConfigMigration({
-    id: "agents.sandbox.perSession->scope",
-    describe: "Move legacy agent sandbox perSession aliases to sandbox.scope",
-    legacyRules: LEGACY_SANDBOX_SCOPE_RULES,
-    apply: (raw, changes) =>
-      visitAgentConfigScopes(raw, (agent, pathLabel) => {
-        const sandbox = getRecord(agent.sandbox);
-        if (sandbox) {
-          migrateLegacySandboxPerSession(sandbox, `${pathLabel}.sandbox`, changes);
-        }
-      }),
   }),
   defineLegacyConfigMigration({
     id: "agents.sandbox.browser.network-none",
@@ -1414,50 +1218,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
           : "Moved session.typingMode → agents.defaults.typingMode.",
       );
       delete session.typingMode;
-    },
-  }),
-  defineLegacyConfigMigration({
-    id: "heartbeat->agents.defaults.heartbeat",
-    describe: "Move top-level heartbeat to agents.defaults.heartbeat/channels.defaults.heartbeat",
-    legacyRules: [HEARTBEAT_RULE],
-    apply: (raw, changes) => {
-      const legacyHeartbeat = getRecord(raw.heartbeat);
-      if (!legacyHeartbeat) {
-        return;
-      }
-
-      const { agentHeartbeat, channelHeartbeat } = splitLegacyHeartbeat(legacyHeartbeat);
-
-      if (agentHeartbeat) {
-        mergeLegacyIntoDefaults({
-          raw,
-          rootKey: "agents",
-          fieldKey: "heartbeat",
-          legacyValue: agentHeartbeat,
-          changes,
-          movedMessage: "Moved heartbeat → agents.defaults.heartbeat.",
-          mergedMessage:
-            "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
-        });
-      }
-
-      if (channelHeartbeat) {
-        mergeLegacyIntoDefaults({
-          raw,
-          rootKey: "channels",
-          fieldKey: "heartbeat",
-          legacyValue: channelHeartbeat,
-          changes,
-          movedMessage: "Moved heartbeat visibility → channels.defaults.heartbeat.",
-          mergedMessage:
-            "Merged heartbeat visibility → channels.defaults.heartbeat (filled missing fields from legacy; kept explicit channels.defaults values).",
-        });
-      }
-
-      if (!agentHeartbeat && !channelHeartbeat) {
-        changes.push("Removed empty top-level heartbeat.");
-      }
-      delete raw.heartbeat;
     },
   }),
 ];

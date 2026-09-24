@@ -15,6 +15,7 @@ import {
   renderPersonName,
   type PersonActivityRouting,
 } from "./person-activity-link.ts";
+import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { renderSessionColorDot } from "./session-color.ts";
 import {
   renderSessionHovercardContext,
@@ -596,6 +597,16 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
       lastMessagePreview
         ? html`<section class="session-hovercard__section session-hovercard__section--optional">
             <div class="session-hovercard__excerpt">${lastMessagePreview}</div>
+          </section>`
+        : nothing
+    }
+    ${
+      input.row?.attention?.kind === "error"
+        ? html`<section class="session-hovercard__section session-hovercard__error">
+            <span class="session-hovercard__error-icon" aria-hidden="true"
+              >${icons.alertTriangle}</span
+            >
+            <span>${sessionAttentionSubtitle(input.row.attention)}</span>
           </section>`
         : nothing
     }

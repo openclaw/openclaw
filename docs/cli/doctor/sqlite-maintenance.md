@@ -173,6 +173,13 @@ are named in the warning; retained historical conflicts do not block update's
 post-session plugin repair. Preserve the originals and migration manifests while
 resolving those conflicts, then rerun `openclaw doctor --fix`.
 
+Normal Doctor output and `openclaw update status` show at most five
+`historical_transcript_deferred` examples per session store. Larger groups include
+the total and omitted counts; other warning types remain visible. For every
+finding, run `openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json`.
+This summary does not retire recovery references or make missing archives eligible
+for cleanup. Preserve the remaining originals and migration manifests for recovery.
+
 ### Changed archived registry
 
 `historical_transcript_deferred` can report that an archived session registry no

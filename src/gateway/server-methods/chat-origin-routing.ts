@@ -6,7 +6,6 @@ import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-prot
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
-import { scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   deliveryContextFromSession,
@@ -90,23 +89,6 @@ export function normalizeExplicitChatSendOrigin(
       ...(messageThreadId ? { messageThreadId } : {}),
     },
   };
-}
-
-export function resolveChatSendActiveScopeKey(params: {
-  sessionKey: string;
-  agentId?: string;
-  mainKey?: string;
-}): string {
-  if (parseAgentSessionKey(params.sessionKey) || !params.agentId) {
-    return params.sessionKey;
-  }
-  return (
-    scopeLegacySessionKeyToAgent({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      mainKey: params.mainKey,
-    }) ?? params.sessionKey
-  );
 }
 
 export function resolveChatSendOriginatingRoute(params: {

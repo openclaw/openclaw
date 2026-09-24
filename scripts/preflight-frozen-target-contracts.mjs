@@ -582,8 +582,11 @@ async function planWorkflowAdmission(input) {
         requested: requestedBaselines,
       });
     } else {
-      const { normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } =
-        await import("./lib/upgrade-survivor-policy.mjs");
+      const {
+        assertSupportedUpgradeSurvivorBaselineSpec,
+        normalizeUpgradeSurvivorBaselineSpec,
+        parseUpgradeSurvivorBaselineSpecs,
+      } = await import("./lib/upgrade-survivor-policy.mjs");
       const specs = [
         normalizeUpgradeSurvivorBaselineSpec(options.upgradeSurvivorBaseline),
         ...parseUpgradeSurvivorBaselineSpecs(options.upgradeSurvivorBaselines),
@@ -591,6 +594,7 @@ async function planWorkflowAdmission(input) {
       if (!specs[0] || specs.some((spec) => !/^openclaw@[0-9]/u.test(spec))) {
         throw new Error("unresolved upgrade baselines at the execution boundary");
       }
+      specs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
     }
   }
   const sourcePaths = new Set();
