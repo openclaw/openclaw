@@ -55,6 +55,7 @@ describe("stageAndEnqueueOutboundDelivery", () => {
       id: "shared-intent",
       enqueuedAt: 1,
       retryCount: 0,
+      attemptCount: 0,
       channel: "matrix" as const,
       to: "!original:example",
       preparedBatch: createUnmodifiedPreparedOutboundBatch(payloads),
