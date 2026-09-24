@@ -1,17 +1,24 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
-import { styleMap } from "lit/directives/style-map.js";
-import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import { formatUiExternalText } from "./format-error.ts";
 
-type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
+type ToastDismissReason =
+  | "action"
+  | "cancelled"
+  | "dismiss"
+  | "disconnected"
+  | "replaced"
+  | "timeout";
 
 export type ToastOptions = {
   /** A template lets a message name a destination the operator can actually open,
    * instead of spelling out a settings path the toast then makes them find. */
   message: string | TemplateResult;
+  /** A heading gives notifications a compact card with a separate action row. */
+  title?: string | TemplateResult;
+  /** Retire transient notifications when their owning view or access changes. */
+  signal?: AbortSignal;
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
   anchorTopOffset?: number;
@@ -52,13 +59,28 @@ let queuedToast: ToastOptions | null = null;
 class OpenClawToastHost extends OpenClawLightDomContentsElement {
   @state() private toast: ToastOptions | null = null;
   @state() private active = false;
-  private readonly toastQueue: ToastOptions[] = [];
+  private readonly toastQueue: { options: ToastOptions; abort: () => void }[] = [];
   private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private exitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private exitReason: ToastDismissReason | null = null;
   private remainingMs = 0;
   private deadline = 0;
   private hovered = false;
+  private renderToast?: typeof import("./toast-view.ts").renderToast;
+  private viewLoadFailed = false;
+  private visibleToast: ToastOptions | null = null;
+
+  protected override async scheduleUpdate() {
+    if (this.toast && !this.renderToast && !this.viewLoadFailed) {
+      try {
+        this.renderToast = (await import("./toast-view.ts")).renderToast;
+      } catch {
+        this.viewLoadFailed = true;
+      }
+    }
+    // Read live state in render(), never the toast that began the import.
+    await super.scheduleUpdate();
+  }
 
   private syncPlacement() {
     this.dataset.toastPlacement = this.parentElement?.matches(".shell") ? "shell" : "overlay";
@@ -92,17 +114,36 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     }
   }
 
+  private readonly abortActive = () => this.dismiss("cancelled");
+
   show(options: ToastOptions) {
-    if (options.fifo && this.toast) {
-      this.toastQueue.push(options);
+    if (options.signal?.aborted) {
+      options.onDismiss?.("cancelled");
       return;
     }
-    this.finishDismiss(this.exitReason ?? "replaced");
+    if (options.fifo && this.toast) {
+      const pending = {
+        options,
+        abort: () => {
+          const index = this.toastQueue.indexOf(pending);
+          if (index >= 0) {
+            this.toastQueue.splice(index, 1);
+            options.onDismiss?.("cancelled");
+          }
+        },
+      };
+      this.toastQueue.push(pending);
+      options.signal?.addEventListener("abort", pending.abort, { once: true });
+      return;
+    }
+    // A replacement keeps FIFO entries queued even when the old toast is exiting.
+    this.finishDismiss(this.exitReason ?? "replaced", false);
     this.toast = options;
+    this.viewLoadFailed = false;
+    options.signal?.addEventListener("abort", this.abortActive, { once: true });
     this.active = true;
     this.exitReason = null;
     this.remainingMs = options.durationMs ?? DEFAULT_TOAST_DURATION_MS;
-    this.syncDismissTimer();
   }
 
   override updated() {
@@ -111,11 +152,12 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     if (!this.toast) {
       this.hovered = false;
     }
+    this.visibleToast = this.renderToast ? this.toast : null;
     this.syncDismissTimer();
   }
 
   private syncDismissTimer(focused?: boolean) {
-    if (!this.toast || !this.active || !this.isConnected) {
+    if (!this.toast || this.visibleToast !== this.toast || !this.active || !this.isConnected) {
       return;
     }
     const root = this.getRootNode();
@@ -145,23 +187,32 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     }
   }
 
-  private finishDismiss(reason: ToastDismissReason) {
+  private finishDismiss(reason: ToastDismissReason, promoteNext = true) {
     const toast = this.toast;
+    toast?.signal?.removeEventListener("abort", this.abortActive);
     this.clearDismissTimer();
     this.active = false;
     this.exitReason = null;
     this.toast = null;
+    this.visibleToast = null;
     toast?.onDismiss?.(reason);
     if (reason === "disconnected") {
       this.hovered = false;
       const queued = this.toastQueue.splice(0);
       for (const pending of queued) {
-        pending.onDismiss?.("disconnected");
+        pending.options.signal?.removeEventListener("abort", pending.abort);
+        pending.options.onDismiss?.("disconnected");
       }
-    } else if (reason !== "replaced") {
-      const next = this.toastQueue.shift();
-      if (next) {
-        this.show(next);
+    } else if (promoteNext) {
+      while (this.toastQueue.length) {
+        const next = this.toastQueue.shift()!;
+        next.options.signal?.removeEventListener("abort", next.abort);
+        if (next.options.signal?.aborted) {
+          next.options.onDismiss?.("cancelled");
+          continue;
+        }
+        this.show(next.options);
+        break;
       }
     }
   }
@@ -175,8 +226,9 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     if (
       (reason !== "dismiss" && reason !== "timeout") ||
       !this.isConnected ||
+      this.visibleToast !== toast ||
       globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ||
-      !resolveToastAnchorRect(toast.anchor)
+      (!toast.title && !resolveToastAnchorRect(toast.anchor))
     ) {
       this.finishDismiss(reason);
       return;
@@ -195,85 +247,54 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     if (!toast) {
       return nothing;
     }
-    const anchorRect = resolveToastAnchorRect(toast.anchor);
-    return html`
-      <div
-        class="app-toast ${anchorRect ? "app-toast--anchored" : toast.placement === "bottom" ? "app-toast--bottom" : ""}"
-        data-active=${this.active ? "true" : "false"}
-        style=${styleMap(
-          anchorRect
-            ? {
-                "--app-toast-anchor-center": `${anchorRect.left + anchorRect.width / 2}px`,
-                "--app-toast-anchor-top": `${anchorRect.top + (toast.anchorTopOffset ?? 0)}px`,
-                "--app-toast-anchor-width": `${anchorRect.width}px`,
-              }
-            : {},
-        )}
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        @pointerenter=${() => {
-          this.hovered = true;
-          this.syncDismissTimer();
-        }}
-        @pointerleave=${() => {
-          this.hovered = false;
-          this.syncDismissTimer();
-        }}
-        @focusin=${() => this.syncDismissTimer(true)}
-        @focusout=${(event: FocusEvent) => {
-          // relatedTarget keeps transfers between Undo, links, and Dismiss paused.
-          this.syncDismissTimer(
-            event.relatedTarget instanceof Node && this.contains(event.relatedTarget),
-          );
-        }}
-        @transitionend=${(event: TransitionEvent) => {
-          if (
-            event.target === event.currentTarget &&
-            event.propertyName === "opacity" &&
-            !this.active &&
-            this.exitReason
-          ) {
-            this.finishDismiss(this.exitReason);
-          }
-        }}
-      >
-        ${
-          toast.icon
-            ? html`<span class="app-toast__icon" aria-hidden="true">${toast.icon}</span>`
-            : nothing
-        }
-        <span class="app-toast__message"
-          >${
-            typeof toast.message === "string" ? formatUiExternalText(toast.message) : toast.message
-          }</span
-        >
-        ${
-          toast.actionLabel && toast.onAction
-            ? html`
-                <button
-                  type="button"
-                  class="app-toast__action"
-                  @click=${() => {
-                    this.dismiss("action");
-                    toast.onAction?.();
-                  }}
-                >
-                  ${toast.actionLabel}
-                </button>
-              `
-            : nothing
-        }
+    if (!this.renderToast) {
+      // Retain the original outcome and FIFO queue until the operator can load
+      // the view. The failure notice never consumes the outcome's duration.
+      return html`<div class="app-toast" role="status" aria-live="polite">
+        <span class="app-toast__message">${t("lazyView.staleTitle")}</span>
         <button
           type="button"
-          class="app-toast__dismiss"
-          aria-label=${t("common.dismiss")}
-          @click=${() => this.dismiss("dismiss")}
+          class="app-toast__action"
+          @click=${() => {
+            this.viewLoadFailed = false;
+            this.requestUpdate();
+          }}
         >
-          ${icons.x}
+          ${t("common.retry")}
         </button>
-      </div>
-    `;
+        <button type="button" class="app-toast__dismiss" @click=${() => this.dismiss("dismiss")}>
+          ${t("common.dismiss")}
+        </button>
+      </div>`;
+    }
+    return this.renderToast(toast, this.active, resolveToastAnchorRect(toast.anchor), {
+      action: () => {
+        this.dismiss("action");
+        toast.onAction?.();
+      },
+      dismiss: () => this.dismiss("dismiss"),
+      hover: (hovered) => {
+        this.hovered = hovered;
+        this.syncDismissTimer();
+      },
+      focus: (focused) => this.syncDismissTimer(focused),
+      focusOut: (event) => {
+        // relatedTarget keeps transfers between Undo, links, and Dismiss paused.
+        this.syncDismissTimer(
+          event.relatedTarget instanceof Node && this.contains(event.relatedTarget),
+        );
+      },
+      transitionEnd: (event) => {
+        if (
+          event.target === event.currentTarget &&
+          event.propertyName === "opacity" &&
+          !this.active &&
+          this.exitReason
+        ) {
+          this.finishDismiss(this.exitReason);
+        }
+      },
+    });
   }
 }
 

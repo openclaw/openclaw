@@ -34,7 +34,12 @@ import { observeChatCache, type ChatMessageCache } from "./session-message-cache
 import { installSessionPrefetch } from "./session-prefetch.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SplitDropZone } from "./split-drop-zone.ts";
-import type { ChatSplitLayout, ChatSplitPane, SessionSplitHost } from "./split-layout-types.ts";
+import {
+  CHAT_SPLIT_NARROW_MEDIA_QUERY,
+  type ChatSplitLayout,
+  type ChatSplitPane,
+  type SessionSplitHost,
+} from "./split-layout-types.ts";
 import {
   applyUiCommandToSplitLayout,
   closePane,
@@ -137,7 +142,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     observeChatCache(this.messageCache, this.snapshotStore);
     this.routeHref = window.location.href;
     this.layout = loadSettings().chatSplitLayout;
-    this.mediaQuery = window.matchMedia("(max-width: 1099px)");
+    this.mediaQuery = window.matchMedia(CHAT_SPLIT_NARROW_MEDIA_QUERY);
     this.narrow = this.mediaQuery.matches;
     this.mediaQuery.addEventListener("change", this.handleViewportChange);
     this.mobileNavMediaQuery = window.matchMedia(mobileNavLayoutMediaQuery());

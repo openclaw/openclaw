@@ -10,7 +10,7 @@ import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import type { MentionsCapability } from "./mentions.ts";
+import type { createMentionsCapability, MentionsCapability } from "./mentions.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 
 export type SidebarAttentionStoreSources = {
@@ -22,22 +22,29 @@ export type SidebarAttentionStoreSources = {
   connectionBootstrap?: ConnectionBootstrapCoordinator;
 };
 
+export type SidebarAttentionStoreControllerSources = SidebarAttentionStoreSources & {
+  mentions: MentionsCapability;
+};
+
 export type SidebarAttentionStoreController = {
   readonly entries: readonly SidebarInboxEntry[];
-  readonly mentions: MentionsCapability;
   dismiss(dismissal: SidebarAttentionDismissal): void;
   syncDismissals(): void;
   dispose(): void;
 };
 
 type SidebarAttentionStoreControllerConstructor = new (
-  sources: SidebarAttentionStoreSources,
+  sources: SidebarAttentionStoreControllerSources,
   onChange: () => void,
 ) => SidebarAttentionStoreController;
 
 export type SidebarAttentionStore = {
+  getMentions(create: typeof createMentionsCapability): MentionsCapability;
   readonly entries: readonly SidebarInboxEntry[];
-  activate(Controller: SidebarAttentionStoreControllerConstructor): MentionsCapability;
+  activate(
+    Controller: SidebarAttentionStoreControllerConstructor,
+    create: typeof createMentionsCapability,
+  ): MentionsCapability;
   dismiss(dismissal: SidebarAttentionDismissal): void;
   subscribe(listener: () => void): () => void;
   dispose(): void;
@@ -46,6 +53,10 @@ export type SidebarAttentionStore = {
 export function createSidebarAttentionStore(
   sources: SidebarAttentionStoreSources,
 ): SidebarAttentionStore {
+  // Lazy consumers supply code; this facade alone owns the shared instance.
+  let mentions: MentionsCapability | undefined;
+  const getMentions = (create: typeof createMentionsCapability) =>
+    (mentions ??= create(sources.gateway, { connectionBootstrap: sources.connectionBootstrap }));
   const listeners = new Set<() => void>();
   let controller: SidebarAttentionStoreController | null = null;
   const publish = () => {
@@ -70,12 +81,14 @@ export function createSidebarAttentionStore(
   const stopScopeUpgrade = sources.scopeUpgrade.subscribe(synchronizeScopeUpgradeDismissal);
   synchronizeScopeUpgradeDismissal();
   return {
+    getMentions,
     get entries() {
       return controller?.entries ?? [];
     },
-    activate(Controller) {
-      controller ??= new Controller(sources, publish);
-      return controller.mentions;
+    activate(Controller, create) {
+      const ownedMentions = getMentions(create);
+      controller ??= new Controller({ ...sources, mentions: ownedMentions }, publish);
+      return ownedMentions;
     },
     dismiss(dismissal) {
       controller?.dismiss(dismissal);
@@ -89,6 +102,7 @@ export function createSidebarAttentionStore(
       stopScopeUpgrade();
       controller?.dispose();
       controller = null;
+      mentions?.dispose();
       listeners.clear();
     },
   };

@@ -272,6 +272,12 @@ export const SIDEBAR_ATTENTION_ELEMENT = {
   loadModule: () => import("../components/sidebar-attention.ts"),
 } satisfies OptionalCustomElement;
 
+export const MENTION_NOTIFICATIONS_ELEMENT = {
+  tagName: "openclaw-mention-notifications",
+  label: t("attention.issues"),
+  loadModule: () => import("../components/mention-notifications.ts"),
+} satisfies OptionalCustomElement;
+
 export const TERMINAL_PANEL_ELEMENT = {
   tagName: "openclaw-terminal-panel",
   label: "terminal panel",

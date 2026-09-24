@@ -4,7 +4,7 @@ import { property, state } from "lit/decorators.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
-import type { MentionsCapability } from "../app/mentions.ts";
+import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
@@ -81,7 +81,10 @@ class SidebarAttention extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.mentions =
-      this.context?.sidebarAttention.activate(SidebarAttentionStoreController) ?? null;
+      this.context?.sidebarAttention.activate(
+        SidebarAttentionStoreController,
+        createMentionsCapability,
+      ) ?? null;
     // Idle callbacks can run after the first click on a busy page.
     this.preloadPanel();
     // Dismissal belongs to the connected Inbox, including while its panel imports.

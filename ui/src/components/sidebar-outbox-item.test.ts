@@ -61,6 +61,9 @@ it.each([
         activate() {
           throw new Error("not used by renderer");
         },
+        getMentions() {
+          throw new Error("not used by renderer");
+        },
         dismiss: vi.fn(),
         subscribe: () => () => {},
         dispose() {},

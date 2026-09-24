@@ -48,6 +48,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/i18n/locales/en-login.ts":
     case "ui/src/lib/gateway-secret-shape.ts":
       return "login-runtime";
+    // Keep shared settings rules and their plugin overrides together so
+    // splitting the dense boot CSS does not invert their cascade order.
+    case "ui/src/styles/settings.css":
+    case "ui/src/styles/plugins.css":
+      return "settings-styles";
     case "ui/src/components/sidebar-update-card.ts":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";

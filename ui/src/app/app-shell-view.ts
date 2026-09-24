@@ -36,6 +36,7 @@ import {
   APP_SIDEBAR_ELEMENT,
   isOptionalElementDefined,
   MACOS_TITLEBAR_ELEMENT,
+  MENTION_NOTIFICATIONS_ELEMENT,
   type OptionalCustomElement,
   SIDEBAR_ATTENTION_ELEMENT,
 } from "./lazy-custom-element.ts";
@@ -224,6 +225,9 @@ export function renderApplicationShell(host: ShellViewHost) {
   });
   const openNewSession = callbacks.requestOpenNewSession;
   const uiSettings = context.theme.settings;
+  if (gatewayConnected && canCallGatewayMethod(gatewaySnapshot, "mentions.list", "operator.read")) {
+    host.lazyCustomElements.preload(MENTION_NOTIFICATIONS_ELEMENT, { reportError: true });
+  }
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session" || activeRoute === "systems";
@@ -593,6 +597,10 @@ export function renderApplicationShell(host: ShellViewHost) {
           : nothing
       }
       <openclaw-toast-host></openclaw-toast-host>
+      <openclaw-mention-notifications
+        .sessionKey=${sessionRoute ? host.activeSessionKey : null}
+        .splitLayout=${sessionRoute ? uiSettings.chatSplitLayout : undefined}
+      ></openclaw-mention-notifications>
     </div>
   `;
   // Keep plugin settings reachable when a replacement owns the workspace.

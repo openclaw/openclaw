@@ -27,6 +27,7 @@ export type MentionsCapability = {
   refresh: () => Promise<void>;
   dismiss: (ids: readonly string[]) => Promise<void>;
   subscribe: (listener: () => void) => () => void;
+  subscribeArrivals: (listener: (items: readonly MentionInboxItem[]) => void) => () => void;
   dispose: () => void;
 };
 
@@ -39,6 +40,8 @@ type MentionConnection = {
   revision: number | null;
   requiredRevision: number | null;
   dismissing: Set<string>;
+  seenArrivals: Map<string, number>;
+  hasArrivalBaseline: boolean;
   refreshRequested: boolean;
   refreshPromise: Promise<void> | null;
 };
@@ -57,6 +60,10 @@ export function createMentionsCapability(
   let connection: MentionConnection | null = null;
   let disposed = false;
   const listeners = new Set<() => void>();
+  const arrivalListeners = new Set<(items: readonly MentionInboxItem[]) => void>();
+  // The sidebar can hydrate before the lazy notification presenter subscribes.
+  // Keep only arrival IDs; the current authorized Inbox owns their contents.
+  const pendingArrivalIds = new Set<string>();
   const publish = (patch: Partial<MentionsSnapshot>) => {
     snapshot = { ...snapshot, ...patch };
     for (const listener of listeners) {
@@ -85,13 +92,55 @@ export function createMentionsCapability(
       if (
         !isCurrent(owner) ||
         result.gatewayInstanceId !== owner.gatewayInstanceId ||
-        (owner.revision !== null && result.revision < owner.revision) ||
-        (owner.requiredRevision !== null && result.revision < owner.requiredRevision)
+        (owner.revision !== null && result.revision < owner.revision)
       ) {
         return;
       }
+      if (!owner.hasArrivalBaseline) {
+        // Even an invalidated first read can identify retained IDs without
+        // publishing stale contents. A first read already at the new revision
+        // has no arrival boundary, so conservatively seed it without replay.
+        for (const item of result.items) {
+          owner.seenArrivals.set(item.id, item.expiresAt);
+        }
+        owner.hasArrivalBaseline = true;
+      }
+      if (owner.requiredRevision !== null && result.revision < owner.requiredRevision) {
+        return;
+      }
+      const arrivals = result.items.filter((item) => !owner.seenArrivals.has(item.id)).toReversed();
       owner.revision = result.revision;
+      const currentIds = new Set(result.items.map((item) => item.id));
+      // Omission can mean a temporarily unreadable session, not a new arrival
+      // when access returns. Retain IDs until their server-owned expiry; use
+      // observed server creation times rather than the browser clock to prune.
+      const observedTime = result.items.reduce((time, item) => Math.max(time, item.createdAt), 0);
+      for (const [id, expiresAt] of owner.seenArrivals) {
+        if (expiresAt <= observedTime && !currentIds.has(id)) {
+          owner.seenArrivals.delete(id);
+        }
+      }
+      for (const item of result.items) {
+        owner.seenArrivals.set(item.id, item.expiresAt);
+      }
+      for (const id of pendingArrivalIds) {
+        if (!currentIds.has(id)) {
+          pendingArrivalIds.delete(id);
+        }
+      }
       publish({ phase: "ready", items: result.items, error: null });
+      if (isCurrent(owner)) {
+        if (arrivals.length) {
+          if (!arrivalListeners.size) {
+            for (const item of arrivals) {
+              pendingArrivalIds.add(item.id);
+            }
+          }
+          for (const listener of arrivalListeners) {
+            listener(arrivals);
+          }
+        }
+      }
     } catch (error) {
       if (!isCurrent(owner)) {
         return;
@@ -104,6 +153,7 @@ export function createMentionsCapability(
       if (accessLost) {
         // Retire in-flight reads too; an earlier success cannot restore a revoked Inbox.
         connection = null;
+        pendingArrivalIds.clear();
       }
       publish({
         phase: "error",
@@ -167,6 +217,7 @@ export function createMentionsCapability(
     if (connection && isCurrent(connection)) {
       return;
     }
+    pendingArrivalIds.clear();
     if (
       disposed ||
       next.phase !== "connected" ||
@@ -189,6 +240,8 @@ export function createMentionsCapability(
       revision: null,
       requiredRevision: null,
       dismissing: new Set(),
+      seenArrivals: new Map(),
+      hasArrivalBaseline: false,
       refreshRequested: false,
       refreshPromise: null,
     };
@@ -269,12 +322,32 @@ export function createMentionsCapability(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    subscribeArrivals(listener) {
+      arrivalListeners.add(listener);
+      if (pendingArrivalIds.size) {
+        const currentItems = new Map(
+          connection && isCurrent(connection) ? snapshot.items.map((item) => [item.id, item]) : [],
+        );
+        const arrivals = [...pendingArrivalIds].flatMap((id) => {
+          const item = currentItems.get(id);
+          return item ? [item] : [];
+        });
+        // Consume before calling: a synchronous subscription must not replay them.
+        pendingArrivalIds.clear();
+        if (arrivals.length) {
+          listener(arrivals);
+        }
+      }
+      return () => arrivalListeners.delete(listener);
+    },
     dispose() {
       disposed = true;
       connection = null;
+      pendingArrivalIds.clear();
       stopGateway();
       stopEvents();
       listeners.clear();
+      arrivalListeners.clear();
     },
   };
 }

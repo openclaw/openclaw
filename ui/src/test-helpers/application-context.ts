@@ -23,10 +23,12 @@ const unavailableMentionsCapability = {
   refresh: async () => undefined,
   dismiss: async () => undefined,
   subscribe: () => () => undefined,
+  subscribeArrivals: () => () => undefined,
   dispose: () => undefined,
 } satisfies MentionsCapability;
 
 const emptySidebarAttentionStore = {
+  getMentions: () => unavailableMentionsCapability,
   entries: [],
   activate: () => unavailableMentionsCapability,
   dismiss: () => undefined,

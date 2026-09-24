@@ -1,3 +1,5 @@
+export const CHAT_SPLIT_NARROW_MEDIA_QUERY = "(max-width: 1099px)";
+
 export type ChatSplitPane = { id: string; sessionKey: string };
 
 export interface SessionSplitHost extends HTMLElement {

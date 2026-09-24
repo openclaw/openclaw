@@ -16,6 +16,7 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 import { icons } from "./icons.ts";
+import { renderMentionExcerpt } from "./mention-excerpt.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import { renderSidebarNotificationCard } from "./sidebar-notification-card.ts";
 import "./sidebar-update-card.ts";
@@ -96,7 +97,9 @@ export function renderSidebarMentionItem(params: {
         body: html`
           ${
             mention.excerpt
-              ? html`<p class="sidebar-mention-row__excerpt">${mention.excerpt}</p>`
+              ? html`<p class="sidebar-mention-row__excerpt">
+                  ${renderMentionExcerpt(mention.excerpt, mention.excerptMention)}
+                </p>`
               : nothing
           }
           <div class="sidebar-issues-panel__actions sidebar-mention-row__actions">

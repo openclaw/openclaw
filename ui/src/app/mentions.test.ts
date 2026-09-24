@@ -153,6 +153,8 @@ describe("application mention Inbox", () => {
     const harness = gatewayForMentions(request);
     const capability = createCapability(harness.gateway);
     const published: string[][] = [];
+    const arrivals = vi.fn();
+    capability.subscribeArrivals(arrivals);
     capability.subscribe(() => published.push(capability.snapshot.items.map((item) => item.id)));
     const hydration = capability.refresh();
     await flushMicrotasks();
@@ -163,13 +165,43 @@ describe("application mention Inbox", () => {
     await flushMicrotasks();
     expect(request).toHaveBeenCalledTimes(2);
     expect(published.flat()).not.toContain(mention.id);
+    expect(arrivals).not.toHaveBeenCalled();
 
     const current = { ...mention, id: "mention-current" };
-    latest.resolve(result(3, [current]));
+    latest.resolve(result(3, [current, mention]));
     await hydration;
-    expect(capability.snapshot.items).toEqual([current]);
+    expect(capability.snapshot.items).toEqual([current, mention]);
+    expect(arrivals).toHaveBeenCalledExactlyOnceWith([current]);
     expect(request).toHaveBeenCalledTimes(2);
   });
+
+  it.each([false, true])(
+    "seeds conservatively when the first snapshot includes an in-flight invalidation (reconnect: %s)",
+    async (reconnect) => {
+      const initial = deferred<MentionsListResult>();
+      const request = vi.fn<RequestFn>(() => initial.promise);
+      if (reconnect) {
+        request.mockResolvedValueOnce(result(1));
+      }
+      const harness = gatewayForMentions(request);
+      const capability = createCapability(harness.gateway);
+      const arrivals = vi.fn();
+      capability.subscribeArrivals(arrivals);
+      if (reconnect) {
+        await capability.refresh();
+        harness.update({ client: client(request) });
+      }
+      const hydration = capability.refresh();
+      await flushMicrotasks();
+      harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
+      // Revisions carry no arrival IDs or connection-time boundary. This may be
+      // retained Inbox data, including on reconnect; never guess from timestamps.
+      initial.resolve(result(2));
+      await hydration;
+      expect(capability.snapshot.items).toEqual([mention]);
+      expect(arrivals).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not resurrect a dismissed item from an older list or delayed invalidation", async () => {
     const staleList = deferred<MentionsListResult>();
@@ -271,8 +303,10 @@ describe("application mention Inbox", () => {
             )
           : Promise.resolve(result(1)),
       );
+      request.mockResolvedValueOnce(result(0, []));
       const harness = gatewayForMentions(request);
       const capability = createCapability(harness.gateway);
+      await capability.refresh();
       await capability.refresh();
       revoked = true;
 
@@ -291,6 +325,9 @@ describe("application mention Inbox", () => {
       revoked = false;
       await capability.refresh();
       expect(capability.snapshot).toMatchObject({ phase: "ready", items: [mention], error: null });
+      const arrivals = vi.fn();
+      capability.subscribeArrivals(arrivals);
+      expect(arrivals).not.toHaveBeenCalled();
     },
   );
 
@@ -410,5 +447,93 @@ describe("application mention Inbox", () => {
     queued.dispose();
     await flushMicrotasks();
     expect(request).toHaveBeenCalledTimes(2);
+  });
+  it("publishes only new arrivals after hydration and never replays a reconnected Inbox", async () => {
+    let response = result(1);
+    const request = vi.fn<RequestFn>(() => Promise.resolve(response));
+    const harness = gatewayForMentions(request);
+    const capability = createCapability(harness.gateway);
+    const arrivals = vi.fn();
+    const unsubscribe = capability.subscribeArrivals(arrivals);
+    await capability.refresh();
+    expect(arrivals).not.toHaveBeenCalled();
+
+    // The server source sequence, not millisecond timestamp uniqueness, owns order.
+    const newer = { ...mention, id: "newer", createdAt: 3_000 };
+    const older = { ...mention, id: "older", createdAt: 3_000 };
+    response = result(2, [newer, older, mention]);
+    harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
+    await capability.refresh();
+    expect(arrivals).toHaveBeenCalledExactlyOnceWith([older, newer]);
+    await capability.refresh();
+    expect(arrivals).toHaveBeenCalledTimes(1);
+
+    // A session access change can hide retained entries without dismissing them.
+    response = result(3, []);
+    await capability.refresh();
+    response = result(4, [newer, older, mention]);
+    await capability.refresh();
+    expect(arrivals).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    response = result(5, [{ ...mention, id: "before-reconnect" }, newer, older, mention]);
+    await capability.refresh();
+    harness.update({ client: client(request) });
+    await capability.refresh();
+    capability.subscribeArrivals(arrivals);
+    expect(arrivals).toHaveBeenCalledTimes(1);
+    response = result(6, []);
+    await capability.dismiss([mention.id]);
+    expect(arrivals).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers fresh arrivals once to the first late subscriber in arrival order", async () => {
+    let response = result(1);
+    const request = vi.fn<RequestFn>(() => Promise.resolve(response));
+    const harness = gatewayForMentions(request);
+    const capability = createCapability(harness.gateway);
+    await capability.refresh();
+
+    const newer = { ...mention, id: "newer", createdAt: 3_000 };
+    const older = { ...mention, id: "older", createdAt: 2_000 };
+    response = result(2, [newer, older, mention]);
+    harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
+    await capability.refresh();
+    const updated = { ...older, sessionTitle: "Renamed review" };
+    const later = { ...mention, id: "later", createdAt: 1_500 };
+    response = result(3, [newer, updated, later, mention]);
+    await capability.refresh();
+
+    const nextSubscriber = vi.fn();
+    const arrivals = vi.fn(() => capability.subscribeArrivals(nextSubscriber));
+    const unsubscribe = capability.subscribeArrivals(arrivals);
+    expect(arrivals).toHaveBeenCalledExactlyOnceWith([updated, newer, later]);
+    expect(nextSubscriber).not.toHaveBeenCalled();
+    unsubscribe();
+    await capability.refresh();
+    expect(nextSubscriber).not.toHaveBeenCalled();
+  });
+
+  it("prunes removed arrivals before a snapshot listener mounts the presenter", async () => {
+    let response = result(1);
+    const request = vi.fn<RequestFn>(() => Promise.resolve(response));
+    const harness = gatewayForMentions(request);
+    const capability = createCapability(harness.gateway);
+    await capability.refresh();
+    const removed = { ...mention, id: "removed", createdAt: 2_000 };
+    const surviving = { ...mention, id: "surviving", createdAt: 3_000 };
+    response = result(2, [surviving, removed, mention]);
+    await capability.refresh();
+
+    const arrivals = vi.fn();
+    capability.subscribe(() => {
+      if (capability.snapshot.phase === "ready") {
+        capability.subscribeArrivals(arrivals);
+      }
+    });
+    response = result(3, [surviving, mention]);
+    await capability.refresh();
+
+    expect(arrivals).toHaveBeenCalledExactlyOnceWith([surviving]);
   });
 });

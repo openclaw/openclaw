@@ -1,0 +1,191 @@
+/* A compact header pair establishes context; the larger message gets the emphasis. */
+.app-toast--notification {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px var(--space-3);
+  left: auto;
+  right: calc(var(--space-4) + var(--safe-area-right));
+  width: min(500px, calc(100vw - 32px));
+  max-width: none;
+  padding: 14px 14px var(--space-3);
+  border-color: var(--border);
+  border-radius: 12px;
+  letter-spacing: normal;
+  background: var(--bg);
+  box-shadow: var(--shadow-md);
+  transition:
+    translate 250ms ease-out,
+    opacity 250ms ease-out;
+}
+
+.app-toast--notification:has(.app-toast__icon) {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+}
+
+.app-toast--notification .app-toast__icon {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: start;
+  width: 28px;
+  height: 28px;
+}
+
+.app-toast__title {
+  grid-column: -3 / -2;
+  grid-row: 1;
+  min-width: 0;
+  align-self: start;
+  padding-top: 1px;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: 600;
+  line-height: calc(20px * var(--control-ui-text-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-toast--notification .app-toast__message {
+  grid-column: -3 / -1;
+  grid-row: 2;
+  max-height: none;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: calc(15px * var(--control-ui-text-scale));
+}
+
+.app-toast__footer {
+  grid-column: -3 / -1;
+  grid-row: 3;
+  display: flex;
+  min-width: 0;
+}
+
+.app-toast--notification .app-toast__action {
+  max-width: 100%;
+  min-height: 30px;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-strong);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+}
+
+.app-toast--notification .app-toast__action:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
+}
+
+.app-toast--notification .app-toast__dismiss {
+  grid-column: -2 / -1;
+  grid-row: 1;
+  align-self: start;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+}
+
+.app-toast--notification .app-toast__dismiss svg {
+  width: 12px;
+  height: 12px;
+}
+
+.app-toast--notification[data-active="true"] {
+  translate: 0 0;
+  opacity: 1;
+}
+
+@starting-style {
+  .app-toast--notification[data-active="true"] {
+    translate: 0 calc(-100% - var(--space-4));
+    opacity: 0;
+  }
+}
+
+.app-toast--notification[data-active="false"] {
+  translate: calc(100% + var(--space-6) + var(--safe-area-right)) 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mention-toast__sender-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.mention-toast__reason {
+  flex: none;
+}
+
+.mention-toast__name,
+.mention-toast__session {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mention-toast__session {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.mention-toast__excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.mention-toast__avatar {
+  display: inline-flex;
+}
+
+.mention-toast__avatar .viewer-avatar {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  letter-spacing: normal;
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  .app-toast--notification .app-toast__action {
+    position: relative;
+    min-width: 44px;
+    min-height: 32px;
+    padding: var(--space-1) 10px;
+    border-radius: 6px;
+    font-size: calc(12px * var(--control-ui-text-scale));
+  }
+
+  .app-toast--notification .app-toast__action::after {
+    /* Keep a 44px tap area without making the visible CTA dominate the card. */
+    position: absolute;
+    inset: -6px 0;
+    content: "";
+  }
+
+  .app-toast--notification .app-toast__dismiss {
+    min-width: 44px;
+    min-height: 44px;
+    /* Grow only into outer padding; the grid reserves the rest of the hit area. */
+    margin-block-start: -10px;
+    margin-inline-end: -10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-toast--notification {
+    transition: none;
+  }
+}

@@ -1,8 +1,7 @@
 import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
-import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
 import type {
   SidebarAttentionStoreController as StoreController,
-  SidebarAttentionStoreSources,
+  SidebarAttentionStoreControllerSources,
 } from "../app/sidebar-attention-store.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
@@ -39,7 +38,6 @@ type SidebarAttentionOwner = {
 };
 
 export class SidebarAttentionStoreController implements StoreController {
-  readonly mentions: MentionsCapability;
   private cronJobs: CronAttentionJob[] = [];
   private cronSchedulerEnabled: boolean | null = null;
   private modelAuthStatus: ModelAuthStatusResult | null = null;
@@ -67,13 +65,9 @@ export class SidebarAttentionStoreController implements StoreController {
   private disposed = false;
 
   constructor(
-    private readonly sources: SidebarAttentionStoreSources,
+    private readonly sources: SidebarAttentionStoreControllerSources,
     private readonly onChange: () => void,
   ) {
-    // Load with the Inbox, but keep its profile state across presenter unmounts.
-    this.mentions = createMentionsCapability(sources.gateway, {
-      connectionBootstrap: sources.connectionBootstrap,
-    });
     this.loadedClient = null;
     this.stopGateway = sources.gateway.subscribe(() => this.synchronizeGateway());
     this.stopEvents = sources.gateway.subscribeEvents((event) => {
@@ -88,7 +82,7 @@ export class SidebarAttentionStoreController implements StoreController {
     this.stopSelection = sources.agentSelection.subscribe(() => this.synchronizeGateway());
     this.stopAgents = sources.agents.subscribe(onChange);
     this.stopOverlays = sources.overlays.subscribe(onChange);
-    this.stopMentions = this.mentions.subscribe(onChange);
+    this.stopMentions = sources.mentions.subscribe(onChange);
     this.stopOutbox = subscribeStoredChatOutboxChanges(onChange);
     // Share the chat owner’s live overlays without putting its send graph in shell startup.
     void import("../pages/chat/chat-outbox-owner.ts")
@@ -243,7 +237,7 @@ export class SidebarAttentionStoreController implements StoreController {
       approvals: overlay.approvalQueue,
       attention,
       outbox,
-      mentions: this.mentions.snapshot.items,
+      mentions: this.sources.mentions.snapshot.items,
       scopeUpgrade,
       update,
     });
@@ -518,7 +512,6 @@ export class SidebarAttentionStoreController implements StoreController {
     this.stopOverlays();
     this.stopMentions();
     this.stopOutbox();
-    this.mentions.dispose();
     document.removeEventListener("visibilitychange", this.refreshDeferred);
     globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);
   }

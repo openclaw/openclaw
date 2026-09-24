@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ModelAuthStatusResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { createMentionsCapability } from "../app/mentions.ts";
 import { createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import {
   createSidebarAttentionStore,
@@ -71,7 +72,7 @@ function setup(expiresInMs?: number) {
     } as unknown as ApplicationContext["overlays"],
     scopeUpgrade: hiddenScopeUpgradeCapability,
   });
-  store.activate(SidebarAttentionStoreController);
+  store.activate(SidebarAttentionStoreController, createMentionsCapability);
   return {
     authRequest,
     client,
