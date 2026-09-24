@@ -93,6 +93,7 @@ describe("replacement guard advice", () => {
         "local.service": { models: [{ id: "llama3.1:70b" }, { id: "qwen3:8b" }] },
         "local]service": { models: [{ id: "llama3.1:70b" }, { id: "qwen3:8b" }] },
         "it's": { models: [{ id: "llama3.1:70b" }, { id: "qwen3:8b" }] },
+        "it‘s": { models: [{ id: "llama3.1:70b" }, { id: "qwen3:8b" }] },
       },
     },
   } as Record<string, unknown>;
@@ -252,6 +253,24 @@ describe("replacement guard advice", () => {
     // Copying either form into the other shell is what the two spellings exist to prevent.
     expect(readPowerShellArgument(posix ?? "")).not.toBe(argument);
     expect(readShellArgument(powershell ?? "")).not.toBe(argument);
+  });
+
+  it("names both spellings for a key holding a typographic quote", () => {
+    // PowerShell ends a quoted span on its own delimiter class, not just on an ASCII apostrophe,
+    // so the divergence test reads both owners' output instead of looking for one character.
+    const path = ["models", "providers", "it\u2018s", "models"];
+    const advice = refusal(() =>
+      assertNonDestructiveReplacement({
+        root,
+        path,
+        value: [{ id: "qwen3:8b" }],
+        command: "patch",
+      }),
+    );
+    const [posix, powershell] = replacePathArguments(advice);
+    expect(posix).toBe(`'models.providers["it\u2018s"].models'`);
+    expect(powershell).toBe(`'models.providers["it\u2018\u2018s"].models'`);
+    expect(parseConfigSetPath(readShellArgument(posix ?? ""))).toEqual(path);
   });
 
   it("strands a bare retry whose key contains a closing bracket", () => {

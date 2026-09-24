@@ -10,6 +10,7 @@ import {
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatStrictJsonParseFailure } from "./error-format.js";
+import { quoteCliArg, quotePowerShellArg } from "./quote-cli-arg.js";
 
 export { parseConcreteConfigPath as parseConfigSetPath } from "../shared/dot-path.js";
 
@@ -41,22 +42,18 @@ function refusalPathLabel(command: ConfigMutationCommand, path: PathSegment[]): 
   return command === "patch" ? formatConfigSetPath(path) : toDotPath(path);
 }
 
-const COPYABLE_ARGUMENT_RE = /^[A-Za-z0-9_.:/@+-]+$/;
-
 /**
- * A copied retry crosses a shell, which strips the quotes a bracketed path needs to re-parse.
- * Single quotes hold everything else literally in both POSIX shells and PowerShell; a key holding
- * an apostrophe has no spelling that survives both conventions, so the advice names each one.
+ * A copied retry crosses a shell, and once a key holds a quote no single spelling survives both
+ * the POSIX and the PowerShell convention. The host platform is no proxy for the interactive
+ * shell - Git Bash on Windows needs the POSIX form - so the advice names both when they differ.
  */
 function replacePathArgument(pathLabel: string): string {
-  if (COPYABLE_ARGUMENT_RE.test(pathLabel)) {
-    return `--replace-path ${pathLabel}`;
+  const posix = quoteCliArg(pathLabel);
+  const powershell = quotePowerShellArg(pathLabel);
+  // Bare and plainly quoted arguments read identically in both shells; only escaping makes them diverge.
+  if (posix === pathLabel || posix === powershell) {
+    return `--replace-path ${posix}`;
   }
-  if (!pathLabel.includes("'")) {
-    return `--replace-path '${pathLabel}'`;
-  }
-  const posix = `'${pathLabel.replaceAll("'", `'\\''`)}'`;
-  const powershell = `'${pathLabel.replaceAll("'", "''")}'`;
   return `--replace-path ${posix} in bash and zsh, or --replace-path ${powershell} in PowerShell`;
 }
 
