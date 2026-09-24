@@ -4,7 +4,8 @@
  * Dispatches normalized actions to either Playwright-backed OpenClaw browser
  * control or Chrome MCP existing-session operations with navigation guards.
  */
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { resolveExistingSessionActTimeouts } from "../act-policy.js";
 import {
   clickChromeMcpElement,

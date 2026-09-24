@@ -20,7 +20,7 @@ import {
   isWorktreeRegistryReadCommand,
   executeWorktreeRegistryReadCommand,
 } from "../agents/worktrees/registry-read.worker.js";
-import { releaseWorktreeRunLeaseInDatabase } from "../agents/worktrees/run-lease-store.kernel.js";
+import { executeWorktreeRunLeaseCommand } from "../agents/worktrees/run-lease-store.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
@@ -486,18 +486,6 @@ export function executeSharedStateCommand(
   if (command.type === "nativeHookRelay.listSnapshots") {
     return listNativeHookRelayBridgeSnapshotsInDatabase(database);
   }
-  if (
-    command.type === "nativeHookRelay.write" ||
-    command.type === "nativeHookRelay.renew" ||
-    command.type === "nativeHookRelay.deleteOwned" ||
-    command.type === "nativeHookRelay.prune"
-  ) {
-    return executeNativeHookRelayMutation(command, {
-      database,
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    });
-  }
   if (command.type === "sessionUpstream.listWatched") {
     return listWatchedSessionUpstreamLinksInDatabase(database.db);
   }
@@ -512,6 +500,14 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   };
+  if (
+    command.type === "nativeHookRelay.write" ||
+    command.type === "nativeHookRelay.renew" ||
+    command.type === "nativeHookRelay.deleteOwned" ||
+    command.type === "nativeHookRelay.prune"
+  ) {
+    return executeNativeHookRelayMutation(command, writeOptions);
+  }
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
   }
@@ -635,16 +631,8 @@ export function executeSharedStateCommand(
   if (isWorktreeRegistryReadCommand(command)) {
     return executeWorktreeRegistryReadCommand(database.db, command);
   }
-  if (command.type === "worktrees.releaseRunLease") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        releaseWorktreeRunLeaseInDatabase(db, command.input.worktreeId, command.input.token);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      },
-      writeOptions,
-      { operationLabel: command.type },
-    );
+  if (command.type === "worktrees.releaseRunLease" || command.type === "worktrees.reapRunLeases") {
+    return executeWorktreeRunLeaseCommand(command, writeOptions);
   }
   if (command.type === "projects.resolve") {
     ensureProjectRegistrySchema(writeOptions);

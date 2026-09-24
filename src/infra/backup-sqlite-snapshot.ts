@@ -151,11 +151,6 @@ async function discoverBackupSqliteSources(params: {
         }
         continue;
       }
-      // Exclusions win before symlink/stat handling; protected declarations
-      // are already resolved by the inventory's include-over-exclude policy.
-      if (!params.inventory.isIncluded(entryPath)) {
-        continue;
-      }
       if (
         (!entry.isFile() && !entry.isSymbolicLink()) ||
         classifyBackupSqliteSource(entryPath, params.inventory) !== "sqlite"

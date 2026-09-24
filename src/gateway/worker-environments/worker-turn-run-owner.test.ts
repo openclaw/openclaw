@@ -142,12 +142,7 @@ describe("cloud worker run ownership", () => {
         protocolFeatures: ["worker-live-event-v1"],
         credentialExpiresAtMs: Date.now() + input.timeoutMs,
       };
-      const receiver = createWorkerLiveEventReceiver({
-        startupBindings: [
-          { environmentId: ENVIRONMENT_ID, runEpoch: OWNER_EPOCH, sessionId: SESSION_ID },
-        ],
-        startupOwners: new Map([[ENVIRONMENT_ID, OWNER_EPOCH]]),
-      });
+      const receiver = createWorkerLiveEventReceiver();
       vi.useFakeTimers({
         toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
         now: turnStartedAtMs + firstToolDelayMs,
@@ -169,6 +164,7 @@ describe("cloud worker run ownership", () => {
       try {
         expect(
           await receiver.apply({
+            readAckedSeq: () => 0,
             source: turnCapability,
             identity,
             request: {
@@ -209,6 +205,7 @@ describe("cloud worker run ownership", () => {
         } else {
           expect(
             await receiver.apply({
+              readAckedSeq: () => 0,
               source: turnCapability,
               identity,
               request: {

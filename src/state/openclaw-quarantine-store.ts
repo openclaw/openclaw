@@ -390,30 +390,6 @@ function readOpenClawDatabaseQuarantine(
   return outcome.value;
 }
 
-/** Reject a known state quarantine while retaining best-effort metadata admission. */
-export function assertOpenClawStateDatabaseNotQuarantined(
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-  onNativeCleanupFailure?: (error: OpenClawQuarantineReadCleanupError) => void,
-): void {
-  let quarantineFailure: Error | undefined;
-  try {
-    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, { env });
-  } catch (error) {
-    if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
-      throw error;
-    }
-    onNativeCleanupFailure?.(error);
-    return;
-  }
-  if (quarantineFailure?.cause instanceof OpenClawQuarantineReadCleanupError) {
-    onNativeCleanupFailure?.(quarantineFailure.cause);
-  }
-  if (quarantineFailure) {
-    throw quarantineFailure;
-  }
-}
-
 function readQuarantineDecision(
   database: DatabaseSync,
   pathname: string,
