@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { prepareSecretsRuntimeFastPathSnapshot } from "../../secrets/runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -32,10 +38,10 @@ import {
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
+import { authProfileScopeCwdEntrypoint } from "./store-scope-cwd-runtime.test-support.js";
 import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
-  resolveRuntimeAuthProfileAgentDir,
   restoreAuthProfileStorePersistenceSnapshot,
   withAuthProfileStoreAgentDir,
 } from "./store.js";
@@ -576,29 +582,30 @@ describe("auth publication owner receipts", () => {
     expect(snapshotAt(original.agentPath)?.profiles.shared).toEqual(apiKey("updated-original"));
   });
 
-  it("keeps relative scope paths bound to their original working directory during preparation", async () => {
-    const original = await seedRoot("original");
+  it("keeps relative scope paths bound to their original working directory during preparation", async ({
+    signal,
+  }) => {
+    const stateDir = tempDirs.make("openclaw-auth-scope-state-");
+    const agentDir = tempDirs.make("openclaw-auth-scope-agent-");
     const entryCwd = tempDirs.make("openclaw-auth-scope-entry-cwd-");
     const laterCwd = path.join(tempDirs.make("openclaw-auth-scope-later-cwd-"), "nested");
     fs.mkdirSync(laterCwd);
-    const previousCwd = process.cwd();
-    try {
-      process.chdir(entryCwd);
-      const preparing = withAuthProfileStoreAgentDir(
-        path.relative(entryCwd, original.agentDir),
-        path.relative(entryCwd, original.stateDir),
-        () => {
-          expect(resolveRuntimeAuthProfileAgentDir()).toBe(original.agentDir);
-          expect(ensureAuthProfileStoreWithoutExternalProfiles().profiles.shared).toEqual(
-            apiKey("original"),
-          );
-        },
-      );
-      process.chdir(laterCwd);
-      await preparing;
-    } finally {
-      process.chdir(previousCwd);
-    }
+    const result = await runNodeScript(
+      [
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(authProfileScopeCwdEntrypoint)),
+        stateDir,
+        agentDir,
+        laterCwd,
+      ],
+      {
+        ...process.env,
+        TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)),
+      },
+      undefined,
+      { cwd: entryCwd, signal, requireProcessTreeExit: process.platform !== "win32" },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("retains shared OAuth in the owner snapshot but excludes it from bounded exec", async () => {

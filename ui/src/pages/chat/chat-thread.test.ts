@@ -913,7 +913,7 @@ describe("collapseCompletedTurnWork", () => {
     expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
     const work = requireWorkGroup(items[1]);
     expect(work.groups).toHaveLength(2);
-    expect(work.durationMs).toBe(9_000);
+    expect(work.durationMs).toBeNull();
     expect(requireGroup(items[2]).role).toBe("assistant");
   });
 
@@ -922,33 +922,29 @@ describe("collapseCompletedTurnWork", () => {
       name: "independent sends",
       identities: ["first", "second"],
       steerTargetRunId: undefined,
-      durationMs: 13_000,
       sizes: [1, 1],
     },
     {
       name: "consecutive same-run steers",
       identities: ["first", "steer-1", "steer-2"],
       steerTargetRunId: "first",
-      durationMs: 994_000,
       sizes: [3],
     },
     {
       name: "same-submit projections",
       identities: ["first", "first"],
       steerTargetRunId: undefined,
-      durationMs: 994_000,
       sizes: [2],
     },
     {
       name: "unkeyed historical prompts",
       identities: [null, null],
       steerTargetRunId: undefined,
-      durationMs: 994_000,
       sizes: [2],
     },
   ])(
-    "preserves elapsed ownership for $name before any assistant output",
-    ({ identities, steerTargetRunId, durationMs, sizes }) => {
+    "preserves user boundaries without estimating duration for $name",
+    ({ identities, steerTargetRunId, sizes }) => {
       const prompts = identities.map((identity, index) =>
         userMessage(`Prompt ${index + 1}`, index === 0 ? 1_000 : 982_000 + index - 1, {
           __openclaw: {
@@ -967,7 +963,7 @@ describe("collapseCompletedTurnWork", () => {
       });
       const work = items.find((item) => item.kind === "work-group");
 
-      expect(work?.durationMs).toBe(durationMs);
+      expect(work?.durationMs).toBeNull();
       const users = items.filter(
         (item): item is MessageGroup => item.kind === "group" && item.role === "user",
       );
@@ -1120,7 +1116,7 @@ describe("collapseCompletedTurnWork", () => {
         "group",
         "group",
       ]);
-      expect(requireWorkGroup(completed[1]).durationMs).toBe(4_000);
+      expect(requireWorkGroup(completed[1]).durationMs).toBeNull();
     },
   );
 
@@ -1197,7 +1193,7 @@ describe("collapseCompletedTurnWork", () => {
     if (isError) {
       expect(requireGroup(items[3]).messages.map(({ message }) => message)).toContain(trailing);
     } else {
-      expect(work.durationMs).toBe(3_000);
+      expect(work.durationMs).toBeNull();
     }
   });
 
@@ -1366,8 +1362,8 @@ describe("collapseCompletedTurnWork", () => {
     });
 
     expect(items.map((item) => item.kind)).toEqual(["work-group", "group", "work-group", "group"]);
-    expect(requireWorkGroup(items[0]).durationMs).toBe(2_000);
-    expect(requireWorkGroup(items[2]).durationMs).toBe(5_000);
+    expect(requireWorkGroup(items[0]).durationMs).toBeNull();
+    expect(requireWorkGroup(items[2]).durationMs).toBeNull();
   });
 
   it("keeps a completed-work row keyed to its final reply as older work is prepended", () => {
@@ -1392,7 +1388,8 @@ describe("collapseCompletedTurnWork", () => {
     const prependedWork = requireWorkGroup(prepended[0]);
 
     expect(prependedWork.key).toBe(initialWork.key);
-    expect(prependedWork.durationMs).toBeGreaterThan(initialWork.durationMs ?? 0);
+    expect(initialWork.durationMs).toBeNull();
+    expect(prependedWork.durationMs).toBeNull();
   });
 });
 
@@ -2291,118 +2288,6 @@ describe("buildCachedChatItems", () => {
         timestamp: 1000,
       },
     ]);
-  });
-
-  it("maps known system notices and preserves the generic fallback and search visibility", () => {
-    const messages = [
-      userMessage("before", 999),
-      userMessage("[System] Continue the interrupted turn.", 1000, {
-        provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-        __openclaw: { id: "restart-recovery", idempotencyKey: "run-recovered:user" },
-      }),
-      userMessage("[System] Gateway restarted during update 2026.8.2 -> 2026.8.3.", 1001, {
-        provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
-      }),
-      userMessage("[System] Keep the raw fallback copy.", 1002, {
-        provenance: { kind: "internal_system", sourceTool: "session-companion" },
-      }),
-      userMessage("after", 1003),
-    ];
-    const items = buildCachedChatItems(createProps({ messages }));
-
-    expect(items.map((item) => item.kind)).toEqual([
-      "group",
-      "notice",
-      "notice",
-      "notice",
-      "group",
-    ]);
-    expect(items[1]).toMatchObject({
-      kind: "notice",
-      icon: "cpu",
-      label: "System · restart recovery",
-      text: "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
-      timestamp: 1000,
-      boundaryId: "send:run-recovered",
-    });
-    // Summary-less kinds keep the producer's informative text under the label.
-    expect(items[2]).toMatchObject({
-      kind: "notice",
-      icon: "cpu",
-      label: "System · gateway restarted",
-      text: "Gateway restarted during update 2026.8.2 -> 2026.8.3.",
-      timestamp: 1001,
-    });
-    expect(items[3]).toMatchObject({
-      kind: "notice",
-      icon: "cpu",
-      label: "System",
-      text: "Keep the raw fallback copy.",
-      timestamp: 1002,
-    });
-
-    const filtered = buildCachedChatItems(
-      createProps({ messages, searchOpen: true, searchQuery: "after" }),
-    );
-    expect(filtered.some((item) => item.kind === "notice")).toBe(false);
-  });
-
-  it("renders Claude CLI internal user turns as notices, not operator bubbles", () => {
-    const items = buildCachedChatItems(
-      createProps({
-        messages: [
-          userMessage("run the review", 1000),
-          userMessage(
-            "Base directory for this skill: /tmp/skills/autoreview\n\n# Auto Review",
-            1001,
-            {
-              provenance: { kind: "internal_system", sourceTool: "cli_harness_context" },
-              __openclaw: {
-                id: "skill-meta-1",
-                importedFrom: "claude-cli",
-                cliSessionId: "cli-1",
-                externalId: "skill-meta-1",
-              },
-            },
-          ),
-          userMessage(
-            "<task-notification>\n<status>completed</status>\n</task-notification>",
-            1002,
-            {
-              provenance: {
-                kind: "internal_system",
-                sourceTool: "claude_cli_task_notification",
-              },
-            },
-          ),
-          assistantMessage("review finished", 1003),
-        ],
-      }),
-    );
-
-    // The operator turn keeps its bubble; the injected turn becomes a
-    // collapsed system notice that does not start a new operator turn.
-    expect(items.map((item) => item.kind)).toEqual(["group", "notice", "notice", "group"]);
-    expect(items[0]).toMatchObject({ kind: "group", role: "user" });
-    expect(items[1]).toMatchObject({
-      kind: "notice",
-      icon: "cpu",
-      label: "System · injected context",
-      collapsedBody: true,
-      text: "Base directory for this skill: /tmp/skills/autoreview\n\n# Auto Review",
-      timestamp: 1001,
-    });
-    expect((items[1] as { startsTurn?: true }).startsTurn).toBeUndefined();
-    expect(items[2]).toMatchObject({
-      kind: "notice",
-      icon: "cpu",
-      label: "System · background task",
-      collapsedBody: true,
-      text: "<task-notification>\n<status>completed</status>\n</task-notification>",
-      timestamp: 1002,
-    });
-    expect((items[2] as { startsTurn?: true }).startsTurn).toBeUndefined();
-    expect(items[3]).toMatchObject({ kind: "group", role: "assistant" });
   });
 
   it("attributes assistant groups to the latest user in multi-sender threads", () => {
@@ -4965,7 +4850,7 @@ describe("buildCachedChatItems", () => {
     expect(preview.title).toBe("Streamed demo");
   });
 
-  it("explains compaction boundaries without a recovery action", () => {
+  it("keeps compaction boundaries concise without a recovery action", () => {
     const items = buildCachedChatItems(
       createProps({
         messages: [compactionMessage("checkpoint-1")],
@@ -4977,9 +4862,7 @@ describe("buildCachedChatItems", () => {
     expect(divider.kind).toBe("divider");
     expect(divider.label).toBe("Context compacted");
     expect(divider.compaction).toBe("complete");
-    expect(divider.description).toBe(
-      "Earlier messages were summarized to make room in the context window.",
-    );
+    expect(divider).not.toHaveProperty("description");
     expect(divider).not.toHaveProperty("action");
   });
 

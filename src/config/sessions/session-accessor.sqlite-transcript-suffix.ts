@@ -6,6 +6,7 @@ import {
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
+  readEventTimestamp,
   readTranscriptEventId,
   readTranscriptStorageRows,
   type SqliteTranscriptStorageRow,
@@ -19,8 +20,6 @@ import {
 import {
   canonicalizeTranscriptEventMedia,
   insertTranscriptRowsWithoutProjectionInTransaction,
-  readEventTimestamp,
-  readMessageIdempotencyKey,
   scheduleTranscriptProjectionReconcile,
 } from "./session-accessor.sqlite-transcript-store.js";
 import {
@@ -43,6 +42,8 @@ import {
   prepareFullTranscriptSuffixMutation,
   prepareTranscriptIndexProjection,
 } from "./session-transcript-suffix-projection.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
+import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 import {
   isSessionTranscriptLeafControl,
   parseSessionTranscriptTreeEntry,
@@ -176,11 +177,12 @@ function prepareIncrementalTranscriptSuffixMutation(
     database.db,
     db
       .selectFrom("transcript_events")
-      .select((eb) => [
+      .select([
         "created_at",
-        projectTranscriptRetainedDataSql(eb.ref("event_json"), retainedCustomDataIds).as(
-          "event_json",
-        ),
+        projectTranscriptRetainedDataSql(
+          transcriptEventJsonSql(database.db),
+          retainedCustomDataIds,
+        ).as("event_json"),
         "seq",
       ])
       .where("session_id", "=", resolved.sessionId)
@@ -428,11 +430,12 @@ export function replaceSqliteTranscriptSuffixInTransaction(
         database.db,
         db
           .selectFrom("transcript_events")
-          .select((eb) => [
+          .select([
             "created_at",
-            projectTranscriptRetainedDataSql(eb.ref("event_json"), retainedCustomDataIds).as(
-              "event_json",
-            ),
+            projectTranscriptRetainedDataSql(
+              transcriptEventJsonSql(database.db),
+              retainedCustomDataIds,
+            ).as("event_json"),
             "seq",
           ])
           .where("session_id", "=", resolved.sessionId)
@@ -565,7 +568,7 @@ export function replaceSqliteTranscriptSuffixInTransaction(
             .onRef("event.session_id", "=", "identity.session_id")
             .onRef("event.seq", "=", "identity.seq"),
         )
-        .select(["event.event_json", "identity.event_id"])
+        .select([transcriptEventNavigationSql("event").as("event_json"), "identity.event_id"])
         .where("identity.session_id", "=", resolved.sessionId)
         .where("identity.seq", "<", plan.startSeq)
         .where("identity.message_idempotency_key", "is", null)

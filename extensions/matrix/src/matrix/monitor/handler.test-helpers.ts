@@ -19,9 +19,12 @@ import { createMatrixRoomMessageHandler } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
 
 type MatrixMonitorHandlerParams = Parameters<typeof createMatrixRoomMessageHandler>[0];
+type MatrixDispatchInput = Parameters<
+  typeof import("openclaw/plugin-sdk/reply-runtime").dispatchInboundMessage
+>[0];
 type MatrixDispatchInboundMessage = (params: {
-  ctx: unknown;
-  cfg: unknown;
+  ctx: MatrixDispatchInput["ctx"];
+  cfg: MatrixDispatchInput["cfg"];
   dispatcher: unknown;
   replyOptions?: Record<string, unknown>;
 }) => Promise<{
@@ -161,17 +164,14 @@ export function createMatrixHandlerTestHarness(
       markDispatchIdle: () => {},
       markRunComplete: () => {},
     }));
-  const dispatchInboundMessageWithBufferedDispatcher = (async ({
+  const dispatchInboundMessageWithBufferedDispatcher = async ({
     ctx,
     cfg,
     dispatcherOptions,
     replyOptions,
-  }: {
-    ctx: unknown;
-    cfg: unknown;
-    dispatcherOptions: Record<string, unknown>;
-    replyOptions?: Record<string, unknown>;
-  }) => {
+  }: Parameters<
+    typeof import("openclaw/plugin-sdk/reply-runtime").dispatchInboundMessageWithBufferedDispatcher
+  >[0]) => {
     const prepared = createReplyDispatcherWithTyping(dispatcherOptions);
     try {
       return await dispatchInboundMessage({
@@ -179,7 +179,7 @@ export function createMatrixHandlerTestHarness(
         cfg,
         dispatcher: prepared.dispatcher,
         replyOptions: { ...replyOptions, ...prepared.replyOptions },
-      } as never);
+      });
     } finally {
       const dispatcher = prepared.dispatcher as {
         markComplete?: () => void;
@@ -187,11 +187,11 @@ export function createMatrixHandlerTestHarness(
       };
       dispatcher.markComplete?.();
       await dispatcher.waitForIdle?.();
-      await (dispatcherOptions.onSettled as (() => Promise<void> | void) | undefined)?.();
+      await dispatcherOptions.onSettled?.();
       prepared.markRunComplete();
       prepared.markDispatchIdle();
     }
-  }) as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchInboundMessageWithBufferedDispatcher;
+  };
   const createChannelInboundEnvelopeBuilder = (() => (input: { body: string }) =>
     (options.formatAgentEnvelope ?? (({ body }: { body: string }) => body))({
       body: input.body,

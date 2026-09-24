@@ -145,13 +145,11 @@ const ToolPolicyBaseSchema = z
   .strict();
 
 export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) => {
-  if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message:
-        "tools policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-    });
-  }
+  addAllowAlsoAllowConflictIssue(
+    value,
+    ctx,
+    "tools policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
+  );
 }).optional();
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
@@ -330,21 +328,15 @@ function addAllowAlsoAllowConflictIssue(
   }
 }
 
-const ToolPolicyWithProfileSchema = z
-  .object({
-    allow: z.array(z.string()).optional(),
-    alsoAllow: z.array(z.string()).optional(),
-    deny: z.array(z.string()).optional(),
-    profile: ToolProfileSchema,
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    addAllowAlsoAllowConflictIssue(
-      value,
-      ctx,
-      "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-    );
-  });
+const ToolPolicyWithProfileSchema = ToolPolicyBaseSchema.extend({
+  profile: ToolProfileSchema,
+}).superRefine((value, ctx) => {
+  addAllowAlsoAllowConflictIssue(
+    value,
+    ctx,
+    "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
+  );
+});
 
 // Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
 export const ElevatedAllowFromSchema = z
@@ -521,15 +513,15 @@ const CodeModeSchema = z
     z.literal("auto"),
     z
       .object({
-        /** OpenClaw Code Mode default, overridden by per-model codeMode. Default: false; "auto" engages catalog-preferred models. */
+        /** Explicit object-form activation. Omitted stays off; "auto" engages catalog-preferred models. A completely absent global codeMode setting defaults separately to auto. */
         enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
-        /** Guest runtime. Only quickjs-wasi is supported. */
-        runtime: z.literal("quickjs-wasi").optional(),
+        /** Executor. Node is the default; QuickJS provides a separate WASM guest. */
+        executor: z.enum(["node", "quickjs"]).optional(),
         /** Model-facing mode. Only "only" is supported: expose exec/wait and hide normal tools. */
         mode: z.literal("only").optional(),
         /** Wall-clock limit in milliseconds for one exec or wait call. */
         timeoutMs: z.number().int().positive().optional(),
-        /** QuickJS heap limit in bytes. */
+        /** QuickJS guest heap limit or best-effort Node worker V8 heap budget in bytes; excludes external buffers and process RSS. */
         memoryLimitBytes: z.number().int().positive().optional(),
         /** Maximum serialized output bytes. */
         maxOutputBytes: z.number().int().positive().optional(),
@@ -621,10 +613,7 @@ export const AgentSandboxSchema = z
 const CommonToolPolicyFields = {
   /** Base tool profile applied before allow/deny lists. */
   profile: ToolProfileSchema,
-  allow: z.array(z.string()).optional(),
-  /** Additional allowlist entries merged into allow and/or profile allowlist. */
-  alsoAllow: z.array(z.string()).optional(),
-  deny: z.array(z.string()).optional(),
+  ...ToolPolicyBaseSchema.shape,
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
   /** Per-sender tool policy overrides keyed by sender identity. */

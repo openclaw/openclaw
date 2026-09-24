@@ -116,6 +116,7 @@ export function createCodexAppServerAgentHarness(
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
+    nativeModelPolicySupport: "exact",
     conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
     conversationToolPolicyNativeTools: CODEX_NATIVE_TOOL_REQUIREMENTS,
     deliveryDefaults: {
@@ -152,7 +153,8 @@ export function createCodexAppServerAgentHarness(
     },
     ...(sessionCatalogControlFactory && sessionRuntime
       ? {
-          sessionFork: {
+          sessionForkV2: {
+            executionEnvironment: "host-only" as const,
             upstreamKinds: ["codex-app-server"] as const,
             fork: async (params) => {
               const { forkCodexUpstreamSession } =
@@ -199,7 +201,19 @@ export function createCodexAppServerAgentHarness(
       validate: async (binding) => {
         const { validateCodexAppServerRuntimeArtifact } =
           await import("./src/app-server/runtime-artifact.js");
-        return validateCodexAppServerRuntimeArtifact(binding);
+        const { isCodexConfiguredConnectionArtifact } =
+          await import("./src/app-server/runtime-artifact-connection.js");
+        if (!isCodexConfiguredConnectionArtifact(binding.id)) {
+          return validateCodexAppServerRuntimeArtifact(binding);
+        }
+        const { resolveCodexAppServerRuntimeOptions } = await import("./src/app-server/config.js");
+        return validateCodexAppServerRuntimeArtifact(
+          binding,
+          undefined,
+          resolveCodexAppServerRuntimeOptions({
+            pluginConfig: resolveAttemptPluginConfig(options.resolveConfig?.()),
+          }).start,
+        );
       },
     },
     fetchUsageSnapshot: async (ctx) => {
@@ -212,10 +226,12 @@ export function createCodexAppServerAgentHarness(
       const { createCodexAppServerModelCatalog } =
         await import("./src/app-server/model-catalog.js");
       if (disposed) {
-        return [];
+        return { entries: [] };
       }
       modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
-      return await modelCatalog.load(params, resolveAttemptPluginConfig(params.config));
+      return {
+        entries: await modelCatalog.load(params, resolveAttemptPluginConfig(params.config)),
+      };
     },
     readModelCatalogReadiness: (params) =>
       modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
@@ -447,6 +463,12 @@ export function createCodexAppServerAgentHarness(
         await import("./src/app-server/session-retirement.js");
       params.assertCurrent();
       return withCodexAppServerSessionDeletion(options.bindingStore, params, run);
+    },
+    withSessionContextReset: async (params, run) => {
+      const { withCodexAppServerSessionContextReset } =
+        await import("./src/app-server/session-retirement.js");
+      params.assertCurrent();
+      return withCodexAppServerSessionContextReset(options.bindingStore, params, run);
     },
     reset: async (params) => {
       if (params.sessionId && params.reason !== "deleted") {

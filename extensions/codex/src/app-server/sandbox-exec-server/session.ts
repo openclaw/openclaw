@@ -1,6 +1,7 @@
 /** Owns the JSON-RPC protocol and resources of one sandbox execution connection. */
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import type { CodexNativeProcessClient } from "../native-process-authority.js";
 import type { JsonValue } from "../protocol.js";
 import {
   closeAllFileReads,
@@ -50,6 +51,7 @@ export class CodexSandboxExecSession {
   constructor(
     private readonly execServer: OpenClawExecServer,
     private readonly transport: CodexSandboxExecMessageTransport,
+    private readonly processAuthority?: CodexNativeProcessClient,
   ) {
     this.notifications = {
       isOpen: transport.isOpen,
@@ -124,7 +126,13 @@ export class CodexSandboxExecSession {
         return { status: "ready" };
       // Registered exec-server URLs use these process methods, not app-server process/spawn.
       case "process/start":
-        return startProcess(this.execServer, this.processes, this.notifications.send, params);
+        return startProcess(
+          this.execServer,
+          this.processes,
+          this.notifications.send,
+          params,
+          this.processAuthority,
+        );
       case "process/read":
         return await readProcess(this.processes, params);
       case "process/write":

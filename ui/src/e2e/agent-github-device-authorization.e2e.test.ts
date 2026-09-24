@@ -129,7 +129,7 @@ const configResponse = {
 
 suite.define(() => {
   it.each(["profile", "agent"] as const)(
-    "explains native GitHub lookup in %s Settings without changing setup scope",
+    "keeps native GitHub status compact in %s Settings without changing setup scope",
     async (surface) => {
       await suite.withPage(pageOptions(), async ({ page }) => {
         const native = {
@@ -192,8 +192,7 @@ suite.define(() => {
         await expect(section.getByText("No credentials", { exact: true }).first()).toBeVisible();
         await section.scrollIntoViewIfNeeded();
         await capture(page, `13-native-${surface}.png`);
-        await expect(section.getByText(/OS account running the Gateway/)).toBeVisible();
-        await expect(section).toContainText("Other OS users' logins are separate.");
+        await expect(section.getByText(/OS account running the Gateway/)).toHaveCount(0);
         if (surface === "agent") {
           await section.getByRole("button", { name: "Manage connections in Profile" }).click();
           await expect(page).toHaveURL(/settings\/profile#settings-profile-github-connections$/);

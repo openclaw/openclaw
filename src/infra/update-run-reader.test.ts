@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
@@ -11,6 +11,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import {
   createUpdateRun,
@@ -18,6 +19,7 @@ import {
   finishUpdateRun,
   getUpdateRun,
   getUpdateRunAsync,
+  getUpdateRunStatusAsync,
   listUpdateRuns,
   listUpdateRunsAsync,
   recordUpdateRunPhase,
@@ -78,6 +80,7 @@ describe("update run history reads", () => {
     expect(findActiveUpdateRun(options)).toBeUndefined();
     expect(await getUpdateRunAsync(runId, options)).toBeUndefined();
     expect(await listUpdateRunsAsync({}, options)).toEqual([]);
+    expect(await getUpdateRunStatusAsync(options)).toEqual({});
     expect(fs.existsSync(filename)).toBe(false);
     expect(fs.readdirSync(options.env.OPENCLAW_STATE_DIR)).toEqual([]);
 
@@ -119,7 +122,7 @@ describe("update run history reads", () => {
   });
 
   it.each(
-    (["get", "list", "active", "get-async", "list-async"] as const).flatMap((reader) =>
+    (["get", "list", "active", "get-async", "list-async", "status"] as const).flatMap((reader) =>
       [false, true].map((retainedWal) => ({ reader, retainedWal })),
     ),
   )(
@@ -157,15 +160,7 @@ describe("update run history reads", () => {
       expect(fs.existsSync(`${filename}-shm`)).toBe(false);
       expect(fs.existsSync(`${filename}-wal`)).toBe(retainedWal);
       const before = snapshotDatabaseFiles(filename);
-      const nativeCalls = reader.endsWith("-async")
-        ? [
-            vi.spyOn(DatabaseSync.prototype, "prepare"),
-            vi.spyOn(DatabaseSync.prototype, "exec"),
-            ...(["get", "all", "run", "iterate"] as const).map((method) =>
-              vi.spyOn(StatementSync.prototype, method),
-            ),
-          ]
-        : [];
+      const nativeCalls = reader.endsWith("-async") ? observeMainThreadSql() : undefined;
       const result =
         reader === "get"
           ? getUpdateRun(created.runId, options)
@@ -175,9 +170,17 @@ describe("update run history reads", () => {
               ? await getUpdateRunAsync(created.runId, options)
               : reader === "list-async"
                 ? await listUpdateRunsAsync({}, options)
-                : findActiveUpdateRun(options);
-      expect(result).toEqual(reader === "list" || reader === "list-async" ? [expected] : expected);
-      expect(nativeCalls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+                : reader === "status"
+                  ? await getUpdateRunStatusAsync(options)
+                  : findActiveUpdateRun(options);
+      expect(result).toEqual(
+        reader === "status"
+          ? { activeRun: expected, lastRun: expected }
+          : reader === "list" || reader === "list-async"
+            ? [expected]
+            : expected,
+      );
+      expect(nativeCalls?.count() ?? 0).toBe(0);
       vi.restoreAllMocks();
       expect(snapshotDatabaseFiles(filename)).toEqual(before);
     },
@@ -234,11 +237,15 @@ describe("update run history reads", () => {
       recordUpdateRunPhase(created.runId, "staging", {}, options);
       expect(await getUpdateRunAsync(created.runId, options)).toEqual(created);
       expect(await listUpdateRunsAsync({}, options)).toEqual([created]);
+      expect(await getUpdateRunStatusAsync(options)).toEqual({
+        activeRun: created,
+        lastRun: created,
+      });
     }, options);
     expect((await getUpdateRunAsync(created.runId, options))?.phase).toBe("staging");
   });
 
-  it("reads committed history without consuming the cached writer's transaction", () => {
+  it("reads committed history without consuming the cached writer's transaction", async () => {
     const options = isolatedOptions();
     const created = createUpdateRun({ trigger: "cli" }, options);
     const { db } = openOpenClawStateDatabase(options);
@@ -248,6 +255,10 @@ describe("update run history reads", () => {
       expect(getUpdateRun(created.runId, options)).toEqual(created);
       expect(listUpdateRuns({}, options)).toEqual([created]);
       expect(findActiveUpdateRun(options)).toEqual(created);
+      expect(await getUpdateRunStatusAsync(options)).toEqual({
+        activeRun: created,
+        lastRun: created,
+      });
       expect(db.isTransaction).toBe(true);
       expect(
         db.prepare("SELECT phase FROM update_runs WHERE run_id = ?").get(created.runId),

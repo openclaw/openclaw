@@ -137,6 +137,7 @@ it.each([
         };
         await replaceSessionEntry(scope, sessionEntry);
         const selection = await resolveSessionAuthSelection({
+          agentId,
           cfg,
           provider: "arcee",
           modelId: "trinity-large-thinking",

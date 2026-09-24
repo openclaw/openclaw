@@ -48,18 +48,29 @@ export function captureAgentRunTerminalWriteContext(
   runId: string,
 ): CapturedAgentRunTerminalWriteContext | undefined {
   const owner = getAgentRunContext(runId);
-  const current = owner ? terminalWrites.get(owner) : undefined;
-  const context = current?.context;
-  if (!owner || !current || !context) {
+  const authority = owner?.delegatedAuthority;
+  if (!owner || !authority || !validateAgentRunDelegatedAuthority(authority)) {
     return undefined;
   }
+  // Embedded runtimes have no account-specific CLI context, but their accepted
+  // terminal writes must settle before the same operational admission closes.
+  let current = terminalWrites.get(owner);
+  if (!current) {
+    current = { authority, pending: new Set() };
+    terminalWrites.set(owner, current);
+  }
+  if (current.authority !== authority) {
+    return undefined;
+  }
+  const captured = current;
+  const context = captured.context;
   const assertCurrent = () => {
     if (
       getAgentRunContext(runId) !== owner ||
-      terminalWrites.get(owner) !== current ||
-      current.context !== context ||
-      owner.delegatedAuthority !== current.authority ||
-      !validateAgentRunDelegatedAuthority(current.authority)
+      terminalWrites.get(owner) !== captured ||
+      captured.context !== context ||
+      owner.delegatedAuthority !== captured.authority ||
+      !validateAgentRunDelegatedAuthority(captured.authority)
     ) {
       throw new Error("Terminal write owner changed before commit");
     }
@@ -68,11 +79,11 @@ export function captureAgentRunTerminalWriteContext(
     assertCurrent,
     run: (write) => {
       assertCurrent();
-      return context.run(write);
+      return context ? context.run(write) : write();
     },
     track: (persistence) => {
-      current.pending.add(persistence);
-      const settled = () => current.pending.delete(persistence);
+      captured.pending.add(persistence);
+      const settled = () => captured.pending.delete(persistence);
       void persistence.then(settled, settled);
     },
   };

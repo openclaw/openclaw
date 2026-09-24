@@ -19,7 +19,7 @@ import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
-import type { NodeHostClient } from "./client.js";
+import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
 import { resolveNodeDesktopHostConfig } from "./desktop-stream-command.js";
 import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
 import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } from "./invoke.js";
@@ -51,6 +51,7 @@ import {
   type NodeHostManifest,
   type NodeHostInventory,
 } from "./runtime-manifest.js";
+import { createNodeHostUpdatePause } from "./runtime-update-pause.js";
 import { scanNodeHostedSkills } from "./skills.js";
 export type { NodeHostInventory } from "./runtime-manifest.js";
 
@@ -78,7 +79,7 @@ type ActiveNodeHostRuntime = {
   handleInput(invokeId: string, seq: number, payloadJSON: string): void;
   cancel(invokeId: string): void;
   cancelAll(): void;
-  tryPauseForUpdate(): boolean;
+  tryPauseForUpdate(): Promise<boolean>;
   resumeAfterUpdate(): void;
   updateGatewayConnection(connection?: {
     url: string;
@@ -345,7 +346,6 @@ export async function prepareNodeHostRuntime(params?: {
     }) {
       const mcpAbort = new AbortController();
       let closing = false;
-      let pausedForUpdate = false;
       let inFlightInvokes = 0;
       let connectionGeneration = 0;
       let closePromise: Promise<void> | undefined;
@@ -412,6 +412,8 @@ export async function prepareNodeHostRuntime(params?: {
           await client.request("node.event", buildNodeEventParams(event, payload)),
         ...(workerWorkspace
           ? {
+              acquireManagedWorkspaceAsync: (request) =>
+                workerWorkspace.acquireManagedWorkspaceAsync(request),
               acquireManagedWorkspace: (request) =>
                 workerWorkspace.acquireManagedWorkspace(request),
             }
@@ -475,17 +477,24 @@ export async function prepareNodeHostRuntime(params?: {
       if (onManifestChanged) {
         refreshAvailability();
       }
+      const updatePause = createNodeHostUpdatePause({
+        hasLocalActiveWork: () =>
+          closing ||
+          !mcpStartupComplete ||
+          inFlightInvokes > 0 ||
+          pendingPluginDisconnectCleanups > 0 ||
+          pluginDisconnectCleanupFailed ||
+          hasRegisteredNodeHostCommandActiveWork() ||
+          workerCleanupIncomplete,
+        hasWorkerActiveWork: () => workerSupervisor?.hasActiveWork(),
+      });
       return {
         async invoke(frame) {
-          if (pausedForUpdate) {
-            await client
-              .request("node.invoke.result", {
-                id: frame.id,
-                nodeId: frame.nodeId,
-                ok: false,
-                error: { code: "UNAVAILABLE", message: "node host is updating; retry shortly" },
-              })
-              .catch(() => {});
+          if (updatePause.isPaused) {
+            await createNodeInvokeResponder(client, frame).error(
+              "UNAVAILABLE",
+              "node host is updating; retry shortly",
+            );
             return;
           }
           // Admission precedes the first await; disconnects and duplicate IDs do
@@ -500,14 +509,10 @@ export async function prepareNodeHostRuntime(params?: {
             // Enforce the declaration locally too: a paired Gateway cannot widen
             // an operator-restricted surface by sending a hidden command directly.
             if (commandAllowlist && !currentManifest.commands.includes(frame.command)) {
-              await client
-                .request("node.invoke.result", {
-                  id: frame.id,
-                  nodeId: frame.nodeId,
-                  ok: false,
-                  error: { code: "UNAVAILABLE", message: "command not advertised by this node" },
-                })
-                .catch(() => {});
+              await createNodeInvokeResponder(client, frame).error(
+                "UNAVAILABLE",
+                "command not advertised by this node",
+              );
               return;
             }
             const claudeSkills =
@@ -670,26 +675,8 @@ export async function prepareNodeHostRuntime(params?: {
               pendingPluginDisconnectCleanups -= 1;
             });
         },
-        tryPauseForUpdate() {
-          if (
-            closing ||
-            pausedForUpdate ||
-            !mcpStartupComplete ||
-            inFlightInvokes > 0 ||
-            pendingPluginDisconnectCleanups > 0 ||
-            pluginDisconnectCleanupFailed ||
-            hasRegisteredNodeHostCommandActiveWork() ||
-            workerCleanupIncomplete ||
-            workerSupervisor?.hasActiveWork()
-          ) {
-            return false;
-          }
-          pausedForUpdate = true;
-          return true;
-        },
-        resumeAfterUpdate() {
-          pausedForUpdate = false;
-        },
+        tryPauseForUpdate: updatePause.tryPauseForUpdate,
+        resumeAfterUpdate: updatePause.resumeAfterUpdate,
         updateGatewayConnection(connection) {
           gatewayConnection = connection;
         },

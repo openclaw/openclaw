@@ -8,7 +8,6 @@ import {
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { prepareAgentWorkspaceAttachments } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -21,6 +20,7 @@ import {
   type CodexSteeringQueueOptions,
 } from "./attempt-steering.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
 import { canonicalizeNativeProgressCardInput } from "./plan-compaction-state.js";
@@ -64,7 +64,7 @@ export function activateCodexAttemptTurn(
     runAbortController,
     terminalState,
     abortExplicitly,
-    abortFromUpstream,
+    cancellation,
     sessionAgentId,
     contextSessionKey,
     effectiveCwd,
@@ -273,9 +273,18 @@ export function activateCodexAttemptTurn(
             : "Codex cancellation could not confirm the turn stopped; background terminals may still be running.",
         );
       }
-      // Native terminal receipt leaves background terminals alive. Cancellation,
-      // budget expiry, and policy replacement close that thread's execution too.
-      await terminateCodexBackgroundTerminals(resourceState.client, resourceState.thread.threadId);
+      if (resources.nativeProcessAuthority) {
+        await resources.nativeProcessAuthority.cancelTurn(
+          resourceState.client,
+          resourceState.thread.threadId,
+          activeTurnId,
+        );
+      } else {
+        await terminateCodexBackgroundTerminals(
+          resourceState.client,
+          resourceState.thread.threadId,
+        );
+      }
       if (state.permissionChangeRestart) {
         state.permissionChangeRestart = "confirmed";
       }
@@ -360,16 +369,14 @@ export function activateCodexAttemptTurn(
     signal: runAbortController.signal,
     assertActive: assertSteeringActive,
     prepareMessage: async (text, options, assertMessageCurrent) => {
-      const attachmentNote = await prepareAgentWorkspaceAttachments({
-        workspaceDir: params.workspaceDir,
+      const attachmentNote = await connection.prepareInputAttachments({
+        maxChars: Math.max(0, CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - text.length - 2),
         turn: {
-          config: params.config,
           media: options.media,
-          timeoutMs: params.timeoutMs,
-          abortSignal: runAbortController.signal,
           userTurnTranscriptRecorder: options.userTurnTranscriptRecorder,
         },
         assertCurrent: assertMessageCurrent,
+        signal: runAbortController.signal,
       });
       const result = await detectAndLoadAgentHarnessPromptImages({
         ...imageContext,
@@ -602,13 +609,7 @@ export function activateCodexAttemptTurn(
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
   };
-  const freezeRunTerminalOutcome = () => {
-    if (terminalState.terminalOutcomeFrozen) {
-      return;
-    }
-    terminalState.terminalOutcomeFrozen = true;
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-  };
+  const freezeRunTerminalOutcome = cancellation.freezeTerminalOutcome;
   // Return cleanup ownership before callbacks or backend publication can fail.
   const projectionReady = Promise.resolve().then(async () => {
     runAbortController.signal.addEventListener("abort", abortListener, { once: true });

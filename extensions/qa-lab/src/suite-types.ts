@@ -17,6 +17,7 @@ import type {
 } from "./qa-transport-registry.js";
 import type { QaReportCheck } from "./report.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import type { QaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -89,6 +90,7 @@ export type QaSuiteRunParams = {
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   scenarioIds?: string[];
+  scenarioDefinitions?: QaSeedScenarioWithSource[];
   lab?: QaLabServerHandle;
   startLab?: QaSuiteStartLabFn;
   concurrency?: number;

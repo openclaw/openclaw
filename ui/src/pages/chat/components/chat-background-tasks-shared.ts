@@ -1,6 +1,6 @@
 import { t } from "../../../i18n/index.ts";
 import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
-import { isActiveTask, taskStatusLabel, taskTimestampMs } from "../../../lib/tasks/data.ts";
+import { isActiveTask, taskStatusLabel } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 
 registerBackgroundTasksEnglish();
@@ -72,10 +72,9 @@ export function backgroundTaskDeliveryLabel(task: TaskSummary): string | undefin
 
 export type BackgroundTaskObservations = {
   taskActivityById: Map<string, Pick<TaskSummary, "lastActivity" | "diffStat">>;
-  terminalObservedAtByTask: Map<string, number>;
 };
 
-function retainTaskStreamingFields(
+export function prepareTaskSnapshot(
   state: BackgroundTaskObservations,
   task: TaskSummary,
 ): TaskSummary {
@@ -101,33 +100,4 @@ function retainTaskStreamingFields(
     delete next.lastActivity;
   }
   return next;
-}
-
-export function prepareTaskSnapshot(
-  state: BackgroundTaskObservations,
-  task: TaskSummary,
-): TaskSummary {
-  const retained = retainTaskStreamingFields(state, task);
-  if (isActiveTask(retained)) {
-    state.terminalObservedAtByTask.delete(retained.id);
-  }
-  return retained;
-}
-
-export function observeTaskTerminal(
-  state: BackgroundTaskObservations,
-  task: TaskSummary,
-  source: "event" | "snapshot",
-) {
-  if (isActiveTask(task)) {
-    state.terminalObservedAtByTask.delete(task.id);
-    return;
-  }
-  if (!state.terminalObservedAtByTask.has(task.id)) {
-    const terminalAt =
-      source === "event" ? Date.now() : taskTimestampMs(task.endedAt ?? task.updatedAt);
-    if (terminalAt > 0) {
-      state.terminalObservedAtByTask.set(task.id, terminalAt);
-    }
-  }
 }

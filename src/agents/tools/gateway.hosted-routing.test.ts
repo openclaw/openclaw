@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import { sanitizeSystemRunParamsForForwarding } from "../../gateway/node-invoke-system-run-approval.js";
@@ -220,8 +220,8 @@ describe("hosted Gateway tool routing", () => {
       bindApprovalRequesterMetadata({ record, client });
       record.agentRuntimeDelegatedAuthority =
         client?.internal?.agentRuntimeIdentity?.delegatedAuthority;
-      const decision = manager.register(record, 60_000);
-      expect(manager.resolve(record.id, "allow-once")).toBe(true);
+      const decision = (await manager.register(record, 60_000)).decision;
+      expect(await manager.resolve(record.id, "allow-once")).toBe(true);
       await decision;
       respond(true, { id: record.id });
     });

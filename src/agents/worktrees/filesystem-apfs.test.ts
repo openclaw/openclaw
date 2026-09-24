@@ -69,7 +69,7 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
     );
     expect(metadata.cloneId).toBe(getApfsCloneId(cloned));
     await fs.writeFile(cloned, "independent edit");
-    expect(await fs.readFile(original)).toEqual(Buffer.alloc(1024 * 1024, 0x5a));
+    expect((await fs.readFile(original)).equals(Buffer.alloc(1024 * 1024, 0x5a))).toBe(true);
     expect(getApfsCloneId(cloned)).not.toBe(getApfsCloneId(original));
 
     await expect(backend.cloneTemplate(source, destination, options)).rejects.toMatchObject({

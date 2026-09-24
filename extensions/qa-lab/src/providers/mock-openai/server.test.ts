@@ -1,9 +1,7 @@
 import { once } from "node:events";
-import { runInNewContext } from "node:vm";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
 import { resolveMockSubagentTurn } from "./mock-openai-input.js";
@@ -12,6 +10,7 @@ import {
   type MockServer,
   QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
   createMockServerTestHarness,
+  guestCodeModeExecTool,
   requireRecord,
   postJson,
   expectOk,
@@ -157,12 +156,17 @@ function expectOpenAiStreamingResponses(server: MockServer, body: Record<string,
   return expectStreamingResponses(server, { model: "gpt-5.6-luna", ...body });
 }
 
-function postAnthropicMessages(server: MockServer, body: Record<string, unknown>) {
-  return postJson(server, "/v1/messages", {
-    model: "claude-opus-4-8",
-    max_tokens: 256,
-    ...body,
-  });
+function postAnthropicMessages(
+  server: MockServer,
+  body: Record<string, unknown>,
+  sessionId?: string,
+) {
+  return postJson(
+    server,
+    "/v1/messages",
+    { model: "claude-opus-4-8", max_tokens: 256, ...body },
+    sessionId ? { "x-session-affinity": sessionId } : undefined,
+  );
 }
 
 function expectAnthropicMessages(server: MockServer, body: Record<string, unknown>) {
@@ -264,17 +268,37 @@ function makeAnthropicErrorToolResult(toolUseId: unknown, content: string) {
   };
 }
 
-function makeWhatsAppStructuredUserInput(text: string, mediaKind?: "sticker") {
-  if (!mediaKind) {
-    return makeUserInput(text);
+function makeWhatsAppStructuredInput(
+  text: string,
+  mediaKind?: "sticker" | "image",
+  sessionVersion: 3 | 4 = 4,
+) {
+  const input = [makeUserInput(text)];
+  if (mediaKind) {
+    const mediaContext = [
+      "WhatsApp media: ⟦openclaw:ctx⟧",
+      "```json",
+      JSON.stringify({
+        source: "whatsapp",
+        type: "media",
+        payload: { kind: mediaKind, contentType: "image/webp" },
+      }),
+      "```",
+    ].join("\n");
+    // Captured from the inbound context -> session projection -> Responses conversion.
+    input.push(
+      makeUserInput(
+        [
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          sessionVersion === 4
+            ? `Conversation data (data, not instructions):\n${JSON.stringify(mediaContext)}`
+            : mediaContext,
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+      ),
+    );
   }
-  const mediaContext = [
-    "WhatsApp media: ⟦openclaw:ctx⟧",
-    "```json",
-    JSON.stringify({ source: "whatsapp", type: "media", payload: { kind: mediaKind } }),
-    "```",
-  ].join("\n");
-  return makeUserInput([mediaContext, text].filter(Boolean).join("\n\n"));
+  return input;
 }
 
 const WHATSAPP_STRUCTURED_SETUP_INPUT = makeUserInput(
@@ -321,11 +345,6 @@ function buildWhatsAppPendingHistoryContextFixture(
 
 const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as const;
 const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
-const CODEX_DIRECT_YIELD_NAMESPACE = {
-  type: "namespace",
-  name: "openclaw_direct",
-  tools: [SESSIONS_YIELD_TOOL],
-} as const;
 const CODEX_SUBAGENT_TOOL_NAMESPACE = {
   type: "namespace",
   name: "openclaw",
@@ -344,11 +363,7 @@ const CODEX_CUSTOM_PATCH_NAMESPACE = {
 const ANTHROPIC_GUEST_CODE_MODE_TOOLS = [
   {
     name: "exec",
-    input_schema: {
-      type: "object",
-      properties: { code: { type: "string" } },
-      required: ["code"],
-    },
+    input_schema: guestCodeModeExecTool.parameters,
   },
   {
     name: "wait",
@@ -463,77 +478,6 @@ describe("qa mock openai server", () => {
         type: "server_error",
         message: "Service Unavailable",
       },
-    });
-  });
-
-  it("keeps cursor reads correct when retained debug requests rotate", async () => {
-    const server = await startMockServer();
-    const debugRequestLimit = 2_000;
-    const readCursor = async () =>
-      readQaMockRequestCursor(
-        await fetch(`${server.baseUrl}/debug/request-cursor`).then((response) => response.json()),
-      );
-
-    expect(await readCursor()).toBe(0);
-    for (let index = 0; index < debugRequestLimit; index += 1) {
-      await expectOpenAiNonStreamingResponsesJson(server, {
-        input: [makeUserInput(`cursor request ${index}`)],
-      });
-    }
-    const cursor = await readCursor();
-    expect(cursor).toBe(debugRequestLimit);
-
-    await expectOpenAiNonStreamingResponsesJson(server, {
-      input: [makeUserInput("cursor request overflow")],
-    });
-
-    const retained = requireArray(
-      await getJson(server, "/debug/requests"),
-      "retained debug requests",
-    );
-    expect(retained).toHaveLength(debugRequestLimit);
-    expect(requireRecord(retained[0], "retained request 0").cursor).toBe(2);
-    expect(requireRecord(retained.at(-1), "last retained request").cursor).toBe(
-      debugRequestLimit + 1,
-    );
-    expect(String(requireRecord(retained[0], "retained request 0").allInputText)).toContain(
-      "cursor request 1",
-    );
-    expect(String(requireRecord(retained.at(-1), "last retained request").allInputText)).toContain(
-      "cursor request overflow",
-    );
-
-    const nextRequests = requireArray(
-      await fetch(`${server.baseUrl}/debug/requests?after=${cursor}`).then((response) =>
-        response.json(),
-      ),
-      "debug requests after cursor",
-    );
-    expect(nextRequests).toHaveLength(1);
-    expect(String(requireRecord(nextRequests[0], "next request").prompt)).toContain("overflow");
-
-    const expired = await fetch(`${server.baseUrl}/debug/requests?after=0`);
-    expect(expired.status).toBe(409);
-    expect(await expired.json()).toEqual({
-      error: "request cursor expired",
-      after: 0,
-      oldestCursor: 2,
-      latestCursor: debugRequestLimit + 1,
-    });
-
-    const futureCursor = debugRequestLimit + 2;
-    const future = await fetch(`${server.baseUrl}/debug/requests?after=${futureCursor}`);
-    expect(future.status).toBe(409);
-    expect(await future.json()).toEqual({
-      error: "request cursor is ahead of the latest recorded request",
-      after: futureCursor,
-      latestCursor: debugRequestLimit + 1,
-    });
-
-    const invalid = await fetch(`${server.baseUrl}/debug/requests?after=1.5`);
-    expect(invalid.status).toBe(400);
-    expect(await invalid.json()).toEqual({
-      error: "after must be a non-negative safe integer",
     });
   });
 
@@ -1853,6 +1797,7 @@ describe("qa mock openai server", () => {
     expect(outputToolArgsFromItem(groupToolCall)).toEqual({
       action: "react",
       emoji: "👍",
+      final: true,
     });
 
     const toolCall = outputToolCall(declaredPayload, "message");
@@ -1863,30 +1808,8 @@ describe("qa mock openai server", () => {
     expect(outputToolArgsFromItem(toolCall)).toEqual({
       action: "react",
       emoji: "👍",
+      final: true,
     });
-
-    const afterToolPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      input: [
-        makeUserInput(WHATSAPP_AGENT_REACT_PROMPT),
-        makeToolOutputWithCallId(
-          outputToolCallId(toolCall, "call_mock_message_react"),
-          "reaction sent",
-        ),
-      ],
-    });
-
-    expect(
-      outputItems(afterToolPayload).some(
-        (item) => item.type === "function_call" && item.name === "message",
-      ),
-    ).toBe(false);
-    expect(
-      outputItems(afterToolPayload)
-        .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
-        .map((content) => requireRecord(content, "assistant content").text)
-        .filter((text): text is string => typeof text === "string" && text.trim().length > 0),
-    ).toEqual([]);
   });
 
   it("emits WhatsApp agent upload-file message tool calls only when the tool is declared", async () => {
@@ -1925,24 +1848,6 @@ describe("qa mock openai server", () => {
       filename: "whatsapp-qa-agent-upload.png",
     });
     expect(outputToolArgsFromItem(toolCall).buffer).toEqual(expect.any(String));
-
-    const afterToolPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      input: [
-        makeUserInput(WHATSAPP_AGENT_UPLOAD_PROMPT),
-        makeToolOutputWithCallId(
-          outputToolCallId(toolCall, "call_mock_message_upload"),
-          "media sent",
-        ),
-      ],
-    });
-
-    expect(
-      outputItems(afterToolPayload).some(
-        (item) => item.type === "function_call" && item.name === "message",
-      ),
-    ).toBe(false);
-    expect(outputText(afterToolPayload)).toBe("");
   });
 
   it("answers WhatsApp pending-history prompts only with injected prior group context", async () => {
@@ -2272,7 +2177,7 @@ describe("qa mock openai server", () => {
     const runtimeSessionId = "compaction-below-threshold";
 
     await expectOpenAiNonStreamingResponsesJson(server, {
-      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      client_metadata: { session_id: runtimeSessionId },
       input: [makeUserInput(QA_COMPACTION_RETRY_PROMPT)],
     });
 
@@ -2296,7 +2201,7 @@ describe("qa mock openai server", () => {
     const runtimeSessionId = "compaction-one-shot";
     const body = {
       model: "gpt-5.6-luna",
-      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      client_metadata: { session_id: runtimeSessionId },
       input: [
         makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
       ],
@@ -2340,7 +2245,7 @@ describe("qa mock openai server", () => {
     for (const runtimeSessionId of ["compaction-session-a", "compaction-session-b"]) {
       const response = await postNonStreamingResponses(server, {
         model: "gpt-5.6-luna",
-        instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+        client_metadata: { session_id: runtimeSessionId },
         input: [
           makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
         ],
@@ -2358,8 +2263,7 @@ describe("qa mock openai server", () => {
 
   it("injects one Anthropic overflow per session before planning the logical write", async () => {
     const server = await startMockServer();
-    const bodyFor = (sessionId: string) => ({
-      system: `Runtime: embedded | sessionId=${sessionId}`,
+    const body = {
       tools: [
         {
           name: "exec",
@@ -2385,9 +2289,9 @@ describe("qa mock openai server", () => {
           `${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`,
         ),
       ],
-    });
+    };
 
-    const first = await postAnthropicMessages(server, bodyFor("anthropic-overflow-a"));
+    const first = await postAnthropicMessages(server, body, "anthropic-overflow-a");
     expect(first.status).toBe(400);
     expect(await first.json()).toEqual({
       type: "error",
@@ -2398,7 +2302,7 @@ describe("qa mock openai server", () => {
       },
     });
 
-    const second = await postAnthropicMessages(server, bodyFor("anthropic-overflow-a"));
+    const second = await postAnthropicMessages(server, body, "anthropic-overflow-a");
     expect(second.status).toBe(200);
     const content = requireArray(
       requireRecord(await second.json(), "Anthropic response").content,
@@ -2410,7 +2314,7 @@ describe("qa mock openai server", () => {
       plannedWireToolName: "exec",
     });
 
-    const independent = await postAnthropicMessages(server, bodyFor("anthropic-overflow-b"));
+    const independent = await postAnthropicMessages(server, body, "anthropic-overflow-b");
     expect(independent.status).toBe(400);
   });
 
@@ -2418,7 +2322,7 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const initial = await postNonStreamingResponses(server, {
       model: "gpt-5.6-luna",
-      instructions: "Runtime: embedded | sessionId=compaction-summary",
+      client_metadata: { session_id: "compaction-summary" },
       input: [
         makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
       ],
@@ -2470,7 +2374,7 @@ describe("qa mock openai server", () => {
       const server = await startMockServer();
       const body = {
         model: "gpt-5.6-luna",
-        instructions: `Runtime: embedded | sessionId=compaction-output-${markerPrefix}`,
+        client_metadata: { session_id: `compaction-output-${markerPrefix}` },
         input: [makeUserInput(`${markerPrefix}-http\n${"x".repeat(100_000)}`)],
       };
 
@@ -2762,7 +2666,7 @@ Update and merge these partial structured summaries.`,
     const runtimeSessionId = "compaction-openclaw-retry";
     const initial = await postNonStreamingResponses(server, {
       model: "gpt-5.6-luna",
-      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      client_metadata: { session_id: runtimeSessionId },
       input: [
         makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
       ],
@@ -2784,7 +2688,7 @@ Update and merge these partial structured summaries.`,
 
     const writePlan = await expectOpenAiStreamingResponsesText(server, {
       model: "gpt-5.6-luna",
-      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      client_metadata: { session_id: runtimeSessionId },
       input: [
         makeUserInput(compactedSummary),
         makeUserInput("Continue from the compacted context."),
@@ -3077,67 +2981,6 @@ Update and merge these partial structured summaries.`,
     expect(plannedToolArgs.mode).toBe("run");
   });
 
-  it.each([
-    {
-      name: "flat tools",
-      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
-      namespace: undefined,
-    },
-    {
-      name: "Codex direct-only tools",
-      tools: [SESSIONS_SPAWN_TOOL, CODEX_DIRECT_YIELD_NAMESPACE],
-      namespace: "openclaw_direct",
-    },
-  ])("drives yielded-parent subagent fallback through $name", async ({ tools, namespace }) => {
-    const server = await startMockServer();
-    const prompt =
-      "Subagent direct fallback QA check: spawn one worker and yield until QA-SUBAGENT-DIRECT-FALLBACK-OK is delivered.";
-
-    await expectResponsesText(server, {
-      stream: true,
-      tools,
-      input: [makeUserInput(prompt)],
-    });
-
-    const spawnDebug = requireRecord(
-      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
-      "spawn debug request",
-    );
-    expect(spawnDebug.plannedToolName).toBe("sessions_spawn");
-    const spawnArgs = requireRecord(spawnDebug.plannedToolArgs, "spawn planned tool args");
-    expect(spawnArgs.label).toBe("qa-direct-fallback-worker");
-    expect(spawnArgs.thread).toBe(false);
-    expect(spawnArgs.mode).toBe("run");
-    expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
-
-    const body = await expectResponsesText(server, {
-      stream: true,
-      tools,
-      input: [
-        makeUserInput(prompt),
-        makeToolOutputWithCallId(
-          "call_mock_sessions_spawn_1",
-          JSON.stringify({
-            status: "accepted",
-            childSessionKey: "agent:qa:subagent:child",
-            runId: "run-child-1",
-          }),
-        ),
-      ],
-    });
-
-    expect(body).toContain('"name":"sessions_yield"');
-    expect(body).toContain("QA-SUBAGENT-DIRECT-FALLBACK-OK");
-    if (namespace) {
-      expect(body.match(new RegExp(`"namespace":"${namespace}"`, "g"))).toHaveLength(3);
-    }
-    const yieldDebug = requireRecord(
-      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
-      "yield debug request",
-    );
-    expect(yieldDebug.plannedToolName).toBe("sessions_yield");
-  });
-
   it("returns no visible announce output for the direct fallback QA marker", async () => {
     const server = await startMockServer();
 
@@ -3315,68 +3158,6 @@ Update and merge these partial structured summaries.`,
     expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
   });
 
-  it("binds crossed same-case parent responses to their matching workers", async () => {
-    const server = await startMockServer();
-    const firstChildSessionKey = "agent:qa:subagent:child-1";
-    const secondChildSessionKey = "agent:qa:subagent:child-2";
-    const startChild = (runtimeSessionId: string, childSessionKey: string) =>
-      postNonStreamingResponses(server, {
-        model: "gpt-5.6-luna",
-        instructions: [
-          `Runtime: embedded | sessionId=${runtimeSessionId}`,
-          `- Your session: ${childSessionKey}.`,
-        ].join("\n"),
-        input: [makeUserInput("Subagent terminal reply QA worker: visible.")],
-      });
-    const settleParent = async (
-      runtimeSessionId: string,
-      childSessionKey: string,
-      callId: string,
-    ) => {
-      const parent = await expectNonStreamingResponsesJson(server, {
-        model: "gpt-5.6-luna",
-        instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
-        tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
-        input: [
-          makeUserInput("Subagent terminal reply QA check: visible."),
-          makeToolOutputWithCallId(
-            callId,
-            JSON.stringify({ status: "accepted", childSessionKey, runId: `run-${callId}` }),
-          ),
-        ],
-      });
-      expect(outputText(parent)).toBe("Worker started.");
-    };
-
-    const firstChildResponse = startChild("qa-terminal-child-1", firstChildSessionKey);
-    const secondChildResponse = startChild("qa-terminal-child-2", secondChildSessionKey);
-    let firstChildSettled = false;
-    let secondChildSettled = false;
-    void firstChildResponse.then(() => {
-      firstChildSettled = true;
-    });
-    void secondChildResponse.then(() => {
-      secondChildSettled = true;
-    });
-
-    await expect
-      .poll(async () => {
-        const inflight = await getJson<unknown[]>(server, "/debug/inflight-requests");
-        return inflight.length;
-      })
-      .toBe(2);
-
-    await settleParent("qa-terminal-parent-2", secondChildSessionKey, "call_spawn_2");
-    const secondChild = await (await expectOk(secondChildResponse)).json();
-    expect(outputText(secondChild)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
-    expect(secondChildSettled).toBe(true);
-    expect(firstChildSettled).toBe(false);
-
-    await settleParent("qa-terminal-parent-1", firstChildSessionKey, "call_spawn_1");
-    const firstChild = await (await expectOk(firstChildResponse)).json();
-    expect(outputText(firstChild)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
-  });
-
   it.each([
     QA_REASONING_ONLY_RETRY_INSTRUCTION,
     QA_EMPTY_RESPONSE_RETRY_INSTRUCTION,
@@ -3393,30 +3174,52 @@ Update and merge these partial structured summaries.`,
     expect(outputText(payload)).not.toContain("Protocol note:");
   });
 
-  it("makes the empty terminal worker terminal after one side effect", async () => {
-    const server = await startMockServer();
-    await expectNonStreamingResponsesJson(server, {
-      tools: [{ type: "function", name: "write" }],
-      input: [makeUserInput("Subagent terminal reply QA worker: empty.")],
-    });
-    const writeRequest = requireRecord(
-      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
-      "empty terminal write request",
-    );
-    expect(writeRequest.plannedToolName).toBe("write");
-    expect(requireRecord(writeRequest.plannedToolArgs, "empty terminal write args")).toMatchObject({
-      path: "qa-terminal-empty-side-effect.txt",
-    });
+  it.each(["write", "tool_call"])(
+    "makes the empty terminal worker terminal after one %s side effect",
+    async (wireName) => {
+      const server = await startMockServer();
+      const tools = [{ type: "function", name: wireName }];
+      const kickoff = await expectNonStreamingResponsesJson(server, {
+        tools,
+        input: [makeUserInput("Subagent terminal reply QA worker: empty.")],
+      });
+      const call = outputToolCall(kickoff, wireName);
+      if (wireName === "tool_call") {
+        expect(outputToolArgsFromItem(call)).toMatchObject({
+          id: "write",
+          args: { path: "qa-terminal-empty-side-effect.txt" },
+        });
+      }
+      const writeRequest = requireRecord(
+        await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+        "empty terminal write request",
+      );
+      expect(writeRequest.plannedToolName).toBe("write");
+      expect(
+        requireRecord(writeRequest.plannedToolArgs, "empty terminal write args"),
+      ).toMatchObject({
+        path: "qa-terminal-empty-side-effect.txt",
+      });
 
-    const payload = await expectNonStreamingResponsesJson(server, {
-      tools: [{ type: "function", name: "write" }],
-      input: [
-        makeUserInput("Subagent terminal reply QA worker: empty."),
-        makeToolOutputWithCallId(String(writeRequest.plannedToolCallId), "Wrote 40 bytes"),
-      ],
-    });
-    expect(outputText(payload)).toContain("QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK");
-  });
+      const payload = await expectNonStreamingResponsesJson(server, {
+        tools,
+        input: [
+          makeUserInput("Subagent terminal reply QA worker: empty."),
+          call,
+          makeToolOutputWithCallId(
+            String(writeRequest.plannedToolCallId),
+            wireName === "tool_call"
+              ? JSON.stringify({
+                  tool: { id: "write", name: "write", source: "core" },
+                  result: { content: [{ type: "text", text: "Wrote 40 bytes" }] },
+                })
+              : "Wrote 40 bytes",
+          ),
+        ],
+      });
+      expect(outputText(payload)).toContain("QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK");
+    },
+  );
 
   it("returns explicit empty output for the intentional non-delivery worker", async () => {
     const server = await startMockServer();
@@ -3491,65 +3294,6 @@ Update and merge these partial structured summaries.`,
         makeToolOutputWithCallId(
           outputToolCallId(messageCall, "call_mock_message_silent_terminal"),
           '{"ok":true,"messageId":"qa-silent-terminal"}',
-        ),
-      ],
-    });
-    expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
-    expect(outputText(settled)).toBe("");
-  });
-
-  it.each([
-    {
-      name: "OpenAI private-source guidance",
-      instructions:
-        "Current source visible reply MUST use `message(action=send)`; final text is private.",
-      final: undefined,
-    },
-    {
-      name: "Codex private-source guidance",
-      instructions:
-        "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. When the message is the completed reply to the current source conversation, set `final=true`.",
-      final: true,
-    },
-  ])("delivers an empty terminal representation with $name", async ({ instructions, final }) => {
-    const server = await startMockServer();
-    const completionInput = [
-      makeUserInput("Subagent terminal reply QA check: empty."),
-      {
-        type: "function_call",
-        call_id: "call_empty_historical_write",
-        name: "write",
-        arguments: '{"path":"qa-terminal-empty-side-effect.txt"}',
-      },
-      makeToolOutputWithCallId("call_empty_historical_write", "Wrote 40 bytes"),
-      makeUserInput(
-        TEST_RUNTIME_CONTEXT_CARRIER.replace(
-          "runtime metadata",
-          "[Internal task completion event]\nTask: qa-terminal-empty\nResult: (no output)",
-        ),
-      ),
-    ];
-    const delivery = await expectNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      instructions,
-      input: completionInput,
-    });
-    const messageCall = outputToolCall(delivery, "message");
-    expect(outputToolArgsFromItem(messageCall)).toEqual({
-      action: "send",
-      message: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
-      ...(final ? { final } : {}),
-    });
-
-    const settled = await expectNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      instructions,
-      input: [
-        ...completionInput,
-        messageCall,
-        makeToolOutputWithCallId(
-          outputToolCallId(messageCall, "call_mock_message_empty_terminal"),
-          '{"ok":true,"messageId":"qa-empty-terminal"}',
         ),
       ],
     });
@@ -4917,79 +4661,6 @@ Update and merge these partial structured summaries.`,
     expect(await firstB.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
   });
 
-  it("isolates interleaved session state while preserving cross-provider ownership", async () => {
-    const server = await startMockServer();
-    const handoffPrompt =
-      "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
-    const fanoutPrompt =
-      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
-    const sessions = ["qa-session-alpha", "qa-session-beta"] as const;
-    const runtimePrompt = (sessionId: string) =>
-      `Runtime: agent=main | sessionId=${sessionId} | channel=qa`;
-    const postSession = (sessionId: string, input: unknown[], cacheBoundary = 0) =>
-      expectOpenAiNonStreamingResponsesJson(server, {
-        prompt_cache_key: `${sessionId}:${cacheBoundary}`,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [makeDeveloperInput(runtimePrompt(sessionId)), ...input],
-      });
-
-    const handoffs = await Promise.all(
-      sessions.map((sessionId) => postSession(sessionId, [makeUserInput(handoffPrompt)])),
-    );
-    for (const handoff of handoffs) {
-      expect(outputToolArgsFromItem(outputToolCall(handoff, "sessions_spawn"))).toMatchObject({
-        label: "qa-sidecar",
-      });
-    }
-
-    const crossProviderContinuation = await expectAnthropicMessages(server, {
-      system: [{ type: "text", text: runtimePrompt(sessions[0]) }],
-      tools: [{ name: "sessions_spawn", input_schema: { type: "object", properties: {} } }],
-      messages: [makeAnthropicUserText(handoffPrompt)],
-    });
-    const continued = requireRecord(
-      await crossProviderContinuation.json(),
-      "cross-provider handoff continuation",
-    );
-    expect(continued.stop_reason).toBe("end_turn");
-
-    const anthropicHandoff = await expectAnthropicMessages(server, {
-      system: [{ type: "text", text: runtimePrompt("qa-session-anthropic") }],
-      tools: [{ name: "sessions_spawn", input_schema: { type: "object", properties: {} } }],
-      messages: [makeAnthropicUserText(handoffPrompt)],
-    });
-    expect(
-      requireRecord(await anthropicHandoff.json(), "independent Anthropic handoff"),
-    ).toMatchObject({ stop_reason: "tool_use" });
-
-    const firstFanoutCalls = await Promise.all(
-      sessions.map((sessionId) => postSession(sessionId, [makeUserInput(fanoutPrompt)], 1)),
-    );
-    for (const fanout of firstFanoutCalls) {
-      expect(outputToolArgsFromItem(outputToolCall(fanout, "sessions_spawn"))).toMatchObject({
-        label: "qa-fanout-alpha",
-      });
-    }
-
-    const secondFanoutCalls = await Promise.all(
-      sessions.map((sessionId) =>
-        postSession(
-          sessionId,
-          [
-            makeUserInput(fanoutPrompt),
-            makeToolOutput('{"status":"accepted","childSessionKey":"alpha","note":"ALPHA-OK"}'),
-          ],
-          2,
-        ),
-      ),
-    );
-    for (const fanout of secondFanoutCalls) {
-      expect(outputToolArgsFromItem(outputToolCall(fanout, "sessions_spawn"))).toMatchObject({
-        label: "qa-fanout-beta",
-      });
-    }
-  });
-
   it.each([
     {
       name: "legacy workspace heartbeat",
@@ -5038,36 +4709,6 @@ Update and merge these partial structured summaries.`,
     });
 
     expect(outputText(await response.json())).toBe("NEW_TOKEN");
-  });
-
-  it("requires both WhatsApp batched markers before returning the final batched marker", async () => {
-    const server = await startMockServer();
-
-    const standalone = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "Second batched WhatsApp QA message. Reply with only this exact marker: " +
-            "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
-            "in this same run context.",
-        ),
-      ],
-    });
-    expect(outputText(await standalone.json())).toBe("WHATSAPP_QA_BATCHED_MISSING_CONTEXT_TEST");
-
-    const batched = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "First batched WhatsApp QA message WHATSAPP_QA_BATCHED_FIRST_TEST. " +
-            "Wait for the next message before replying.",
-        ),
-        makeUserInput(
-          "Second batched WhatsApp QA message. Reply with only this exact marker: " +
-            "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
-            "in this same run context.",
-        ),
-      ],
-    });
-    expect(outputText(await batched.json())).toBe("WHATSAPP_QA_BATCHED_FINAL_TEST");
   });
 
   it("lets the latest exact marker prompt beat stale Telegram session_status history", async () => {
@@ -5180,41 +4821,54 @@ Update and merge these partial structured summaries.`,
     expect(outputText(await response.json())).toBe("QA_WHATSAPP_LOCATION_OK");
   });
 
-  it("uses WhatsApp contact and sticker markers only for matching structured bodies", async () => {
-    const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
-
-    const setupResponse = await readMockResponse(server, [setupInput]);
-    const contactResponse = await readMockResponse(server, [
-      setupInput,
-      makeUserInput("  <contact>"),
-    ]);
-    const stickerResponse = await readMockResponse(server, [
-      setupInput,
-      makeWhatsAppStructuredUserInput("", "sticker"),
-    ]);
-    const webpImageInput = {
-      role: "user" as const,
-      content: [
-        { type: "input_text" as const, text: "" },
-        { type: "input_image" as const, image_url: "data:image/webp;base64,AA==" },
-      ],
-    };
-    const webpImageResponse = await postNonStreamingResponses(server, {
-      input: [setupInput, webpImageInput],
-    });
-
-    expect(outputText(await setupResponse.json())).toBe("QA_STRUCTURED_INITIAL_OK");
-    expect(outputText(await contactResponse.json())).toBe("QA_WHATSAPP_CONTACT_OK");
-    expect(outputText(await stickerResponse.json())).toBe("QA_WHATSAPP_STICKER_OK");
-    expect(outputText(await webpImageResponse.json())).not.toBe("QA_WHATSAPP_STICKER_OK");
-  });
+  it.each([false, true])(
+    "reads only current WhatsApp sticker context (stream=%s)",
+    async (stream) => {
+      const server = await startMockServer();
+      const history = [
+        WHATSAPP_STRUCTURED_SETUP_INPUT,
+        makeUserInput("Reply with only this exact marker: QA_DOCUMENT_OK"),
+      ];
+      for (const sessionVersion of [3, 4] as const) {
+        const sticker = makeWhatsAppStructuredInput(
+          "[User sent media without caption]",
+          "sticker",
+          sessionVersion,
+        );
+        const cases = [
+          { input: sticker, expected: "QA_WHATSAPP_STICKER_OK" },
+          {
+            input: [...sticker, ...makeWhatsAppStructuredInput("", "image", sessionVersion)],
+            expected: "QA_DOCUMENT_OK",
+          },
+          {
+            input: [...sticker, makeUserInput("A later ordinary message")],
+            expected: "QA_DOCUMENT_OK",
+          },
+          { input: [...sticker, makeUserInput("<contact>")], expected: "QA_WHATSAPP_CONTACT_OK" },
+          {
+            input: [...sticker, makeUserInput("📍 37.774900, -122.419400")],
+            expected: "QA_WHATSAPP_LOCATION_OK",
+          },
+          {
+            input: [
+              makeImageUserInput({ type: "input_image", image_url: "data:image/webp;base64,AA==" }),
+            ],
+            expected: "QA_DOCUMENT_OK",
+          },
+        ];
+        for (const { input, expected } of cases) {
+          const response = await expectResponses(server, { stream, input: [...history, ...input] });
+          const payload = stream
+            ? parseStreamingResponseEvents(await response.text()).find(
+                (event) => event.type === "response.completed",
+              )?.response
+            : await response.json();
+          expect(outputText(payload)).toBe(expected);
+        }
+      }
+    },
+  );
 
   it("uses WhatsApp structured markers for metadata-prefixed message bodies", async () => {
     const server = await startMockServer();
@@ -5245,7 +4899,7 @@ Update and merge these partial structured summaries.`,
     const stickerResponse = await readMockResponse(server, [
       setupInput,
       previousExactMarkerInput,
-      makeWhatsAppStructuredUserInput([...contextPrefix, ""].join("\n"), "sticker"),
+      ...makeWhatsAppStructuredInput([...contextPrefix, ""].join("\n"), "sticker"),
     ]);
 
     expect(outputText(await locationResponse.json())).toBe("QA_WHATSAPP_LOCATION_OK");
@@ -5261,7 +4915,7 @@ Update and merge these partial structured summaries.`,
       const response = await readMockResponse(server, [
         setupInput,
         makeUserInput("Reply with only this previous document marker: QA_WHATSAPP_DOCUMENT_OK"),
-        makeWhatsAppStructuredUserInput(
+        ...makeWhatsAppStructuredInput(
           `[WhatsApp +15555550123] +15555550123: ${structuredCase.body}`,
           "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
         ),
@@ -5278,7 +4932,7 @@ Update and merge these partial structured summaries.`,
     for (const structuredCase of WHATSAPP_STRUCTURED_CASES) {
       const response = await readMockResponse(server, [
         setupInput,
-        makeWhatsAppStructuredUserInput(
+        ...makeWhatsAppStructuredInput(
           `[Tue 2026-07-14 18:17 GMT+5:30] [WhatsApp +15555550123] +15555550123: ${structuredCase.body}`,
           "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
         ),
@@ -5304,7 +4958,7 @@ Update and merge these partial structured summaries.`,
       for (const structuredCase of WHATSAPP_STRUCTURED_CASES) {
         const response = await readMockResponse(server, [
           setupInput,
-          makeWhatsAppStructuredUserInput(
+          ...makeWhatsAppStructuredInput(
             `${prefix} ${structuredCase.body}`,
             "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
           ),
@@ -5360,47 +5014,6 @@ Update and merge these partial structured summaries.`,
       expect(text).not.toBe("QA_WHATSAPP_CONTACT_OK");
       expect(text).not.toBe("QA_WHATSAPP_STICKER_OK");
     }
-  });
-
-  it("streams WhatsApp location markers for the matching coordinate body", async () => {
-    const server = await startMockServer();
-
-    const body = await expectResponsesText(server, {
-      stream: true,
-      input: [
-        makeUserInput(
-          "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-            "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_STREAM_OK. " +
-            "Reply with only this exact marker: QA_INITIAL_STREAM_OK",
-        ),
-        makeUserInput("📍 37.774900, -122.419400"),
-      ],
-    });
-
-    expect(body).toContain("QA_WHATSAPP_LOCATION_STREAM_OK");
-    expect(body).not.toContain("QA_INITIAL_STREAM_OK");
-  });
-
-  it("streams WhatsApp structured markers ahead of previous exact markers", async () => {
-    const server = await startMockServer();
-
-    const body = await expectResponsesText(server, {
-      stream: true,
-      input: [
-        makeUserInput(
-          "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-            "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_STREAM_OK. " +
-            "Reply with only this exact marker: QA_INITIAL_STREAM_OK",
-        ),
-        makeUserInput(
-          "Reply with only this previous unrelated exact marker: QA_WHATSAPP_PREVIOUS_STREAM_OK",
-        ),
-        makeUserInput("📍 37.774900, -122.419400"),
-      ],
-    });
-
-    expect(body).toContain("QA_WHATSAPP_LOCATION_STREAM_OK");
-    expect(body).not.toContain("QA_WHATSAPP_PREVIOUS_STREAM_OK");
   });
 
   it("uses image generation directives from request context when the latest user text is generic", async () => {
@@ -6789,13 +6402,7 @@ Update and merge these partial structured summaries.`,
     const tools = [
       {
         name: "exec",
-        input_schema: {
-          type: "object",
-          properties: {
-            code: { type: "string" },
-          },
-          required: ["code"],
-        },
+        input_schema: guestCodeModeExecTool.parameters,
       },
       {
         name: "wait",
@@ -6864,7 +6471,14 @@ Update and merge these partial structured summaries.`,
 
     const readAgent = readToolUse(await request());
     expect(readAgent.name).toBe("exec");
-    expect(readAgent.input).toEqual({ code: expect.any(String) });
+    const readAgentArgs = requireRecord(readAgent.input, "exec input");
+    validateToolArguments(guestCodeModeExecTool, {
+      type: "toolCall",
+      id: String(readAgent.id),
+      name: "exec",
+      arguments: readAgentArgs,
+    });
+    expect(readAgentArgs).toEqual({ title: expect.any(String), code: expect.any(String) });
     const readAgentCode = String(requireRecord(readAgent.input, "exec input").code);
     expect(readAgentCode).toContain("await catalog.search(targetName)");
     expect(readAgentCode).toContain("await target(targetArgs)");
@@ -7119,157 +6733,26 @@ Update and merge these partial structured summaries.`,
     expect(outputText(payload)).not.toBe("Protocol note: replay unsafe after write.");
   });
 
-  const restartCheckpointTools = [
+  it.each([
+    { surface: "Code Mode", tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS, wireName: "exec" },
     {
-      type: "function",
-      name: "exec",
-      parameters: {
-        type: "object",
-        properties: {
-          code: { type: "string" },
-          restartSafe: { type: "boolean" },
+      surface: "structured catalog",
+      tools: [
+        {
+          name: "tool_call",
+          input_schema: {
+            type: "object",
+            properties: { id: { type: "string" }, args: { type: "object" } },
+            required: ["id"],
+          },
         },
-        required: ["code"],
-      },
+      ],
+      wireName: "tool_call",
     },
-    {
-      type: "function",
-      name: "wait",
-      parameters: {
-        type: "object",
-        properties: { runId: { type: "string" } },
-        required: ["runId"],
-      },
-    },
-  ];
-  const restartRecoveryPrompt =
-    "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
-
-  async function expectRestartCheckpointExecution(
-    execArgs: Record<string, unknown>,
-    checkpoint: number,
-  ) {
-    expect(execArgs).toEqual({ code: expect.any(String), restartSafe: true });
-    expect(execArgs.code).toContain("qa_restart_wait");
-    expect(execArgs.code).toContain('catalog.search("qa_restart_wait")');
-    expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
-
-    const started = createDeferred<void>();
-    const released = createDeferred<void>();
-    const calls: unknown[] = [];
-    const target = Object.assign(
-      (args: unknown) => {
-        calls.push(args);
-        started.resolve();
-        return released.promise;
-      },
-      { toolName: "qa_restart_wait" },
-    );
-    let yielded = false;
-    const execution: unknown = runInNewContext(`(async () => { ${String(execArgs.code)} })()`, {
-      catalog: {
-        search: async (name: string) => {
-          expect(name).toBe("qa_restart_wait");
-          return [target];
-        },
-      },
-      yield_control: () => {
-        yielded = true;
-      },
-    });
-    try {
-      await started.promise;
-      expect(yielded).toBe(true);
-    } finally {
-      released.resolve();
-      await expect(execution).resolves.toBe(`CHECKPOINT-${checkpoint}`);
-    }
-    expect(calls).toEqual([{}]);
-  }
-
-  it("settles hard-kill recovery after one real checkpoint and resets from request history", async () => {
-    const server = await startMockServer();
-    const prompt = "Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.";
-    const tools = [
-      ...restartCheckpointTools,
-      { type: "function", name: "qa_restart_unsafe_probe", parameters: { type: "object" } },
-    ];
-    const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
-    const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
-    expect(outputItems(execPayload)).toHaveLength(1);
-    const execCall = outputToolCall(execPayload, "exec");
-    const execArgs = outputToolArgsFromItem(execCall);
-    await expectRestartCheckpointExecution(execArgs, 1);
-
-    const runId = "kill-restart-checkpoint-1";
-    input.push(
-      execCall,
-      makeToolOutputWithCallId(
-        outputToolCallId(execCall, "kill-restart-exec"),
-        JSON.stringify({ status: "waiting", runId }),
-      ),
-    );
-    const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
-    expect(outputItems(waitPayload)).toHaveLength(1);
-    const waitCall = outputToolCall(waitPayload, "wait");
-    expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
-    input.push(waitCall, makeUserInput(restartRecoveryPrompt));
-
-    const recovered = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
-    expect(outputItems(recovered).map((item) => item.type)).toEqual(["message"]);
-    expect(outputText(recovered)).toBe("KILL-RESTART-RECOVERED-OK");
-
-    const freshPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools,
-      input: [makeUserInput(prompt)],
-    });
-    expect(outputItems(freshPayload)).toHaveLength(1);
-    expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec"))).toEqual(execArgs);
-  });
-
-  it("derives three restart checkpoints from request history without server counters", async () => {
-    const server = await startMockServer();
-    const prompt =
-      "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
-    const tools = restartCheckpointTools;
-    const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
-
-    for (const checkpoint of [1, 2, 3]) {
-      const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
-      const execCall = outputToolCall(execPayload, "exec");
-      const execArgs = outputToolArgsFromItem(execCall);
-      await expectRestartCheckpointExecution(execArgs, checkpoint);
-
-      const runId = `restart-checkpoint-${checkpoint}`;
-      input.push(
-        execCall,
-        makeToolOutputWithCallId(
-          outputToolCallId(execCall, `checkpoint-exec-${checkpoint}`),
-          JSON.stringify({ status: "waiting", runId }),
-        ),
-      );
-      const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
-      const waitCall = outputToolCall(waitPayload, "wait");
-      expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
-      input.push(waitCall, makeUserInput(restartRecoveryPrompt));
-    }
-
-    const finalPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
-    expect(outputText(finalPayload)).toBe("unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK");
-
-    const freshPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools,
-      input: [makeUserInput(prompt)],
-    });
-    expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec")).code).toContain(
-      "CHECKPOINT-1",
-    );
-  });
-
-  it("routes Anthropic image generation through Code Mode when only exec and wait are visible", async () => {
+  ])("routes Anthropic image generation through $surface", async ({ tools, wireName }) => {
     const server = await startMockServer();
     const body = (await expectAnthropicMessagesJson(server, {
-      tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS,
+      tools,
       messages: [
         makeAnthropicUserText(
           "Capability flip image check: generate a QA lighthouse image in this turn right now.",
@@ -7280,14 +6763,21 @@ Update and merge these partial structured summaries.`,
       content: Array<Record<string, unknown>>;
     };
     expect(body.stop_reason).toBe("tool_use");
-    expect(body.content.find((block) => block.type === "tool_use")?.name).toBe("exec");
+    const call = body.content.find((block) => block.type === "tool_use");
+    expect(call?.name).toBe(wireName);
+    if (wireName === "tool_call") {
+      expect(call?.input).toMatchObject({
+        id: "image_generate",
+        args: { filename: "qa-lighthouse.png", size: "1024x1024" },
+      });
+    }
 
     const debug = requireRecord(
       await fetch(`${server.baseUrl}/debug/last-request`).then((result) => result.json()),
       "debug request",
     );
     expect(debug.plannedToolName).toBe("image_generate");
-    expect(debug.plannedWireToolName).toBe("exec");
+    expect(debug.plannedWireToolName).toBe(wireName);
   });
 
   it("does not route hidden capabilities through ordinary shell exec", async () => {

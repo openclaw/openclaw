@@ -5,10 +5,8 @@ import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
-import {
-  readMessageIdempotencyKey,
-  redactTranscriptMessageForStorage,
-} from "./session-accessor.sqlite-transcript-store.js";
+import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 function resolvePendingInputRequestHash(
   message: Record<string, unknown>,

@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { renderProviderBrandIcon } from "./provider-icon.ts";
+import { providerDisplayLabel, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderPicker } from "./select-picker.ts";
 
 export type ModelPickerOption = {
@@ -20,6 +20,8 @@ type ModelPickerParams = {
   className?: string;
   placement?: "top" | "bottom";
   showSelectedDetail?: boolean;
+  groupByProvider?: boolean;
+  searchPlaceholder?: string;
   custom?: {
     label: string;
     placeholder?: string;
@@ -54,6 +56,19 @@ export function renderModelPicker(params: ModelPickerParams) {
         title: params.title,
         placement: params.placement,
         searchable: true,
+        searchPlaceholder: params.searchPlaceholder,
+        groupBy: params.groupByProvider
+          ? (option) =>
+              option.provider
+                ? {
+                    id: option.provider,
+                    label: providerDisplayLabel(option.provider),
+                    leading: renderProviderBrandIcon(option.provider, {
+                      className: "model-picker__provider-icon",
+                    }),
+                  }
+                : undefined
+          : undefined,
         showOptionTooltips: false,
         showSelectedDescription: params.showSelectedDetail,
         className: `model-picker__select ${params.className ?? ""}`,

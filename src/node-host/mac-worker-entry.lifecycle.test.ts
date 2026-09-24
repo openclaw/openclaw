@@ -66,6 +66,20 @@ it.each([0, 143])("finalizes the worker's requested exit code %s", async (code) 
   expect(exit).toHaveBeenCalledExactlyOnceWith(code);
 });
 
+it.each([
+  { args: [], enabled: undefined },
+  { args: ["--desktop-sharing"], enabled: true },
+  { args: ["--no-desktop-sharing"], enabled: false },
+])("passes the parsed desktop preference into worker startup: $args", async ({ args, enabled }) => {
+  const { defaultRuntime } = await import("../runtime.js");
+  vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
+  process.argv.push(...args);
+
+  await import("./mac-worker-entry.js");
+
+  expect(fixture.worker).toHaveBeenCalledExactlyOnceWith({ desktopSharingEnabled: enabled });
+});
+
 it("reports startup failure and finalizes an unsuccessful exit", async () => {
   const { defaultRuntime } = await import("../runtime.js");
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});

@@ -337,6 +337,8 @@ async function deliverAsyncMessageBestEffort(params: {
         config: params.params.config,
         messages: [attachCodexMirrorIdentity(params.message, mirrorIdentity)],
         idempotencyScope: `codex-app-server:${params.threadId}`,
+        runId: params.params.runId,
+        runMirrorIdentityPrefix: `${params.turnId}:`,
       });
     } catch (error) {
       embeddedAgentLog.warn("failed to persist codex async agent message", {

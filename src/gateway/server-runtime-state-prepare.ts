@@ -13,6 +13,10 @@ import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { isGatewayDraining } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import {
+  canIsolateAgentDatabase,
+  listAgentDatabaseAdmissionRefusals,
+} from "../state/agent-database-admission.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
@@ -20,13 +24,14 @@ import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generation.js";
-import type { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 import { createGatewayTransportBridge } from "./server-transport-bridge.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -158,10 +163,18 @@ export async function prepareGatewayKernelState(params: {
         loadWorkerPlacementStartupModule,
       )
     : undefined;
+  const getCommittedRuntimeConfig = () => {
+    const context = resolvePluginGatewayContext();
+    if (!context) {
+      throw new GatewayOperatorAccessUnavailableError();
+    }
+    return (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
+  };
   const githubPublicationRuntime =
     workerEnvironmentStartup && workerPlacementModule
       ? workerPlacementModule.createGatewayGitHubPublicationRuntime({
           placements: workerEnvironmentStartup.placementStore,
+          getCommittedRuntimeConfig,
           warn: (message) => log.warn(message),
         })
       : undefined;
@@ -173,6 +186,7 @@ export async function prepareGatewayKernelState(params: {
       ? await startupTrace.measure("worker-environments.placement-runtime", async () =>
           workerPlacementModule.createGatewayWorkerPlacementRuntime({
             placements: workerEnvironmentStartup.placementStore,
+            getCommittedRuntimeConfig,
             environments: workerEnvironmentService,
             gatewayNamespace: nodeWorkerGatewayNamespace,
             nodeWorkerBundleRetention,
@@ -328,10 +342,10 @@ export async function prepareGatewayKernelState(params: {
     );
   const resolveSharedGatewaySessionGenerationForRuntimeSnapshot = () =>
     resolveSharedGatewaySessionGenerationForConfig(getRuntimeConfig());
-  const sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState = {
+  const sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
-  };
+  });
   const preauthHandshakeTimeoutMs = undefined;
   const initialHooksConfig = runtimeConfig.hooksConfig;
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
@@ -427,7 +441,13 @@ export async function prepareGatewayKernelState(params: {
     ...startupCheckerDeps,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     getStateDatabaseFailure: () =>
-      openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(resolveDatabasePath()),
+      openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(resolveDatabasePath()),
+    getAgentDatabaseAdmissionRefusals: () => {
+      const cfg = getRuntimeConfig();
+      return listAgentDatabaseAdmissionRefusals().filter(
+        (refusal) => !canIsolateAgentDatabase(cfg, refusal.agentId),
+      );
+    },
     getPluginReloadStatus: params.getPluginReloadStatus,
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||

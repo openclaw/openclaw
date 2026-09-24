@@ -146,6 +146,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private(set) var signedOutNeedsRefresh = false
     private var reconnectTask: (id: UUID, task: Task<Void, Never>)?
     private var signInProgress: GatewayBrowserSignInProgress?
+    private var browserSignInRoute: (baseURL: URL, url: URL)?
     private var navigationGeneration: UInt64 = 0
     private var loadGeneration: UInt64 = 0
     private var pendingLoad: Task<Void, Never>?
@@ -396,12 +397,17 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.show()
     }
 
-    func loadInBackground(url: URL, auth: DashboardWindowAuth) {
-        self.update(url: url, auth: auth)
+    func loadInBackground(url: URL, auth: DashboardWindowAuth, restoringRoute: URL? = nil) {
+        self.update(url: url, auth: auth, restoringRoute: restoringRoute)
     }
 
     func invalidateBrowserSession(error: GatewayBrowserSessionError? = nil) {
         self.invalidateGatewayHealth()
+        if let route = self.browserSignInRoute, let url = self.webView.url,
+           Self.isTrustedLinkSource(url, dashboardURL: route.baseURL)
+        {
+            self.browserSignInRoute = (route.baseURL, url)
+        }
         if self.signedOut != nil {
             self.signedOutNeedsRefresh = true
             return
@@ -420,7 +426,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     /// the remote tunnel is recreated on a new local port while the window stays
     /// open; ordering the window front here would steal focus on background
     /// tunnel recreation.
-    func update(url: URL, auth: DashboardWindowAuth, updateBridgeEnabled: Bool? = nil) {
+    func update(
+        url: URL, auth: DashboardWindowAuth, updateBridgeEnabled: Bool? = nil, restoringRoute: URL? = nil)
+    {
         let shouldReload = Self.shouldReloadDashboard(
             currentURL: self.currentURL,
             newURL: url,
@@ -435,7 +443,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
         if shouldReload {
             self.refreshNativeAuthScript(url: url, auth: auth)
-            self.load(url)
+            let route = restoringRoute.flatMap { Self.isTrustedLinkSource($0, dashboardURL: url) ? $0 : nil }
+            self.load(route ?? url)
         }
         self.requestBrowserProfileImportOfferIfNeeded()
     }
@@ -467,6 +476,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         _ = self.takePendingNativeActions()
         self.reconnectTask?.task.cancel()
         self.reconnectTask = nil
+        self.browserSignInRoute = nil
         self.deviceSettingsMessageHandler.stopObserving()
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.isExcludedFromWindowsMenu = true
@@ -505,6 +515,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // detaching first transfers AppKit ownership without a close/focus cycle.
         self.reconnectTask?.task.cancel()
         self.reconnectTask = nil
+        self.browserSignInRoute = nil
         self.retirePendingLoad()
         self.deviceSettingsMessageHandler.stopObserving()
         self.webView.stopLoading()
@@ -622,13 +633,17 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
     }
 
-    /// The Control UI posts this from mousedown on passive pane-header chrome
-    /// (split-view session titles). WKWebView swallows titlebar-style drags, so
-    /// the web side asks the window to take over the in-flight mouse gesture.
+    /// The Control UI's passive chrome and the native failure page's background
+    /// ask the window to take over the in-flight mouse gesture because
+    /// WKWebView swallows titlebar-style drags.
     fileprivate func receiveWindowDragMessage(_ message: WKScriptMessage) {
+        let isNativeFailureDocument = self.isShowingFailurePage &&
+            message.frameInfo.request.url?.absoluteString == "about:blank" &&
+            self.webView.url?.absoluteString == "about:blank"
         guard message.name == Self.windowDragMessageHandlerName,
               message.webView === self.webView,
               message.frameInfo.isMainFrame,
+              isNativeFailureDocument ||
               Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
               Self.isWindowDragRequest(message.body),
               let window
@@ -888,6 +903,10 @@ extension DashboardWindowController {
     }
 
     func reconnectGateway(_ target: DashboardGatewayTarget) {
+        if self.signedOut == nil {
+            self.reconnectLiveDashboard(target)
+            return
+        }
         guard let page = self.signedOut, page.target == target,
               case let .profile(id) = target, self.reconnectTask == nil else { return }
         self.showFailureHTML(DashboardFailurePage.html(signedOut: page, signingIn: true), present: false)
@@ -915,6 +934,52 @@ extension DashboardWindowController {
             }
         }
         self.reconnectTask = (attempt, task)
+    }
+
+    private func reconnectLiveDashboard(_ target: DashboardGatewayTarget) {
+        guard self.isWindowOpen, self.pendingGatewaySwitch == nil, self.reconnectTask == nil,
+              self.auth.usesBrowserIdentity,
+              let url = self.webView.url, Self.isTrustedLinkSource(url, dashboardURL: self.currentURL)
+        else { return }
+        guard self.browserSession != nil else {
+            // Chrome and WebKit have separate cookies. Identity redirects must
+            // return to this WebKit store, retaining the requested chat route.
+            self.load(url)
+            return
+        }
+        guard case let .profile(id) = target else { return }
+        self.browserSignInRoute = (self.currentURL, url)
+        let attempt = UUID()
+        let task = Task { @MainActor [weak self] in
+            do {
+                try Task.checkCancellation()
+                try await GatewayBrowserOnboardingController.withSignInProgress { [weak self] progress in
+                    guard let self, self.reconnectTask?.id == attempt, self.isWindowOpen,
+                          self.pendingGatewaySwitch == nil else { throw CancellationError() }
+                    try await GatewayBrowserSignInCoordinator.reconnectGateway(id: id, progress: progress)
+                }
+                guard let self, self.reconnectTask?.id == attempt else { return }
+                self.reconnectTask = nil
+            } catch {
+                guard let self, self.reconnectTask?.id == attempt else { return }
+                self.reconnectTask = nil
+                self.browserSignInRoute = nil
+                guard self.isWindowOpen, !(error is CancellationError) else { return }
+                DashboardManager.shared.presentGatewayError(
+                    error, title: String(localized: "Gateway sign-in"), over: self.window)
+            }
+        }
+        self.reconnectTask = (attempt, task)
+    }
+
+    func browserSignInReturnURL(session: GatewayBrowserSession?, dashboardURL: URL) -> URL? {
+        guard let route = self.browserSignInRoute,
+              let previous = self.browserSession, let session,
+              previous.browserDataPrincipal == session.browserDataPrincipal,
+              DashboardManager.notificationRoute(route.baseURL) == DashboardManager.notificationRoute(dashboardURL),
+              Self.isTrustedLinkSource(route.url, dashboardURL: dashboardURL)
+        else { return nil }
+        return route.url
     }
 
     func cancelGatewayReconnect(_ target: DashboardGatewayTarget) {
@@ -968,6 +1033,7 @@ extension DashboardWindowController {
 
     func retirePendingSessionCommands() {
         self.pendingNativeCommands.removeAll(where: \.supersedesPendingNavigation)
+        self.browserSignInRoute = nil
     }
 
     var pendingGatewaySwitch: DashboardGatewaySwitchIntent? {
@@ -1149,6 +1215,7 @@ extension DashboardWindowController {
     func windowWillClose(_: Notification) {
         self.reconnectTask?.task.cancel()
         self.reconnectTask = nil
+        self.browserSignInRoute = nil
         self.retirePendingLoad()
         (self.window as? DashboardWindow)?.lifetimeRevision &+= 1
         (self.window as? DashboardWindow)?.isHiddenForExperience = false

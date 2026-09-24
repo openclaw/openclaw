@@ -51,7 +51,7 @@ import {
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../utils/delivery-context.shared.js";
+} from "../utils/delivery-context.read.js";
 // Status text helpers render runtime status summaries for CLI output.
 import {
   buildCodexSyntheticUsageAuth,
@@ -539,7 +539,7 @@ export async function buildStatusReplyParts(
     }
     const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
-    const subagentReadContext = buildControlledSubagentRunsReadContext(
+    const subagentReadContext = await buildControlledSubagentRunsReadContext(
       requesterKey,
       statusAgentId,
       cfg,

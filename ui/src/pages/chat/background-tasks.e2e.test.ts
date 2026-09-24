@@ -757,9 +757,8 @@ suite.define(() => {
           },
         });
 
-        await expect.poll(() => firstRow.getAttribute("aria-label")).toContain("Cancelled");
+        await firstRow.waitFor({ state: "detached" });
         await detailPanel.getByText("Cancelled").waitFor();
-        expect(await firstRow.textContent()).not.toContain("Cross-checking requester ownership");
         expect(await activity.locator(".chat-diffstat").count()).toBe(0);
         expect(await detailPanel.locator(".chat-diffstat__add").textContent()).toBe("+14");
         expect(await detailPanel.locator(".chat-diffstat__del").textContent()).toBe("-3");
@@ -769,10 +768,7 @@ suite.define(() => {
         expect(await secondRow.textContent()).toContain("Checking tool card rendering");
         await writeFile(
           path.join(activityDir, "02-one-subagent-cancelled.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-            firstRow,
-            secondRow,
-          ]),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [secondRow]),
         );
         await page.getByRole("button", { name: "Close Tasks" }).click();
         await detailPanel.waitFor({ state: "detached" });
@@ -780,14 +776,9 @@ suite.define(() => {
         const states = [
           ["queued", "Queued"],
           ["running", "Running"],
-          ["completed", "Completed"],
-          ["failed", "Failed"],
-          ["cancelled", "Cancelled"],
-          ["timed_out", "Timed out"],
         ] as const;
         const claw = firstRow.locator(".chat-subagent-activity__claw > svg");
         const jaw = claw.locator(".claw-icon__jaw");
-        const indicator = firstRow.locator(".chat-subagent-activity__indicator");
         const tooltip = firstRow.locator("..").locator("wa-tooltip[open] .tooltip-content");
         const tooltipPopup = firstRow
           .locator("..")
@@ -796,18 +787,14 @@ suite.define(() => {
           jaw.evaluate((element) =>
             element.getAnimations().some((animation) => animation.playState === "running"),
           );
-        let idleColor = "";
         for (const [status, description] of states) {
-          const active = status === "queued" || status === "running";
-          const preview = active ? first.lastActivity : "Reviewed session ownership";
+          const preview = first.lastActivity;
           await gateway.emitGatewayEvent("task", {
             action: "upserted",
             task: {
               ...first,
               status,
               updatedAt: Date.now(),
-              endedAt: active ? undefined : Date.now(),
-              terminalSummary: active ? undefined : preview,
             },
           });
           await expect.poll(() => firstRow.getAttribute("aria-label")).toContain(description);
@@ -816,17 +803,6 @@ suite.define(() => {
           );
           await expect.poll(isMoving).toBe(status === "running");
           expect(await claw.count()).toBe(1);
-          expect(await firstRow.locator(".chat-subagent-activity__badge").count()).toBe(
-            status === "failed" || status === "timed_out" ? 1 : 0,
-          );
-          if (status === "queued") {
-            idleColor = await indicator.evaluate((element) => getComputedStyle(element).color);
-          }
-          if (status === "completed") {
-            expect(await indicator.evaluate((element) => getComputedStyle(element).color)).not.toBe(
-              idleColor,
-            );
-          }
           await firstRow.hover();
           await tooltip.waitFor({ state: "visible" });
           expect(await tooltip.textContent()).toContain(description);
@@ -847,21 +823,20 @@ suite.define(() => {
             await page.emulateMedia({ reducedMotion: "no-preference" });
             await expect.poll(isMoving).toBe(true);
           }
-          if (status === "completed") {
-            await page.emulateMedia({ reducedMotion: "reduce" });
-            await expect
-              .poll(() => indicator.evaluate((element) => getComputedStyle(element).color), {
-                timeout: 5_000,
-              })
-              .toBe(idleColor);
-            await page.emulateMedia({ reducedMotion: "no-preference" });
-          }
         }
         await page.keyboard.press("Tab");
         await firstRow.focus();
         await tooltip.waitFor({ state: "visible" });
-        expect(await tooltip.textContent()).toContain("Timed out");
+        expect(await tooltip.textContent()).toContain("Running");
         await page.keyboard.press("Escape");
+        for (const status of ["completed", "failed", "cancelled", "timed_out"] as const) {
+          await gateway.emitGatewayEvent("task", {
+            action: "upserted",
+            task: { ...first, status, updatedAt: Date.now(), endedAt: Date.now() },
+          });
+          await firstRow.waitFor({ state: "detached" });
+          expect(await secondRow.textContent()).toContain("Checking tool card rendering");
+        }
       },
     );
   });

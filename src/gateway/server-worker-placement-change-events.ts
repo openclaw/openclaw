@@ -1,11 +1,10 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
-import { readWorkerPlacementIdentity } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 
 export function createGatewayWorkerPlacementChangePublisher(params: {
-  placements: Pick<WorkerSessionPlacementStore, "list">;
+  placements: Pick<WorkerSessionPlacementStore, "readChangeSnapshot">;
   getSessionChangeContext?: () => Parameters<typeof emitSessionsChanged>[0] | undefined;
   warn: (message: string) => void;
 }) {
@@ -16,27 +15,20 @@ export function createGatewayWorkerPlacementChangePublisher(params: {
       // Reporting failures must never replace a committed placement outcome.
     }
   };
-  const snapshotPlacements = () =>
+  const snapshotPlacements = async () =>
     new Map(
-      params.placements.list().map((placement) => [
+      (await params.placements.readChangeSnapshot()).map((placement) => [
         placement.sessionId,
-        {
-          state: placement.state,
-          generation: placement.generation,
-          updatedAtMs: placement.updatedAtMs,
-          sessionKey: placement.sessionKey,
-          agentId: placement.agentId,
-        },
+        placement,
       ]),
     );
-
   return async <T>(operation: () => Promise<T>): Promise<T> => {
     let context: ReturnType<NonNullable<typeof params.getSessionChangeContext>>;
-    let before: ReturnType<typeof snapshotPlacements> | undefined;
+    let before: Awaited<ReturnType<typeof snapshotPlacements>> | undefined;
     try {
       context = params.getSessionChangeContext?.();
       if (context) {
-        before = snapshotPlacements();
+        before = await snapshotPlacements();
       }
     } catch (error) {
       warnPlacementChangeFailure(error);
@@ -48,7 +40,7 @@ export function createGatewayWorkerPlacementChangePublisher(params: {
       return await operation();
     } finally {
       try {
-        const after = snapshotPlacements();
+        const after = await snapshotPlacements();
         for (const [sessionId, previous] of before) {
           const current = after.get(sessionId);
           if (
@@ -85,26 +77,60 @@ export function createGatewayWorkerPlacementChangePublisher(params: {
 }
 
 export function subscribeGatewayWorkerMachineShapeChanges(params: {
-  placements: Pick<WorkerSessionPlacementStore, "list">;
-  environments: Pick<
-    WorkerEnvironmentService,
-    "get" | "readMachineShape" | "subscribeMachineShapeChanged"
-  >;
+  placements: Pick<WorkerSessionPlacementStore, "readChangeSnapshot">;
+  environments: Pick<WorkerEnvironmentService, "subscribeMachineShapeChanged">;
   getSessionChangeContext?: () => Parameters<typeof emitSessionsChanged>[0] | undefined;
+  warn: (message: string) => void;
 }) {
-  return params.environments.subscribeMachineShapeChanged((profileId) => {
-    const context = params.getSessionChangeContext?.();
-    if (!context) {
+  const profiles = new Set<string>();
+  let stopped = false;
+  let pending: Promise<void> | undefined;
+  const unsubscribe = params.environments.subscribeMachineShapeChanged((profileId) => {
+    if (stopped || !params.getSessionChangeContext?.()) {
       return;
     }
-    for (const placement of params.placements.list()) {
-      if (readWorkerPlacementIdentity(placement, params.environments)?.profileId === profileId) {
-        emitSessionsChanged(context, {
-          reason: "placement",
-          sessionKey: placement.sessionKey,
-          agentId: placement.agentId,
-        });
-      }
+    profiles.add(profileId);
+    if (pending) {
+      return;
     }
+    // Catalog creation, machine options, and OS discovery can publish together.
+    pending = Promise.resolve().then(async () => {
+      try {
+        while (profiles.size) {
+          const batch = [...profiles];
+          profiles.clear();
+          try {
+            const placements = await params.placements.readChangeSnapshot(batch);
+            const context = params.getSessionChangeContext?.();
+            if (stopped || !context) {
+              return;
+            }
+            for (const placement of placements) {
+              emitSessionsChanged(context, {
+                reason: "placement",
+                sessionKey: placement.sessionKey,
+                agentId: placement.agentId,
+              });
+            }
+          } catch (error) {
+            try {
+              params.warn(
+                `Worker machine metadata change reporting failed: ${formatErrorMessage(error)}`,
+              );
+            } catch {
+              // Best-effort reporting must not leak a rejected background operation.
+            }
+          }
+        }
+      } finally {
+        pending = undefined;
+      }
+    });
   });
+  return async () => {
+    stopped = true;
+    profiles.clear();
+    unsubscribe();
+    await pending;
+  };
 }

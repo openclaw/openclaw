@@ -1,4 +1,3 @@
-import type { Result } from "@openclaw/normalization-core/result";
 // Tracks task process state transitions used to reconcile running work.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -16,15 +15,32 @@ import {
   listTasksFromIndex,
 } from "./task-registry-records.js";
 import type {
+  TaskExecutionRestoreStore,
   TaskRegistryMutationScope,
   TaskRegistryObserverEvent,
+  TaskRegistryStoreSnapshot,
+  TaskRegistryObservers,
 } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord, TaskRuntime } from "./task-registry.types.js";
+import type { TaskRunOwner } from "./task-run-owner.types.js";
+
+export type TaskRegistryReadIdentity =
+  | "preserved"
+  | {
+      kind: "creation";
+      taskId: string;
+      runId?: string;
+    };
 
 export type PendingTaskRegistryMutation = {
   scope: TaskRegistryMutationScope;
   readEventTarget?: () => TaskAgentEventTarget | undefined;
-  readIdentity?: "preserved";
+  readIdentity?: TaskRegistryReadIdentity;
+  readSettlement?: {
+    databaseKey: string;
+    store: TaskExecutionRestoreStore;
+    promise: Promise<void>;
+  };
   published: Map<string, Omit<TaskRecord, "detail"> | undefined>;
   publication?: {
     records: Map<string, TaskRecord>;
@@ -33,13 +49,6 @@ export type PendingTaskRegistryMutation = {
   };
   readWitness?: { writtenTaskIds: Set<string>; replaced: boolean };
   recoveryWitness?: { writtenTaskIds: Set<string>; replaced: boolean };
-};
-
-export type TaskRunOwner = {
-  task: Readonly<
-    Pick<TaskRecord, "taskId" | "runtime" | "ownerKey" | "scopeKind" | "runId" | "childSessionKey">
-  >;
-  cancel: (reason: string) => Promise<Result<TaskRecord, string>>;
 };
 
 export type TaskActivityOverlayState = {
@@ -95,6 +104,7 @@ export type TaskProgressBatch = {
   abortController: AbortController;
   lastPublishedContent?: string;
   typingStarted?: boolean;
+  finalReplyDelivered?: true;
   members: Map<string, TaskProgressMember>;
   pendingItems: Map<string, TaskProgressItem>;
   pendingPlan?: TaskProgressPlan;
@@ -111,6 +121,7 @@ export type TaskProgressBatch = {
 export type TaskRegistryEventMutations = {
   prepare: () => { consume: () => void; release: () => void } | undefined;
   pending: (taskId?: string) => boolean;
+  pendingTaskIds: () => readonly string[];
   captureReadFence: (admission: OpenClawStateDatabaseReadAdmission) => Promise<void>;
 };
 
@@ -122,7 +133,8 @@ type TaskRegistryProcessState = {
   taskIdsByOwnerKey: Map<string, Set<string>>;
   taskIdsByParentFlowId: Map<string, Set<string>>;
   taskIdsByRelatedSessionKey: Map<string, Set<string>>;
-  tasksWithPendingDelivery: Set<string>;
+  taskIdsByChildSessionKey: Map<string, Set<string>>;
+  tasksWithPendingDelivery: Map<string, symbol>;
   /** Ephemeral live activity is intentionally discarded on gateway restart. */
   taskActivityByTaskId: Map<string, TaskActivityOverlayState>;
   /** Bounded presentation work; completion and restart recovery never depend on it. */
@@ -135,12 +147,15 @@ type TaskRegistryProcessState = {
     events: TaskRegistryEventMutations;
   };
   changeListeners: Set<(event?: TaskRegistryObserverEvent) => void>;
+  // SDK and Gateway module instances must publish to the same lifecycle observer.
+  observers: TaskRegistryObservers | null;
   projection: {
     epoch: number;
     dirty: boolean;
     mutationDepth: number;
     pending: Set<PendingTaskRegistryMutation>;
     readTail?: Promise<void>;
+    mutationTail?: Promise<void>;
     dirtyScopes: Set<TaskRegistryMutationScope>;
   };
 };
@@ -159,11 +174,13 @@ export function getTaskRegistryProcessState(): TaskRegistryProcessState {
     taskIdsByOwnerKey: new Map<string, Set<string>>(),
     taskIdsByParentFlowId: new Map<string, Set<string>>(),
     taskIdsByRelatedSessionKey: new Map<string, Set<string>>(),
-    tasksWithPendingDelivery: new Set<string>(),
+    taskIdsByChildSessionKey: new Map<string, Set<string>>(),
+    tasksWithPendingDelivery: new Map<string, symbol>(),
     taskActivityByTaskId: new Map<string, TaskActivityOverlayState>(),
     taskProgressBatches: new Map<string, TaskProgressBatch>(),
     runOwners: new Map<string, TaskRunOwner>(),
     changeListeners: new Set(),
+    observers: null,
     projection: {
       epoch: 0,
       dirty: false,
@@ -278,14 +295,46 @@ export function deleteParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "
 }
 
 export function addRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
+  const child = normalizeOptionalString(task.childSessionKey);
+  if (child) {
+    addIndexedKey(indexState.taskIdsByChildSessionKey, child, taskId);
+  }
   for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
     addIndexedKey(indexState.taskIdsByRelatedSessionKey, sessionKey, taskId);
   }
 }
 
 export function deleteRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
+  const child = normalizeOptionalString(task.childSessionKey);
+  if (child) {
+    deleteIndexedKey(indexState.taskIdsByChildSessionKey, child, taskId);
+  }
   for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
     deleteIndexedKey(indexState.taskIdsByRelatedSessionKey, sessionKey, taskId);
+  }
+}
+
+export function clearTaskRegistryProjectionRows(): void {
+  indexState.tasks.clear();
+  indexState.taskDeliveryStates.clear();
+  clearTaskRegistryIndexes();
+}
+
+export function installRestoredTaskRegistrySnapshot(
+  snapshot: TaskRegistryStoreSnapshot,
+  committed = true,
+): void {
+  // Replace rows in snapshot order without disturbing live execution owners.
+  clearTaskRegistryProjectionRows();
+  for (const [id, task] of snapshot.tasks) {
+    indexState.tasks.set(id, task);
+    addTaskIndexes(task);
+  }
+  for (const [id, delivery] of snapshot.deliveryStates) {
+    indexState.taskDeliveryStates.set(id, delivery);
+  }
+  if (committed) {
+    recordTaskRegistryProjectionWrite("snapshot");
   }
 }
 
@@ -319,6 +368,14 @@ export function updateRunIdIndex(
   indexState.taskIdsByRunId.set(nextRunId, ids);
 }
 
+function clearTaskRegistryIndexes(): void {
+  indexState.taskIdsByRunId.clear();
+  indexState.taskIdsByOwnerKey.clear();
+  indexState.taskIdsByParentFlowId.clear();
+  indexState.taskIdsByRelatedSessionKey.clear();
+  indexState.taskIdsByChildSessionKey.clear();
+}
+
 export function removeTaskIndexes(task: TaskRecord): void {
   deleteRunIdIndex(task.taskId, task.runId);
   deleteOwnerKeyIndex(task.taskId, task);
@@ -331,6 +388,28 @@ export function addTaskIndexes(task: TaskRecord): void {
   addOwnerKeyIndex(task.taskId, task);
   addParentFlowIdIndex(task.taskId, task);
   addRelatedSessionKeyIndex(task.taskId, task);
+}
+
+/** Update a published row without disturbing unchanged index insertion order. */
+export function updateTaskIndexes(current: TaskRecord, next: TaskRecord): void {
+  const taskId = next.taskId;
+  updateRunIdIndex(current, next);
+  if (current.ownerKey !== next.ownerKey) {
+    deleteOwnerKeyIndex(taskId, current);
+    addOwnerKeyIndex(taskId, next);
+  }
+  if (current.parentFlowId !== next.parentFlowId) {
+    deleteParentFlowIdIndex(taskId, current);
+    addParentFlowIdIndex(taskId, next);
+  }
+  if (
+    current.ownerKey !== next.ownerKey ||
+    current.requesterSessionKey !== next.requesterSessionKey ||
+    current.childSessionKey !== next.childSessionKey
+  ) {
+    deleteRelatedSessionKeyIndex(taskId, current);
+    addRelatedSessionKeyIndex(taskId, next);
+  }
 }
 
 export function taskIdsInScope(scope?: TaskRegistryMutationScope): Iterable<string> {

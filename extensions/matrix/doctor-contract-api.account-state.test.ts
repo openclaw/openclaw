@@ -1,5 +1,5 @@
 // Matrix tests cover the released account-state upgrade through the Doctor CLI.
-import { spawnSync } from "node:child_process";
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,12 +7,16 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createFixtureLifetime,
+  getCliProcessTestTimeout,
+  runCliProcessChild,
+} from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
-import { installMatrixTestRuntime } from "./src/test-runtime.js";
-import { useAutoCleanupTempDirTracker } from "./test-support.js";
+import { installMatrixTestRuntime, resetMatrixTestStores } from "./src/test-runtime.js";
 
+const MATRIX_DOCTOR_CHILD_TIMEOUT_MS = 120_000;
 const MATRIX_V2026_7_1_FIXTURE_BASE64 = new URL(
   "./test/fixtures/sqlite/matrix-account-v2026.7.1.sqlite.gz.base64",
   import.meta.url,
@@ -113,9 +117,8 @@ if (process.versions.bun) {
 `,
   );
   const entryPath = fileURLToPath(new URL("../../src/entry.ts", import.meta.url));
-  return spawnSync(
-    process.execPath,
-    [
+  return runCliProcessChild({
+    nodeArgs: [
       ...(process.versions.bun ? ["--preload"] : ["--import", "tsx", "--import"]),
       loaderPath,
       entryPath,
@@ -125,123 +128,150 @@ if (process.versions.bun) {
       "--no-workspace-suggestions",
       "--no-color",
     ],
-    {
-      cwd: path.resolve("."),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: params.rootDir,
-        USERPROFILE: params.rootDir,
-        NODE_DISABLE_COMPILE_CACHE: "1",
-        NODE_ENV: undefined,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-        OPENCLAW_HIDE_BANNER: "1",
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_NO_RESPAWN: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_STATE_DIR: params.stateDir,
-        OPENCLAW_TEST_FAST: "1",
-        VITEST: undefined,
-        VITEST_POOL_ID: undefined,
-        VITEST_WORKER_ID: undefined,
-      },
-      maxBuffer: 4 * 1024 * 1024,
-      timeout: 120_000,
+    cwd: path.resolve("."),
+    env: {
+      ...process.env,
+      HOME: params.rootDir,
+      USERPROFILE: params.rootDir,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      NODE_ENV: undefined,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_HIDE_BANNER: "1",
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_NO_RESPAWN: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_STATE_DIR: params.stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      VITEST: undefined,
+      VITEST_POOL_ID: undefined,
+      VITEST_WORKER_ID: undefined,
     },
-  );
+    maxBuffer: 4 * 1024 * 1024,
+    timeoutMs: MATRIX_DOCTOR_CHILD_TIMEOUT_MS,
+  });
 }
 
 describe("Matrix account state Doctor migration", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const lifetime = createFixtureLifetime();
 
-  beforeEach(() => {
-    resetPluginStateStoreForTests();
+  beforeEach(async () => {
+    await resetMatrixTestStores();
     installMatrixTestRuntime();
   });
 
-  afterEach(() => {
-    resetPluginStateStoreForTests();
-  });
+  afterEach(() => lifetime.cleanup());
 
-  it("repairs active account state without opening token-root archives", async () => {
-    const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const storageRootDir = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "sync-cache-backup",
-      "matrix.example.org__bot",
-      "0123456789abcdef",
-    );
-    const archivedStorageRootDir = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "default",
-      "matrix.example.org__bot",
-      "sync-cache-backup",
-    );
-    const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
-    const archivedDatabasePath = path.join(archivedStorageRootDir, "state", "openclaw.sqlite");
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    fs.mkdirSync(path.dirname(archivedDatabasePath), { recursive: true });
-    const compressedFixture = Buffer.from(
-      fs.readFileSync(MATRIX_V2026_7_1_FIXTURE_BASE64, "utf8").replaceAll(/\s/gu, ""),
-      "base64",
-    );
-    expect(createHash("sha256").update(compressedFixture).digest("hex")).toBe(
-      MATRIX_V2026_7_1_GZIP_SHA256,
-    );
-    const rawFixture = gunzipSync(compressedFixture);
-    expect(createHash("sha256").update(rawFixture).digest("hex")).toBe(MATRIX_V2026_7_1_RAW_SHA256);
-    fs.writeFileSync(databasePath, rawFixture);
-    fs.writeFileSync(archivedDatabasePath, rawFixture);
+  it(
+    "repairs active account state without opening token-root archives",
+    () =>
+      lifetime.run(async () => {
+        let bodyFailure: { error: unknown } | undefined;
+        try {
+          const stateDir = lifetime.createTempDir("openclaw-matrix-doctor-");
+          const storageRootDir = path.join(
+            stateDir,
+            "matrix",
+            "accounts",
+            "sync-cache-backup",
+            "matrix.example.org__bot",
+            "0123456789abcdef",
+          );
+          const archivedStorageRootDir = path.join(
+            stateDir,
+            "matrix",
+            "accounts",
+            "default",
+            "matrix.example.org__bot",
+            "sync-cache-backup",
+          );
+          const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
+          const archivedDatabasePath = path.join(
+            archivedStorageRootDir,
+            "state",
+            "openclaw.sqlite",
+          );
+          fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+          fs.mkdirSync(path.dirname(archivedDatabasePath), { recursive: true });
+          const compressedFixture = Buffer.from(
+            fs.readFileSync(MATRIX_V2026_7_1_FIXTURE_BASE64, "utf8").replaceAll(/\s/gu, ""),
+            "base64",
+          );
+          expect(createHash("sha256").update(compressedFixture).digest("hex")).toBe(
+            MATRIX_V2026_7_1_GZIP_SHA256,
+          );
+          const rawFixture = gunzipSync(compressedFixture);
+          expect(createHash("sha256").update(rawFixture).digest("hex")).toBe(
+            MATRIX_V2026_7_1_RAW_SHA256,
+          );
+          fs.writeFileSync(databasePath, rawFixture);
+          fs.writeFileSync(archivedDatabasePath, rawFixture);
 
-    const beforeRepairRowsSha256 = matrixStateRowsSha256(databasePath);
-    const staleStore = await SqliteBackedMatrixSyncStore.create(storageRootDir);
-    await expect(staleStore.getSavedSyncToken()).resolves.toBe("cursor-a");
-    await staleStore.setSyncData(matrixSyncResponse("cursor-after-repair"));
-    await expect(staleStore.flush()).rejects.toMatchObject({
-      cause: {
-        name: "OpenClawStateDatabaseSchemaMigrationRequiredError",
-        message: expect.stringContaining("audit-events-v2"),
-      },
-    });
-    resetPluginStateStoreForTests();
+          const beforeRepairRowsSha256 = matrixStateRowsSha256(databasePath);
+          const staleStore = await SqliteBackedMatrixSyncStore.create(storageRootDir);
+          await expect(staleStore.getSavedSyncToken()).resolves.toBe("cursor-a");
+          await staleStore.setSyncData(matrixSyncResponse("cursor-after-repair"));
+          await expect(staleStore.flush()).rejects.toMatchObject({
+            cause: {
+              name: "OpenClawStateDatabaseSchemaMigrationRequiredError",
+              message: expect.stringContaining("audit-events-v2"),
+            },
+          });
+          await lifetime.verifyCleanup(resetMatrixTestStores);
 
-    const stale = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(stale.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-      expect(stale.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    } finally {
-      stale.close();
-    }
+          const stale = new DatabaseSync(databasePath, { readOnly: true });
+          try {
+            expect(stale.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+            expect(stale.prepare("PRAGMA integrity_check").get()).toEqual({
+              integrity_check: "ok",
+            });
+          } finally {
+            stale.close();
+          }
 
-    const doctor = runMatrixDoctorFix({ rootDir: stateDir, stateDir });
-    const doctorOutput = `${doctor.stderr}\n${doctor.stdout}`;
-    expect(doctor.error, doctorOutput).toBeUndefined();
-    expect(doctor.signal, doctorOutput).toBeNull();
-    expect(doctor.status, doctorOutput).toBe(0);
-    expect(doctor.stderr.match(/^matrix-doctor-fixture:(?:ui|health)$/gm)?.toSorted()).toEqual([
-      "matrix-doctor-fixture:health",
-      "matrix-doctor-fixture:ui",
-    ]);
-    expect(doctorOutput).toContain(`Matrix account SQLite ${storageRootDir}`);
-    expect(doctorOutput).not.toContain(`Matrix account SQLite ${archivedStorageRootDir}`);
-    expect(doctorOutput).toContain(
-      "Migrated shared state audit event ledger → versioned message lifecycle schema",
-    );
-    expect(matrixStateRowsSha256(databasePath)).toBe(beforeRepairRowsSha256);
-    expect(fs.readFileSync(archivedDatabasePath)).toEqual(rawFixture);
+          const doctor = await runMatrixDoctorFix({ rootDir: stateDir, stateDir });
+          const doctorOutput = `${doctor.stderr}\n${doctor.stdout}`;
+          expect(doctor.signal, doctorOutput).toBeNull();
+          expect(doctor.code, doctorOutput).toBe(0);
+          expect(
+            doctor.stderr.match(/^matrix-doctor-fixture:(?:ui|health)$/gm)?.toSorted(),
+          ).toEqual(["matrix-doctor-fixture:health", "matrix-doctor-fixture:ui"]);
+          expect(doctorOutput).toContain(`Matrix account SQLite ${storageRootDir}`);
+          expect(doctorOutput).not.toContain(`Matrix account SQLite ${archivedStorageRootDir}`);
+          expect(doctorOutput).toContain(
+            "Migrated shared state audit event ledger → versioned message lifecycle schema",
+          );
+          expect(matrixStateRowsSha256(databasePath)).toBe(beforeRepairRowsSha256);
+          assert.deepStrictEqual(fs.readFileSync(archivedDatabasePath), rawFixture);
 
-    const repairedStore = await SqliteBackedMatrixSyncStore.create(storageRootDir);
-    await expect(repairedStore.getSavedSyncToken()).resolves.toBe("cursor-a");
-    await repairedStore.setSyncData(matrixSyncResponse("cursor-after-repair"));
-    await repairedStore.flush();
-    resetPluginStateStoreForTests();
+          const repairedStore = await SqliteBackedMatrixSyncStore.create(storageRootDir);
+          await expect(repairedStore.getSavedSyncToken()).resolves.toBe("cursor-a");
+          await repairedStore.setSyncData(matrixSyncResponse("cursor-after-repair"));
+          await repairedStore.flush();
+          await lifetime.verifyCleanup(resetMatrixTestStores);
 
-    const reopenedStore = await SqliteBackedMatrixSyncStore.create(storageRootDir);
-    await expect(reopenedStore.getSavedSyncToken()).resolves.toBe("cursor-after-repair");
-  });
+          const reopenedStore = await SqliteBackedMatrixSyncStore.create(storageRootDir);
+          await expect(reopenedStore.getSavedSyncToken()).resolves.toBe("cursor-after-repair");
+        } catch (error) {
+          bodyFailure = { error };
+        }
+        // Join database work before removal, retaining the fixture if cleanup cannot be verified.
+        try {
+          await lifetime.verifyCleanup(resetMatrixTestStores);
+        } catch (cleanupError) {
+          if (bodyFailure) {
+            throw new AggregateError(
+              [bodyFailure.error, cleanupError],
+              "Matrix Doctor fixture and cleanup failed",
+              { cause: cleanupError },
+            );
+          }
+          throw cleanupError;
+        }
+        if (bodyFailure) {
+          throw bodyFailure.error;
+        }
+      }),
+    getCliProcessTestTimeout(MATRIX_DOCTOR_CHILD_TIMEOUT_MS),
+  );
 });

@@ -3,11 +3,14 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
+import { resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
+import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import { emitMessageReceivedHooks } from "../../auto-reply/reply/message-received-hooks.js";
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import {
@@ -59,15 +62,23 @@ export function createChatSendMessageInjectionStarter(params: {
   >;
   logGateway: GatewayRequestContext["logGateway"];
   assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
   const { cfg, entry, sessionKey, storePath, clientRunId } = params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
+  const assertCurrent =
+    params.assertCurrent || params.operatorAuthority
+      ? () => {
+          params.assertCurrent?.();
+          params.operatorAuthority?.assertCurrent();
+        }
+      : undefined;
   return (): ReplyMessageInjectionAttempt | undefined => {
     if (!params.target || isInternalTextSlashCommandTurn) {
       return undefined;
     }
-    params.assertCurrent?.();
+    assertCurrent?.();
     // Preparation can outlive terminal delivery. Recheck before the backend
     // takes this input; an unreadable receipt cannot authorize steering.
     let fenceEntry = entry;
@@ -151,7 +162,13 @@ export function createChatSendMessageInjectionStarter(params: {
         ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
         : text,
       {
-        assertCurrent: params.assertCurrent,
+        // Reply-target injection already includes this prefix in its text.
+        currentInboundContext: p.replyToId
+          ? undefined
+          : {
+              text: buildInboundUserContextPrefix(ctx, resolveEnvelopeFormatOptions(cfg), entry),
+            },
+        assertCurrent,
         steeringMode: "all",
         isInboundUserMessage: true,
         ...(isProgressCardRefreshInputProvenance(ctx.InputProvenance)
@@ -165,6 +182,7 @@ export function createChatSendMessageInjectionStarter(params: {
             toolOverrides: params.admittedSessionSettings?.toolOverrides,
           },
           senderIsOwner: authorization.senderIsOwner,
+          operatorAuthority: params.operatorAuthority,
           disableTools: false,
         }),
         ...(injectionImages?.length ? { images: injectionImages } : {}),

@@ -92,7 +92,7 @@ export function ownChild(child) {
   return currentTelegramRun().ownChild(child, stopChildProcess);
 }
 
-export function removeRunnerScratch(root) {
+function removeRunnerScratch(root) {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
@@ -1088,11 +1088,23 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
       await waitForOutput(mock, /mock-openai listening/u, "mock-openai", 10_000);
     } else if (args.backend === "qa-mock") {
       mock = spawnProcess(
-        "pnpm",
-        ["openclaw", "qa", "mock-openai", "--host", "127.0.0.1", "--port", String(args.mockPort)],
+        args.sourceGateway ? "pnpm" : process.execPath,
+        [
+          args.sourceGateway ? "openclaw" : "dist/entry.js",
+          "qa",
+          "mock-openai",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          String(args.mockPort),
+        ],
         {
           cwd: repoRoot,
-          env: { ...sanitizeChildEnvironment(driverEnv), OPENCLAW_BUILD_PRIVATE_QA: "1" },
+          env: {
+            ...sanitizeChildEnvironment(driverEnv),
+            OPENCLAW_BUILD_PRIVATE_QA: "1",
+            OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+          },
         },
       );
       await waitForOutput(mock, /QA mock OpenAI:/u, "QA mock OpenAI", 30_000);
@@ -1316,6 +1328,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
               "cron",
               "command",
               "telegramApiHold",
+              "telegramApiReject",
               "telegramApiWaitHeld",
               "telegramApiRelease",
               "followupDrainHold",
@@ -1419,6 +1432,13 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
             } else if (action.type === "telegramApiHold") {
               creds.telegramProxy.holdNextResponse({ method: action.method, skip: action.skip });
               telegramApi = { method: action.method, skip: action.skip };
+            } else if (action.type === "telegramApiReject") {
+              creds.telegramProxy.rejectNextRequest({
+                method: action.method,
+                skip: action.skip,
+                bodyIncludes: action.bodyIncludes,
+              });
+              telegramApi = { method: action.method, skip: action.skip };
             } else if (action.type === "telegramApiWaitHeld") {
               const held = await creds.telegramProxy.waitForHeldResponse(
                 action.method,
@@ -1490,6 +1510,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
           gatewayActions,
           gatewayHealth: gatewayHealthSamples,
           telegramApiResponseHolds: creds.telegramProxy.getResponseHoldEvents(),
+          telegramApiRequestRejections: creds.telegramProxy.getRequestRejectionEvents(),
         },
       });
     }

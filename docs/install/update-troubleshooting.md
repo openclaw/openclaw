@@ -51,8 +51,12 @@ and **Ask OpenClaw**. It previews a bounded report containing the OpenClaw
 version, platform, update target, failed phase, sanitized diagnostics, and
 verified rollback outcome. The report excludes secrets, tokens, chat content,
 raw logs, private absolute paths, and recovery commands. Nothing is submitted
-until an administrator confirms that preview. OpenClaw then uses the existing
-GitHub CLI issue flow. Fallback and pending outcomes retain the sanitized report
+until an identified administrator confirms that preview. Named administrators
+receive a prefilled issue to review and submit using their own GitHub account in
+their browser. This path never invokes the host's GitHub CLI, including for
+authentication or reconciliation. Connecting My GitHub does not grant host-account
+publication authority. Only the Gateway owner or an internal system administrator
+can authorize the existing host GitHub CLI issue flow. Fallback and pending outcomes retain the sanitized report
 locally; a confirmed issue keeps only its durable issue URL. OpenClaw first makes
 a silent, read-only request with the active `github.com` account. A missing CLI
 or a failed, unavailable, or timed-out authentication check returns a prefilled
@@ -92,6 +96,27 @@ The controls require a connected Gateway, support for the corresponding typed
 Gateway method, and administrator scope. When those conditions are not met, use
 the CLI fallback on the Gateway host.
 
+## Doctor cannot enter maintenance during finalization
+
+`finalize:doctor` can report `Doctor could not enter maintenance` when a Gateway
+still owns the selected state directory. A starting Gateway and a healthy serving
+Gateway retain that ownership for their entire process lifetime; waiting for
+readiness does not release the lock.
+
+Maintenance admission refusals finish the update with a recorded warning when
+no data is at risk, including contention from an unknown or non-serving holder.
+Repair restores a managed service it stopped before reporting that warning.
+Doctor and plugin maintenance remain pending. Resolve the reported ownership or
+availability problem, then run `openclaw update repair`. Check
+`openclaw update status --json` and `openclaw gateway status --deep` for pending
+migrations, the recorded warning, and current health.
+
+Do not delete lock files to force entry. A dead process releases the physical lock,
+and lease owners reclaim provably dead identities. A maintenance warning never
+authorizes concurrent repair or discards recovery backups. Active migration
+writes, unreadable state, incomplete migrations, and unconfirmed subprocess
+cleanup retain their failure and recovery guidance.
+
 ## Node and global install permissions
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
@@ -124,15 +149,23 @@ probe, or unreadable layout stops the update before staging; an unknown
 destination is never treated as empty. Restore inspection access or make
 `npm prefix -g` succeed with the selected runtime. Ask the deployment owner to
 verify unreadable layouts and explicitly select the intended installation.
-The report names the destination (or says that npm could not resolve it), the cause,
-and the selected service's launcher when available. Switch the runtime back and
+The saved outcome and public failure report name the destination prefix, package,
+launcher, running installation, and classified ownership cause. Public paths
+replace your home with `~` and redact other home-directory usernames. `openclaw
+update status` and Doctor retain the warning and recovery step. A symlinked prefix
+that resolves to the same installation is admitted; spelling alone does not make
+a destination foreign. Switch the runtime back and
 retry through the retained absolute launcher. Alternatively, with the destination
 owner's agreement, explicitly select that installation for the intended service
 using a printed `gateway install --force` command when available, then update. This changes
 the service binding; it is not permission to overwrite another deployment's
 package. A protected service definition uses deployment-owner instructions instead;
 `--force` cannot replace a sealed mount. Dry-run returns the same refusal. Recorded attempts remain in update
-history and are shown by Doctor.
+history and are shown by Doctor. If the active CLI and service point at different
+installations, follow [Gateway service recovery](/cli/doctor/recovery#gateway-service-recovery)
+to select the intended installation while preserving its state and service account.
+An older updater that refuses before staging cannot load a candidate's improved
+diagnostics; resolve its prefix mismatch before retrying the update.
 
 If the ranges do not overlap, install a supported Node and select a compatible
 OpenClaw target; that candidate cannot run through this updater on a supported
@@ -152,6 +185,38 @@ rollback and service-recovery constraints still apply if activation had begun.
 Inside a container, the same next action also directs you to pull or build the
 target OpenClaw image and redeploy with the same state/config mounts. Package
 changes inside a running container are not durable.
+
+### System-scope systemd services
+
+A system-scope Gateway service does not prevent a package update when the
+invoking account can write the installation. Both `openclaw update --yes` and
+the Gateway update action update the package and record a warning with the
+exact operator restart command, such as `sudo systemctl restart
+openclaw-gateway.service`. The updater does not stop or restart the system
+service and never invokes `sudo`. The running Gateway can exit when it detects
+that its installation has been replaced; restart the unit after the update.
+Use the unit name printed in your result, including any instance name, then
+check `openclaw gateway status --deep`.
+
+The restart remains operator-managed even when the updater runs as root:
+managed update handoffs own user-scope service supervision and recovery, not
+the system service's lifecycle. Pending Doctor or plugin maintenance is recorded
+as a warning when it cannot safely run alongside the current Gateway. Run
+`openclaw update repair` after resolving the reported maintenance condition.
+
+If the installation is not writable, the update stops before package mutation
+with `managed-service-handoff-failed` and prints the exact package-update and
+restart commands. Have the installation's owning account run those commands
+while preserving the Gateway's service account, state, and configuration.
+Do not run the whole updater under a different home or recursively change
+ownership of a shared system prefix.
+
+An installed updater that reports `Managed update handoff requires a user-scope
+systemd unit` refuses before loading the candidate. A candidate cannot repair
+that admission decision. Use the [manual package-manager
+procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+once, then restart the named system unit; subsequent updates can use the fixed
+updater.
 
 ## Published 2026.9.4 on large agent fleets
 
@@ -206,6 +271,21 @@ restarting the same 2026.9.4 fleet resolves the failed-update condition.
 
 ## Plugin repair warnings
 
+`post-update-plugins` / `plugin-convergence` with
+`post-plugin-doctor-execution-failed` can describe a Doctor child failure after
+the package was already installed. Updated convergence records that execution
+failure as a warning, retains its exit reason and available plugin diagnostics,
+and continues to config validation, readiness checks, and Gateway activation.
+`openclaw update status` shows the warning even when the update succeeds. A later
+failure report keeps it in a separate **Warnings** section.
+
+A throwing plugin config-repair hook leaves that plugin's input unchanged and
+names the plugin in its warning. Repair the plugin, then run
+`openclaw doctor --fix` or `openclaw update repair`.
+A live or unverified Gateway and explicit state-migration or config-write refusals remain blocking. So does a
+Doctor child whose shutdown could not be confirmed: it may still write state.
+Preserve the backup and resolve that specific refusal before retrying.
+
 Doctor's configured-plugin repair and payload-verification warnings do not block
 Gateway readiness. A tracked plugin whose payload is unavailable is marked
 unavailable, and its configuration and pending migration inputs stay preserved.
@@ -236,6 +316,44 @@ Official version-bound runtime plugins installed through ClawHub use their
 declared ClawHub source for the new core release cohort. The released 2026.9.4
 catalog omitted that source for Codex; the correction is on main in
 [#148518](https://github.com/openclaw/openclaw/pull/148518).
+
+### Missing temporary plugin captures
+
+An `ENOENT` path containing `openclaw-plugin-build-` can identify a missing
+runtime source capture even when the installed plugin files still exist.
+Reloading or replacing that plugin reports the unavailable recovery snapshot
+as a warning and loads the installed replacement after normal cleanup.
+Run `openclaw plugins reload <id>`, or reinstall the plugin if its installed
+payload also needs repair. If replacement fails, the missing previous code
+cannot be restored; healthy plugins retain their available recovery snapshots.
+
+Older releases can reject enable, uninstall, and reinstall while trying to copy
+that same missing capture. Restart the Gateway through its service owner before
+retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
+### Large model-catalog temporary directories
+
+Older releases can retain several complete plugin copies inside
+`openclaw-model-catalog-*` directories. A scan of only top-level
+`openclaw-plugin-build-*` paths misses those nested copies. Current catalog
+workers reuse the selected runtime capture for provider discovery and remove
+their scratch tree when its owner retires.
+
+Upgrade the host, then run `openclaw doctor` to inspect legacy captures.
+On Linux and macOS, `openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
+when no other OpenClaw process is running. Do not delete captures based on their
+age or absence from open-file or memory-map lists: an idle owner can still need
+them. Modern captures use SQLite custody to prove retirement. See
+[plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
+Unrelated Node services running `node dist/index.js` do not count as OpenClaw
+owners. Doctor resolves generic entrypoints against their installation's package
+identity and honors OpenClaw service markers. If a live PID cannot be classified,
+Doctor preserves the captures and reports that PID and the inspection failure
+(including a missing or unreadable package manifest);
+this remains a maintenance warning and does not fail the update. Retry
+`openclaw doctor --fix` after resolving the reported inspection problem.
+Windows host-wide capture cleanup remains report-only.
 
 ## Reason codes
 
@@ -295,6 +413,14 @@ changed` when the updater's umask differs from the installed launcher's
   not writable by the invoking user; fix ownership and permissions, then retry.
   Re-run the [installer](/install/installer) if the package install is
   incomplete.
+- `runtime-verification-failed` near 300 seconds at `candidate gateway canary`
+  when updating from 2026.9.4: the installed updater shares that deadline across
+  the snapshot and candidate checks, even with a larger `--timeout`. The elapsed
+  failure duration is not Gateway startup time alone. Use the same
+  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+  then run `openclaw doctor --fix` and restart the Gateway. See
+  [#144858](https://github.com/openclaw/openclaw/issues/144858) and
+  [#154381](https://github.com/openclaw/openclaw/issues/154381).
 - `doctor-failed`: run `openclaw doctor` on the Gateway host, resolve its
   findings, then retry. See [Doctor](/cli/doctor) for the check list and
   `--fix` behavior.

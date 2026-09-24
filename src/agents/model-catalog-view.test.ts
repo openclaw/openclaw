@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
@@ -94,6 +94,62 @@ describe("prepared model catalog view", () => {
       policy.mockRestore();
     }
   });
+
+  it.each(["absent", "empty"])(
+    "prepares %s provider overrides once for distinct view rows",
+    (initial) => {
+      const providers: Record<string, ModelProviderConfig> =
+        initial === "empty" ? { fixture: { baseUrl: "", models: [] } } : {};
+      const enumerate = vi.fn((target: Record<string, ModelProviderConfig>) =>
+        Reflect.ownKeys(target),
+      );
+      const cfg: OpenClawConfig = {
+        models: { providers: new Proxy(providers, { ownKeys: enumerate }) },
+      };
+      const catalog = Array.from({ length: 1_000 }, (_, index) => row("fixture", `model-${index}`));
+      const keyOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
+        `${entry.provider}/${entry.id}`;
+      const params = { cfg, catalog, keyOf };
+      const view = createModelCatalogView(params);
+      expect(enumerate).not.toHaveBeenCalled();
+      expect(
+        catalog.map((entry) => view.readProjection(entry, { kind: "unmanaged" }, keyOf(entry))),
+      ).toEqual(catalog.map((entry) => ({ entry, runtimeEntry: entry })));
+      expect(enumerate).toHaveBeenCalledOnce();
+
+      providers.fixture = {
+        baseUrl: "",
+        models: [
+          {
+            id: "model-0",
+            name: "Configured",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            maxTokens: 4096,
+          },
+        ],
+      };
+      const freshEntry = row("fixture", "model-0");
+      expect(view.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual({
+        entry: freshEntry,
+        runtimeEntry: freshEntry,
+      });
+      expect(enumerate).toHaveBeenCalledOnce();
+      const nextView = createModelCatalogView(params);
+      const expected = {
+        ...freshEntry,
+        name: "Configured",
+        reasoning: false,
+        configuredReasoning: false,
+        input: ["text"],
+      };
+      expect(nextView.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual(
+        { entry: expected, runtimeEntry: expected },
+      );
+      expect(enumerate).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("keeps missing runtime credentials labeled missing", async () => {
     const prepared = facts();

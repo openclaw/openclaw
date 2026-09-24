@@ -1,6 +1,12 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../../../src/test-utils/node-process.js";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
+import { eventStreamRetentionEntrypoint } from "../retention-runtime.test-support.js";
 import { EventStream, getEventStreamCompletion } from "./event-stream.js";
 
 function createNumberStream(): EventStream<number, number> {
@@ -17,9 +23,10 @@ describe("EventStream", () => {
     const result = await runNodeScript(
       [
         "--expose-gc",
-        "--import",
-        "tsx",
-        fileURLToPath(new URL("./event-stream.retention.test-support.ts", import.meta.url)),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(eventStreamRetentionEntrypoint),
+          resolveTestNodeExecPath(),
+        ),
       ],
       { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
       15_000,

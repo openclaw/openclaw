@@ -156,6 +156,7 @@ export {
   patchSessionEntryCore,
   patchSessionEntryTarget,
   patchSessionEntryWithKey,
+  prepareQualifiedSessionEntryTarget,
   readSessionUpdatedAtCore,
   readSessionStoreSummaryReadOnly,
   replaceSessionEntry,
@@ -248,7 +249,6 @@ export {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
   loadTranscriptSuffixEventsBoundedSync,
   persistCompactionBoundaryWithSessionEntrySync,
   preflightSessionTranscriptForManualCompact,
@@ -322,3 +322,7 @@ export {
   readLatestSessionTranscriptReport,
 } from "./session-accessor.sqlite-transcript-reports.js";
 export { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
+export { readSessionEntriesFromStoreInWorker } from "./session-entry-read-runtime.js";
+
+export { readSessionBackingFacts, type SessionBackingFact } from "./session-backing-facts.js";
+export { readSessionBackingFactsInWorker } from "./session-backing-facts-runtime.js";

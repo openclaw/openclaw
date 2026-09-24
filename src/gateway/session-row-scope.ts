@@ -147,7 +147,8 @@ export function prepareSessionRowScopes(
   return {
     select,
     physicalPaths(locator: string, agentId?: string) {
-      const normalized = residentPath(path.resolve(locator));
+      // Resident physical locators were normalized when the topology was prepared.
+      const normalized = filenames.has(locator) ? locator : residentPath(path.resolve(locator));
       const owners = aliases.get(normalized);
       return agentId
         ? [owners?.get(normalizeAgentId(agentId)) ?? normalized]
@@ -169,6 +170,7 @@ export function selectSessionRowEntries(
     dirty: ReadonlySet<string>;
     matching: (query: records.Query, kind?: string) => records.Row[];
     acquire: (row: records.Row) => records.Row | undefined;
+    referenced: (reference: string) => records.Row | undefined;
   },
   query: records.Query,
 ) {
@@ -180,7 +182,9 @@ export function selectSessionRowEntries(
   const children = new Set<string>();
   if (parent) {
     for (const ref of [
-      ...[...agents].map((agentId) => records.parentReference(cfg, parent, agentId)),
+      ...[...agents].map((agentId) =>
+        records.parentReference(cfg, parent, agentId, undefined, params.referenced),
+      ),
       ...matching({ ...query, key: parent }).map((row) =>
         records.physical(row.storeTarget.storePath, parent),
       ),

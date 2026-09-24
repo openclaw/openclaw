@@ -48,8 +48,8 @@ export function createFaceTimeCallEventHandler(params: {
   isStopping: () => boolean;
   isDriverInstallPending: () => boolean;
   getPendingDial: () => PendingFaceTimeDial | undefined;
-  clearPendingDial: () => void;
-  persistPendingDial: () => void;
+  clearPendingDial: () => Promise<void>;
+  persistPendingDial: () => Promise<void>;
   outboundCarrierPeers: ReadonlyMap<number, FaceTimeHelperPeer>;
   cancelPendingDial: (pending: PendingFaceTimeDial) => Promise<void>;
 }) {
@@ -72,13 +72,18 @@ export function createFaceTimeCallEventHandler(params: {
     return undefined;
   };
   const canPromotePendingDial = (pending: PendingFaceTimeDial) =>
-    params.getPendingDial() === pending && pending.delivery !== "cancelling";
+    !params.isStopping() &&
+    params.getPendingDial() === pending &&
+    pending.delivery !== "cancelling";
   const authorizePendingDial = async (
     event: FaceTimeCallStatusEvent,
     pending: PendingFaceTimeDial,
   ): Promise<AuthenticatedFaceTimeOwner | undefined> => {
     retainFaceTimeDialCallUUID(pending, readCallUUID(event));
-    params.persistPendingDial();
+    await params.persistPendingDial();
+    if (params.isStopping() || params.getPendingDial() !== pending) {
+      return undefined;
+    }
     const owner =
       pending.delivery === "cancelling"
         ? undefined
@@ -362,28 +367,31 @@ export function createFaceTimeCallEventHandler(params: {
         canPromotePendingDial(authorizedPending) &&
         params.calls.has(callUUID)
       ) {
-        params.clearPendingDial();
+        await params.clearPendingDial();
       }
       return;
     }
     if (isEndedCall(event)) {
-      if (
+      const clearing =
         event.data.is_outgoing === true &&
         pending &&
         doesFaceTimeCallMatchPendingDial({ event, pending })
-      ) {
-        params.clearPendingDial();
-      }
+          ? params.clearPendingDial()
+          : undefined;
       const endedCall = resolveEventCall(event);
       if (endedCall) {
         if (endedCall.retiredCarrierCallUUIDs.has(callUUID)) {
           params.logger.debug?.(
             "[facetime] ignored ended event for a stale carrier alias while another carrier is current",
           );
+          await clearing;
           return;
         }
+        // Native terminal evidence revokes media immediately, even while SQLite settles.
         endedCall.markCarrierClosed();
-        await params.callControl.closeCall(endedCall, "native-ended");
+        await Promise.all([clearing, params.callControl.closeCall(endedCall, "native-ended")]);
+      } else {
+        await clearing;
       }
       return;
     }

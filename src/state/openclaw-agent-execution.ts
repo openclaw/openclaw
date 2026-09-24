@@ -35,6 +35,8 @@ export type OpenClawAgentDatabaseExecution = {
   readonly agentId: string;
   readonly path: string;
   assertCurrent(): void;
+  /** Initialize first-use storage through the same admitted native owner. */
+  prepare(source: AgentDatabaseRequestExecutionSource): Promise<void>;
   /** Admit a write against existing storage; a missing store remains missing. */
   runExisting<T>(
     source: AgentDatabaseRequestExecutionSource,
@@ -69,7 +71,9 @@ const IDLE_EXECUTION_MS = 60_000;
 const runInExecutionOwnerContext = AsyncLocalStorage.snapshot();
 
 /** These native-only scopes still need their complete owning caller cutover. */
-function supportsOpenClawAgentDatabaseExecution(options: OpenClawAgentDatabaseOptions): boolean {
+export function supportsOpenClawAgentDatabaseExecution(
+  options: OpenClawAgentDatabaseOptions,
+): boolean {
   return (
     !isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options) &&
     getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance !== true &&
@@ -190,6 +194,7 @@ export function captureOpenClawAgentDatabaseExecution(
     assertCallerCurrent?: () => void,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
     retireNativeOnFailure = false,
+    createIfMissing = false,
   ): Promise<T | undefined> {
     assertCurrent();
     assertCallerCurrent?.();
@@ -207,7 +212,12 @@ export function captureOpenClawAgentDatabaseExecution(
       assertCurrent();
     }
     if (cleanupFailure) {
-      throw cleanupFailure.error;
+      // A transient lifecycle refusal must not poison every later borrower.
+      // Retire the original generation before admitting any replacement work.
+      await closeNative();
+      assertCurrent();
+      assertCallerCurrent?.();
+      source.assertCurrent();
     }
     if (!generation) {
       for (let idle = executionState.idle; idle && idle !== owner; idle = executionState.idle) {
@@ -240,7 +250,7 @@ export function captureOpenClawAgentDatabaseExecution(
     }
     const current = generation;
     try {
-      return await current.runExisting(source, operation, assertCallerCurrent);
+      return await current.run(source, operation, assertCallerCurrent, createIfMissing);
     } catch (error) {
       const nativeFailed = current.failed();
       if (generation === current && (nativeFailed || retireNativeOnFailure)) {
@@ -306,6 +316,20 @@ export function captureOpenClawAgentDatabaseExecution(
         agentId,
         path: pathname,
         assertCurrent: assertBorrowed,
+        async prepare(source) {
+          assertBorrowed();
+          const result = run(
+            source,
+            async () => undefined,
+            assertReferenceCurrent,
+            expectedIdentity,
+            false,
+            true,
+          );
+          pending.add(result);
+          void result.finally(() => pending.delete(result)).catch(() => undefined);
+          await result;
+        },
         async runExisting(source, operation, runOptions) {
           assertBorrowed();
           const result = run(
@@ -353,9 +377,6 @@ export function captureOpenClawAgentDatabaseExecution(
       };
     },
     async closeIdle() {
-      if (cleanupFailure) {
-        throw cleanupFailure.error;
-      }
       await closeNative();
       // A reborrow may have retained the owner or started its next native generation.
       if (borrowers === 0 && !generation) {

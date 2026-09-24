@@ -17,6 +17,10 @@ import {
   refreshPluginCacheStat,
 } from "./plugin-cache-files.js";
 import { getPluginCache } from "./plugin-cache.js";
+import {
+  resolvePluginRuntimeArtifactPreference,
+  type PluginRuntimeArtifactPreference,
+} from "./plugin-runtime-artifact-selection.js";
 
 const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
 const TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV = "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR";
@@ -50,12 +54,14 @@ export function isSourceCheckoutRoot(packageRoot: string): boolean {
 }
 
 export function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boolean {
-  const isVitestProcess = isVitestRuntimeEnv(env) || isVitestRuntimeEnv(process.env);
-  return (
-    isVitestProcess &&
-    (isTruthyEnvValue(env[TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV]) ||
-      isTruthyEnvValue(process.env[TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV]))
-  );
+  const separateEnv = env !== process.env;
+  if (
+    !isTruthyEnvValue(env[TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV]) &&
+    !(separateEnv && isTruthyEnvValue(process.env[TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV]))
+  ) {
+    return false;
+  }
+  return isVitestRuntimeEnv(env) || (separateEnv && isVitestRuntimeEnv(process.env));
 }
 
 export function hasUsableBundledPluginTree(pluginsDir: string): boolean {
@@ -208,14 +214,21 @@ export function isForeignBundledPluginRoot(
   );
 }
 
-export function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefined {
+export function resolveBundledDirFromPackageRoot(
+  packageRoot: string,
+  preference: PluginRuntimeArtifactPreference = "bundled",
+): string | undefined {
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
-  // In pnpm source checkouts, prefer the built bundled plugin runtime when it
-  // exists so dist gateway runs avoid loading TS plugin entrypoints through jiti.
-  // Keep the source tree as the fallback for fresh checkouts before build.
   const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
   if (isSourceCheckoutRoot(packageRoot)) {
-    return [builtExtensionsDir, runtimeExtensionsDir, path.join(packageRoot, "extensions")].find(
+    const sourceExtensionsDir = path.join(packageRoot, "extensions");
+    // Runtime execution follows its host graph; candidate/update inspection keeps
+    // the packaged default without borrowing the inspecting process's graph.
+    const roots =
+      preference === "source"
+        ? [sourceExtensionsDir]
+        : [builtExtensionsDir, runtimeExtensionsDir, sourceExtensionsDir];
+    return roots.find(
       (rootDir) =>
         isPluginInPackageBundledRoots({ rootDir, packageRoot }) &&
         hasUsableBundledPluginTree(rootDir),
@@ -265,7 +278,10 @@ function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | unde
       [safeArgvRoot, moduleRoot].filter((entry): entry is string => Boolean(entry)),
     );
     for (const packageRoot of packageRoots) {
-      const bundledDir = resolveBundledDirFromPackageRoot(packageRoot);
+      const bundledDir = resolveBundledDirFromPackageRoot(
+        packageRoot,
+        resolvePluginRuntimeArtifactPreference(),
+      );
       if (bundledDir) {
         return bundledDir;
       }

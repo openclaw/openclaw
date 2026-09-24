@@ -302,7 +302,14 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
-      Object.assign(designReview, { label: "Design review refreshed", color: null, icon: "book" });
+      const committed = await gateway.getSessionRow(key);
+      Object.assign(designReview, {
+        ...committed,
+        label: "Design review refreshed",
+        color: null,
+        icon: "book",
+        updatedAt: committed.updatedAt! + 1,
+      });
       await gateway.setSessionsListResponse(sessionsListResponse(sessions));
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, color: null });
       // Only the roster response carries this label; wait for that render so a

@@ -123,7 +123,7 @@ describe("node runner auto-update handoff", () => {
   beforeEach(() => {
     resetRunnerTestState();
     mocks.useFakeRuntime = true;
-    mocks.activeRuntime.tryPauseForUpdate.mockReset().mockReturnValue(true);
+    mocks.activeRuntime.tryPauseForUpdate.mockReset().mockResolvedValue(true);
     mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
       ready: true,
       aborted: false,
@@ -206,7 +206,7 @@ describe("node runner auto-update handoff", () => {
       commands: entry.commands,
     };
     mocks.configureNodeHost.mockResolvedValueOnce(effectiveConfig);
-    mocks.activeRuntime.tryPauseForUpdate.mockReturnValueOnce(false);
+    mocks.activeRuntime.tryPauseForUpdate.mockResolvedValueOnce(false);
 
     await withRunningNodeHost(
       {

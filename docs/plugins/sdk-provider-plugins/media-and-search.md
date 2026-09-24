@@ -156,6 +156,22 @@ plugins](/plugins/sdk-provider-plugins) guide.
     still belong in `resolveModelCapabilities` and `generateVideo`; reuse
     the same capability constant for both paths when possible.
 
+    The following [private-local helpers](/plugins/sdk-subpaths#compatibility-and-private-local-helpers)
+    are supported only for bundled and separately published official plugins.
+
+    For asynchronous provider jobs, `pollProviderOperation` from
+    `openclaw/plugin-sdk/provider-http` shares the bounded polling loop while
+    the plugin supplies its request, completion/failure checks, and wait function.
+    `pollProviderOperationJson` adds the standard HTTP JSON transport.
+    Keep vendor authentication and deadline scope in the provider adapter.
+
+    `readGeneratedVideoAsset` from `openclaw/plugin-sdk/media-generation-runtime`
+    reads a response under a byte cap and derives the asset's MIME type and filename.
+    Set `validateBinaryResponse` to reject non-video responses. An optional
+    `overflowUrl` provides delivery only when the body exceeds that cap; malformed
+    media and transport errors still fail. The caller owns response cleanup.
+    `downloadGeneratedVideoAsset` also owns fetching, deadlines, and cleanup.
+
   </Tab>
   <Tab title="Web fetch and search">
     ```typescript
@@ -204,6 +220,13 @@ plugins](/plugins/sdk-provider-plugins) guide.
     `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
     `getCredentialValue`, `setCredentialValue`, and `createTool` are all
     required.
+
+    Search providers can declare `configPath` as a path relative to their own
+    plugin configuration for the Search settings page. It defaults to
+    `["webSearch"]`; use `null` when the provider has no inline settings.
+    Providers sharing a plugin can expose different settings without showing
+    fields that only apply to a sibling provider. Credentials remain described
+    by `credentialPath` and use the existing masked credential editor.
 
     Search providers using `openclaw/plugin-sdk/provider-web-search` should
     resolve `resolveSearchCacheTtlMs(searchConfig)` once per execution and

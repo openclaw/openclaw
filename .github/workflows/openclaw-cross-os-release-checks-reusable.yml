@@ -116,18 +116,8 @@ on:
         required: false
         default: ""
         type: string
-      advisory:
-        description: Also treat preparation and Linux failures as advisory for the caller
-        required: false
-        default: false
-        type: boolean
   workflow_call:
     inputs:
-      advisory:
-        description: Also treat preparation and Linux failures as advisory for the caller
-        required: false
-        default: false
-        type: boolean
       ref:
         description: Public OpenClaw ref to validate (tag, branch, or full commit SHA)
         required: true
@@ -258,9 +248,8 @@ env:
 
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 90
-    continue-on-error: ${{ inputs.advisory }}
     outputs:
       baseline_artifact_digest: ${{ steps.upload_baseline.outputs.artifact-digest }}
       baseline_artifact_id: ${{ steps.upload_baseline.outputs.artifact-id }}
@@ -896,11 +885,10 @@ jobs:
   cross_os_release_checks:
     name: "${{ matrix.display_name }} / ${{ matrix.suite_label }}"
     needs: prepare
-    continue-on-error: ${{ inputs.advisory || matrix.os_id != 'ubuntu' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(matrix.runner))) || (matrix.runner) }}
     timeout-minutes: 60
     steps:
       - name: Checkout workflow repo
@@ -912,18 +900,17 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      # Windows Server 2025 with Node 24.19 can crash in libuv fs-event on RUNNER~1.
-      # Keep only packaged-fresh on the last validated Node until an upstream fix ships.
       - name: Setup Node.js
         id: node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.16.0' || env.NODE_VERSION }}
+          # Older workflow_ref harnesses omit the field; retire this adapter with those revisions.
+          node-version: ${{ matrix.node_version || (matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.16.0' || env.NODE_VERSION) }}
 
       - name: Setup pnpm
         uses: ./workflow/.github/actions/setup-pnpm-store-cache
         with:
-          node-version: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.16.0' || env.NODE_VERSION }}
+          node-version: ${{ matrix.node_version || (matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.16.0' || env.NODE_VERSION) }}
           package-manager-file: workflow/package.json
           lockfile-path: workflow/pnpm-lock.yaml
           cache-mode: off
@@ -941,6 +928,8 @@ jobs:
             openclaw-cross-os-npm-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ matrix.suite }}-
             openclaw-cross-os-npm-v1-seed-
 
+      # These bounded fallbacks repeat only artifact-service acquisition, before
+      # any test executes. Each retry preserves the prepared immutable inputs.
       - name: Download candidate artifact
         id: download_candidate
         continue-on-error: true
@@ -950,6 +939,11 @@ jobs:
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
           run-id: ${{ needs.prepare.outputs.candidate_artifact_run_id }}
           github-token: ${{ github.token }}
+
+      - name: Warn about candidate artifact acquisition retry
+        if: ${{ steps.download_candidate.outcome == 'failure' }}
+        shell: bash
+        run: echo "::warning::Candidate artifact download failed; retrying infrastructure acquisition once before tests."
 
       - name: Retry candidate artifact download
         if: ${{ steps.download_candidate.outcome == 'failure' }}
@@ -971,8 +965,13 @@ jobs:
           run-id: ${{ needs.prepare.outputs.baseline_artifact_run_id }}
           github-token: ${{ github.token }}
 
+      - name: Warn about baseline artifact acquisition retry
+        if: ${{ steps.download_baseline.outcome == 'failure' }}
+        shell: bash
+        run: echo "::warning::Baseline artifact download failed; retrying infrastructure acquisition once before tests."
+
       - name: Retry baseline artifact download
-        if: ${{ matrix.suite == 'packaged-upgrade' && steps.download_baseline.outcome == 'failure' }}
+        if: ${{ steps.download_baseline.outcome == 'failure' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ needs.prepare.outputs.baseline_artifact_id }}
@@ -991,8 +990,13 @@ jobs:
           run-id: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
           github-token: ${{ github.token }}
 
+      - name: Warn about prerelease plugin registry artifact acquisition retry
+        if: ${{ steps.download_prepublish_plugin_registry.outcome == 'failure' }}
+        shell: bash
+        run: echo "::warning::Prerelease plugin registry artifact download failed; retrying infrastructure acquisition once before tests."
+
       - name: Retry prerelease plugin registry artifact download
-        if: needs.prepare.outputs.prepublish_plugin_registry_json != '' && steps.download_prepublish_plugin_registry.outcome == 'failure'
+        if: ${{ steps.download_prepublish_plugin_registry.outcome == 'failure' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
@@ -1088,40 +1092,20 @@ jobs:
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
             DISCORD_ARGS+=(--run-discord-roundtrip true)
           fi
-          run_cross_os_release_checks() {
-            bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
-              --candidate-tgz "${CANDIDATE_TGZ}" \
-              --candidate-version "${CANDIDATE_VERSION}" \
-              --source-sha "${SOURCE_SHA}" \
-              --baseline-spec "${BASELINE_SPEC}" \
-              --previous-version "${PREVIOUS_VERSION}" \
-              --baseline-tgz "${BASELINE_TGZ}" \
-              --provider "${PROVIDER}" \
-              --mode "${MODE}" \
-              --suite "${SUITE}" \
-              --ref "${REF}" \
-              "${PLUGIN_ARGS[@]}" \
-              "${DISCORD_ARGS[@]}" \
-              --output-dir "${OUTPUT_DIR}"
-          }
-
-          if run_cross_os_release_checks; then
-            exit 0
-          else
-            status=$?
-          fi
-
-          dashboard_log="${OUTPUT_DIR}/logs/${MODE}-dashboard.log"
-          if [[ "${OPENCLAW_RELEASE_CHECK_OS}" != "windows" ||
-                "$status" -ne 127 ||
-                ! -f "${dashboard_log}" ||
-                -f "${OUTPUT_DIR}/summary.json" ]] ||
-            ! grep -q 'attempt=.*url=http://127.0.0.1:' "${dashboard_log}"; then
-            exit "$status"
-          fi
-
-          echo "::warning::retrying Windows release checks after the outer process exited 127 after the dashboard probe and before summary generation"
-          run_cross_os_release_checks
+          bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
+            --candidate-tgz "${CANDIDATE_TGZ}" \
+            --candidate-version "${CANDIDATE_VERSION}" \
+            --source-sha "${SOURCE_SHA}" \
+            --baseline-spec "${BASELINE_SPEC}" \
+            --previous-version "${PREVIOUS_VERSION}" \
+            --baseline-tgz "${BASELINE_TGZ}" \
+            --provider "${PROVIDER}" \
+            --mode "${MODE}" \
+            --suite "${SUITE}" \
+            --ref "${REF}" \
+            "${PLUGIN_ARGS[@]}" \
+            "${DISCORD_ARGS[@]}" \
+            --output-dir "${OUTPUT_DIR}"
 
       - name: Save npm downloads
         if: github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && steps.npm_downloads.outputs.cache-hit != 'true'

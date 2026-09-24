@@ -1,5 +1,6 @@
 import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import type { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { scopedAgentIdForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
@@ -7,11 +8,11 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { generateUUID } from "../../lib/uuid.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import type { StoredChatQueueReplacement } from "./composer-persistence-state.ts";
 import {
   type ChatQueueAdmissionResult,
   listStoredChatOutboxes,
   storedChatOutboxScopeKey,
-  type StoredChatQueueReplacement,
   type ChatComposerScope,
   type StoredChatOutbox,
   type StoredChatOutboxScope,
@@ -68,9 +69,9 @@ export function keepVolatileQueuedMessage(
   item: ChatQueueItem,
   agentId?: string,
   options: { retryable?: boolean } = {},
-): void {
+): ChatQueueItem {
   const scope = resolveUiConversationIdentity(host, sessionKey, agentId ?? item.agentId);
-  chatOutboxOwner(host).keep(host, scope, item, options.retryable);
+  return chatOutboxOwner(host).keep(host, scope, item, options.retryable);
 }
 
 export function syncVisibleChatQueueProjection(
@@ -80,8 +81,11 @@ export function syncVisibleChatQueueProjection(
   chatOutboxOwner(host).syncHost(host, options);
 }
 
-export function subscribeChatOutboxProjection(host: ChatQueueScopedSessionHost): () => void {
-  return chatOutboxOwner(host).subscribe(host);
+export function subscribeChatOutboxProjection(
+  host: ChatQueueScopedSessionHost,
+  onDiscard?: (item: ChatQueueItem) => void,
+): () => void {
+  return chatOutboxOwner(host).subscribe(host, onDiscard);
 }
 
 export function enqueueChatMessage(
@@ -106,8 +110,7 @@ export function enqueueChatMessage(
     agentId: scopedAgentIdForSession(host, host.sessionKey),
     ...(sender ? { sender } : {}),
   };
-  keepVolatileQueuedMessage(host, host.sessionKey, item, item.agentId);
-  return item;
+  return keepVolatileQueuedMessage(host, host.sessionKey, item, item.agentId);
 }
 
 export function enqueuePendingRunMessage(
@@ -165,6 +168,37 @@ export function updateQueuedMessage(
   return chatOutboxOwner(host).update(host, [{ id, update }])?.[0] ?? null;
 }
 
+/** Positive custody settles uncertainty, not consumption or retry-payload ownership. */
+export function confirmQueuedMessageCustody(
+  host: ChatQueueScopedSessionHost,
+  expected: ChatQueueItem,
+  sessionId: string | undefined,
+): boolean {
+  if (!sessionId || (expected.sessionId && expected.sessionId !== sessionId)) {
+    return false;
+  }
+  const current = readQueuedMessageById(host, expected.id);
+  if (
+    !current ||
+    (current.sessionId && current.sessionId !== sessionId) ||
+    !sameQueuedDeliveryVersion(current, expected)
+  ) {
+    return false;
+  }
+  if (current.sessionId && current.sendState !== "unconfirmed") {
+    return true;
+  }
+  return (
+    updateQueuedMessage(host, expected.id, (item) => ({
+      ...item,
+      sessionId,
+      ...(item.sendState === "unconfirmed"
+        ? { sendState: "waiting-idle" as const, sendError: undefined }
+        : {}),
+    })) !== null
+  );
+}
+
 export function updateQueuedMessagesForSession(
   host: ChatQueueScopedSessionHost,
   updates: readonly { id: string; update: (item: ChatQueueItem) => ChatQueueItem }[],
@@ -213,9 +247,13 @@ export function excludeComposerAttachments(
   return attachments.filter((attachment) => !retainedIds.has(attachment.id));
 }
 
-export function removeQueuedMessage(host: ChatQueueScopedSessionHost, id: string) {
+export function removeQueuedMessage(
+  host: ChatQueueScopedSessionHost,
+  id: string,
+  options?: { discard?: boolean },
+) {
   const item = readQueuedMessageById(host, id);
-  const removed = item ? removeQueuedMessageWithoutReleasing(host, id) : null;
+  const removed = item ? chatOutboxOwner(host).remove(host, id, options) : null;
   if (removed) {
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
   }

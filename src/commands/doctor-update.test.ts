@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import { withUpdateInProgressEnv } from "../cli/update-cli/update-command-service-env.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";

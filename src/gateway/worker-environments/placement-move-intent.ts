@@ -25,6 +25,7 @@ import {
 } from "./placement-record.js";
 import { getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 const MOVE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (";
@@ -280,12 +281,41 @@ function findMoveRowBySession(db: DatabaseSync, sessionId: string): MoveRow | un
   );
 }
 
-export function readWorkerPlacementMove(
+function readWorkerPlacementMove(
   db: DatabaseSync,
   sessionId: string,
 ): WorkerPlacementMoveIntent | undefined {
   const row = findMoveRowBySession(db, sessionId);
   return row ? fromRow(row) : undefined;
+}
+
+/** Display reads tolerate the shipped additive columns without mutating their source. */
+export function readWorkerPlacementMovesReadOnly(
+  db: DatabaseSync,
+  sessionIds: readonly string[],
+): ReadonlyMap<string, WorkerPlacementMoveIntent> {
+  const results = new Map<string, WorkerPlacementMoveIntent>();
+  if (!tableExists(db, "worker_session_placement_moves")) {
+    return results;
+  }
+  for (let offset = 0; offset < sessionIds.length; offset += 250) {
+    for (const row of executeSqliteQuerySync(
+      db,
+      moveQuery(db)
+        .selectFrom("worker_session_placement_moves")
+        .selectAll()
+        .where("session_id", "in", sessionIds.slice(offset, offset + 250)),
+    ).rows) {
+      const intent = fromRow({
+        ...row,
+        target_machine_class: row.target_machine_class ?? null,
+        target_os: row.target_os ?? null,
+        abandon_source: row.abandon_source ?? null,
+      });
+      results.set(intent.sessionId, intent);
+    }
+  }
+  return results;
 }
 
 function findMoveRowByOperation(db: DatabaseSync, operationId: string): MoveRow | undefined {
@@ -567,7 +597,9 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
         if (intent.target.kind === "gateway") {
           deleteExactMove(db, intent);
         }
-        return getRequired(db, intent.sessionId);
+        const record = getRequired(db, intent.sessionId);
+        publishPlacementTurnClaimState(db, record);
+        return record;
       });
     },
 
@@ -613,7 +645,9 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           throw new Error(`Session ${intent.sessionId} changed during abandoned placement move`);
         }
         deleteExactMove(db, intent);
-        return getRequired(db, intent.sessionId);
+        const record = getRequired(db, intent.sessionId);
+        publishPlacementTurnClaimState(db, record);
+        return record;
       });
     },
 

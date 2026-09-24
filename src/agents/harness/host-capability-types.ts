@@ -23,17 +23,49 @@ type AgentHarnessToolSurfaceOptions = Omit<
   "operationalRunInstance"
 >;
 
+type AgentHarnessModelExecutionBinder = (
+  model: import("@openclaw/model-catalog-core/model-catalog-refs").ProviderModelRef | undefined,
+) => Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined;
+
 export type AgentHarnessHostCapabilities = Readonly<{
   kind: "agent-harness-host-capability";
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Binds the actual native model; returns undefined only for runs without an operator source. */
+  bindModelExecution?: AgentHarnessModelExecutionBinder;
+  /** Retains the original source for already-admitted work beyond foreground completion. */
+  retainSourceAuthority?: () =>
+    | Readonly<{
+        assertCurrent: () => void;
+        signal?: AbortSignal;
+        /** Live preflight fact; absence means unknown, not an unrestricted source. */
+        modelPolicyRequired?: boolean;
+        /** Opaque equality for compatible active input; never authority by itself. */
+        sourceIdentity?: object;
+        /** Binds later dispatches while this retained work remains active. */
+        bindModelExecution?: AgentHarnessModelExecutionBinder;
+        release: () => void;
+      }>
+    | undefined;
   /** Reports one completed model call's output tokens to this admitted run's live total. */
   reportOutputTokens?: (outputTokens: number) => void;
   /** Adds native provenance only to this host's exact current admitted prompt. */
   annotateCurrentUserTurn?: (
     annotation: import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptAnnotation,
   ) => Promise<void>;
+  /** Execution-only document paths after the harness confirms unsandboxed local placement. */
+  prepareInputAttachments?: (request: {
+    placement: "local-host";
+    maxChars: number;
+    /** Omit for the admitted input; supply the current input for steering. */
+    turn?: Pick<
+      import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams,
+      "media" | "userTurnTranscriptRecorder"
+    >;
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+  }) => Promise<string | undefined>;
   /** Rebuilds retained attachments under this host's captured media policy and run authority. */
   prepareContextMedia?: (request: {
     message: import("../runtime/index.js").AgentMessage;

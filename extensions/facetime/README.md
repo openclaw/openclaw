@@ -20,7 +20,11 @@ openclaw gateway restart
 - `src/call-lifecycle.ts` owns the closed carrier/model state machine,
   generation fencing, serialized native commands, and the complete alias index.
 - `src/pending-dial-store.ts` persists the one exact approved pending dial in
-  plugin-owned SQLite state.
+  plugin-owned SQLite state. Current hosts execute these operations in the
+  shared-state worker, preserving write order and conditional dial-ID cleanup.
+  Runtime startup, helper dispatch, and shutdown await the required publications.
+  Pending outbound calls reserve admission while persistence waits, preserving the
+  same incoming-call policy before and after durable publication.
 - `src/helper-rpc.ts` owns bounded loopback IPC with mutual authentication,
   connection-epoch message MACs, replay sequencing, and typed native
   postcondition projection.

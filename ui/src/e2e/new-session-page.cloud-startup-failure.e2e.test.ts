@@ -174,7 +174,7 @@ suite.define(() => {
   ])(
     "keeps cloud startup visible through failure ($historyFails, disconnect: $disconnect, replacement: $replaceClient, cold scope: $coldScope)",
     async ({ historyFails, disconnect, replaceClient, coldScope }) => {
-      const context = await suite.browser.newContext({
+      const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
         permissions: ["clipboard-read", "clipboard-write"],
@@ -389,14 +389,14 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         }
       } finally {
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     },
   );
   it.each(["none", "accepted", "invalid"] as const)(
     "resumes an unrelated offline queue after recovery releases it (%s)",
     async (recoveryKind) => {
-      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const context = await suite.newBrowserContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
       const sessionKey = "agent:main:release-recovery";
       const message = "original accepted turn";
@@ -536,7 +536,7 @@ suite.define(() => {
         }
       } finally {
         runtime?.release();
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     },
   );

@@ -37,6 +37,7 @@ import { respondDesktopLaunch, respondDesktopObserve } from "./environments.desk
 import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
 import { environmentsSessionHandlers } from "./environments.session.js";
 import { respondUnavailableOnThrow } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -342,7 +343,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       "worker environment creation failed",
     );
   },
-  "environments.prepare": async ({ params, respond, context, hasCurrentClientAuthority }) => {
+  "environments.prepare": async (options) => {
+    const { params, respond, context } = options;
     if (
       !assertValidParams(params, validateEnvironmentsPrepareParams, "environments.prepare", respond)
     ) {
@@ -358,15 +360,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      respond(
-        true,
-        await service.prepare(params, () => {
-          if (hasCurrentClientAuthority?.() === false) {
-            throw new Error("Worker preparation caller authority was revoked");
-          }
-        }),
-        undefined,
-      );
+      const authority = readGatewayRequestMutationAuthority(options);
+      respond(true, await service.prepare(params, authority.assertCurrent), undefined);
     } catch (error) {
       const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
       const invalid =

@@ -396,7 +396,7 @@ describe("host-owned current admission annotation", () => {
             .all(f.target.sessionId);
         const searchBefore = searchRows();
         const projectionWork = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-          sql.includes("session_transcript_fts")
+          /\bsession_transcript_fts\b/i.test(sql)
             ? "fts"
             : sql.includes("octet_length")
               ? "size"

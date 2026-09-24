@@ -1,11 +1,50 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import {
+  encodeOpenClawStateWorkerError,
+  hydrateOpenClawStateWorkerError,
+  retainOpenClawStateWorkerErrorPayload,
+} from "../../state/openclaw-state-worker-error.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
-import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
+import type { SessionHistoryDelta } from "./session-history-types.js";
+import {
+  SessionTranscriptProjectionUnavailableError,
+  SessionTranscriptStorageUnavailableError,
+} from "./session-transcript-projection-error.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
+import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
+
+/** A later display reset may leave this failed visibility lookup unconsumed. */
+export class SessionHistoryDeltaPreparationError extends Error {
+  constructor(
+    readonly partial: SessionHistoryDelta,
+    cause?: unknown,
+  ) {
+    super("Session history visibility preparation failed", { cause });
+  }
+}
+
+export function encodeSessionTranscriptWorkerError(
+  error: unknown,
+): SessionTranscriptWorkerReadError | undefined {
+  if (error instanceof SessionTranscriptStorageUnavailableError) {
+    return { kind: "storage", reason: error.reason };
+  }
+  if (error instanceof SessionTranscriptColdError) {
+    return { kind: "cold", sessionId: error.sessionId };
+  }
+  if (error instanceof SessionTranscriptProjectionUnavailableError) {
+    return { kind: "projection", sessionId: error.sessionId };
+  }
+  if (error instanceof SessionTranscriptReadFenceError) {
+    return { kind: "fence", message: error.message };
+  }
+  const payload = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
+  return payload ? { kind: "read-error", message: coerceErrorMessage(error), payload } : undefined;
+}
 
 export function unwrapSessionTranscriptWorkerReply<
   Kind extends keyof SessionTranscriptWorkerValues,
@@ -13,16 +52,37 @@ export function unwrapSessionTranscriptWorkerReply<
   if (reply.ok) {
     return reply.value;
   }
-  if (reply.error.kind === "cold") {
-    throw new SessionTranscriptColdError(reply.error.sessionId);
+  if (reply.error.kind === "delta-visibility") {
+    throw new SessionHistoryDeltaPreparationError(reply.error.partial);
   }
-  if (reply.error.kind === "projection") {
-    throw new SessionTranscriptProjectionUnavailableError(reply.error.sessionId);
-  }
-  throw new SessionTranscriptReadFenceError(reply.error.message);
+  throw decodeSessionTranscriptWorkerReadError(reply.error);
 }
 
-/** Keep both diagnostics in the message-only worker response and both causes locally. */
+/** Decode a positively identified domain failure without classifying transport rejections. */
+export function decodeSessionTranscriptWorkerReadError(
+  failure: SessionTranscriptWorkerReadError,
+): Error {
+  if (failure.kind === "read-error") {
+    const error = new Error(failure.message);
+    retainOpenClawStateWorkerErrorPayload(error, failure.payload);
+    return hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+  }
+  if (failure.kind === "storage") {
+    return new SessionTranscriptStorageUnavailableError(failure.reason);
+  }
+  if (failure.kind === "cold") {
+    return new SessionTranscriptColdError(failure.sessionId);
+  }
+  if (failure.kind === "projection") {
+    return new SessionTranscriptProjectionUnavailableError(failure.sessionId);
+  }
+  if (failure.kind === "syntax") {
+    return new SyntaxError(failure.message);
+  }
+  return new SessionTranscriptReadFenceError(failure.message);
+}
+
+/** Keep read and cleanup failures together through the worker error graph. */
 export function sessionHistoryCleanupError(
   error: unknown,
   cleanupError: unknown,

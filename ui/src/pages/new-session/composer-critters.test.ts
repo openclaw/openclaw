@@ -34,6 +34,34 @@ describe("new-session composer critter visits", () => {
     expect(context.theme.refresh).toHaveBeenCalledOnce();
   });
 
+  it("suspends only the resident for a theme without a mascot and passes its visitor catalog", () => {
+    const context = composerContext({ client: null });
+    const { composer, rerender } = renderComposer({ context });
+    const pet = composer.querySelector<
+      HTMLElement & {
+        visitsEnabled: boolean;
+        residentEnabled: boolean;
+        critters: readonly string[];
+      }
+    >("openclaw-lobster-pet")!;
+    expect(pet.visitsEnabled).toBe(true);
+    expect(pet.residentEnabled).toBe(true);
+    context.theme.branding.mascot = "none";
+    context.theme.branding.critters = ["penguin", "fedora"];
+    rerender();
+    expect(pet.residentEnabled).toBe(false);
+    expect(pet.visitsEnabled).toBe(true);
+    expect(pet.critters).toEqual(["penguin", "fedora"]);
+    expect(context.theme.settings.lobsterPetVisits).toBe(true);
+    context.theme.branding.mascot = "claw";
+    rerender();
+    expect(pet.residentEnabled).toBe(true);
+    expect(pet.visitsEnabled).toBe(true);
+    context.theme.settings.lobsterPetVisits = false;
+    rerender();
+    expect(pet.visitsEnabled).toBe(false);
+  });
+
   it("keeps the visitor cast stable while editing and rerolls only for a new draft or opening", () => {
     const first = renderComposer();
     const visitor = () =>

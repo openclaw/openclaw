@@ -68,9 +68,9 @@ export function createCommandTerminationController(params: {
     windowsTerminationPromise = (async () => {
       if (graceful) {
         taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T"]));
+        // Awaited cleanup stays live after both the child and taskkill handles close.
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, params.killGraceMs);
-          timer.unref();
+          setTimeout(resolve, params.killGraceMs);
         });
         if (isDirectChildAlive()) {
           taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T", "/F"]));
@@ -128,8 +128,12 @@ export function createCommandTerminationController(params: {
         while (groupAlive()) {
           const currentStart = getFileLockProcessStartTime(childPid);
           const remaining = deadline - Date.now();
-          if ((currentStart !== null && currentStart !== originalStart) || remaining <= 0) {
+          if (currentStart !== null && currentStart !== originalStart) {
             cleanup = "uncertain";
+            return;
+          }
+          if (remaining <= 0) {
+            cleanup = groupAlive() ? "uncertain" : "forced";
             return;
           }
           await new Promise<void>((resolve) => {

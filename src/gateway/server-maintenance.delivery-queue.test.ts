@@ -36,14 +36,8 @@ function createMaintenanceTimerDeps() {
 async function stopMaintenanceTimers(
   timers: ReturnType<typeof import("./server-maintenance.js").startGatewayMaintenanceTimers>,
 ) {
-  clearInterval(timers.tickInterval);
-  clearInterval(timers.healthInterval);
-  clearInterval(timers.dedupeCleanup);
-  clearInterval(timers.worktreeCleanup);
+  await timers.stopPeriodicTasks();
   await timers.skillUsageCleanup();
-  await timers.stopMediaCleanup();
-  await timers.stopSessionColdStorageMaintenance();
-  await timers.stopTelemetryChecks();
 }
 
 describe("delivery queue maintenance", () => {

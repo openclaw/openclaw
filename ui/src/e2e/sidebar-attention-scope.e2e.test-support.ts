@@ -365,7 +365,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await holdProof(page, params.captureProof);
     await captureProof(params, page, "11-mobile-inbox-writer-agent.png");
 
-    await sidebar.getByRole("button", { name: "Dismiss all shown" }).click();
+    await sidebar.getByRole("button", { name: "Dismiss shown" }).click();
     await expect.poll(() => automationRows.count()).toBe(0);
     await sidebar.getByRole("tab", { name: /All/ }).click();
     await expect.poll(() => approvalRow.count()).toBe(1);

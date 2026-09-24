@@ -1,3 +1,5 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 /**
  * Browser control service lifecycle for plugin-managed, in-process operation.
  */
@@ -13,8 +15,6 @@ import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { ensureBrowserControlAuth } from "./browser/control-auth.js";
 import { getExtensionRelayModule } from "./browser/extension-relay.runtime.js";
 import type { BrowserServerState } from "./browser/server-context.js";
-import { getRuntimeConfig } from "./config/config.js";
-import { createSubsystemLogger } from "./logging/subsystem.js";
 import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 
 const log = createSubsystemLogger("browser");
@@ -28,7 +28,7 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
 
   const cfg = getRuntimeConfig();
   const browserCfg = loadBrowserConfigForRuntimeRefresh();
-  if (!resolveBrowserPluginEnableState(browserCfg).enabled) {
+  if (!resolveBrowserPluginEnableState(cfg).enabled) {
     return null;
   }
   const resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);

@@ -444,57 +444,67 @@ describe("RealtimeTalkSession consult handoff", () => {
   });
 
   it("submits the no-text fallback after an empty final and completed Gateway run", async () => {
-    let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        setImmediate(() => {
-          listener?.({
-            event: "chat",
-            payload: {
-              runId: "run-1",
-              state: "final",
-              message: undefined,
-            },
-          });
-        });
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
+    vi.useFakeTimers();
+    try {
+      let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
+      const request = vi.fn(async (method: string) => {
+        if (method === "talk.client.toolCall") {
+          window.setTimeout(() => {
+            listener?.({
+              event: "chat",
+              payload: {
+                runId: "run-1",
+                state: "final",
+                message: undefined,
+              },
+            });
+          }, 0);
+          return {
+            runId: "run-1",
+            idempotencyKey: "run-1",
+            agentId: "main",
+            agentSessionKey: "agent:main:main",
+          };
+        }
+        if (method === "agent.wait") {
+          return { runId: "run-1", status: "ok" };
+        }
+        throw new Error(`unexpected request: ${method}`);
+      });
+      const addEventListener = vi.fn((callback: typeof listener) => {
+        listener = callback;
+        return () => {
+          listener = undefined;
         };
-      }
-      if (method === "agent.wait") {
-        return { runId: "run-1", status: "ok" };
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    const addEventListener = vi.fn((callback: typeof listener) => {
-      listener = callback;
-      return () => {
-        listener = undefined;
-      };
-    });
-    const submit = vi.fn();
+      });
+      const submit = vi.fn();
 
-    await submitRealtimeTalkConsult({
-      ctx: {
-        client: { request, addEventListener },
-        sessionKey: "agent:main:main",
-        callbacks: {},
-      } as never,
-      callId: "call-1",
-      args: { question: "Check status" },
-      submit,
-    });
+      const consult = submitRealtimeTalkConsult({
+        ctx: {
+          client: { request, addEventListener },
+          sessionKey: "agent:main:main",
+          callbacks: {},
+        } as never,
+        callId: "call-1",
+        args: { question: "Check status" },
+        submit,
+      });
 
-    expect(request).toHaveBeenCalledWith("agent.wait", {
-      runId: "run-1",
-      timeoutMs: 120_000,
-    });
-    expect(submit).toHaveBeenCalledWith("call-1", {
-      result: "OpenClaw finished with no text.",
-    });
+      await vi.advanceTimersByTimeAsync(499);
+      expect(submit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await consult;
+
+      expect(request).toHaveBeenCalledWith("agent.wait", {
+        runId: "run-1",
+        timeoutMs: 120_000,
+      });
+      expect(submit).toHaveBeenCalledWith("call-1", {
+        result: "OpenClaw finished with no text.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([

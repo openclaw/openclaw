@@ -21,6 +21,27 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+Admitted agent and cached shared-state handles retain their schema version and
+table facts. The handle owner revokes these facts after local DDL or transaction
+rollback. A fresh `PRAGMA data_version` probe observes foreign commits on the next
+unpinned read, even within the same event-loop turn. On a foreign commit, the owner
+compares `schema_version` and `user_version` in one pinned snapshot and retains
+facts and their revision when both are unchanged. Data-only commits therefore
+avoid table and column scans while version-only changes still trigger refusal
+when the stored version is newer than the running build. Actual
+SQLite read snapshots retain their view until they end; the next read then observes
+committed changes. Canonical session validation uses the same schema revision.
+Unchanged versions reuse parsed schema facts and prepared statements without
+repeating schema scans. Migration and snapshot consistency checks remain fresh reads.
+This changes no stored schema, migration, durability, or update behavior.
+
+The nullable requester-authority columns on GitHub publication lifecycle and
+repository receipts require [state schema 18](/reference/database-schemas/state-schema-history#state-schema-18).
+Shipped readers validate these optional tables exactly and reject additional
+columns even when bare and nullable. Migration preserves historical rows with
+unknown requester authority; the version bump also prevents older publishers
+from reopening requests without the new authority checks.
+
 Session label lookups use a nonunique partial index on
 `session_nodes(label, session_key)` for non-null labels, without changing agent
 schema 20. The existing writable schema owner installs and repairs the index;
@@ -85,6 +106,29 @@ Their writers ensure them idempotently on first use; reads do not install them.
 Older readers ignore the columns. NULL remains unknown, so Gateway notification
 delivery does not assign historical records to a current parent by key alone.
 
+Cron standing-grant definition generations use three bare nullable projections on
+`cron_jobs`: `grant_definition_revision`, `grant_definition_generation`, and
+`grant_definition_updated_at`. The canonical job remains `job_json`. Current
+writers update the projections atomically with it, advance the generation for a
+substantive definition change (including edit-and-restore), and preserve the
+generation across disable and re-enable.
+
+The released `operator_approval_standing_grants` table keeps its exact shape. A
+first-use companion table, `operator_approval_standing_grant_generations`, binds
+each newly minted grant to its job generation and cascades with the grant. Older
+same-version readers ignore the companion and the bare nullable job columns, so
+they can reopen the database. After re-upgrade, a grant without a companion row
+is treated as legacy and requires approval again; it is never assigned a
+generation retroactively. A job recreation advances past retained companion
+generations, including when an older writer deleted the job row.
+
+An older writer does not maintain these projections. Its edits make the
+projection stale, so a current reader fails closed after re-upgrade. While the
+older build is running it cannot enforce generation binding, and changes that
+preserve every observable job value and timestamp cannot be reconstructed later.
+No backfill or schema-version bump is required. The accepted design and rollback
+contract are recorded in [#142153](https://github.com/openclaw/openclaw/pull/142153).
+
 Retained ACP imports use the same-version additive-column exception for the bare
 nullable `session_nodes.legacy_acp_migration_json TEXT` column. Legacy session
 import ensures it on first use and records exact source-component provenance;
@@ -118,6 +162,20 @@ leave pending markers when they change canonical inputs. Reopening with older
 code is refused. Rollback uses the verified pre-migration backup and matching
 build, not marker changes or removal of the derived table alone. See
 [incremental canonical-session validation](/reference/database-schemas/agent-schema-history#incremental-canonical-session-validation).
+
+Agent schema 22 introduced exact transcript FTS row ownership with a nullable
+completeness count and lazy backfill. Schema 23 accepts that deployed shape as
+well as schema 21. It rebuilds the ownership map from existing FTS content,
+preserves pending reconciliation, and retires the old completeness counter.
+
+Agent schema 23 changes existing payload representations: transcript events can
+use Zstd BLOBs, memory embeddings use Float64 BLOBs, and memory full-text
+maintenance uses stable integer chunk identities. Older writers cannot preserve
+these contracts, so this requires a bump despite retaining logical event and
+chunk IDs. Shared-state schema remains 17. The usage-rollup cache format changes
+with this migration but is independently rebuildable. See
+[compact agent payload storage](/reference/database-schemas/agent-schema-history#compact-agent-payload-storage)
+for conversion, runtime requirements, and recovery.
 
 Agent schema 19 records collected input consumption in the nullable
 `session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's

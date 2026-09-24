@@ -18,6 +18,11 @@ describe.skipIf(process.platform === "win32")("backup SQLite symbolic link loops
     await withOpenClawTestState(
       { layout: "split", prefix: "backup-opaque-link-", scenario: "minimal" },
       async (state) => {
+        // Keep unrelated backup scratch out of this fixture's warning count.
+        const scratchRoot = state.path("scratch");
+        await fs.mkdir(scratchRoot);
+        state.envVars.TMPDIR = scratchRoot;
+        state.applyEnv();
         const sideFile = await state.writeText("foreign/keep.txt", "keep this file\n");
         const loopPath = state.statePath("foreign", "cycle.sqlite");
         await fs.symlink("cycle.sqlite", loopPath);
@@ -29,7 +34,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite symbolic link loops
         });
 
         expect(archive.verified).toBe(true);
-        expect(archive.warnings).toHaveLength(1);
+        expect(archive.warnings, JSON.stringify(archive.warnings)).toHaveLength(1);
         const warning = expectDefined(archive.warnings?.[0], "skipped link warning");
         expect(warning).toContain("cycle.sqlite");
         expect(warning).toMatch(/skip/iu);

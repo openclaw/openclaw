@@ -12,6 +12,37 @@ import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
 const CHANGED_PATHS_OUTPUT_MAX_BYTES = 64 * 1024;
 
+/** @param {string} changedPath */
+export function isCiDocumentationPath(changedPath) {
+  if (
+    /(?:^|\/)(?:test|tests|__tests__|fixture|fixtures|__fixtures__|test-fixtures|templates)\//u.test(
+      changedPath,
+    )
+  ) {
+    return false;
+  }
+  const instruction =
+    /(?:^|\/)AGENTS\.md$/u.test(changedPath) ||
+    /^\.agents\/skills\/.+\.md$/u.test(changedPath) ||
+    /^skills\/[^/]+\/SKILL\.md$/u.test(changedPath);
+  return (
+    /(?:^|\/)README\.mdx?$/u.test(changedPath) || instruction || changedPath.startsWith("docs/")
+  );
+}
+
+/**
+ * Catalog data skips PR Node rows; generator/runtime code keeps its test owners.
+ * @param {string} changedPath
+ */
+export function isNodeTestDataOnlyPath(changedPath) {
+  return (
+    isCiDocumentationPath(changedPath) ||
+    /^(?:ui\/src\/i18n\/(?:locales\/[^/]+\.ts|\.i18n\/[^/]+\.(?:json|jsonl))$|src\/wizard\/i18n\/locales\/[^/]+\.ts$|apps\/\.i18n\/native\/[^/]+\.json$)/u.test(
+      changedPath,
+    )
+  );
+}
+
 /** @type {ChangedScope} */
 const FULL_SCOPE = {
   runNode: true,
@@ -40,10 +71,13 @@ const EMPTY_SCOPE = {
   runUiTests: false,
 };
 
+// Skills native subscriptions need real filesystem proof on both desktop OSes.
+const SKILLS_WATCH_SCOPE_RE = /^src\/skills\/runtime\/refresh(?:[.-][^/]+)?\.ts$/;
 const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|skills\/pyproject\.toml$)/;
 const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
 const APPLE_SWIFT_CONFIG_RE = /^config\/(?:swiftformat|swiftlint\.yml)$/;
+const SWIFT_LINT_OWNER_RE = /^scripts\/(?:run-swiftlint|lib\/check-limits)\.mts$/;
 const APPLE_SHARED_CONTRACT_FIXTURE_RE =
   /^test\/fixtures\/(?:device-identity-coordinator|talk-config)-contract\.json$/;
 const MACOS_NATIVE_RE =
@@ -55,13 +89,13 @@ const MACOS_SCRIPT_SCOPE_RE =
 const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
-  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
 // Tests and WatchTests Swift sources belong only to retained native unit-test targets.
 // UITests, resources, and project changes still prove the screenshot target graph.
 const IOS_SCREENSHOT_APP_SCOPE_RE =
   /^(?:apps\/ios\/(?!(?:Tests|WatchTests)\/.*\.swift$)|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
 const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
-  /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
+  /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE =
   /^(apps\/android\/|apps\/shared\/|\.github\/actions\/setup-android-toolchain\/)/;
 // Native bundling reads the root aliases and this shared coercion dependency.
@@ -81,7 +115,7 @@ const WINDOWS_PROCESS_IDENTITY_SCOPE_RE =
 const WINDOWS_FILE_URL_SCOPE_RE =
   /^(?:src\/agents\/tools\/(?:media-tool-file-url\.windows\.test|media-tool-shared(?:\.test)?|pdf-tool(?:\.test)?)|src\/auto-reply\/(?:reply\/stage-sandbox-media|reply\.triggers\.trigger-handling\.stages-inbound-media-into-sandbox-workspace\.test)|src\/media\/(?:local-media-path(?:\.windows\.test)?|local-roots(?:\.test)?|web-media(?:\.file-url\.windows\.test)?)|src\/channels\/inbound-event\/media(?:\.test)?|src\/gateway\/managed-image-attachments(?:\.test)?|extensions\/msteams\/src\/(?:media-helpers|messenger)(?:\.test)?)\.ts$/;
 const WINDOWS_SCOPE_RE =
-  /^(src\/cli\/completion-runtime\.ts$|extensions\/canvas\/scripts\/pnpm-runner\.(?:mjs|test\.ts)$|extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive(?:\.worker(?:\.test)?)?|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:exec-allowlist-pattern|fs-safe-remove)(?:\.windows)?(?:\.test)?|ports(?:-inspect|\.test)|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:-(?:command|lifecycle)\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:android-(?:app-i18n|pin-version)\.ts|ci-run-timings\.mjs|e2e\/lib\/package-compat\.mjs|generate-bundled-channel-config-metadata\.ts|install\.ps1|openclaw-cross-os-release-checks\.ts|plan-release-workflow-matrix\.mjs|run-additional-boundary-checks\.mts|verify-docker-attestations\.mjs|github\/run-openclaw-cross-os-release-checks\.sh|tsx\.mjs|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|mts|js)|lib\/(?:direct-run\.(?:mjs|mts)|format-generated-module\.mts|tsx-cli-shim\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable|windows-testbox-probe)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(src\/cli\/completion-runtime\.ts$|extensions\/canvas\/scripts\/pnpm-runner\.(?:mjs|test\.ts)$|extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive(?:\.worker(?:\.test)?)?|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:exec-allowlist-pattern|fs-safe-remove)(?:\.windows)?(?:\.test)?|ports(?:-inspect|\.test)|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:-(?:command|lifecycle)\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:android-(?:app-i18n|pin-version)\.ts|ci-run-timings\.mjs|e2e\/lib\/package-compat\.mjs|generate-bundled-channel-config-metadata\.ts|(?:install|windows-testbox-openssh)\.ps1|openclaw-cross-os-release-checks\.ts|plan-release-workflow-matrix\.mjs|run-additional-boundary-checks\.mts|verify-docker-attestations\.mjs|github\/run-openclaw-cross-os-release-checks\.sh|tsx\.mjs|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|mts|js)|lib\/(?:direct-run\.(?:mjs|mts)|format-generated-module\.mts|tsx-cli-shim\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable|windows-testbox-probe|windows-blacksmith-testbox)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_LAN_ADVERTISEMENT_SCOPE_RE =
   /^src\/infra\/advertised-lan-host(?:\.windows)?(?:\.test)?\.ts$/;
 const WINDOWS_SECRETREF_SCOPE_RE =
@@ -95,7 +129,7 @@ const WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE =
 const WINDOWS_HOME_DISPLAY_SCOPE_RE =
   /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths|sessions\/tools\/render-utils)(?:\.test)?)|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
 const WINDOWS_CHILD_ENV_SCOPE_RE =
-  /^src\/(?:agents\/provider-local-service(?:\.env-case\.test)?|cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
+  /^src\/(?:agents\/provider-local-service(?:-process|\.(?:env-case|shutdown|settlement)\.test)?|cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
 const WINDOWS_SOURCE_CLI_SCOPE_RE =
   /^src\/infra\/openclaw-cli-(?:invocation(?:\.test(?:-support)?)?|shim(?:\.(?:windows\.)?test)?)\.ts$/;
 // The helper is test-only, but its command and receipt owners need native process proof.
@@ -155,13 +189,14 @@ const NODE_FAST_SCOPE_RE = new RegExp(
 
 /** @param {string} path Canonical repository-relative script or test path. */
 export function isMacosToolingPath(path) {
-  return MACOS_SCRIPT_SCOPE_RE.test(path);
+  return MACOS_SCRIPT_SCOPE_RE.test(path) || SWIFT_LINT_OWNER_RE.test(path);
 }
 
 /** @param {string} path Canonical repository-relative build input. */
 function isAppleSharedBuildInput(path) {
   return (
     APPLE_SWIFT_CONFIG_RE.test(path) ||
+    SWIFT_LINT_OWNER_RE.test(path) ||
     MERMAID_ASSET_INPUT_RE.test(path) ||
     path === "scripts/prepare-apple-mermaid.mjs"
   );
@@ -194,6 +229,7 @@ export function detectChangedScope(changedPaths) {
   let runNode = false;
   let runMacos = false;
   let hasGitOwnerChanges = false;
+  let hasSkillsWatchChanges = false;
   let hasMacosNodeTestSupportChanges = false;
   let runIosBuild = false;
   let runAndroid = false;
@@ -220,6 +256,7 @@ export function detectChangedScope(changedPaths) {
 
     hasNonDocs = true;
     hasGitOwnerChanges ||= GIT_OWNER_SCOPE_RE.test(path);
+    hasSkillsWatchChanges ||= SKILLS_WATCH_SCOPE_RE.test(path);
     // Native shell fixture support needs Darwin proof, not Swift or Windows builds.
     hasMacosNodeTestSupportChanges ||= path === "test/scripts/mac-script-fixture.test-support.ts";
 
@@ -261,6 +298,7 @@ export function detectChangedScope(changedPaths) {
 
     if (
       windowsCiTests.has(path) ||
+      path === "test/vitest/vitest.shared.config.ts" ||
       WINDOWS_LAN_ADVERTISEMENT_SCOPE_RE.test(path) ||
       WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
       WINDOWS_DAEMON_SCOPE_RE.test(path) ||
@@ -277,6 +315,9 @@ export function detectChangedScope(changedPaths) {
       WINDOWS_WORKER_BUNDLE_SCOPE_RE.test(path) ||
       WINDOWS_WORKER_WORKSPACE_SCOPE_RE.test(path) ||
       WINDOWS_PROCESS_IDENTITY_SCOPE_RE.test(path) ||
+      /^scripts\/lib\/ci-windows-test-plan\.mts$|^test\/scripts\/ci-windows-test-plan\.test\.ts$/u.test(
+        path,
+      ) ||
       (!facts.isTestOnly &&
         (WINDOWS_SCOPE_RE.test(path) ||
           WINDOWS_SQLITE_SCOPE_RE.test(path) ||
@@ -312,10 +353,11 @@ export function detectChangedScope(changedPaths) {
   return {
     runNode,
     runMacos,
-    runMacosNode: runMacos || hasGitOwnerChanges || hasMacosNodeTestSupportChanges,
+    runMacosNode:
+      runMacos || hasGitOwnerChanges || hasMacosNodeTestSupportChanges || hasSkillsWatchChanges,
     runIosBuild,
     runAndroid,
-    runWindows: runWindows || hasGitOwnerChanges,
+    runWindows: runWindows || hasGitOwnerChanges || hasSkillsWatchChanges,
     runSkillsPython,
     runChangedSmoke,
     runControlUiI18n,
@@ -712,6 +754,9 @@ export function writeGitHubOutput(
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
   }
+  const nodeTestDataOnly =
+    changedPaths !== null && changedPaths.length > 0 && changedPaths.every(isNodeTestDataOnlyPath);
+  appendFileSync(outputPath, `node_test_data_only=${nodeTestDataOnly}\n`, "utf8");
   appendFileSync(outputPath, `run_node=${scope.runNode}\n`, "utf8");
   appendFileSync(outputPath, `run_macos=${scope.runMacos}\n`, "utf8");
   appendFileSync(outputPath, `run_macos_node=${scope.runMacosNode}\n`, "utf8");

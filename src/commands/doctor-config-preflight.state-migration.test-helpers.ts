@@ -1,17 +1,23 @@
 import { afterEach, expect, it, vi, type Mock } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ConfigFileSnapshot } from "../config/types.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 
-export function makePreflightConfigSnapshot(config: Record<string, unknown>) {
+export function makePreflightConfigSnapshot(
+  config: Record<string, unknown>,
+): Pick<
+  ConfigFileSnapshot,
+  "exists" | "valid" | "config" | "sourceConfig" | "parsed" | "legacyIssues" | "warnings" | "issues"
+> {
   return {
     exists: true,
     valid: true,
     config,
     sourceConfig: config,
     parsed: config,
-    legacyIssues: [] as Array<{ path: string; message: string }>,
-    warnings: [] as Array<{ path: string; message: string }>,
-    issues: [] as Array<{ path: string; message: string }>,
+    legacyIssues: [],
+    warnings: [],
+    issues: [],
   };
 }
 

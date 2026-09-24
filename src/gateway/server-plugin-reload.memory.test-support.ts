@@ -8,7 +8,7 @@ import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types
 import { createPluginRegistry } from "../plugins/registry.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
@@ -104,7 +104,7 @@ export async function verifyGatewayMemoryReplacement(
   assert(runtime);
   const independent = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
+    runtime: createPluginRuntime(),
     activateGlobalSideEffects: false,
   });
   const otherRecord = createPluginRecord({ id: "other-memory-host" });

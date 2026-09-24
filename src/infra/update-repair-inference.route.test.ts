@@ -20,11 +20,9 @@ vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
   loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
 }));
-vi.mock("../agents/model-auth-availability.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/model-auth-availability.js")>()),
-  createModelAuthAvailabilityResolver: () => ({
-    evaluateModelAuth: () => ({ availability: true }),
-  }),
+vi.mock("../agents/model-auth.js", () => ({
+  hasAvailableAuthForProvider: async () => true,
+  resolveApiKeyForProviderCore: async () => ({ apiKey: "synthetic-credential" }),
 }));
 vi.mock("../system-agent/setup-inference-turn.js", () => ({ runSetupInferenceTurn: probe }));
 

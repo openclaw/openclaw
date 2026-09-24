@@ -152,7 +152,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionAgentId,
     transcriptLifecycle: sessionLock.transcriptLifecycle,
     sessionManager,
-    assertInitialUserTurnReplay: preparedSessionManager.assertInitialUserTurnReplay,
+    prepareInitialUserTurnReplay: preparedSessionManager.prepareInitialUserTurnReplay,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
   const recordCurrentTurnImageFailure = (count: number) => {

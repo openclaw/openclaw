@@ -1,7 +1,6 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
-import { isSyntheticSourceReplyTurn } from "../../auto-reply/reply/source-reply-delivery-mode.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
@@ -50,6 +49,7 @@ import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
+import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
@@ -253,6 +253,7 @@ export async function prepareAgentCommandExecution(
     sessionId,
     sessionKey,
     sessionEntry: sessionEntryRaw,
+    sessionAgentId,
     storePath,
     isNewSession,
     previousSessionId,
@@ -271,9 +272,6 @@ export async function prepareAgentCommandExecution(
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
-  const sessionAgentId =
-    agentIdOverride ??
-    resolveSessionAgentId({ sessionKey: sessionKey ?? explicitSessionKey, config: cfg });
   assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,

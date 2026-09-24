@@ -8,7 +8,6 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
-import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
@@ -26,12 +25,11 @@ import {
   moveSidebarMenuFocus,
   renderSidebarHelpMenu,
 } from "./app-sidebar-agent-menu.ts";
+import { renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
 import { icons } from "./icons.ts";
 import "./sidebar-build-chip.ts";
 import "./viewer-facepile.ts";
 import { syncDropdownItemRadio, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
-
-registerSidebarAttentionEnglish();
 
 type SidebarIdentityMenuParams = {
   position: { x: number; bottom: number; width: number };
@@ -41,7 +39,6 @@ type SidebarIdentityMenuParams = {
   updateAttentionDismissed: boolean;
   profileViewer?: PresenceViewer;
   canRetryConnection: boolean;
-  queuedOutboxCount: number;
   themeMode: ThemeMode;
   triggerWidth: number;
   onTabAway: () => void;
@@ -219,14 +216,11 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       }}
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
-      <button
-        slot="trigger"
-        type="button"
-        tabindex="-1"
-        aria-hidden="true"
-        aria-label=${t("profilePage.identity.menuLabel")}
-        style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-      ></button>
+      ${renderSidebarMenuTrigger(
+        { x: position.x, y: position.bottom },
+        t("profilePage.identity.menuLabel"),
+        "bottom",
+      )}
       <wa-dropdown-item
         class="sidebar-customize-menu__item sidebar-identity-menu__header"
         value="command:profile"
@@ -246,17 +240,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         </span>
       </wa-dropdown-item>
       <div class="sidebar-customize-menu__separator" role="separator"></div>
-      ${
-        params.queuedOutboxCount > 0
-          ? html`<div class="sidebar-identity-menu__outbox">
-                <strong
-                  >${t("connection.queuedCount", { count: String(params.queuedOutboxCount) })}</strong
-                >
-                <p>${t("connection.outboxDescription")}</p>
-              </div>
-              <div class="sidebar-customize-menu__separator" role="separator"></div>`
-          : nothing
-      }
       ${renderIdentityGateways(params.onClose)}
       <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
         <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
@@ -316,7 +299,10 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           }}
         ></openclaw-sidebar-build-chip>
         <span class="sidebar-mode-switch">
-          <openclaw-theme-mode-toggle .mode=${params.themeMode}></openclaw-theme-mode-toggle>
+          <openclaw-theme-mode-toggle
+            .mode=${params.themeMode}
+            .menuItem=${true}
+          ></openclaw-theme-mode-toggle>
         </span>
       </div>
     </wa-dropdown>

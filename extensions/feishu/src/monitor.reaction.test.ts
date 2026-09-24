@@ -933,6 +933,7 @@ describe("Feishu inbound debounce regressions", () => {
     setFeishuRuntime(
       createFeishuMonitorRuntime({
         createInboundDebouncer: <T>(params: { onError?: (err: unknown, items: T[]) => void }) => ({
+          shouldBuffer: () => false,
           enqueue: async (item: T) => {
             enqueueMock(item);
             params.onError?.(new Error("dispatch failed"), [item]);

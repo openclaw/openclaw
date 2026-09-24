@@ -147,6 +147,14 @@ Run `openclaw configure --section gateway` and select **Trusted Proxy**. Enterin
 
 When reconfiguring an existing trusted-proxy setup, the prompt defaults to the existing `allowLoopback` opt-in. Choosing **No** revokes it. If no entered address or range matches a loopback source, the wizard leaves the existing value unchanged. Same-mode reconfiguration also preserves `deviceAutoApprove` verbatim; device enrollment policy is not changed by this prompt. Switching from another auth mode does not restore dormant trusted-proxy opt-ins.
 
+With live configuration reload enabled, changes to `gateway.trustedProxies`,
+`gateway.allowRealIpFallback`, `gateway.auth.allowTailscale`,
+`gateway.auth.identityScopes`, and `gateway.auth.trustedProxy` apply without a
+Gateway restart. Gateway clients reconnect under the new policy. A configuration
+writer receives its accepted result before its connection closes. Pending
+handshakes and HTTP requests cannot retain old policy authority through an
+asynchronous wait; already-admitted work follows its existing completion lifecycle.
+
 ## Per-identity scope grants
 
 Use `gateway.auth.identityScopes` to give selected verified users additional

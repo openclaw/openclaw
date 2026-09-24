@@ -31,6 +31,9 @@ xAI Responses.
     details.
   </Step>
   <Step title="Configure">
+    Open **Settings → Search** in the Control UI to choose a provider, configure
+    its credentials, and test a search. Or use the CLI:
+
     ```bash
     openclaw configure --section web
     ```
@@ -59,6 +62,32 @@ xAI Responses.
 
   </Step>
 </Steps>
+
+## Search settings
+
+**Settings → Search** separates whether search is enabled from whether a provider
+is configured and working. Choose an agent and model to see the effective search
+route: native search, a managed provider, disabled, or unavailable. For an external
+harness, the page identifies that harness and explains that its search capability
+is determined when a turn starts.
+
+- **Automatic** uses supported native search for the model connection, or the
+  managed provider selected by credential auto-detection.
+- Selecting a managed provider makes that provider available through OpenClaw's
+  `web_search`, including for open-weight models. Provider credentials and options
+  reuse the plugin settings, including compatible custom endpoints and SearXNG
+  instance URLs.
+- **Configured** means credential or setup information is present. It does not
+  prove that the provider accepts the credential or is reachable.
+- **Test search** runs a query through the named managed provider and shows
+  results or an error with latency. It uses the provider's normal account limits
+  and billing. A provider test checks that service; it does not prove an external
+  harness used it. Native search runs inside its model or harness; **Test in chat**
+  opens an unsent chat with the displayed agent and model selected. Ask it to
+  search to verify that route.
+
+Provider setup and search testing require Gateway administrator access. Changes
+use the existing configuration owner; there is no separate search credential store.
 
 ## Choosing a provider
 

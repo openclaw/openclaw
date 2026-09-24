@@ -1,8 +1,12 @@
-import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectErrorGraphCandidates,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
+  QuestionDispatchUnsupportedError,
 } from "../../agents/harness/gateway-question-dispatch.js";
 import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -16,11 +20,13 @@ import {
   replyMessageInjectionTargetOperation,
   type ReplyBackendHandle,
   type ReplyBackendMessageInjection,
+  type ReplyBackendQueueMessageMismatch,
   type ReplyBackendQueueMessageOptions,
   type ReplyBackendQueueMessageResult,
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionOptions,
   type ReplyMessageInjectionOutcome,
+  type ReplyMessageInjectionRejectionReason,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
 } from "./reply-run-registry.contracts.js";
@@ -29,22 +35,6 @@ import {
   isReplyRunEvidenceStale,
   replyRunState,
 } from "./reply-run-registry.state.js";
-
-type ReplyBackendQueueMessageMismatch =
-  | "input_visibility_mismatch"
-  | "tool_authority_mismatch"
-  | "image_input_unsupported"
-  | "source_reply_delivery_mode_mismatch"
-  | "reply_expectation_mismatch"
-  | "task_suggestion_delivery_mode_mismatch";
-
-type ReplyMessageInjectionRejectionReason =
-  | "no_active_run"
-  | "not_running"
-  | "stale_run"
-  | "injection_unavailable"
-  | ReplyBackendQueueMessageMismatch
-  | "runtime_rejected";
 
 export function resolveReplyBackendQueueMessageMismatch(
   backend: Pick<
@@ -127,9 +117,8 @@ function resolveReplyBackendMessageInjection(
     };
   }
   if (sourceBound) {
-    throw new QuestionDispatchRefusedError(
-      "Source-bound steering requires a version 2 injection backend.",
-    );
+    createMessageInjectionAuthority(canInject)();
+    return undefined;
   }
   if (backend.messageInjection) {
     const injection = backend.messageInjection;
@@ -253,6 +242,60 @@ export function resolveReplyMessageInjectionRejection(params: {
     : { backend, injection };
 }
 
+function resolveReplyMessageInjectionFailure(
+  error: unknown,
+  params: { assertCurrent?: () => void; accepted: boolean },
+): ReplyMessageInjectionOutcome | undefined {
+  const { assertCurrent, accepted } = params;
+  const candidates = collectErrorGraphCandidates(error, (current) => [current.cause]);
+  const unsupported = candidates.findLast(
+    (candidate) => candidate instanceof QuestionDispatchUnsupportedError,
+  );
+  const unconfirmed = candidates.findLast(
+    (candidate) => candidate instanceof QuestionAnswerUnconfirmedError,
+  );
+  if (unconfirmed) {
+    return { status: "indeterminate", errorMessage: unconfirmed.message };
+  }
+  const refusal = candidates.findLast(
+    (candidate) =>
+      candidate instanceof MessageInjectionAuthorityError ||
+      ((assertCurrent !== undefined || unsupported !== undefined) &&
+        ((candidate instanceof QuestionDispatchRefusedError &&
+          !(candidate instanceof QuestionDispatchUnsupportedError)) ||
+          candidate instanceof SessionPendingInputCustodyError)),
+  );
+  if (unsupported && !refusal && !accepted) {
+    try {
+      assertCurrent?.();
+    } catch (sourceError) {
+      return {
+        status: "failed",
+        error: toErrorObject(sourceError, "Message source authority is no longer current"),
+      };
+    }
+    return { status: "rejected", reason: "injection_unavailable" };
+  }
+  const authorityError = refusal ?? unsupported;
+  if (
+    authorityError instanceof MessageInjectionAuthorityError ||
+    authorityError instanceof QuestionDispatchRefusedError ||
+    authorityError instanceof SessionPendingInputCustodyError
+  ) {
+    // SQL and runtime wrappers retain the original cause. Never turn an owner
+    // refusal into fallback, or downgrade an already reported acceptance.
+    return {
+      status: "failed",
+      error:
+        authorityError instanceof MessageInjectionAuthorityError &&
+        authorityError.cause instanceof Error
+          ? authorityError.cause
+          : authorityError,
+    };
+  }
+  return undefined;
+}
+
 export function beginReplyMessageInjectionTarget(
   target: ReplyMessageInjectionTarget,
   text: string,
@@ -292,12 +335,34 @@ export function beginReplyMessageInjectionTarget(
         resolved.reason === "image_input_unsupported")
         ? resolved.cancelPendingUserInput
         : undefined;
+    let outcome: Promise<ReplyMessageInjectionOutcome> = Promise.resolve(immediateRejection);
+    if (cancelPendingImage) {
+      const onCancellationError = (error: unknown): ReplyMessageInjectionOutcome => {
+        const failure = resolveReplyMessageInjectionFailure(error, {
+          assertCurrent,
+          accepted: false,
+        });
+        if (!failure) {
+          throw error;
+        }
+        return failure;
+      };
+      try {
+        outcome = Promise.resolve(cancelPendingImage("image-reply")).then(
+          () => immediateRejection,
+          onCancellationError,
+        );
+      } catch (error) {
+        outcome = Promise.resolve(onCancellationError(error));
+      }
+    }
     return {
       targetRunId: target.runId,
-      acceptance: Promise.resolve(false),
-      outcome: cancelPendingImage
-        ? Promise.resolve(cancelPendingImage("image-reply")).then(() => immediateRejection)
-        : Promise.resolve(immediateRejection),
+      acceptance: outcome.then(
+        (result) => result.status === "indeterminate",
+        () => false,
+      ),
+      outcome,
     };
   }
   const targetRunId = normalizeOptionalString(resolved.backend.runId);
@@ -333,37 +398,12 @@ export function beginReplyMessageInjectionTarget(
     },
   };
   const failed = (error: unknown): ReplyMessageInjectionOutcome => {
-    if (error instanceof QuestionAnswerUnconfirmedError) {
-      settleAcceptance(true);
-      return { status: "indeterminate", errorMessage: error.message };
-    }
-    settleAcceptance(false);
-    const authorityError = collectErrorGraphCandidates(error, (current) => [
-      current.cause,
-    ]).findLast(
-      (candidate) =>
-        candidate instanceof MessageInjectionAuthorityError ||
-        (assertCurrent !== undefined &&
-          (candidate instanceof QuestionDispatchRefusedError ||
-            candidate instanceof SessionPendingInputCustodyError)),
-    );
-    if (
-      authorityError instanceof MessageInjectionAuthorityError ||
-      authorityError instanceof QuestionDispatchRefusedError ||
-      authorityError instanceof SessionPendingInputCustodyError
-    ) {
-      // SQL and runtime wrappers retain the original cause. Never turn an owner
-      // refusal into fallback, or downgrade an already reported acceptance.
-      return {
-        status: "failed",
-        error:
-          authorityError instanceof MessageInjectionAuthorityError &&
-          authorityError.cause instanceof Error
-            ? authorityError.cause
-            : authorityError,
-      };
-    }
-    return { status: "rejected", reason: "runtime_rejected", errorMessage: String(error) };
+    const outcome: ReplyMessageInjectionOutcome = resolveReplyMessageInjectionFailure(error, {
+      assertCurrent,
+      accepted: acceptanceSettled,
+    }) ?? { status: "rejected", reason: "runtime_rejected", errorMessage: String(error) };
+    settleAcceptance(outcome.status === "indeterminate");
+    return outcome;
   };
   let queued: Promise<void | ReplyBackendQueueMessageResult>;
   try {

@@ -33,8 +33,6 @@ import {
 import {
   assertStateDatabaseSourceReadContext,
   hasStateDatabaseSourceExclusion,
-  prepareStateDatabaseCanonicalMutation,
-  prepareStateDatabaseMutationSnapshot,
 } from "./state-database-coordinator.js";
 
 // Keep parent launch orchestration out of the native snapshot child's import graph.
@@ -45,17 +43,6 @@ export async function prepareSqliteReadOnlyLocation(
   const signal = resolveSqliteInspectionSignal(options.signal);
   try {
     signal?.throwIfAborted();
-    const ownedSnapshot = prepareStateDatabaseMutationSnapshot(pathname, signal);
-    if (ownedSnapshot) {
-      const prepared = await ownedSnapshot;
-      try {
-        signal?.throwIfAborted();
-        return prepared;
-      } catch (error) {
-        await prepared.cleanupAsync();
-        throw error;
-      }
-    }
     if (hasStateDatabaseSourceExclusion(pathname)) {
       const prepared = options.preserveSourceArtifacts
         ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
@@ -88,10 +75,7 @@ export function prepareSqliteReadOnlyLocationAsync(
   pathname: string,
   options: { preserveSourceArtifacts?: boolean; signal?: AbortSignal } = {},
 ): Promise<AsyncPreparedSqliteReadOnlyLocation> {
-  if (
-    prepareStateDatabaseCanonicalMutation(pathname) ||
-    hasStateDatabaseSourceExclusion(pathname)
-  ) {
+  if (hasStateDatabaseSourceExclusion(pathname)) {
     throw new Error("SQLite source requires its existing snapshot owner");
   }
   return prepareWorkerSnapshot(
@@ -159,21 +143,13 @@ function prepareWorkerSnapshot(
 
 export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
-  options: { fallbackToOnlineBackupUnderLoad?: boolean } = {},
 ): PreparedSqliteReadOnlyLocation {
   if (hasStateDatabaseSourceExclusion(pathname)) {
     return prepareSqliteReadOnlyLocationSyncInProcess(pathname);
   }
   const stagingRoot = createSqliteSnapshotStagingDirectorySync();
   try {
-    return adoptPreparedLocation(
-      runSqliteReadOnlyWorkerSync(
-        pathname,
-        stagingRoot,
-        options.fallbackToOnlineBackupUnderLoad ? "sync-fallback" : "sync",
-      ),
-      stagingRoot,
-    );
+    return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname, stagingRoot), stagingRoot);
   } catch (error) {
     if (!removeTempDirectory(stagingRoot)) {
       throw new SqliteSnapshotCleanupError(

@@ -34,7 +34,15 @@ function readback(fault: string, deferVisibility = true, route = "npm-oidc") {
   writeFileSync(summary, "");
   writeFileSync(
     preload,
-    `const packument = ${JSON.stringify(packument)};
+    `// Only explicit retry waits advance the mocked registry's clock.
+let now = Date.now();
+Date.now = () => now;
+const delay = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => {
+  now += ms;
+  return delay(fn, 0, ...args);
+};
+const packument = ${JSON.stringify(packument)};
 const fault = ${JSON.stringify(fault)};
 const bytes = Buffer.from(${JSON.stringify(bytes.toString())});
 if (fault === "missing-version") packument.versions = {};

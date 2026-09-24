@@ -4,15 +4,11 @@ import {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "../../packages/gateway-client/src/session-projection.js";
-import { agentSessionKeysMatchByRequestKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { parseAgentSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { extractTextFromMessage } from "./tui-formatters.js";
 import { extractTuiImageSources, type TuiImageSource } from "./tui-images.js";
 import type { SessionMessageEvent, TuiStateAccess } from "./tui-types.js";
 
-type TuiSessionEvent = {
-  sessionKey?: string;
-  agentId?: string;
-};
 type OwnedTuiEvent = { sessionKey?: string | null; agentId?: string | null };
 
 /** Reads the durable user identity without mistaking another run's prompt for this one. */
@@ -59,40 +55,34 @@ export function readTuiSessionUserMessage(event: SessionMessageEvent): {
 /** Preserves opaque peer IDs while guarding canonical, global, and alias ownership. */
 export function matchesSelectedTuiSession(
   state: TuiStateAccess,
-  event: TuiSessionEvent,
+  event: OwnedTuiEvent,
   options?: { requireAliasOwnership?: boolean },
 ): boolean {
-  const eventSessionKey = event.sessionKey?.trim();
-  if (!agentSessionKeysMatchByRequestKey(eventSessionKey, state.currentSessionKey)) {
-    return false;
-  }
-
-  const parsedEvent = parseAgentSessionKey(eventSessionKey);
-  const parsedSelection = parseAgentSessionKey(state.currentSessionKey);
-  if (parsedEvent && parsedSelection && parsedEvent.agentId !== parsedSelection.agentId) {
-    return false;
-  }
-
-  const selectedAgentId = normalizeLowercaseStringOrEmpty(state.currentAgentId);
-  const eventAgentId = normalizeLowercaseStringOrEmpty(event.agentId);
-  const defaultAgentId = normalizeLowercaseStringOrEmpty(state.agentDefaultId);
-  const isGlobalSession = normalizeLowercaseStringOrEmpty(eventSessionKey) === "global";
-  const requiresExplicitOwner =
-    isGlobalSession || (options?.requireAliasOwnership === true && !parsedEvent);
-
-  if (!requiresExplicitOwner) {
-    return true;
-  }
-  return eventAgentId ? eventAgentId === selectedAgentId : selectedAgentId === defaultAgentId;
+  const legacyOwner =
+    normalizeLowercaseStringOrEmpty(event.sessionKey) === "global" || options?.requireAliasOwnership
+      ? state.agentDefaultId
+      : state.currentAgentId;
+  return matchesOwnedTuiSession(state.currentSessionKey, state.currentAgentId, event, legacyOwner);
 }
 
-/** Requires explicit ownership for aliases before presenting actionable session prompts. */
-export function matchesOwnedTuiSession(session: string, agentId: string, event: OwnedTuiEvent) {
+/** Compare qualified identities without accepting contradictory owner claims. */
+export function matchesOwnedTuiSession(
+  session: string,
+  agentId: string,
+  event: OwnedTuiEvent,
+  legacyOwnerAgentId?: string,
+) {
   const owner = normalizeLowercaseStringOrEmpty(event.agentId);
   const selected = normalizeLowercaseStringOrEmpty(agentId);
+  const eventOwner =
+    parseAgentSessionKey(event.sessionKey)?.agentId ||
+    owner ||
+    normalizeLowercaseStringOrEmpty(legacyOwnerAgentId);
   return (
-    agentSessionKeysMatchByRequestKey(event.sessionKey, session) &&
-    (parseAgentSessionKey(event.sessionKey)?.agentId || owner) === selected &&
-    (!owner || owner === selected)
+    eventOwner === selected &&
+    (!owner || owner === selected) &&
+    Boolean(event.sessionKey?.trim() && session.trim()) &&
+    toAgentStoreSessionKey({ requestKey: event.sessionKey, agentId: selected }) ===
+      toAgentStoreSessionKey({ requestKey: session, agentId: selected })
   );
 }

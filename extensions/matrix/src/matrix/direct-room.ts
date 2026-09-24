@@ -49,15 +49,7 @@ export async function hasDirectMatrixMemberFlag(
   }
   try {
     const state = await client.getRoomStateEvent(roomId, "m.room.member", normalizedUserId);
-    // Return true if is_direct is explicitly true, false if explicitly false, null if absent
-    if (state?.is_direct === true) {
-      return true;
-    }
-    if (state?.is_direct === false) {
-      return false;
-    }
-    // is_direct field is absent from the membership event
-    return null;
+    return typeof state?.is_direct === "boolean" ? state.is_direct : null;
   } catch {
     // API/network error - treat as unavailable
     return null;

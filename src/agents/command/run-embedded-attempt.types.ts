@@ -1,7 +1,7 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { prepareAgentCommandExecutionIdentity } from "../agent-command-execution-identity.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import type { EmbeddedModelSelection } from "./model-selection.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";

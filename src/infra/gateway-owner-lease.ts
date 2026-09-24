@@ -201,6 +201,7 @@ export function acquireGatewayOwnerLease(params: {
         existingOnly: true,
         identity,
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
+        acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
         heartbeatMs: 30_000,
         ...(processOwner.startedAt === null

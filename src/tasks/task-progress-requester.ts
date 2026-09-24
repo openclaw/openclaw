@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AcceptedSessionSpawn } from "../agents/accepted-session-spawn.js";
+import type { SubagentAnnounceDeliveryResult } from "../agents/subagents/announce/subagent-announce-dispatch.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
@@ -16,10 +17,11 @@ import {
   readTaskBackingInstance,
   type TaskBackingRead,
 } from "./task-backing-authority.js";
-import { resolveTaskDeliveryOwner } from "./task-registry-delivery.js";
+import { resolveTaskDeliveryOwner } from "./task-notification-routing.js";
 import {
   MAX_PROGRESS_BATCH_MEMBERS,
   scheduleYieldedSubagentRunProgress,
+  completeTaskProgressBatch,
   flushTaskProgressBatch,
   getTaskProgressBatchesForRuns,
   recordRequesterTaskProgress,
@@ -55,15 +57,15 @@ function logProgressFailure(error: unknown): void {
 }
 
 /** Observe the admitted requester turn without changing its delivery outcome. */
-export async function withTaskProgressRequesterContinuation<T>(
+export async function withTaskProgressRequesterContinuation(
   params: {
     entries: readonly SubagentRunRecord[];
     runId: string;
     requesterSessionId: string;
     isCurrent: () => boolean;
   },
-  run: () => Promise<T>,
-): Promise<T> {
+  run: () => Promise<SubagentAnnounceDeliveryResult>,
+): Promise<SubagentAnnounceDeliveryResult> {
   let batches: Array<{ key: string; batch: TaskProgressBatch }>;
   try {
     batches = await getTaskProgressBatchesForRuns(params.entries);
@@ -142,8 +144,11 @@ export async function withTaskProgressRequesterContinuation<T>(
   } catch (error) {
     logProgressFailure(error);
   }
+  let finalDelivered = false;
   try {
-    return await run();
+    const result = await run();
+    finalDelivered = result.delivered && result.requesterVisibleFinalDelivered === true;
+    return result;
   } finally {
     unsubscribe?.();
     await Promise.all(
@@ -152,7 +157,9 @@ export async function withTaskProgressRequesterContinuation<T>(
           return;
         }
         try {
-          await flushTaskProgressBatch(key, batch);
+          if (!finalDelivered || !(await completeTaskProgressBatch(key, batch))) {
+            await flushTaskProgressBatch(key, batch);
+          }
         } catch (error) {
           logProgressFailure(error);
         } finally {

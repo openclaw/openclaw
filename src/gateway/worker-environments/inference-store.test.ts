@@ -11,6 +11,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -103,11 +104,12 @@ describe("worker inference SQLite store", () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-inference-store-"));
     nowMs = 1_000;
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    initializeStore();
+    await initializeStore();
   });
 
-  function initializeStore(): void {
-    createWorkerEnvironmentStore({ database, now: () => nowMs }).createIntent({
+  async function initializeStore(): Promise<void> {
+    const environments = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+    await environments.createIntent({
       environmentId: ENVIRONMENT_ID,
       providerId: "fixture-provider",
       profileId: "fixture-profile",
@@ -118,11 +120,13 @@ describe("worker inference SQLite store", () => {
   }
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function reopenStore(): WorkerInferenceStore {
+  async function reopenStore(): Promise<WorkerInferenceStore> {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     return createWorkerInferenceStore({ database, now: () => nowMs });
@@ -156,7 +160,17 @@ describe("worker inference SQLite store", () => {
       store: managerStore,
     });
     const { frames, sink } = createSink();
-    const result = manager.start({ identity: IDENTITY, request: REQUEST, sink });
+    const result = manager.start({
+      identity: IDENTITY,
+      sessionTarget: {
+        agentId: "main",
+        sessionId: REQUEST.sessionId,
+        sessionKey: "agent:main:inference-store",
+        storePath: path.join(root, "sessions.sqlite"),
+      },
+      request: REQUEST,
+      sink,
+    });
     if (!result.ok) {
       throw new Error(`start failed: ${result.reason}`);
     }
@@ -185,13 +199,13 @@ describe("worker inference SQLite store", () => {
     expect(store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
     store.complete({ ...BASE_INPUT, outcome: PROVIDER_ERROR });
 
-    const manager = expectReplayWithoutExecution(reopenStore());
+    const manager = expectReplayWithoutExecution(await reopenStore());
     await manager.stop();
   });
 
   it("recovers a crashed pending turn as provider-error without executing the provider", async () => {
     expect(store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
-    const reopened = reopenStore();
+    const reopened = await reopenStore();
     expect(reopened.begin(BASE_INPUT)).toEqual({ kind: "recover" });
 
     const manager = expectReplayWithoutExecution(reopened);
@@ -238,8 +252,9 @@ describe("worker inference SQLite store", () => {
 
   it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
     "prunes %s terminal turns by UTF-8 maxBytes and retains exact replay",
-    (encoding) => {
+    async (encoding) => {
       if (encoding !== "UTF-8") {
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         const databasePath = path.join(root, "encoded.sqlite");
         const seed = new DatabaseSync(databasePath);
@@ -248,7 +263,7 @@ describe("worker inference SQLite store", () => {
         );
         seed.close();
         database = openOpenClawStateDatabase({ path: databasePath });
-        initializeStore();
+        await initializeStore();
       }
       expect(database.db.prepare("PRAGMA encoding").get()?.encoding).toBe(encoding);
       const outcome: WorkerInferenceTerminalOutcome = {

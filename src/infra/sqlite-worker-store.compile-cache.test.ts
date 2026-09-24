@@ -1,43 +1,36 @@
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { mockNodeBuiltinModule } from "../plugin-sdk/test-helpers/node-builtin-mocks.js";
-import { openSqliteWorkerStore } from "./sqlite-worker-store.js";
-
-const { getCompileCacheDir } = vi.hoisted(() => ({
-  getCompileCacheDir: vi.fn<() => string | undefined>(),
-}));
-// Cache enablement cannot be reversed in Vitest; the worker observes Node's real API.
-vi.mock("node:module", async (importOriginal) =>
-  mockNodeBuiltinModule(() => importOriginal<typeof import("node:module")>(), {
-    getCompileCacheDir,
-  }),
-);
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { sqliteWorkerStoreCompileCacheParentEntrypoint } from "./sqlite-worker-store.compile-cache-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllEnvs());
 
-describe.skipIf(Boolean(process.versions.bun))("SQLite store worker compile cache", () => {
+// Each case owns a fresh native cache lifetime. Mocking the parent getter hides
+// the base-versus-leaf contract that this actual SQLite worker boundary must keep.
+describe("SQLite store worker compile cache", () => {
   it.each([
-    { label: "active programmatic cache", active: true, cache: undefined, disable: undefined },
-    { label: "explicit cache", active: true, cache: "explicit", disable: undefined },
-    { label: "empty explicit cache", active: true, cache: "", disable: undefined },
-    { label: "disabled cache", active: true, cache: undefined, disable: "1" },
-    { label: "empty disable policy", active: true, cache: undefined, disable: "" },
-    { label: "disabled explicit cache", active: true, cache: "explicit", disable: "1" },
-    { label: "unavailable cache", active: false, cache: undefined, disable: undefined },
-  ] as const)("preserves $label through worker retirement", async ({ active, cache, disable }) => {
+    { label: "owned programmatic cache", owner: "openclaw", cache: undefined, disable: undefined },
+    { label: "explicit cache", owner: "openclaw", cache: "explicit", disable: undefined },
+    { label: "empty explicit cache", owner: "openclaw", cache: "", disable: undefined },
+    { label: "disabled cache", owner: "openclaw", cache: undefined, disable: "1" },
+    { label: "zero disable policy", owner: "openclaw", cache: undefined, disable: "0" },
+    { label: "empty disable policy", owner: "openclaw", cache: undefined, disable: "" },
+    { label: "disabled explicit cache", owner: "openclaw", cache: "explicit", disable: "1" },
+    { label: "unavailable cache", owner: "none", cache: undefined, disable: undefined },
+    {
+      label: "foreign ALREADY_ENABLED cache",
+      owner: "foreign",
+      cache: undefined,
+      disable: undefined,
+    },
+    { label: "failed enable", owner: "failed", cache: undefined, disable: undefined },
+    { label: "source checkout", owner: "source", cache: undefined, disable: undefined },
+  ] as const)("preserves $label through worker retirement", async (testCase) => {
     const root = tempDirs.make("openclaw-sqlite-store-cache-");
-    const activeDirectory = path.join(root, "active");
-    const explicitDirectory = path.join(root, "explicit");
-    fs.mkdirSync(activeDirectory);
-    fs.mkdirSync(explicitDirectory);
-    const inheritedCache = cache === "explicit" ? explicitDirectory : cache;
-    vi.stubEnv("NODE_COMPILE_CACHE", inheritedCache);
-    vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", disable);
-    getCompileCacheDir.mockReturnValue(active ? activeDirectory : undefined);
     const modulePath = path.join(root, "backend.mjs");
     fs.writeFileSync(
       modulePath,
@@ -45,44 +38,50 @@ describe.skipIf(Boolean(process.versions.bun))("SQLite store worker compile cach
        import { DatabaseSync } from "node:sqlite";
        export function createSqliteWorkerBackend(_input, context) {
          const database = new DatabaseSync(context.databasePath);
+         database.exec("CREATE TABLE IF NOT EXISTS entries (value INTEGER)");
          return {
-           execute() { return getCompileCacheDir(); },
+           execute() {
+             database.prepare("INSERT INTO entries (value) VALUES (?)").run(7);
+             return {
+               directory: getCompileCacheDir() ?? null,
+               cache: process.env.NODE_COMPILE_CACHE ?? null,
+               disable: process.env.NODE_DISABLE_COMPILE_CACHE ?? null,
+               count: database.prepare("SELECT COUNT(*) AS count FROM entries").get().count,
+             };
+           },
            close() { database.close(); }
          };
        }`,
     );
-    const store = await openSqliteWorkerStore<{
-      directory: { input: undefined; output: string | undefined };
-    }>({
-      moduleUrl: pathToFileURL(modulePath),
-      databasePath: path.join(root, "store.sqlite"),
-      input: undefined,
-    });
-    const expectedDirectory =
-      disable === undefined
-        ? cache === "explicit"
-          ? explicitDirectory
-          : active && cache === undefined
-            ? activeDirectory
-            : undefined
-        : undefined;
-    try {
-      const directory = await store.execute({ type: "directory", input: undefined });
-      if (expectedDirectory) {
-        expect(directory?.startsWith(expectedDirectory + path.sep)).toBe(true);
-      } else {
-        expect(directory).toBeUndefined();
-      }
-    } finally {
-      await store.close();
-    }
-    const hasCacheFiles = (directory: string) =>
-      fs
-        .readdirSync(directory, { recursive: true, withFileTypes: true })
-        .some((entry) => entry.isFile());
-    expect(hasCacheFiles(activeDirectory)).toBe(expectedDirectory === activeDirectory);
-    expect(hasCacheFiles(explicitDirectory)).toBe(expectedDirectory === explicitDirectory);
-    expect(process.env.NODE_COMPILE_CACHE).toBe(inheritedCache);
-    expect(process.env.NODE_DISABLE_COMPILE_CACHE).toBe(disable);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+    };
+    delete env.NODE_COMPILE_CACHE;
+    delete env.NODE_DISABLE_COMPILE_CACHE;
+    delete env.NODE_OPTIONS;
+    const result = await runNodeScript(
+      [
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(sqliteWorkerStoreCompileCacheParentEntrypoint),
+          resolveTestNodeExecPath(),
+        ),
+        root,
+        testCase.owner,
+        testCase.cache ?? "unset",
+        testCase.disable ?? "unset",
+      ],
+      env,
+      10_000,
+      {
+        requireProcessTreeExit: process.platform !== "win32",
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const observed = JSON.parse(result.stdout);
+    expect(observed.closed).toBe(2);
+    expect(observed.directories).toHaveLength(2);
   });
 });

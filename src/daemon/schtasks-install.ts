@@ -6,6 +6,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import {
+  readScheduledTaskDefinition,
   restartRegisteredScheduledTask,
   runScheduledTaskOrThrow,
   type ScheduledTaskActivation,
@@ -47,6 +48,7 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceEnv,
@@ -184,101 +186,6 @@ type ScheduledTaskInstallRecovery = {
   onActivation?: () => void;
 };
 
-async function updateExistingScheduledTask(
-  params: {
-    env: GatewayServiceEnv;
-    stdout: NodeJS.WritableStream;
-    warn?: GatewayServiceInstallArgs["warn"];
-    taskName: string;
-    quotedLaunchPath: string;
-    scriptPath: string;
-    taskLaunchPath: string;
-    description?: string;
-    definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
-  } & ScheduledTaskInstallRecovery,
-): Promise<ScheduledTaskActivation | null> {
-  if (!(params.registration?.registered ?? (await isRegisteredScheduledTask(params.env)))) {
-    return null;
-  }
-  if (!params.definitionTransaction) {
-    // Ordinary installs retain their existing /Change failure and Startup fallback contract.
-    assertGatewayServiceUpdateCurrent();
-    const change = await execSchtasks([
-      "/Change",
-      "/TN",
-      params.taskName,
-      "/TR",
-      params.quotedLaunchPath,
-    ]);
-    if (change.code === 124) {
-      params.registration?.retainRecovery();
-      throw new Error("Scheduled Task registration change did not confirm completion.");
-    }
-    if (change.code !== 0) {
-      return null;
-    }
-  }
-  // Re-apply the full XML so older tasks inherit both false battery flags (#59299).
-  // Transactional repair must compensate; ordinary installs keep best-effort activation.
-  const expectedXml = buildScheduledTaskXml({
-    taskDescription: params.description ?? "OpenClaw Gateway",
-    taskUser: resolveTaskUser(params.env),
-    launchPath: params.taskLaunchPath,
-  });
-  const upgradeXmlPath = await writeTaskXmlTempFile(expectedXml);
-  try {
-    await params.definitionTransaction?.taskPrepared(expectedXml);
-    params.definitionTransaction?.assertCurrent();
-    assertGatewayServiceUpdateCurrent();
-    const upgraded = await execSchtasks([
-      "/Create",
-      "/F",
-      "/TN",
-      params.taskName,
-      "/XML",
-      upgradeXmlPath,
-    ]);
-    if (upgraded.code === 124) {
-      params.registration?.retainRecovery();
-      throw new Error("Scheduled Task registration did not confirm completion.");
-    }
-    if (upgraded.code !== 0) {
-      const detail = (upgraded.stderr || upgraded.stdout).trim() || "unknown error";
-      const message = `Scheduled Task definition upgrade failed: ${detail}`;
-      if (params.definitionTransaction) {
-        throw new Error(message);
-      }
-      params.warn?.(
-        `Scheduled Task ${params.taskName} launch command was refreshed, but XML settings (including battery settings) were not: ${detail}. Inspect Task Scheduler and retry the service installation to refresh those settings.`,
-      );
-    } else {
-      await params.definitionTransaction?.taskWritten(expectedXml);
-    }
-  } finally {
-    await fs.rm(path.dirname(upgradeXmlPath), { recursive: true, force: true }).catch(() => {});
-  }
-  await params.registration?.recordRegistration();
-  await params.definitionTransaction?.beforeWrite();
-  assertGatewayServiceUpdateCurrent();
-  params.onActivation?.();
-  const activation = await runScheduledTaskOrThrow({
-    taskName: params.taskName,
-    env: params.env,
-    scriptPath: params.scriptPath,
-    assertCurrent: params.definitionTransaction?.assertCurrent,
-    allowFallback: params.definitionTransaction ? false : undefined,
-  });
-  writeFormattedLines(
-    params.stdout,
-    [
-      { label: "Updated Scheduled Task", value: params.taskName },
-      { label: "Task script", value: params.scriptPath },
-    ],
-    { leadingBlankLine: true },
-  );
-  return activation;
-}
-
 async function activateScheduledTask(
   params: {
     env: GatewayServiceEnv;
@@ -293,23 +200,33 @@ async function activateScheduledTask(
   const taskDescription = params.description ?? "OpenClaw Gateway";
   const taskName = resolveTaskName(params.env);
   const quotedLaunchPath = quoteSchtasksArg(params.taskLaunchPath);
-  const existingActivation = await updateExistingScheduledTask({
-    ...params,
-    taskName,
-    quotedLaunchPath,
-  });
-  if (existingActivation) {
-    return existingActivation;
-  }
-
-  const taskUser = resolveTaskUser(params.env);
-  // Use `schtasks /Create /XML` so the task carries explicit battery settings.
-  // The CLI flag form cannot set these and kills the Gateway when a laptop unplugs (#59299).
-  const expectedXml = buildScheduledTaskXml({
+  let expectedXml = buildScheduledTaskXml({
     taskDescription,
-    taskUser,
+    taskUser: resolveTaskUser(params.env),
     launchPath: params.taskLaunchPath,
   });
+  if (params.definitionTransaction?.preservePolicy?.length) {
+    expectedXml = preserveServicePolicyXml(
+      expectedXml,
+      await readScheduledTaskDefinition(params.env),
+      params.definitionTransaction.preservePolicy,
+      "Task",
+    );
+  }
+  let updating = params.registration?.registered ?? (await isRegisteredScheduledTask(params.env));
+  if (updating && !params.definitionTransaction) {
+    // Ordinary installs retain their existing /Change failure and Startup fallback contract.
+    assertGatewayServiceUpdateCurrent();
+    const change = await execSchtasks(["/Change", "/TN", taskName, "/TR", quotedLaunchPath]);
+    if (change.code === 124) {
+      params.registration?.retainRecovery();
+      throw new Error("Scheduled Task registration change did not confirm completion.");
+    }
+    updating = change.code === 0;
+  }
+
+  // Re-apply the full XML so existing tasks inherit both false battery flags (#59299).
+  // The CLI flag form cannot set these and kills the Gateway when a laptop unplugs (#59299).
   const xmlPath = await writeTaskXmlTempFile(expectedXml);
   let create: Awaited<ReturnType<typeof execSchtasks>>;
   try {
@@ -320,17 +237,26 @@ async function activateScheduledTask(
     params.definitionTransaction?.assertCurrent();
     assertGatewayServiceUpdateCurrent();
     create = await execSchtasks(xmlArgs);
-    if (create.code === 0) {
+    if (create.code === 124) {
+      params.registration?.retainRecovery();
+      throw new Error("Scheduled Task registration did not confirm completion.");
+    }
+    if (create.code !== 0 && updating) {
+      const detail = (create.stderr || create.stdout).trim() || "unknown error";
+      // Transactional repair must compensate; ordinary installs keep best-effort activation.
+      if (params.definitionTransaction) {
+        throw new Error(`Scheduled Task definition upgrade failed: ${detail}`);
+      }
+      params.warn?.(
+        `Scheduled Task ${taskName} launch command was refreshed, but XML settings (including battery settings) were not: ${detail}. Inspect Task Scheduler and retry the service installation to refresh those settings.`,
+      );
+    } else if (create.code === 0) {
       await params.definitionTransaction?.taskWritten(expectedXml);
     }
   } finally {
     await fs.rm(path.dirname(xmlPath), { recursive: true, force: true }).catch(() => {});
   }
-  if (create.code !== 0) {
-    if (create.code === 124) {
-      params.registration?.retainRecovery();
-      throw new Error("Scheduled Task registration did not confirm completion.");
-    }
+  if (create.code !== 0 && !updating) {
     const detail = create.stderr || create.stdout;
     if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
       if (isUpdateOwnedGatewayServiceCommand() || params.definitionTransaction) {
@@ -391,7 +317,7 @@ async function activateScheduledTask(
   writeFormattedLines(
     params.stdout,
     [
-      { label: "Installed Scheduled Task", value: taskName },
+      { label: updating ? "Updated Scheduled Task" : "Installed Scheduled Task", value: taskName },
       { label: "Task script", value: params.scriptPath },
     ],
     { leadingBlankLine: true },
@@ -402,9 +328,6 @@ async function activateScheduledTask(
 export async function installScheduledTask(
   args: GatewayServiceInstallArgs,
 ): Promise<{ scriptPath: string }> {
-  if (args.beforeLoad) {
-    throw new Error("Deferred native service load is not supported on this platform.");
-  }
   let restoreTask: Awaited<ReturnType<typeof backupScheduledTaskDefinition>> | undefined;
   let staged: Awaited<ReturnType<typeof writeScheduledTaskScript>> | undefined;
   const warn = args.warn ?? ((message: string) => args.stdout.write(`${message}\n`));

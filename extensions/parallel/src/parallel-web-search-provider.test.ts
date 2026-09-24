@@ -107,6 +107,48 @@ beforeEach(() => {
   endpointMockState.responses = [];
 });
 describe.each(["paid", "free"] as const)("Parallel %s cache policy", (transport) => {
+  it("caps returned and cached results when Parallel exceeds the requested count", async () => {
+    const enqueue = transport === "paid" ? enqueueJson : pushMcpHandshake;
+    enqueue({
+      search_id: "parallel-result-cap",
+      session_id: "parallel-cap-session",
+      results: [
+        { url: "https://example.com/first", title: "First", excerpts: ["first"] },
+        { url: "https://example.com/second", title: "Second", excerpts: ["second"] },
+        { url: "https://example.com/third", title: "Third", excerpts: ["third"] },
+      ],
+      warnings: ["provider warning"],
+      usage: [{ count: 1 }],
+    });
+    const tool = transport === "paid" ? paidTool() : freeTool();
+    const args = {
+      search_queries: [`parallel ${transport} result count owner`],
+      session_id: "parallel-cap-session",
+      count: 1,
+    };
+
+    const first = await tool.execute(args);
+    const cached = await tool.execute(args);
+
+    expect(endpointMockState.calls).toHaveLength(transport === "paid" ? 1 : 3);
+    if (transport === "paid") {
+      expect(readBody()).toMatchObject({ advanced_settings: { max_results: 1 } });
+    } else {
+      expect(callArguments()).toMatchObject({ session_id: args.session_id });
+    }
+    expect(first).toMatchObject({
+      provider: transport === "paid" ? "parallel" : "parallel-free",
+      count: 1,
+      searchId: "parallel-result-cap",
+      sessionId: "parallel-cap-session",
+      warnings: ["provider warning"],
+      usage: [{ count: 1 }],
+      results: [{ url: "https://example.com/first" }],
+    });
+    expect(first.results).toHaveLength(1);
+    expect(cached).toEqual({ ...first, cached: true });
+  });
+
   it.each([0, 1])(
     "honors the current %i-minute TTL after populating at 15 minutes",
     async (ttl) => {

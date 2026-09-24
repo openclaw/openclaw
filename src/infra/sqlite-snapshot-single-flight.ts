@@ -26,7 +26,10 @@ async function waitForFlight<T>(
   signal: AbortSignal | undefined,
   withdraw: () => void,
 ): Promise<T> {
-  signal?.throwIfAborted();
+  if (signal?.aborted) {
+    withdraw();
+    signal.throwIfAborted();
+  }
   if (!signal) {
     return promise;
   }

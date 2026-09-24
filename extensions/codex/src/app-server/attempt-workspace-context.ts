@@ -23,9 +23,6 @@ const CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
   "soul.md",
   "user.md",
 ]);
-const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set(
-  CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
-);
 export const CODEX_MEMORY_CONTEXT_BASENAME = "memory.md";
 const CODEX_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
@@ -125,6 +122,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       config: params.params.config,
       sessionKey: params.sessionKey,
       sessionId: params.params.sessionId,
+      bootstrapUserProfileId: params.params.bootstrapUserProfileId,
       chatType: params.params.chatType,
       agentId: params.params.agentId ?? params.sessionAgentId,
       warn: (message) => embeddedAgentLog.warn(message),
@@ -174,7 +172,10 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.resolvedWorkspace)
       : [];
     const turnScopedDeveloperInstructionFiles = injectOpenClawContext
-      ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(contextFiles)
+      ? selectCodexWorkspaceDeveloperInstructionFiles(
+          contextFiles,
+          CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
+        )
       : [];
     return {
       bootstrapFiles,
@@ -266,7 +267,7 @@ function selectCodexWorkspacePromptContextFiles(
       return (
         baseName &&
         !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName) &&
-        !CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName) &&
+        !CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName) &&
         (!excludeMemory ||
           !isCodexWorkspaceRootMemoryContextFile({
             file,
@@ -276,15 +277,6 @@ function selectCodexWorkspacePromptContextFiles(
       );
     })
     .toSorted(compareCodexContextFiles);
-}
-
-function selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(
-  contextFiles: EmbeddedContextFile[],
-): EmbeddedContextFile[] {
-  return selectCodexWorkspaceDeveloperInstructionFiles(
-    contextFiles,
-    CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
-  );
 }
 
 function selectCodexWorkspaceAgentProjectInstructionFiles(
@@ -322,7 +314,10 @@ function renderCodexWorkspaceCollaborationDeveloperInstructions(
     files,
     header: "## OpenClaw Agent Soul",
     preamble:
-      "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
+      "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly." +
+      (files.some((file) => file.personalUser === true)
+        ? " The personal users/<profile-id>/USER.md belongs to this session's selected person (assigned human owner, otherwise human creator). It supplements shared USER.md and overrides conflicting shared preferences, not higher-priority rules. Other participants do not change this personal context."
+        : ""),
     wrapperTag: "AGENT_SOUL",
   });
 }
@@ -404,13 +399,7 @@ async function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   sandboxed?: boolean;
 }): Promise<string | undefined> {
   const memoryRecallInstructions = params.memoryToolRouted
-    ? await renderCodexMemoryRecallInstructions({
-        toolNames: params.toolNames,
-        citationsMode: params.citationsMode,
-        agentId: params.agentId,
-        agentSessionKey: params.agentSessionKey,
-        sandboxed: params.sandboxed,
-      })
+    ? await renderCodexMemoryRecallInstructions(params)
     : undefined;
   const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
     files: params.files,
@@ -488,6 +477,7 @@ function toCodexEmbeddedContextFile(file: CodexBootstrapFile): EmbeddedContextFi
   return {
     path: readNonEmptyString(file.path) ?? readNonEmptyString(file.name) ?? "",
     content: file.content ?? "",
+    ...(file.personalUser === true ? { personalUser: true } : {}),
   };
 }
 
@@ -577,7 +567,8 @@ function compareCodexContextFiles(left: EmbeddedContextFile, right: EmbeddedCont
   if (leftBase !== rightBase) {
     return leftBase.localeCompare(rightBase);
   }
-  return leftPath.localeCompare(rightPath);
+  // Keep USER overlays in loader order: shared defaults precede the current person.
+  return leftBase === "user.md" ? 0 : leftPath.localeCompare(rightPath);
 }
 
 function compareCodexBootstrapFiles(left: CodexBootstrapFile, right: CodexBootstrapFile): number {

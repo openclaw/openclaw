@@ -177,7 +177,13 @@ diagnose a failed check. Recovery guidance reports whether the Gateway is runnin
 or stopped from the latest service observation, even when the new version is running but did
 not pass verification. A restored Gateway must pass its own verification checks
 before the run can finish as `rolled-back`.
-Automatic triage never follows a verified rollback; it runs only when the update
+
+In the Control UI, open **Settings → Updates** and choose **Diagnose update** to
+ask OpenClaw to investigate the recorded failure. Loading the dashboard,
+reconnecting, or receiving an update failure does not start diagnosis. Each
+diagnostic request requires a button press; it does not retry the update.
+
+Automatic CLI triage never follows a verified rollback; it runs only when the update
 ends failed. In an interactive terminal, you can choose **Diagnose update failure**,
 **Report update failure**, or **Exit**, which is selected by default. Reporting
 shows the sanitized preview and requires separate confirmation before issue
@@ -188,13 +194,12 @@ show this menu after rollback.
 If the config file changed after the activation Doctor pass or the databases are
 not schema-neutral, rollback is refused with
 `state-migrated-no-rollback`. For config edits, the next action names the file
-whose changes blocked restoration. The updater attempts
-[bounded unattended repair](/install/updating#unattended-repair-on-your-own-inference)
-on the newly installed version, preserving migrated state. The same repair slot can
-run if rollback itself fails, targeting the previous release if its package was
-already restored. If repair cannot pass verification, the update
-fails with the original reason and recorded repair attempts. Use `openclaw triage`
-or the printed repair command before considering an older version.
+whose changes blocked restoration. The updater preserves the failed outcome and migrated state. Optional
+[post-failure triage](/install/updating#unattended-repair-on-your-own-inference)
+can run after update ownership and service compensation settle, including after
+failed rollback. Use the printed diagnostics and installation-specific repair
+command before considering an older version. Triage does not rewrite that
+failed update as successful.
 Automatic rollback restores code and the captured config, not a full state snapshot.
 The temporary snapshots used to check migrations are removed after
 validation and do not replace your backup.
@@ -276,95 +281,36 @@ The failed update retains its nonzero exit code even if the agent repairs it.
 
 ### Unattended repair on your own inference
 
-The updater enters the optional `repairing` phase when Doctor health checks,
-config validation, plugin resolution, or test startup fails. It repairs the
-staged update and reruns the failed check while the old Gateway keeps serving.
-Only a passing validation allows activation; otherwise the update fails and
-discards the staged update without stopping the service.
-Before activation, repair shares one disposable state/config snapshot for update checks
-across its turns and validation, then independently validates surviving update
-changes before activation. Successful repair can proceed when Doctor migrations
-change the copied config. Activation reruns update-mode Doctor against the
-captured live input, using the normal config writer, backup, and requester checks;
-it never copies temporary validation paths, test Gateway settings, or inference edits into operator config.
-Optional repairs excluded during updates, such as disabling unavailable skills,
-remain excluded. The run ledger and update summary identify changed top-level
-keys and migration messages; the warning log retains the full messages.
-If the writer refuses promotion, `repair-requires-config-change` names the keys
-and the refusal reason. Revoked chat authority remains `requester-revoked`.
-Older versions without guarded Doctor support continue through their normal
-activation Doctor. When update checks change config, the ledger and
-summary list the changed keys and ask you to check those settings after the update,
-because this version cannot verify that they were applied.
-Repairs owned entirely by one internal include file use the existing include
-writer after requester and captured-root checks. The ledger, summary, and warning
-log name the affected keys and report `promotion unavailable for include-owned
-configuration`: the filesystem API does not yet support authority checks at each
-final include-file effect. Guarded authority resumes for later Doctor writes.
-Doctor retains the include values used to prepare each repair and refuses the
-write if those inputs change before publication.
-Mixed-ownership and external-include restrictions remain unchanged.
-Ledger entries and summaries retain their existing diagnostic limits; the warning
-log retains full migration messages.
+Updates, validation, verification, and rollback do not require inference or model
+authentication. An unavailable model route cannot block those operations.
+Validation failures discard the staged candidate while the old Gateway keeps
+serving. After activation, the updater first completes its existing
+compatibility-checked rollback and service-compensation flow.
 
-Git source updates keep the selected source revision. Repair may restore
-dependencies, generated runtime files, or state, but a staged update with changed
-tracked source fails before the Gateway stops; fix the source revision before retrying.
+Eligible failed updates can then start one owned triage repair after their update
+ownership has been released. Triage targets the installation that remains,
+preserves migrated state, and keeps the original failed update's outcome and
+nonzero exit code. Successful repair does not retrospectively publish a successful
+update or verified rollback. Reports from older updaters can still contain a
+`repairing` phase and its attempt summaries.
 
-After activation, the updater can also enter `repairing` when verification fails
-and config edits after the activation Doctor pass or a schema migration prevent rollback, or
-when rollback itself fails. This repair targets the runtime that remains
-installed and preserves migrated state. After each turn, the updater starts or
-restarts a stopped or unhealthy service once, then reruns the service, version,
-and `/readyz` checks. A verified repair of the new version allows the run to succeed. If
-rollback already restored the previous release, successful repair finishes
-`rolled-back` and the command still exits nonzero. Otherwise the original failure
-and repair summary remain in the final report.
-
-During finalization on Windows, the updater restores Scheduled Task autostart
-for activation and suspends it again if final verification fails. This ownership
-survives the fresh-process handoff required after a state migration. See
-[Failed update recovery](/gateway/restart-recovery#recovery-after-a-failed-update).
-
-Repair uses the same embedded loop as `openclaw triage --run`, without a terminal
-or an external coding-agent CLI. It uses the system-agent owner's default model,
-its `model.fallbacks`, then other configured agents' authenticated routes,
-skipping models without tool support and routes without usable authentication.
-It reports unavailable inference instead of waiting for a login or approval
-prompt. Operator-owned updates and explicit repair requests
-replace interactive exec approval with a prompt-free run scoped to the installation
-or staged update root (`fs.workspaceOnly: true`), preserving safe-bin and tool
-allowlists and refusing explicit exec or repair-tool denies with `exec-denied-by-policy`
-and an `openclaw triage` external handoff.
-
-Chat-requested updates recheck the requester's command ownership before repair
-effects and service activation. If configuration or plugin loading fails, the
-update stops and records the load error. Fix that error before retrying; only a
-successful policy check can report that the requester is no longer an owner.
-
-The default limits are three turns, ten minutes total, five minutes per turn,
-and 40 tool calls per turn. The updater supplies a validation check before the
-first turn and after each attempt. Repair stops when validation succeeds, a
-budget is reached, or a turn fails to improve the result; a regression is
-reported as unrepaired. The model's `REPAIR_RESULT` summary does not replace
-these checks.
-
-The agent may diagnose and repair the target install or staged update and
-its OpenClaw state, including running Doctor health checks, `doctor --fix`, and health
-checks. Its repair contract forbids changing credentials or auth stores,
-deleting state or databases, package-manager writes outside the target root,
-and service or Gateway lifecycle commands. The orchestrator retains control of
-activation, restart, and rollback. The repair loop does not take snapshots or undo
-changes. Attempts appear live in the Control UI's phase and step details and in
-`openclaw update status`; the final report includes their summaries. JSON run
-records retain the `repair` attempt list. Repairing stays hidden in the Control
-UI when the run never entered that phase.
+Published 2026.9.4 updaters may invoke the candidate's repair-worker entry before
+the update settles. New candidates retain its response protocol but report
+inference repair unavailable without loading a model or changing operator state.
+The published driver still owns that first update's control flow and budgets.
 
 For an explicit repair using configured inference, run `openclaw triage --run`
-in a terminal on the Gateway host. Interactive triage runs Doctor health checks, attempts
+in a terminal on the Gateway host. Triage runs Doctor health checks, attempts
 up to one embedded repair turn with time and tool-call limits, and runs Doctor
-again. A saved activation or recovery failure additionally requires recorded updater
+again. It uses the normal runtime credential resolver, including inherited
+profiles and OAuth refresh; unavailable inference produces an external handoff
+rather than a login prompt. The repair keeps the existing installation scope and
+tool-policy restrictions.
+
+A saved activation or recovery failure additionally requires recorded updater
 completion and current installation and Gateway verification. An attributed
 Doctor/config blocker can be resolved by fresh Doctor checks and the recorded
-installed identity, while its historical failed run remains unchanged. See [Triage](/cli/triage#installation-target-and-embedded-handoff) for the
-repair contract, installation targeting, and validation results.
+installed identity, while its historical failed run remains unchanged. Native
+service activation and recovery retain their existing authority checks. See
+[Triage](/cli/triage#installation-target-and-embedded-handoff) for installation
+targeting, repair limits, and validation results.

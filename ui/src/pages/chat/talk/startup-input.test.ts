@@ -99,8 +99,12 @@ describe("Realtime Talk microphone preparation", () => {
     async (transport) => {
       vi.useFakeTimers();
       const permission = createDeferred<MediaStream>();
+      const permissionRequested = createDeferred();
       const media = microphone();
-      const getUserMedia = vi.fn(() => permission.promise);
+      const getUserMedia = vi.fn(() => {
+        permissionRequested.resolve();
+        return permission.promise;
+      });
       vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
       const request = vi.fn(async (method: string) => {
         if (method === "talk.client.create" && transport === "gateway-relay") {
@@ -111,6 +115,7 @@ describe("Realtime Talk microphone preparation", () => {
       const session = sessionFor(request, transport);
       const starting = session.start();
       void starting.catch(() => undefined);
+      await permissionRequested.promise;
       await vi.advanceTimersByTimeAsync(65_000);
       expect(request).not.toHaveBeenCalled();
       expect(getUserMedia).toHaveBeenCalledOnce();

@@ -38,7 +38,7 @@ const MENTION_REFRESH_RETRY_MS = 30_000;
 const MENTION_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CACHED_MENTION_QUERIES = 16;
 
-type MentionTarget = { start: number; end: number; query: string };
+type MentionTarget = { start: number; end: number; query: string; value: string };
 type MentionResultSnapshot = {
   result: UsersMentionableResult;
   fetchedAt: number;
@@ -63,8 +63,9 @@ function findMentionTarget(value: string, caret: number): MentionTarget | null {
   ) {
     return null;
   }
-  // Spaces belong to a typed full-name query, but never continue it onto another line.
-  const match = /(?:^|[\s([{])@([\p{L}\p{N}\p{M}_. -]{0,128})$/u.exec(beforeCaret);
+  // Spaces can separate name parts, but a space immediately after @ ends the
+  // invocation so literal at-signs cannot turn the rest of a prompt into a query.
+  const match = /(?:^|[\s([{])@(?! )([\p{L}\p{N}\p{M}_. -]{0,128})$/u.exec(beforeCaret);
   if (!match) {
     return null;
   }
@@ -75,7 +76,7 @@ function findMentionTarget(value: string, caret: number): MentionTarget | null {
   while (end < value.length && /[\p{L}\p{N}\p{M}_.-]/u.test(value[end] ?? "")) {
     end += 1;
   }
-  return { start, end, query };
+  return { start, end, query, value };
 }
 
 /** One bounded suggestion lifecycle shared by existing- and new-session composers. */
@@ -132,22 +133,41 @@ export class HumanMentionMenu {
     this.syncDirectory(undefined);
   }
 
-  update(value: string, caret: number, requestUpdate: () => void, typedAtSign = false) {
+  update(
+    input: Pick<HTMLTextAreaElement, "value" | "selectionStart" | "selectionEnd">,
+    requestUpdate: () => void,
+    intent: "input" | "trigger" | "selection" = "selection",
+  ) {
+    const { value, selectionStart: caret, selectionEnd } = input;
     const target = this.directory ? findMentionTarget(value, caret) : null;
-    if (!target || (!this.open && !typedAtSign)) {
+    // Only typing may extend a full-name query. Moving into untouched prose or
+    // another @ must retire the current invocation, not start a different search.
+    const leftTarget =
+      intent === "selection" &&
+      this.target !== null &&
+      (value !== this.target.value ||
+        target?.start !== this.target.start ||
+        selectionEnd > this.target.end);
+    if (!target || leftTarget || (!this.open && intent !== "trigger")) {
       if (this.open) {
         this.close();
         requestUpdate();
       }
       return;
     }
-    if (this.target?.start === target.start && this.target.query === target.query) {
-      return;
+    const previous = this.target;
+    if (previous?.start === target.start && intent !== "trigger") {
+      // Keep later name parts in the replacement range when navigating or editing
+      // an earlier part. Input shifts that range; selection never changes its extent.
+      target.end = Math.max(target.end, previous.end + value.length - previous.value.length);
     }
-    if (this.target?.start !== target.start) {
+    if (previous?.start !== target.start) {
       this.selectedProfileId = undefined;
     }
     this.target = target;
+    if (previous?.start === target.start && previous.query === target.query) {
+      return;
+    }
     this.searchPeople(requestUpdate);
   }
 
@@ -309,7 +329,11 @@ export class HumanMentionMenu {
   ) {
     const textarea = host.getTextarea();
     const current = textarea?.value ?? host.getDraft();
-    const target = findMentionTarget(current, textarea?.selectionStart ?? current.length);
+    this.update(
+      textarea ?? { value: current, selectionStart: current.length, selectionEnd: current.length },
+      requestUpdate,
+    );
+    const target = this.target;
     if (!target || host.getMentions().length >= MAX_HUMAN_MENTIONS) {
       return;
     }

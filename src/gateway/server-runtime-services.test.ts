@@ -891,7 +891,6 @@ describe("server-runtime-services", () => {
     const applyMaintenance = vi.fn();
     const cron = { start: vi.fn(async () => undefined) };
     const recordPostReadyMemory = vi.fn();
-    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
 
     scheduleGatewayPostReadyMaintenance(
       createPostReadyMaintenanceScheduleParams({
@@ -918,14 +917,9 @@ describe("server-runtime-services", () => {
 
     expect(applyMaintenance).not.toHaveBeenCalled();
     expect(maintenance.startMediaCleanup).not.toHaveBeenCalled();
-    expect(maintenance.stopMediaCleanup).toHaveBeenCalledTimes(1);
+    expect(maintenance.stopPeriodicTasks).toHaveBeenCalledTimes(1);
     expect(cron.start).not.toHaveBeenCalled();
     expect(recordPostReadyMemory).not.toHaveBeenCalled();
-    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.tickInterval);
-    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.healthInterval);
-    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.dedupeCleanup);
-    expect(maintenance.stopMediaCleanup).toHaveBeenCalledTimes(1);
-    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.worktreeCleanup);
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {

@@ -1,5 +1,8 @@
 /** Source-reply visibility and suppression policy for auto-reply delivery. */
-import type { ReplyExpectation } from "../../agents/reply-completion.js";
+import {
+  isSyntheticSourceReplyTurn,
+  type ReplyExpectation,
+} from "../../agents/reply-completion.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
@@ -123,18 +126,6 @@ export function resolveSourceReplyDeliveryMode(params: {
     return "automatic";
   }
   return mode;
-}
-
-/** Returns true when a lifecycle turn must not redefine session-stable reply policy. */
-export function isSyntheticSourceReplyTurn(params: {
-  inputProvenance?: InputProvenance;
-  isHeartbeat?: boolean;
-}): boolean {
-  return (
-    params.isHeartbeat === true ||
-    params.inputProvenance?.kind === "inter_session" ||
-    params.inputProvenance?.kind === "internal_system"
-  );
 }
 
 /** Selects reply requiredness at admission, preserving configured ambient group silence. */

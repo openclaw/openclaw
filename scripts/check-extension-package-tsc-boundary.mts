@@ -83,14 +83,13 @@ type BoundaryStep = {
 type BoundaryCheckParams = { rootDir?: string; processObject?: Pick<EventEmitter, "on" | "off"> };
 const require = createRequire(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
-const tscBin = require.resolve("typescript/bin/tsc");
-const nativePackageJsonPath = require.resolve("typescript-native/package.json");
+const nativePackageJsonPath = require.resolve("typescript/package.json");
 const nativePackageJson = JSON.parse(readFileSync(nativePackageJsonPath, "utf8"));
 const nativeBin = nativePackageJson.bin?.tsc;
 if (typeof nativeBin !== "string") {
-  throw new Error("typescript-native does not declare the tsc binary");
+  throw new Error("typescript does not declare the tsc binary");
 }
-const tsgoBin = resolve(dirname(nativePackageJsonPath), nativeBin);
+const compilerBin = resolve(dirname(nativePackageJsonPath), nativeBin);
 const prepareBoundaryArtifactsArgs = distArtifactEntryArgs(
   resolve(repoRoot, "scripts/prepare-extension-package-boundary-artifacts.mts"),
 );
@@ -549,7 +548,7 @@ async function runCompileCheck(extensionIds: string[]) {
     .map(({ extensionId, config }, index) => {
       const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
       const args = [
-        tsgoBin,
+        compilerBin,
         "-p",
         resolve(repoRoot, config),
         "--noEmit",
@@ -671,7 +670,7 @@ async function runCanaryCheck(extensionIds: string[]) {
 
         const result = await runNodeStepAsync(
           `${extensionId} canary`,
-          [tscBin, "-p", tsconfigPath, "--noEmit"],
+          [compilerBin, "-p", tsconfigPath, "--noEmit"],
           120_000,
         );
         throw new Error(

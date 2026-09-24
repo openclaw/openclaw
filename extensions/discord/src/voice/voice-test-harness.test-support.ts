@@ -1,7 +1,8 @@
 import { PassThrough } from "node:stream";
 import { DAVESession } from "@discordjs/voice";
-import { VoiceOpcodes, type VoiceSendPayload } from "discord-api-types/voice/v8";
+import { VoiceOpcodes } from "discord-api-types/voice/v8";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
@@ -18,6 +19,10 @@ import {
 import { createVoiceReceiveRecoveryState, DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
 import type { VoiceRealtimeSpeakerContext, VoiceSessionEntry } from "./session.js";
 import { createDiscordVoiceTranscriptFixture } from "./transcripts.test-support.js";
+import {
+  installFailingDaveSession,
+  makePoisonedDaveConnections,
+} from "./voice-dave.test-support.js";
 import type { DiscordVoiceReceive } from "./voice-receive.js";
 import { voiceTestMocks } from "./voice-test-mocks.test-support.js";
 
@@ -54,6 +59,9 @@ const {
   isSecretOwnerAvailableMock,
   canonicalizeRealtimeVoiceProviderIdMock,
 } = voiceTestMocks;
+// Load the in-process media owner only after voice-test-mocks has registered
+// SDK/audio mocks. An eager helper import permanently captures the real network SDK.
+const { getDiscordAudioTestWorker } = await import("./audio-worker.test-support.js");
 // Parallel entry points can race Vitest's async audio mock and capture different exports.
 const managerModule = await import("./voice-runtime.js");
 const realtimeModule = await import("./realtime-session.runtime.js");
@@ -483,76 +491,14 @@ function buildVoiceTestHarness() {
     ).toBe(false);
   };
 
+  // Projection-only fault for tests of main-owned rejoin/recording policy.
+  // Native DAVE behavior must use emitWorkerReceiveFailure below.
   const emitDecryptFailure = (manager: InstanceType<typeof managerModule.DiscordVoiceManager>) => {
     const entry = getSessionEntry(manager);
     getVoiceReceive(manager).handleReceiveError(
       entry,
       new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
     );
-  };
-
-  const installFailingDaveSession = (
-    connection: ReturnType<typeof createConnectionMock>,
-    failure: "invalidation" | "native" | "key-package",
-    beforeFailure?: () => void,
-  ) => {
-    const dave = new DAVESession(1, "bot", "1001", { decryptionFailureTolerance: 0 });
-    const nativeSession = {
-      decrypt: vi.fn(() => {
-        throw new Error("UnencryptedWhenPassthroughDisabled");
-      }),
-      getSerializedKeyPackage: vi.fn(() => Buffer.from("new-key-package")),
-      ready: true,
-      reinit: vi.fn(() => {
-        if (failure === "native") {
-          beforeFailure?.();
-          throw new Error("native DAVE reinitialization failed");
-        }
-      }),
-      setPassthroughMode: connection.daveSetPassthroughMode,
-    };
-    dave.session = nativeSession as unknown as NonNullable<typeof dave.session>;
-    dave.lastTransitionId = 0;
-    const gateway = {
-      sendPacket: vi.fn((_packet: VoiceSendPayload) => {
-        if (failure === "invalidation") {
-          beforeFailure?.();
-          throw new Error("voice gateway invalidation failed");
-        }
-      }),
-      sendBinaryMessage: vi.fn((_opcode: VoiceOpcodes, _keyPackage: Buffer) => {
-        if (failure === "key-package") {
-          beforeFailure?.();
-          throw new Error("voice gateway key-package delivery failed");
-        }
-      }),
-    };
-    dave.on("invalidateTransition", (transitionId) => {
-      gateway.sendPacket({
-        op: VoiceOpcodes.DaveMlsInvalidCommitWelcome,
-        d: { transition_id: transitionId },
-      });
-    });
-    dave.on("keyPackage", (keyPackage) => {
-      gateway.sendBinaryMessage(VoiceOpcodes.DaveMlsKeyPackage, keyPackage);
-    });
-    connection.state.networking.state.dave =
-      dave as unknown as typeof connection.state.networking.state.dave;
-    return { dave, gateway };
-  };
-
-  const makePoisonedDaveConnections = (additionalConnections = 0) => {
-    const firstConnection = createConnectionMock();
-    const secondConnection = createConnectionMock();
-    installFailingDaveSession(firstConnection, "native");
-    installFailingDaveSession(secondConnection, "key-package");
-    const connections = [
-      firstConnection,
-      secondConnection,
-      ...Array.from({ length: additionalConnections }, createConnectionMock),
-    ];
-    connections.forEach((connection) => joinVoiceChannelMock.mockReturnValueOnce(connection));
-    return { firstConnection, secondConnection };
   };
 
   const receiveVoiceUtterance = async (
@@ -585,10 +531,63 @@ function buildVoiceTestHarness() {
 
   const getSessionConnection = (entry: VoiceSessionEntry) =>
     expectDefined(
-      joinVoiceChannelMock.mock.results.find(({ value }) => Object.is(value, entry.connection))
-        ?.value,
+      joinVoiceChannelMock.mock.results.find(({ value }) =>
+        Object.is(value, getDiscordAudioTestWorker(entry.audio)["connection"]),
+      )?.value,
       "voice session connection",
     );
+
+  const openWorkerReceiveCapture = async (
+    manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+    guildId = "g1",
+  ) => {
+    const entry = getSessionEntry(manager, guildId);
+    const connection = getSessionConnection(entry);
+    const userId = "u-owner";
+    const source = new PassThrough({ objectMode: true });
+    const subscribed = createDeferred<void>();
+    connection.receiver.subscribe.mockReturnValueOnce(source);
+    // Retain the real worker receive owner. This codec stand-in merely waits
+    // for the SDK source to end; injected decryption fails before codec work.
+    decodeOpusStreamChunksMock.mockImplementationOnce(
+      async (input: import("node:stream").Readable) => {
+        subscribed.resolve();
+        for await (const packet of input) {
+          expect(packet).toHaveLength(0); // No valid audio precedes this fault.
+        }
+      },
+    );
+    const receiving = handleSpeakingStart(manager, entry, userId);
+    await Promise.race([
+      subscribed.promise,
+      receiving.then(() => {
+        throw new Error("Expected an admitted worker-owned receive subscription");
+      }),
+    ]);
+    const captured = expectDefined(entry.capture.get(userId)?.stream, "main capture projection");
+    const errors: Error[] = [];
+    const observeError = (error: Error) => {
+      errors.push(error);
+    };
+    captured.on("error", observeError);
+    const settled = receiving.finally(() => captured.off("error", observeError));
+    return { entry, connection, source, receiving: settled, errors };
+  };
+
+  const emitWorkerReceiveFailure = async (
+    manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+    options: { guildId?: string; error?: Error } = {},
+  ) => {
+    const capture = await openWorkerReceiveCapture(manager, options.guildId);
+    // Capture startup separately re-arms passthrough; measure only fault recovery.
+    capture.connection.daveSetPassthroughMode.mockClear();
+    capture.source.destroy(
+      options.error ??
+        new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
+    );
+    await capture.receiving;
+    return capture.errors;
+  };
 
   const receiveRecordedSpeech = async (
     manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
@@ -711,6 +710,8 @@ function buildVoiceTestHarness() {
     expectUserMessageIncludes,
     expectUserMessageNotIncludes,
     emitDecryptFailure,
+    emitWorkerReceiveFailure,
+    openWorkerReceiveCapture,
     installFailingDaveSession,
     makePoisonedDaveConnections,
     receiveVoiceUtterance,

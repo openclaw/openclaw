@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
-import { isGatewayArgv } from "../infra/gateway-process-argv.js";
+import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortListener } from "../infra/ports-types.js";
 import { tryAcquireGatewayLifecycleCleanupCoordinator } from "../infra/state-database-coordinator.js";
@@ -52,9 +52,7 @@ export function resolveScheduledTaskCommandPort(
 }
 
 export function isNodeHostArgv(programArguments: string[]): boolean {
-  const normalized = programArguments.map((arg) =>
-    normalizeLowercaseStringOrEmpty(arg.replaceAll("\\", "/")),
-  );
+  const normalized = normalizeProgramArguments(programArguments);
   return normalized.some((arg, index) => arg === "node" && normalized[index + 1] === "run");
 }
 
@@ -126,7 +124,7 @@ export function findInstalledGatewayChildPid(
     entries,
     port,
     installedArguments,
-    (argv) => matchesInstalledGatewayChildArguments(argv, installedArguments),
+    (argv) => readWindowsTaskSupervisorRestartExitCode(argv) !== undefined,
     (argv) => argv.slice(0, -1),
   );
   if (supervisedPid) {
@@ -135,9 +133,8 @@ export function findInstalledGatewayChildPid(
   return findInstalledProcessPid(entries, port, installedArguments, () => true);
 }
 
-async function resolveScheduledTaskProcess(
+async function resolveScheduledTaskNodeHostProcess(
   env: GatewayServiceEnv,
-  matchesProcess: (argv: string[]) => boolean,
 ): Promise<{ pid: number; port: number } | null> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
   const installedArguments = command?.programArguments;
@@ -153,14 +150,8 @@ async function resolveScheduledTaskProcess(
     return null;
   }
   // Match full persisted argv so a same-port OpenClaw process cannot impersonate this task.
-  const pid = findInstalledProcessPid(snapshot, port, installedArguments, matchesProcess);
+  const pid = findInstalledProcessPid(snapshot, port, installedArguments, isNodeHostArgv);
   return pid ? { pid, port } : null;
-}
-
-async function resolveScheduledTaskNodeHostProcess(
-  env: GatewayServiceEnv,
-): Promise<{ pid: number; port: number } | null> {
-  return resolveScheduledTaskProcess(env, isNodeHostArgv);
 }
 
 export function shouldManageGatewayListenerPort(env: GatewayServiceEnv): boolean {
@@ -181,16 +172,16 @@ export async function resolveScheduledTaskGatewayContext(env: GatewayServiceEnv)
 export function resolveGatewayListenerPids(listeners: PortListener[]): number[] {
   return Array.from(
     new Set(
-      listeners
-        .filter(
-          (listener) =>
-            typeof listener.pid === "number" &&
-            listener.commandLine &&
-            isGatewayArgv(parseCmdScriptCommandLine(listener.commandLine), {
-              allowGatewayBinary: true,
-            }),
-        )
-        .map((listener) => listener.pid as number),
+      listeners.flatMap((listener) =>
+        typeof listener.pid === "number" &&
+        listener.commandLine &&
+        classifyOpenClawArgv(parseCmdScriptCommandLine(listener.commandLine), {
+          command: "gateway",
+          pid: listener.pid,
+        }).kind === "openclaw"
+          ? [listener.pid]
+          : [],
+      ),
     ),
   );
 }
@@ -347,57 +338,36 @@ async function resolveLegacyScheduledTaskOwnedGatewayPids(
       // A listener can be dual-stack or belong to another task; Windows control requires CIM argv proof.
       return [];
     }
-    // The full-process snapshot can be unavailable (CIM timeout/failure) while
-    // per-PID lookups still work. Verify the actual port listeners against the
-    // persisted argv with the same port + exact-argv proof instead of giving up.
-    const probeHosts =
-      context?.probeHosts ?? (await resolveGatewayServiceProbeHosts({ env, command }));
-    const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
-    if (diagnostics?.status !== "busy") {
-      return [];
-    }
-    const ownedPids = new Set<number>();
-    const supervisorArguments = [...installedArguments, WINDOWS_TASK_SUPERVISOR_FLAG];
-    for (const listener of diagnostics.listeners) {
-      if (typeof listener.pid !== "number") {
-        continue;
-      }
-      // Windows listener command lines are resolved per PID through CIM (WMIC
-      // fallback), the same proof standard as the full-process snapshot.
-      const argv = listener.commandLine
-        ? parseCmdScriptCommandLine(listener.commandLine)
-        : readWindowsProcessArgsSync(listener.pid);
-      if (!argv || parseTcpPortFromArgs(argv) !== port) {
-        continue;
-      }
-      if (
-        matchesInstalledProgramArguments(argv, installedArguments) ||
-        matchesInstalledProgramArguments(argv, supervisorArguments) ||
-        matchesInstalledGatewayChildArguments(argv, installedArguments)
-      ) {
-        ownedPids.add(listener.pid);
-      }
-    }
-    return Array.from(ownedPids);
   }
-  // CIM argv proves Windows ownership without loading Gateway config. Only the
-  // portable listener path needs bind hosts, after a usable command and port exist.
-  const ownedPids = new Set<number>();
+  // If the full CIM snapshot is unavailable, per-PID lookups can still prove
+  // Windows ownership. Both platforms require the same port and persisted argv.
   const probeHosts =
     context?.probeHosts ?? (await resolveGatewayServiceProbeHosts({ env, command }));
   const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
-  if (diagnostics?.status === "busy") {
-    for (const listener of diagnostics.listeners) {
-      if (typeof listener.pid !== "number" || !listener.commandLine) {
-        continue;
-      }
-      const argv = parseCmdScriptCommandLine(listener.commandLine);
-      if (
-        parseTcpPortFromArgs(argv) === port &&
-        matchesInstalledProgramArguments(argv, installedArguments)
-      ) {
-        ownedPids.add(listener.pid);
-      }
+  if (diagnostics?.status !== "busy") {
+    return [];
+  }
+  const ownedPids = new Set<number>();
+  const supervisorArguments = [...installedArguments, WINDOWS_TASK_SUPERVISOR_FLAG];
+  for (const listener of diagnostics.listeners) {
+    if (typeof listener.pid !== "number") {
+      continue;
+    }
+    const argv = listener.commandLine
+      ? parseCmdScriptCommandLine(listener.commandLine)
+      : process.platform === "win32"
+        ? readWindowsProcessArgsSync(listener.pid)
+        : null;
+    if (!argv || parseTcpPortFromArgs(argv) !== port) {
+      continue;
+    }
+    if (
+      matchesInstalledProgramArguments(argv, installedArguments) ||
+      (process.platform === "win32" &&
+        (matchesInstalledProgramArguments(argv, supervisorArguments) ||
+          matchesInstalledGatewayChildArguments(argv, installedArguments)))
+    ) {
+      ownedPids.add(listener.pid);
     }
   }
   return Array.from(ownedPids);
@@ -419,7 +389,7 @@ export async function describeUnverifiedPortListeners(
     const pid = typeof listener.pid === "number" ? listener.pid : null;
     const argv = listener.commandLine ? parseCmdScriptCommandLine(listener.commandLine) : null;
     const identity = argv
-      ? isGatewayArgv(argv, { allowGatewayBinary: true })
+      ? classifyOpenClawArgv(argv, { command: "gateway" }).kind === "openclaw"
         ? "openclaw gateway"
         : "not an openclaw gateway"
       : "argv unavailable";

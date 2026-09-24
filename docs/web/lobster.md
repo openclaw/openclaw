@@ -44,6 +44,12 @@ Settings → Appearance → **Lobster visits**.
 
 The toggle is browser-local and does exactly what it says. Off means never, including the worried disconnect pacing. Your Gateway status dot continues to work regardless; the lobster was never your only source of truth, just the most sympathetic one.
 
+A theme without a mascot hides the resident lobster and visiting lobster strangers while it is active. Ordinary critters can still cross the composer ledge when **Lobster visits** is enabled. Your toggle stays unchanged, and enabled lobster visits return when you switch to a theme with the mascot.
+
+Themes can add occasional penguin or fedora visitors to that ledge traffic. These visitors follow the same visits toggle. A theme can also add occasional decorative hats to agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog; those hats are separate from composer visits.
+
+Plugin themes can bring their own [SVG hats and visitors](/plugins/manifest/surfaces#themes), with visitors following the same visits toggle.
+
 Reduced-motion users get calm, stationary lobsters automatically.
 
 Next to it sits **Lobster sounds**, which is off by default and stays off until you decide otherwise. Turn it on and the lobster becomes very quietly audible when touched. It is a small sound. It is a good sound.

@@ -1,9 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-  createAgentHarnessTaskRuntime,
-  type AgentHarnessTaskRecord,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -18,12 +15,14 @@ import {
   isCodexAppServerLiveThreadClaimed,
 } from "./client-runtime.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import type { NativeSubagentMonitorRuntime } from "./native-subagent-monitor-types.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   childTurnCompletedNotification,
   createClient,
   createRecordedRuntime,
+  createNativeModelSourceFixture,
   createTaskScope,
   nativeHistoryOwner,
   notifyChildStarted,
@@ -171,7 +170,10 @@ it.each([
           return delivery;
         },
       );
-      const runtime = { createAgentHarnessTaskRuntime, deliverAgentHarnessTaskCompletion: deliver };
+      const runtime = {
+        ...defaultNativeSubagentMonitorRuntime,
+        deliverAgentHarnessTaskCompletion: deliver,
+      };
       const initialParent = registerCodexNativeSubagentMonitor({
         client: first.client,
         parentThreadId: initialBinding.threadId,
@@ -459,7 +461,7 @@ it.each([
             client: current.client,
             taskRuntimeScope: resumedScope,
             runtime: {
-              createAgentHarnessTaskRuntime,
+              ...defaultNativeSubagentMonitorRuntime,
               deliverAgentHarnessTaskCompletion: resumedDelivery,
             },
           });
@@ -706,7 +708,12 @@ it.each([
     });
   try {
     initial.bindTurn("initial-turn");
-    await notifyChildStarted(client);
+    await notifyChildStarted(
+      client,
+      "parent-thread",
+      "child-thread",
+      scenario === "during-successor" ? "/root/worker" : "child-thread",
+    );
     await client.notify(turnStartedNotification("turn-a"));
     await client.notify(
       childTurnCompletedNotification({
@@ -728,6 +735,15 @@ it.each([
       ...registration,
       parentThreadId: "rotated-parent",
       historyOwner: observerHistory,
+      ...(scenario === "during-successor"
+        ? {
+            modelSource: createNativeModelSourceFixture(["model-b"]),
+            configurationQualification: {
+              assertCurrent: () => {},
+              hasProvider: (provider: string) => provider === "provider-b",
+            },
+          }
+        : {}),
     });
     observer.bindTurn("observer-turn");
     await collab("rotated-parent", "resumeAgent", "A result");
@@ -748,6 +764,36 @@ it.each([
     await client.notify(turnStartedNotification("turn-b"));
     let secondRecord = structuredClone(records.get(secondRunId)!);
     expect(secondRecord).toMatchObject({ status: "running", runId: secondRunId });
+    if (scenario === "during-successor") {
+      for (const [threadId, provider] of [
+        ["parent-thread", "provider-a"],
+        ["rotated-parent", "provider-b"],
+      ] as const) {
+        const response = threadRead({ childThreadId: threadId, threadStatus: "notLoaded" });
+        response.thread.modelProvider = provider;
+        client.setThreadRead(threadId, response);
+      }
+      const nativeWrite = vi.fn();
+      await expect(
+        codexNativeSubagentMonitorRuntime
+          .prepareModelInput({
+            client: client.client,
+            threadId: "child-thread",
+            turnId: "turn-b",
+            itemId: "original-native-root",
+            target: "/root",
+            readQualification: () => undefined,
+            assertCurrent: () => {},
+          })
+          .then(nativeWrite),
+      ).rejects.toThrow("does not admit this model");
+      expect(client.request).toHaveBeenCalledWith(
+        "thread/read",
+        { threadId: "parent-thread", includeTurns: false },
+        expect.any(Object),
+      );
+      expect(nativeWrite).not.toHaveBeenCalled();
+    }
     let receiptParent = "rotated-parent";
     if (scenario === "old-parent-push") {
       await client.notify(

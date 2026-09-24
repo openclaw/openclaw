@@ -40,7 +40,7 @@ export function prepareProjectedSessionPresentation(
   now = Date.now(),
   projectRun?: ReturnType<typeof createVisibleActiveSessionRunProjector>,
 ) {
-  const { cfg, rowContext } = projection.state;
+  const { cfg, policyConfig, rowContext } = projection.state;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
     projectRun?.({
@@ -55,7 +55,7 @@ export function prepareProjectedSessionPresentation(
     return record ? toProjectedSessionSharingTarget(record) : null;
   };
   const sharing = prepareProjectedSessionSharing({
-    cfg,
+    cfg: policyConfig,
     client: client ?? null,
     isMember: (value, identityId) =>
       projection
@@ -86,7 +86,7 @@ export function prepareProjectedSessionPresentation(
     options: PresentationOptions = {},
   ): GatewaySessionRow | null => {
     const record = projection.describe(
-      { ...captured, storePath: captured.storeTarget.storePath },
+      { agentId: captured.agentId, key: captured.key, storePath: captured.storeTarget.storePath },
       captured,
     );
     if (!record) {
@@ -131,7 +131,7 @@ export function prepareProjectedSessionPresentation(
       );
     }
     if (options.includeActivitySummary === false) {
-      delete row.activitySummary;
+      row.activitySummary = undefined;
     }
     if (client !== undefined) {
       const value = toProjectedSessionSharingTarget(record);

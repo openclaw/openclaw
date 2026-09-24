@@ -19,6 +19,8 @@ type MessageHandlerDepsOptions = {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   getTeamDetails?: ReturnType<typeof vi.fn>;
+  runPrepared?: NonNullable<Parameters<typeof installMSTeamsTestRuntime>[0]>["runPrepared"];
+  resolveStorePath?: () => string;
 };
 
 export function createMessageHandlerDeps(
@@ -56,7 +58,8 @@ export function createMessageHandlerDeps(
     createInboundDebouncer: options.createInboundDebouncer,
     resolveInboundDebounceMs: options.resolveInboundDebounceMs,
     resolveTextChunkLimit: () => 4000,
-    resolveStorePath: () => "/tmp/test-store",
+    resolveStorePath: options.resolveStorePath ?? (() => "/tmp/test-store"),
+    runPrepared: options.runPrepared,
   });
 
   const conversationStore = {

@@ -9,10 +9,12 @@ import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import { hashConfigRaw, parseConfigJson5 } from "./io.read-helpers.js";
-import type { ConfigWriteOptions, NormalizedConfigIoDeps } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
+import type { ConfigWriteOptions } from "./io.types.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { resolveStateDir } from "./paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 /** Pin path lookups without pinning the regular file this write will replace. */
@@ -105,22 +107,6 @@ export function captureConfigFileWritePathProof(
   };
   assertCurrent();
   return { path: filePath, assertCurrent };
-}
-
-/** Keep a refused operation terminal, including when a best-effort I/O catch rechecks it. */
-export function createConfigWriteAuthorityGuard(assertCurrent?: () => void): () => void {
-  let refusal: { error: unknown } | undefined;
-  return () => {
-    if (refusal) {
-      throw refusal.error;
-    }
-    try {
-      assertCurrent?.();
-    } catch (error) {
-      refusal = { error };
-      throw error;
-    }
-  };
 }
 
 type ConfigFileWriteIdentity = Pick<fs.BigIntStats, "dev" | "ino">;

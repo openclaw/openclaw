@@ -1,5 +1,6 @@
 // Synology Chat plugin module implements channel mocks behavior.
 import type { IncomingMessage } from "node:http";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
@@ -207,6 +208,7 @@ vi.mock("./runtime.js", () => ({
         recordInboundSession: vi.fn(async () => undefined),
       },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         run: channelInboundRunMock,
         buildContext: buildChannelInboundEventContextMock,
       },

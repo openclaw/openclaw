@@ -136,6 +136,8 @@ openclaw plugins install npm:@scope/plugin-name@1.0.1
 OpenClaw checks the advertised plugin API / minimum gateway compatibility before install. When the selected ClawHub version publishes a ClawPack artifact, OpenClaw downloads the versioned npm-pack `.tgz`, verifies the ClawHub digest header and the artifact digest, then installs it through the normal archive path. Older ClawHub versions without ClawPack metadata still install through the legacy package archive verification path. Recorded installs keep their ClawHub source metadata, artifact kind, npm integrity, npm shasum, tarball name, and ClawPack digest facts for later updates.
 Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plugins update` can follow newer ClawHub releases; explicit version or tag selectors such as `clawhub:pkg@1.2.3` and `clawhub:pkg@beta` remain pinned to that selector.
 
+When legacy metadata supplies `files[]` without an archive digest, OpenClaw verifies the canonical extracted paths and SHA-256 hashes before installing. Harmless archive spellings such as backslash separators may normalize to those paths; missing, changed, or extra files and named unsupported records still fail verification. Root-only records that create no output are ignored. Server-provided paths and generated `_meta.json` metadata remain strictly validated.
+
 ### Config includes and invalid-config repair
 
 If your `plugins` section, or the `plugins.entries.<id>` entry being changed, is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to the deepest included file that owns the change and leave `openclaw.json` untouched. Root includes (every section of a config whose root object authors `$include`), include arrays, includes with sibling overrides, changes spanning several include files, and an include whose own file still authors a nested `$include` fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
@@ -149,6 +151,13 @@ When the existing host config is valid but the newly installed plugin's own conf
 `--force` confirms a non-ClawHub source without prompting. It does not bypass `security.installPolicy` or remaining install safety checks. When the plugin or hook pack is already installed, it also permits replacing the existing install. Use it after reviewing an arbitrary npm, local, archive, git, or marketplace source, or when intentionally reinstalling the same id. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
 
 Managed npm installs prepare the package and its dependencies in a private staging directory. Integrity and platform-package checks, install policy, and artifact consent finish before the installed directory is replaced. Rejection or cancellation before publication leaves the previous project unchanged. Upgrades retain generation paths that running plugins may still need for later imports.
+
+When a managed npm plugin lacks package metadata or required dependencies, status
+and management report **install incomplete**. The finding and Doctor give
+`openclaw plugins install <package-selector> --force`, using the recorded package
+selector when available. A complete plugin can still require consent for
+capabilities you have not accepted. Add
+`--accept-capabilities` only after reviewing that consent request.
 
 If installation ownership ends during a backup copy, cleanup stops and preserves the complete backup and remaining original files. Failed restoration reports the recovery path. Keep those files until you have checked the current install; an older transaction cannot restore over a newer install or use a substituted backup.
 

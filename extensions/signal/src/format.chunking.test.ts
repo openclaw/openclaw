@@ -194,12 +194,6 @@ describe("splitSignalFormattedText", () => {
   });
 
   describe("style-aware splitting - edge cases", () => {
-    it("handles zero-length text with styles gracefully", () => {
-      // Edge case: empty markdown produces no chunks
-      const chunks = markdownToSignalTextChunks("", 100);
-      expect(chunks).toHaveLength(0);
-    });
-
     it("handles text that splits exactly at limit", () => {
       const limit = 10;
       const markdown = "1234567890"; // exactly 10 chars

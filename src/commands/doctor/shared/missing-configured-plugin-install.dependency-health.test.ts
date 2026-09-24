@@ -36,6 +36,7 @@ describe("configured npm dependency health and repair authority", () => {
   setupPluginInstallSuite();
   it.each([
     "missing",
+    "resolved-spec",
     "empty",
     "symlink-root",
     "ancestor",
@@ -89,6 +90,7 @@ describe("configured npm dependency health and repair authority", () => {
             : scenario === "invalid-spec"
               ? "file:../foreign"
               : `${packageName}@1.0.0`,
+        resolvedSpec: scenario === "resolved-spec" ? `${packageName}@1.2.3` : undefined,
         resolvedName: scenario === "resolved-name-mismatch" ? "another-package" : packageName,
         installPath: rootDir,
       };
@@ -188,6 +190,7 @@ describe("configured npm dependency health and repair authority", () => {
 
       if (
         scenario === "missing" ||
+        scenario === "resolved-spec" ||
         scenario === "empty" ||
         scenario === "symlink-root" ||
         scenario === "ancestor" ||
@@ -198,15 +201,20 @@ describe("configured npm dependency health and repair authority", () => {
             kind: "missing-required-dependencies",
             pluginId,
             installPath: record.installPath,
-            installSpec: record.spec,
+            installSpec: scenario === "resolved-spec" ? "dependency-plugin@1.2.3" : record.spec,
+            installSource: "npm",
             missingRequired: ["required-runtime"],
           },
         ]);
         const issue = expectDefined(issues[0], "dependency health issue");
         expect(configuredPluginInstallIssueToHealthFinding(issue)).toMatchObject({
           target: pluginId,
+          source: "npm",
           message: expect.stringContaining("required-runtime"),
-          fixHint: expect.stringContaining("doctor --fix"),
+          fixHint:
+            scenario === "resolved-spec"
+              ? "Run `openclaw plugins install dependency-plugin@1.2.3 --force` to reinstall the configured plugin package."
+              : "Run `openclaw plugins install dependency-plugin@1.0.0 --force` to reinstall the configured plugin package.",
         });
         expect(configuredPluginInstallIssueToRepairEffect(issue)).toMatchObject({
           kind: "package",

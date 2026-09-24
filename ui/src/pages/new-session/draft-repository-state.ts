@@ -338,7 +338,8 @@ export class DraftRepositoryController {
           this.callbacks.persistPreference({ worktree: false });
         }
       }
-    } else if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser && this.available()) {
+    } else if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser) {
+      // Failed discovery cannot revoke isolation intent; the submit gate checks availability.
       this.worktreeValue = true;
     }
     this.preferredWorktreeRestore = false;

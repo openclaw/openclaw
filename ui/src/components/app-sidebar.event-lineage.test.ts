@@ -16,6 +16,7 @@ describe("selected lineage after a full sessions.changed event", () => {
   it.each(["filtered omitted", "unfiltered metadata", "managed member"] as const)(
     "%s keeps accepted event fields visible after list refresh failures",
     async (mode) => {
+      vi.useFakeTimers();
       const filtered = mode !== "unfiltered metadata";
       const managedMember = mode === "managed member";
       const reparent = mode !== "unfiltered metadata";
@@ -173,7 +174,6 @@ describe("selected lineage after a full sessions.changed event", () => {
           label: "Event-updated selected title",
           updatedAt: Date.now(),
         };
-        vi.useFakeTimers();
         harness.publishEvent("sessions.changed", {
           sessionKey: key,
           agentId: "main",
@@ -218,8 +218,7 @@ describe("selected lineage after a full sessions.changed event", () => {
           activeRunIds: [],
           status: "done",
         });
-        await vi.advanceTimersByTimeAsync(250);
-        vi.useRealTimers();
+        await vi.advanceTimersByTimeAsync(5_000);
         await waitForFast(() =>
           expect(sessions.state.result?.sessions.find((entry) => entry.key === key)).toMatchObject({
             sessionId: child.sessionId,

@@ -234,10 +234,12 @@ suite.define(() => {
             `chat:v3:${storedChatOutboxScopeKey({ agentId: "main", sessionKey: "agent:main:main" })}`,
             draft,
             1,
+            ["Explain the rollback checks. 🦞"],
           );
           await page.reload();
           await chip(1).waitFor({ state: "visible" });
           expect(await composer.inputValue()).toBe(draft);
+          await capture("restored-draft");
           await chip(1).hover();
           const preview = page.getByRole("region", { name: "Comments", exact: true });
           await preview.waitFor({ state: "visible" });
