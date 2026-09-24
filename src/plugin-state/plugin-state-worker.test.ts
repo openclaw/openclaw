@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { deserialize, serialize } from "node:v8";
-import { Worker } from "node:worker_threads";
+import { threadId, Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -21,6 +21,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { VERSION } from "../version.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -655,7 +656,9 @@ describe("worker plugin state", () => {
         operation: "delete",
         path,
         cause: expect.any(SyntaxError),
+        owner: { pid: process.pid, threadId: expect.any(Number), version: VERSION },
       });
+      expect(corrupt).not.toHaveProperty("owner.threadId", threadId);
     });
   });
 });

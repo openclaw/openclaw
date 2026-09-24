@@ -15,6 +15,7 @@ import type {
   ExecutionIdentityInspectionQuery,
   ExecutionIdentityInspectionOutcome,
 } from "../audit/execution-identity-inspection.types.js";
+import type { ConfigSnapshotAuditRecord } from "../config/config-journal-snapshot.kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   CronRunRecoveryReadCommand,
@@ -105,6 +106,7 @@ export type OpenClawStateReadAuthority = {
 
 export type OpenClawStateReadCommand =
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
+  | { type: "config.snapshot.read" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
   | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
@@ -200,6 +202,12 @@ export type OpenClawStateReadReply = (
       type: "deliveryQueue.outbound";
       sourceAdmitted: true;
       entries: OutboundDeliveryStorageEntry[];
+    }
+  | {
+      ok: true;
+      type: "config.snapshot.read";
+      sourceAdmitted: true;
+      snapshot: ConfigSnapshotAuditRecord | null;
     }
   | {
       ok: true;

@@ -62,15 +62,9 @@ export function runWithSqliteCoordinator<T>(
       throw new SqliteCoordinatorError(`${operationLabel} must remain synchronous`);
     }
   } catch (operationError) {
-    let releaseFailed = false;
-    let releaseError: unknown;
     try {
       coordinator.release();
-    } catch (error) {
-      releaseFailed = true;
-      releaseError = error;
-    }
-    if (releaseFailed) {
+    } catch (releaseError) {
       throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         `${operationLabel} and coordinator release both failed`,

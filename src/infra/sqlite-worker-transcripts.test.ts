@@ -1,10 +1,9 @@
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { TRANSCRIPTS_RESULT_MAX_BYTES } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -15,6 +14,8 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { persistTranscriptSummary } from "../transcripts/capture-summary.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { getTranscriptLibrary } from "../transcripts/library.js";
@@ -38,14 +39,7 @@ import {
   resolveStateLifecycleRuntimeDirectory,
 } from "./state-database-coordinator.js";
 
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const dirs = useStateDatabaseTempDirs();
 
 function fixture() {
   const stateDir = dirs.make("transcript-worker-");
@@ -55,25 +49,13 @@ function fixture() {
 }
 
 async function withoutParentSql<T>(operation: () => Promise<T>): Promise<T> {
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-  const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
-    vi.spyOn(StatementSync.prototype, method),
-  );
+  const sql = observeMainThreadSql();
   try {
     const result = await operation();
-    expect(prepare.mock.calls.length, "parent prepare calls").toBe(0);
-    expect(exec.mock.calls.length, "parent exec calls").toBe(0);
-    for (const statement of statements) {
-      expect(statement.mock.calls.length, "parent statement calls").toBe(0);
-    }
+    sql.expectIdle();
     return result;
   } finally {
-    prepare.mockRestore();
-    exec.mockRestore();
-    for (const statement of statements) {
-      statement.mockRestore();
-    }
+    sql.restore();
   }
 }
 
