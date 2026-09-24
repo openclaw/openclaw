@@ -229,6 +229,8 @@ it.each(["local", "local-receipt", "missing"])(
 it.each([
   "duplicate",
   "ambiguous",
+  "ambiguous-missing",
+  "conflicting-missing",
   "excluded",
   "excluded-alias",
   "excluded-alias-pattern",
@@ -266,7 +268,7 @@ it.each([
         "remote.origin.fetch",
         mapping === "excluded-alias-pattern" ? "^refs/heads/oth*" : "^refs/heads/other",
       );
-    } else if (mapping === "ambiguous") {
+    } else if (mapping.startsWith("ambiguous")) {
       await git(receiver, "remote", "add", "other", pathToFileURL(source).href);
       await git(
         receiver,
@@ -280,8 +282,15 @@ it.each([
         "config",
         "--add",
         "remote.origin.fetch",
-        mapping === "excluded" ? "^refs/heads/main" : "+refs/heads/main:refs/remotes/origin/main",
+        mapping === "excluded"
+          ? "^refs/heads/main"
+          : mapping === "conflicting-missing"
+            ? "+refs/heads/other:refs/remotes/origin/main"
+            : "+refs/heads/main:refs/remotes/origin/main",
       );
+    }
+    if (mapping.endsWith("-missing")) {
+      await git(receiver, "update-ref", "-d", "refs/remotes/origin/main");
     }
     await commit(source, "remote advances");
     const latest = await git(source, "rev-parse", "HEAD");
@@ -290,6 +299,7 @@ it.each([
       fetchGit: true,
       includeRegistry: false,
       gitUpstreamFallback: { currentSha, upstreamRef: receiptRef },
+      useDetachedDevUpstream: true,
     });
     const refreshes = mapping === "duplicate" || mapping.startsWith("excluded-alias");
     expect(result.git).toMatchObject(
@@ -302,7 +312,13 @@ it.each([
             fetchOk: null,
           },
     );
-    expect(await git(receiver, "rev-parse", receiptRef)).toBe(refreshes ? latest : currentSha);
+    if (mapping.endsWith("-missing")) {
+      expect(
+        await git(receiver, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/main"),
+      ).toBe("");
+    } else {
+      expect(await git(receiver, "rev-parse", receiptRef)).toBe(refreshes ? latest : currentSha);
+    }
     if (!refreshes) {
       expect(await fs.readFile(path.join(receiver, ".git", "FETCH_HEAD"), "utf8")).toBe(fetchHead);
     }
@@ -347,5 +363,89 @@ it("keeps disconnected shallow comparisons unknown after a scoped refresh", asyn
     expect(await git(receiver, "for-each-ref", "--format=%(refname)", "refs/remotes")).toBe(
       "refs/remotes/origin/main",
     );
+  });
+});
+
+it.each([
+  "receipt",
+  "configured",
+  "missing-ref",
+  "missing-short",
+  "missing-origin",
+  "unresolvable",
+])("preserves %s intent ahead of an unmaterialized origin main default", async (mode) => {
+  await withTestDir({ prefix: "openclaw-receipt-priority-" }, async (base) => {
+    const source = path.join(base, "source");
+    const receiver = path.join(base, "receiver");
+    await initialize(source);
+    await git(source, "commit", "--allow-empty", "-m", "base");
+    const currentSha = await git(source, "rev-parse", "HEAD");
+    await git(source, "switch", "--create", "release");
+    await git(source, "commit", "--allow-empty", "-m", "release advances");
+    const releaseSha = await git(source, "rev-parse", "HEAD");
+    await git(source, "switch", "main");
+    await git(source, "commit", "--allow-empty", "-m", "main advances once");
+    await git(source, "commit", "--allow-empty", "-m", "main advances twice");
+    const mainSha = await git(source, "rev-parse", "HEAD");
+    await initialize(receiver);
+    const origin = pathToFileURL(source).href;
+    await git(receiver, "remote", "add", "origin", origin);
+    await git(
+      receiver,
+      "config",
+      "--add",
+      "remote.origin.fetch",
+      "+refs/heads/release:refs/status/release",
+    );
+    await git(receiver, "fetch", "--depth=1", "--no-tags", "origin", currentSha);
+    await git(receiver, "checkout", "--detach", currentSha);
+    await git(receiver, "update-ref", "refs/status/release", currentSha);
+    expect(
+      await git(
+        receiver,
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/heads/main",
+        "refs/remotes/origin/main",
+      ),
+    ).toBe("");
+    expect(await git(receiver, "config", "--get-regexp", "^branch\\.main\\.").catch(() => "")).toBe(
+      "",
+    );
+    expect(await git(receiver, "remote", "get-url", "origin")).toBe(origin);
+    if (mode === "configured") {
+      await git(receiver, "config", "branch.main.remote", "origin");
+      await git(receiver, "config", "branch.main.merge", "refs/heads/main");
+    } else if (mode.startsWith("missing-") || mode === "unresolvable") {
+      await git(receiver, "update-ref", "-d", "refs/status/release");
+      if (mode === "unresolvable") {
+        await git(receiver, "config", "--unset-all", "remote.origin.fetch");
+      }
+    }
+    const receiptRef =
+      mode === "missing-short"
+        ? "status/release"
+        : mode === "missing-origin"
+          ? "origin/main"
+          : "refs/status/release";
+    const selectsMain = mode === "configured" || mode === "missing-origin";
+    const result = await checkUpdateStatus({
+      root: receiver,
+      fetchGit: true,
+      useDetachedDevUpstream: true,
+      includeRegistry: false,
+      timeoutMs: 5000,
+      gitUpstreamFallback: { currentSha, upstreamRef: receiptRef },
+    });
+    expect(await git(receiver, "remote", "get-url", "origin")).toBe(origin);
+    expect(result.git).toMatchObject({
+      sha: currentSha,
+      upstream: mode === "configured" ? "origin/main" : receiptRef,
+      upstreamSource: mode === "configured" ? "tracking" : "receipt",
+      upstreamSha: mode === "unresolvable" ? null : selectsMain ? mainSha : releaseSha,
+      ahead: mode === "unresolvable" ? null : 0,
+      behind: mode === "unresolvable" ? null : selectsMain ? 2 : 1,
+      fetchOk: mode === "unresolvable" ? null : true,
+    });
   });
 });

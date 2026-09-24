@@ -348,13 +348,7 @@ async function checkGitUpdateStatus(params: {
   }
   const trackingBranch =
     branch === "HEAD" ? (params.useDetachedDevUpstream ? DEV_BRANCH : null) : branch;
-  const tracking = trackingBranch
-    ? await readGitBranchFetchTarget(
-        readGit,
-        trackingBranch,
-        branch === "HEAD" ? "origin" : undefined,
-      )
-    : null;
+  let tracking = trackingBranch ? await readGitBranchFetchTarget(readGit, trackingBranch) : null;
 
   const commitAtSeconds = Number.parseInt(commitAtRaw ?? "", 10);
   const commitAtMs = Number.isSafeInteger(commitAtSeconds) ? commitAtSeconds * 1000 : null;
@@ -367,8 +361,19 @@ async function checkGitUpdateStatus(params: {
       ? params.upstreamFallback.upstreamRef.trim() || null
       : null;
   const receiptTarget = receiptUpstream
-    ? await readGitReceiptFetchTarget(readGit, receiptUpstream)
+    ? await readGitReceiptFetchTarget(readGit, receiptUpstream, Boolean(params.fetch))
     : null;
+  // A matching receipt owns the intended upstream even when it cannot resolve.
+  // Only an install with neither configured tracking nor receipt intent uses Dev's default.
+  if (
+    !tracking &&
+    !receiptUpstream &&
+    branch === "HEAD" &&
+    trackingBranch &&
+    (await readGit("remote", "get-url", "--", "origin"))
+  ) {
+    tracking = { remote: "origin", mergeRef: `refs/heads/${trackingBranch}` };
+  }
   const fetchTarget = tracking ?? receiptTarget;
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
   let fetchOk: boolean | null = null;
