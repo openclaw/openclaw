@@ -15,7 +15,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
@@ -709,7 +709,7 @@ export function prepareNpmPackageBundle({
     mkdirSync(join(sourceDir, ".release-harness"), { recursive: true });
     // The frozen candidate owns the installed compiler used to parse its declarations.
     copyFileSync(
-      fileURLToPath(new URL("./lib/sanitize-bundler-helper-dts-exports.mts", import.meta.url)),
+      join(dirname(fileURLToPath(import.meta.url)), "lib/sanitize-bundler-helper-dts-exports.mts"),
       stagedSanitizer,
     );
     try {
