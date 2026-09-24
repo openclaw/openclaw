@@ -597,7 +597,12 @@ describe("createTeamsReplyStreamController", () => {
 
       await vi.advanceTimersByTimeAsync(5_000);
 
-      expect(stream.update).toHaveBeenLastCalledWith("Working\n\n- tool: search\n- tool: exec");
+      // Teams renders informative updates as a single status line and drops
+      // newlines, so rows are joined with a visible separator.
+      expect(stream.update).toHaveBeenLastCalledWith("Working · tool: search · tool: exec");
+      for (const [text] of stream.update.mock.calls) {
+        expect(text).not.toMatch(/\n/u);
+      }
     } finally {
       vi.useRealTimers();
     }
@@ -626,7 +631,7 @@ describe("createTeamsReplyStreamController", () => {
       { explanation: "Revised plan" },
     );
 
-    expect(stream.update).toHaveBeenLastCalledWith("Revised plan\n\n✅ Inspect\n▸ Patch");
+    expect(stream.update).toHaveBeenLastCalledWith("Revised plan · ✅ Inspect · ▸ Patch");
   });
 
   it("cancels the pending progress gate at finalize so no stale card posts after close", async () => {

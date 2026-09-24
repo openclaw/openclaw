@@ -48,6 +48,18 @@ function isStreamCancelledError(err: unknown): boolean {
   return err instanceof Error && err.name === "StreamCancelledError";
 }
 
+// Teams shows informative stream updates as a one-line status next to the
+// progress bar and drops newlines, so multi-row progress drafts (label,
+// commentary, tool bullets, plan steps) would run together. Join the rows with
+// a visible separator instead.
+function flattenInformativeStatus(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.trim().replace(/^[•-]\s+/u, ""))
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /**
  * Bridges openclaw's reply pipeline callbacks to the SDK's `ctx.stream`.
  * Streaming is enabled for personal (DM) conversations only; group/channel
@@ -59,7 +71,7 @@ function isStreamCancelledError(err: unknown): boolean {
  * - "progress": no per-token streaming; the preview card carries an
  *   informative status that updates as tools run (e.g. "Looking up the
  *   schema..." → "Generating SQL..."). When tool-progress streaming is also
- *   enabled, raw tool names appear as bullets above the label.
+ *   enabled, tool rows are joined onto the same status line.
  * - "block": disable native streaming entirely; the reply lands as a regular
  *   block message. We bypass the controller in that case.
  */
@@ -262,7 +274,7 @@ export function createTeamsReplyStreamController(params: {
         return false;
       }
       try {
-        stream.update(text.replace(/^• /gmu, "- "));
+        stream.update(flattenInformativeStatus(text));
         return true;
       } catch (err) {
         if (isStreamCancelledError(err)) {
