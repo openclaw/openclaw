@@ -197,8 +197,11 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
-    const surface = buildAgentsApiToolSurface(runParams, controller.signal, assertCurrent, (cleanup) =>
-      toolCleanups.push(cleanup),
+    const surface = buildAgentsApiToolSurface(
+      runParams,
+      controller.signal,
+      assertCurrent,
+      (cleanup) => toolCleanups.push(cleanup),
     );
     toolSurface = surface;
     const fingerprint = createHash("sha256")
