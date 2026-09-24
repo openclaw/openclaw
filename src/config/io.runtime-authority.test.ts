@@ -22,6 +22,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import * as configFactory from "./io.factory.js";
 import { writeConfigFile } from "./io.runtime.js";
+import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -61,13 +62,20 @@ const nextConfig = { gateway: { mode: "local" as const, port: 19001 } };
 
 describe("runtime finalization retains original authority", () => {
   const roots = createSuiteTempRootTracker({ prefix: "config-authority-coordinator-" });
-  beforeAll(async () => await roots.setup());
+  const workers = createConfigIoWorkerFixture();
+  beforeAll(async () => {
+    await roots.setup();
+    await workers.setup(await roots.make("workers"));
+  });
   beforeEach(async () => {
     vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
       await roots.make("coordinator"),
     );
   });
-  afterAll(async () => await roots.cleanup());
+  afterAll(async () => {
+    await workers.close();
+    await roots.cleanup();
+  });
 
   afterEach(() => {
     vi.restoreAllMocks();

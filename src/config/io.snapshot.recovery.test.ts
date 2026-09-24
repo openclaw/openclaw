@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createConfigIO } from "./io.factory.js";
 import {
   captureConfigHealthStateStore,
@@ -21,6 +22,7 @@ import * as healthOwner from "./io.health-state.js";
 import { observeConfigSnapshot, observeConfigSnapshotSync } from "./io.observe.js";
 import { normalizeConfigIoDeps } from "./io.read-helpers.js";
 import type { ConfigIoFactoryOptions } from "./io.types.js";
+import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -81,6 +83,18 @@ async function prepare(io: ReturnType<typeof createConfigIO>) {
 }
 
 describe("prepared config recovery", () => {
+  const workerRoots = createSuiteTempRootTracker({ prefix: "openclaw-config-recovery-workers-" });
+  const workers = createConfigIoWorkerFixture();
+
+  beforeAll(async () => {
+    await workers.setup(await workerRoots.setup());
+  });
+
+  afterAll(async () => {
+    await workers.close();
+    await workerRoots.cleanup();
+  });
+
   it("leaves a newer live observation current when an older prepared recovery is applied", async () => {
     const { root, configPath, original, env, io } = fixture();
     const plan = await prepare(io);
