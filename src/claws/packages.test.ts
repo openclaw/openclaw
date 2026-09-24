@@ -325,7 +325,7 @@ describe("preflightClawPackage isolated plugin inspection", () => {
       const actual =
         await vi.importActual<typeof import("@openclaw/fs-safe/temp")>("@openclaw/fs-safe/temp");
       const workspace = await actual.tempWorkspace(options);
-      const cleanup = workspace.cleanup;
+      const cleanup = workspace.cleanup.bind(workspace);
       workspace.cleanup = async () => {
         await cleanup();
         cleanupFailureInjected = true;

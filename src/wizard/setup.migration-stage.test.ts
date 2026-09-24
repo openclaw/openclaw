@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -67,8 +68,8 @@ describe("setup migration stage", () => {
     await fs.mkdir(path.join(root, "CaseProbe"));
     const caseInsensitive = await fs.stat(path.join(root, "cASEpROBE")).then(
       () => true,
-      (error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOENT") {
+      (error: unknown) => {
+        if (!hasErrnoCode(error, "ENOENT")) {
           throw error;
         }
         return false;

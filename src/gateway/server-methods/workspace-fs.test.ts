@@ -19,13 +19,13 @@ it("preserves the workspace file when editor authority expires during write prep
   const revoked = new Error("workspace editor authority expired");
   let authorized = true;
   const createRoot = fsSafe.root;
-  vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
-    const opened = await createRoot(...args);
+  vi.spyOn(fsSafe, "root").mockImplementation(async (...rootArgs) => {
+    const opened = await createRoot(...rootArgs);
     const write = opened.write.bind(opened);
-    opened.write = async (...args) => {
+    opened.write = async (...writeArgs) => {
       await Promise.resolve();
       authorized = false;
-      return await write(...args);
+      return await write(...writeArgs);
     };
     return opened;
   });
@@ -42,7 +42,7 @@ it("preserves the workspace file when editor authority expires during write prep
     },
   ).then(
     () => undefined,
-    (error: unknown) => error,
+    (caught: unknown) => caught,
   );
   expect(authorized).toBe(false);
   expect(error).toBe(revoked);
