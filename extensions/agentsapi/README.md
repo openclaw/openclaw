@@ -4,6 +4,14 @@ The `agentsapi` harness uses API-key authentication and an OpenAI-hosted Linux
 environment. Select it through `agents.defaults.agentRuntime.id` or an agent's
 `agentRuntime.id`. See the [harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
 
+The Gateway must be the only writer to each hosted session bound to OpenClaw.
+Send messages, steering, and interrupts through OpenClaw. Do not also write to
+that hosted session from another API client or a Gateway with independent state.
+Keep write credentials under the trusted Gateway operator's control. This
+exclusivity is a deployment requirement, not API-enforced session isolation.
+Binding leases coordinate OpenClaw attempts; tool execution retains current
+ownership and cancellation checks. External concurrent writers are unsupported.
+
 Saved sessions keep their hosted conversation, workspace, and original tool
 declarations when Gateway tools are added. Fresh sessions receive the current
 Gateway tool declarations. Reset an existing session to adopt the new tool
