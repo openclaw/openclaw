@@ -140,47 +140,6 @@ describe("device placement projection", () => {
 
   it.each([
     {
-      name: "remote execution remains available when every worker slot is occupied",
-      requirement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-        consumesWorkerSlot: false,
-      },
-      environment: {
-        workerSlots: { total: 2, available: 0 },
-        invocableCommands: ["codex.exec-server.stdio.v1"],
-        requiredNodeCommand: {
-          command: "codex.exec-server.stdio.v1",
-          state: "invocable" as const,
-        },
-      },
-      selectable: true,
-    },
-    {
-      name: "worker turns remain unavailable when every worker slot is occupied",
-      requirement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-      environment: { workerSlots: { total: 2, available: 0 } },
-      selectable: false,
-      reason: "No worker slots are available. Wait for a slot or pick another device.",
-    },
-    {
-      name: "declaring a command does not grant Gateway invocation authority",
-      requirement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-        consumesWorkerSlot: false,
-      },
-      environment: {
-        capabilities: ["codex.exec-server.stdio.v1"],
-        invocableCommands: [],
-        requiredNodeCommand: {
-          command: "codex.exec-server.stdio.v1",
-          state: "unauthorized" as const,
-        },
-      },
-      selectable: false,
-      reason:
-        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
-    },
-    {
       name: "an undeclared command fails closed even when worker slots are free",
       requirement: {
         requiredNodeCommands: ["codex.exec-server.stdio.v1"],

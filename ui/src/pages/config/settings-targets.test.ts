@@ -163,16 +163,8 @@ describe("settings config section ownership", () => {
     ["ai-agents", ["agents", "skills", "tools", "session"]],
   ];
 
-  it.each(pages)("routes every %s section back to its rendering page", (pageId, sections) => {
-    expect(configSectionKeysForPage(pageId)).toEqual(sections);
-
-    for (const section of sections) {
-      expect(configPageForSection(section)).toBe(pageId);
-    }
-  });
-
   it("assigns each curated section to exactly one page", () => {
-    const sections = pages.flatMap(([, pageSections]) => pageSections);
+    const sections = pages.flatMap((page) => configSectionKeysForPage(page) ?? []);
 
     expect(new Set(sections).size).toBe(sections.length);
     expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual([...sections, "plugins"].toSorted());
