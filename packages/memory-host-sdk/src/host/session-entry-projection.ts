@@ -31,8 +31,8 @@ export function projectSessionEntryRecord(value: unknown): unknown {
   const metadata = asOptionalRecord(message?.["__openclaw"]);
   const provenance = asOptionalRecord(message?.provenance);
   const data = asOptionalRecord(record.data);
-  const timestamp = (value: unknown) =>
-    typeof value === "string" || typeof value === "number" ? value : undefined;
+  const timestamp = (candidate: unknown) =>
+    typeof candidate === "string" || typeof candidate === "number" ? candidate : undefined;
   return {
     type: readStringValue(record.type),
     id: readStringValue(record.id),
