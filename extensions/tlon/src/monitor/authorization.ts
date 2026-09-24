@@ -2,16 +2,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { TlonSettingsStore } from "../settings.js";
 
-type ChannelAuthorization = {
-  mode?: "restricted" | "open";
-  allowedShips?: string[];
-};
+type ChannelAuthorization = NonNullable<TlonSettingsStore["channelRules"]>[string];
 
 export function resolveChannelAuthorization(
   cfg: OpenClawConfig,
   channelNest: string,
   settings?: TlonSettingsStore,
-): { mode: "restricted" | "open"; allowedShips: string[] } {
+): { mode: "restricted" | "open"; allowedShips: string[]; requireMentionInBotThreads?: boolean } {
   const tlonConfig = cfg.channels?.tlon as
     | {
         authorization?: { channelRules?: Record<string, ChannelAuthorization> };
@@ -27,5 +24,9 @@ export function resolveChannelAuthorization(
   return {
     mode: rule?.mode ?? "restricted",
     allowedShips: rule?.allowedShips ?? defaultShips,
+    requireMentionInBotThreads:
+      typeof rule?.requireMentionInBotThreads === "boolean"
+        ? rule.requireMentionInBotThreads
+        : undefined,
   };
 }

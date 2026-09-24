@@ -68,6 +68,9 @@ function mergeClickClackGroups(
       merged.set(key, {
         ...merged.get(key),
         ...(value.requireMention !== undefined ? { requireMention: value.requireMention } : {}),
+        ...(value.requireMentionInBotThreads !== undefined
+          ? { requireMentionInBotThreads: value.requireMentionInBotThreads }
+          : {}),
         ...(value.mentionPatterns !== undefined ? { mentionPatterns: value.mentionPatterns } : {}),
         ...(value.allowBots !== undefined ? { allowBots: value.allowBots } : {}),
         ...(mergedBotLoopProtection ? { botLoopProtection: mergedBotLoopProtection } : {}),
@@ -253,6 +256,7 @@ export function resolveClickClackAccount(params: {
       section: merged.discussions?.section?.trim() || DEFAULT_DISCUSSIONS_SECTION,
     },
     requireMention: merged.requireMention === true,
+    requireMentionInBotThreads: merged.requireMentionInBotThreads,
     mentionPatterns: merged.mentionPatterns ?? [],
     allowBots: merged.allowBots ?? false,
     botLoopProtection: merged.botLoopProtection,

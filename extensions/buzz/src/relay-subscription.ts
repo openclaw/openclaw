@@ -1,4 +1,8 @@
 import type { Event, Filter, Relay } from "nostr-tools";
+import { BUZZ_RELAY_MAX_CONCURRENT_QUERY_SUBSCRIPTIONS } from "./subscription-budget.js";
+
+type BuzzSnapshotQueries = { active: number; waiting: Array<() => void> };
+const snapshotQueries = new WeakMap<Relay, BuzzSnapshotQueries>();
 
 type BuzzRelaySubscriptionParams = Omit<Parameters<Relay["prepareSubscription"]>[1], "abort">;
 
@@ -58,6 +62,39 @@ export function openBuzzRelaySubscription(
 }
 
 export async function queryBuzzRelaySnapshot<TResult>(
+  params: BuzzRelaySnapshotParams<TResult>,
+): Promise<TResult> {
+  params.signal?.throwIfAborted();
+  const queries: BuzzSnapshotQueries = snapshotQueries.get(params.relay) ?? {
+    active: 0,
+    waiting: [],
+  };
+  snapshotQueries.set(params.relay, queries);
+  // Thread lookups share the reserved slots with membership, history, and directory queries.
+  if (queries.active >= BUZZ_RELAY_MAX_CONCURRENT_QUERY_SUBSCRIPTIONS) {
+    await new Promise<void>((resolve) => {
+      queries.waiting.push(resolve);
+    });
+  } else {
+    queries.active += 1;
+  }
+  try {
+    params.signal?.throwIfAborted();
+    return await queryBuzzRelaySnapshotNow(params);
+  } finally {
+    const next = queries.waiting.shift();
+    if (next) {
+      next();
+    } else {
+      queries.active -= 1;
+      if (queries.active === 0) {
+        snapshotQueries.delete(params.relay);
+      }
+    }
+  }
+}
+
+async function queryBuzzRelaySnapshotNow<TResult>(
   params: BuzzRelaySnapshotParams<TResult>,
 ): Promise<TResult> {
   return await new Promise<TResult>((resolve, reject) => {
