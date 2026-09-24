@@ -36,6 +36,7 @@ import {
   startGatewayService,
 } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
+import { trimToUndefined } from "../gateway/credentials.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -58,6 +59,7 @@ import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import { resolveOnboardingGatewayRuntime } from "./setup.service-runtime.js";
+import { gatewayCompletionAuthNotes, usesLocalGatewayPassword } from "./setup.shared.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
 
 type FinalizeOnboardingOptions = {
@@ -85,6 +87,14 @@ function buildSessionGatewayAuthOverride(params: {
       mode: "token",
       token: params.settings.gatewayToken,
     };
+  }
+  if (params.settings.authMode === "trusted-proxy") {
+    // The wizard cannot author a proxy policy; keep it and surface the resolved
+    // local password so loopback clients authenticate without a secret provider.
+    const auth = params.nextConfig.gateway?.auth;
+    if (auth?.mode === "trusted-proxy" && params.resolvedGatewayPassword) {
+      return { ...auth, password: params.resolvedGatewayPassword };
+    }
   }
   if (params.settings.authMode === "password" && params.resolvedGatewayPassword) {
     return {
@@ -502,7 +512,7 @@ export async function finalizeSetupWizard(
     runtime,
   });
 
-  if (settings.authMode === "password") {
+  if (settings.authMode === "password" || settings.authMode === "trusted-proxy") {
     try {
       resolvedGatewayPassword =
         (await resolveSetupSecretInputString({
@@ -510,7 +520,11 @@ export async function finalizeSetupWizard(
           value: nextConfig.gateway?.auth?.password,
           path: "gateway.auth.password",
           env: process.env,
-        })) ?? "";
+        })) ??
+        // Mirror the Gateway credential owner's env fallback so an environment-only
+        // local password still authenticates loopback probes; never persisted.
+        trimToUndefined(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
+        "";
     } catch (error) {
       await prompter.note(
         [
@@ -543,7 +557,7 @@ export async function finalizeSetupWizard(
       const probeOptions = {
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
+        password: usesLocalGatewayPassword(settings.authMode) ? resolvedGatewayPassword : undefined,
       };
       // A failed replacement may leave the old Gateway alive. Observe it once;
       // only successful install/restart needs the startup grace period.
@@ -578,7 +592,9 @@ export async function finalizeSetupWizard(
               timeoutMs: 10_000,
               config: healthConfig,
               token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-              password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
+              password: usesLocalGatewayPassword(settings.authMode)
+                ? resolvedGatewayPassword
+                : undefined,
             },
             runtime,
           );
@@ -660,7 +676,7 @@ export async function finalizeSetupWizard(
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+        password: usesLocalGatewayPassword(settings.authMode) ? resolvedGatewayPassword : "",
       });
     }
     const controlUiEnabled =
@@ -796,20 +812,7 @@ export async function finalizeSetupWizard(
       }
 
       if (gatewayProbe.ok) {
-        const tokenNotes = [
-          t("wizard.finalize.gatewayTokenShared"),
-          t("wizard.finalize.gatewayTokenStored"),
-          t("wizard.finalize.gatewayTokenView", {
-            command: formatCliCommand("openclaw gateway auth-token --show"),
-          }),
-          t("wizard.finalize.gatewayTokenGenerate", {
-            command: formatCliCommand("openclaw doctor --generate-gateway-token"),
-          }),
-          t("wizard.finalize.dashboardOpenAnytime", {
-            command: formatCliCommand("openclaw dashboard --no-open"),
-          }),
-        ].filter(Boolean);
-        await prompter.note(tokenNotes.join("\n"), "Token");
+        await prompter.note(gatewayCompletionAuthNotes(settings.authMode).join("\n"), "Token");
       }
     } else if (opts.skipUi) {
       await prompter.note(t("wizard.finalize.skipControlUi"), t("wizard.finalize.controlUiTitle"));
@@ -1006,11 +1009,14 @@ export async function finalizeSetupWizard(
             ? {
                 config: nextConfig,
                 boundGateway: {
-                  url: displayLinks.wsUrl,
+                  // Proxy-auth gateways accept the local password only on the direct-local
+                  // route, so hand off the loopback probe endpoint, not the advertised URL.
+                  url:
+                    settings.authMode === "trusted-proxy" ? probeLinks.wsUrl : displayLinks.wsUrl,
                   ...(settings.authMode === "token" && settings.gatewayToken
                     ? { token: settings.gatewayToken }
                     : {}),
-                  ...(settings.authMode === "password" && resolvedGatewayPassword
+                  ...(usesLocalGatewayPassword(settings.authMode) && resolvedGatewayPassword
                     ? { password: resolvedGatewayPassword }
                     : {}),
                 },

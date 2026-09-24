@@ -18,8 +18,10 @@ vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
 
 import {
   formatQuickstartGatewaySummary,
+  gatewayCompletionAuthNotes,
   requestTelemetryConsent,
   resolveQuickstartGatewayDefaults,
+  usesLocalGatewayPassword,
   writeWizardConfigFile,
 } from "./setup.shared.js";
 
@@ -84,6 +86,18 @@ describe("resolveQuickstartGatewayDefaults", () => {
       config: { gateway: { auth: { mode: "password" as const, password: "saved-password" } } },
       expected: "Password",
       mode: "password",
+    },
+    {
+      config: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+        },
+      },
+      expected: "Trusted proxy",
+      mode: "trusted-proxy",
     },
   ])(
     "summarizes the resolved $mode secret without offering an auth choice",
@@ -237,5 +251,38 @@ describe("writeWizardConfigFile", () => {
         plugins: { entries: { demo: { enabled: true } } },
       },
     });
+  });
+});
+
+describe("usesLocalGatewayPassword", () => {
+  it.each(["password", "trusted-proxy"] as const)(
+    "treats %s gateways as local-password capable",
+    (mode) => {
+      expect(usesLocalGatewayPassword(mode)).toBe(true);
+    },
+  );
+
+  it.each(["token"] as const)("treats %s gateways as token-only", (mode) => {
+    expect(usesLocalGatewayPassword(mode)).toBe(false);
+  });
+});
+
+describe("gatewayCompletionAuthNotes", () => {
+  it("replaces token guidance with proxy delegation notes for trusted-proxy", () => {
+    const notes = gatewayCompletionAuthNotes("trusted-proxy");
+
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toContain("trusted reverse proxy");
+    expect(notes.join("\n")).not.toContain("openclaw gateway auth-token --show");
+    expect(notes.join("\n")).not.toContain("openclaw doctor --generate-gateway-token");
+    expect(notes.join("\n")).toContain("openclaw dashboard --no-open");
+  });
+
+  it("keeps the token retrieval guidance for token gateways", () => {
+    const notes = gatewayCompletionAuthNotes("token").join("\n");
+
+    expect(notes).toContain("openclaw gateway auth-token --show");
+    expect(notes).toContain("openclaw doctor --generate-gateway-token");
+    expect(notes).toContain("openclaw dashboard --no-open");
   });
 });

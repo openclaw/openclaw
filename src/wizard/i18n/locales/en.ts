@@ -397,6 +397,7 @@ export const en = {
       quickstartOnlyLocal: "QuickStart only supports local gateways. Switching to Manual mode.",
       quickstartTitle: "QuickStart",
       quickstartAuthTokenDefault: "Gateway secret (generated)",
+      quickstartAuthTrustedProxy: "Trusted proxy",
       quickstartDirectChannels: "Direct to chat channels.",
       quickstartGatewayAuth: "Gateway auth: {auth}",
       quickstartGatewayBind: "Gateway bind: {bind}",
@@ -1154,6 +1155,8 @@ export const en = {
       gatewayServiceRestarted: "Gateway service restarted.",
       gatewayServiceRestarting: "Restarting Gateway service...",
       gatewayServiceRestartScheduled: "Gateway service restart scheduled.",
+      gatewayProxyAuthManaged:
+        "Gateway authentication is managed by your trusted reverse proxy; no Gateway token is stored.",
       gatewayTokenGenerate: "Generate secret: {command}",
       gatewayTokenShared: "Gateway secret: shared access for the Gateway + Control UI.",
       gatewayTokenStored:

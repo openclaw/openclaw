@@ -387,6 +387,7 @@ export const zh_CN = {
       quickstartOnlyLocal: "QuickStart 仅支持本地 Gateway。将切换到手动模式。",
       quickstartTitle: "QuickStart",
       quickstartAuthTokenDefault: "Gateway 密钥（自动生成）",
+      quickstartAuthTrustedProxy: "可信代理",
       quickstartDirectChannels: "直接进入聊天频道设置。",
       quickstartGatewayAuth: "Gateway 认证：{auth}",
       quickstartGatewayBind: "Gateway 绑定：{bind}",
@@ -1114,6 +1115,7 @@ export const zh_CN = {
       gatewayServiceRestarted: "Gateway 服务已重启。",
       gatewayServiceRestarting: "正在重启 Gateway 服务...",
       gatewayServiceRestartScheduled: "Gateway 服务重启已排队。",
+      gatewayProxyAuthManaged: "Gateway 认证已由可信代理管理；未存储 Gateway 密钥。",
       gatewayTokenGenerate: "生成密钥：{command}",
       gatewayTokenShared: "Gateway 密钥：Gateway 和 Control UI 的共享访问凭据。",
       gatewayTokenStored:
