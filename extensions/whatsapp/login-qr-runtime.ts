@@ -13,15 +13,17 @@ const loadLoginQrModule = createLazyRuntimeModule(() => import("./src/login-qr.j
 export async function preflightWebLoginWithQrStart(
   ...args: Parameters<PreflightWebLoginWithQrStart>
 ): ReturnType<PreflightWebLoginWithQrStart> {
-  const { preflightWebLoginWithQrStart } = await loadLoginQrModule();
-  return await preflightWebLoginWithQrStart(...args);
+  const { preflightWebLoginWithQrStart: preflightWebLoginWithQrStartLocal } =
+    await loadLoginQrModule();
+  return await preflightWebLoginWithQrStartLocal(...args);
 }
 
 export async function readExistingWebLoginWithQrResult(
   ...args: Parameters<ReadExistingWebLoginWithQrResult>
 ): Promise<ReturnType<ReadExistingWebLoginWithQrResult>> {
-  const { readExistingWebLoginWithQrResult } = await loadLoginQrModule();
-  return readExistingWebLoginWithQrResult(...args);
+  const { readExistingWebLoginWithQrResult: readExistingWebLoginWithQrResultLocal } =
+    await loadLoginQrModule();
+  return readExistingWebLoginWithQrResultLocal(...args);
 }
 
 export async function startWebLoginWithQr(
@@ -34,8 +36,9 @@ export async function startWebLoginWithQr(
 export async function startWebLoginWithQrAfterPreflight(
   ...args: Parameters<StartWebLoginWithQrAfterPreflight>
 ): ReturnType<StartWebLoginWithQrAfterPreflight> {
-  const { startWebLoginWithQrAfterPreflight } = await loadLoginQrModule();
-  return await startWebLoginWithQrAfterPreflight(...args);
+  const { startWebLoginWithQrAfterPreflight: startWebLoginWithQrAfterPreflightLocal } =
+    await loadLoginQrModule();
+  return await startWebLoginWithQrAfterPreflightLocal(...args);
 }
 
 export async function waitForWebLogin(
