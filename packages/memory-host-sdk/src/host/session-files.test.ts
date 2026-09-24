@@ -760,6 +760,35 @@ describe("memory session sync targets", () => {
 });
 
 describe("buildSessionEntry", () => {
+  it("keeps persisted input_text and output_text blocks in the export", async () => {
+    const jsonlLines = [
+      JSON.stringify({ type: "session-meta", agentId: "test" }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [{ type: "input_text", text: "Remember the control word ZAFFIRO927." }],
+        },
+      }),
+      JSON.stringify({ type: "custom", customType: "tool-result", data: {} }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "output_text", text: "Stored control word ZAFFIRO927." }],
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "provider-text-blocks.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe(
+      "User: Remember the control word ZAFFIRO927.\nAssistant: Stored control word ZAFFIRO927.",
+    );
+    expect(entry.lineMap).toStrictEqual([2, 4]);
+  });
+
   it("preserves the persisted export hash for wrapped Unicode messages", async () => {
     const records = Array.from({ length: 4 }, (_, index) => ({
       type: "message",
