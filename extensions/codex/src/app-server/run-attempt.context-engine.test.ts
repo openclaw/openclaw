@@ -25,67 +25,28 @@ import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import {
   assistantMessage,
-  createParams as createSharedParams,
   createStartedThreadHarness as createSharedStartedThreadHarness,
-  runCodexAppServerAttempt as runSharedCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import {
+  createContextEngineAttemptParams as createParams,
+  runContextEngineCodexAttempt as runCodexAppServerAttempt,
+  withPersistentCodexTestToolPolicy,
+} from "./run-attempt.context-engine.test-helpers.js";
 import { createContextEngine } from "./run-attempt.context-engine.test-support.js";
 import {
   readCodexAppServerBinding,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import * as sharedClientModule from "./shared-client.js";
+import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
-
-function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
-  const params = createSharedParams(sessionFile, workspaceDir);
-  delete params.contextTokenBudget;
-  delete params.contextWindowInfo;
-  delete params.observeToolTerminal;
-  return params;
-}
-
-/** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */
-function withPersistentCodexTestToolPolicy(
-  params: EmbeddedRunAttemptParams,
-): EmbeddedRunAttemptParams {
-  const modelCompat =
-    params.model.compat && typeof params.model.compat === "object" ? params.model.compat : {};
-  const model = {
-    ...params.model,
-    compat: { ...modelCompat, supportsTools: false },
-  } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
-  return {
-    ...params,
-    disableTools: false,
-    model,
-    config: {
-      ...params.config,
-      tools: {
-        ...params.config?.tools,
-        web: {
-          ...params.config?.tools?.web,
-          search: {
-            ...params.config?.tools?.web?.search,
-            enabled: false,
-          },
-        },
-      },
-    },
-  };
-}
-
-function runCodexAppServerAttempt(
-  params: EmbeddedRunAttemptParams,
-  options: Parameters<typeof runSharedCodexAppServerAttempt>[1] = {},
-) {
-  return runSharedCodexAppServerAttempt(withPersistentCodexTestToolPolicy(params), options);
-}
 
 async function createSqliteParams(
   workspaceDir: string,
@@ -1696,7 +1657,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
   });
 
-  it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {
+  it("releases startup resources when stale authority rejects overflow recovery", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
@@ -1726,6 +1687,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       }),
     );
     const contextEngine = createContextEngine({ assemble, compact });
+    const releaseLease = vi.spyOn(sharedClientModule, "releaseLeasedSharedCodexAppServerClient");
+    const bindingStore = {
+      ...testCodexAppServerBindingStore,
+      mutate: vi.fn(async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
+        const mutation = args[1];
+        if (mutation.kind === "clear" && mutation.threadId === "thread-old") {
+          throw new Error("Codex session generation is no longer current: session-1");
+        }
+        return await testCodexAppServerBindingStore.mutate(...args);
+      }),
+    };
     const harness = createStartedThreadHarness(
       async (method, requestParams) => {
         if (method === "thread/resume") {
@@ -1753,8 +1725,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 400_000;
 
-    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
-      "Codex ran out of room in the model's context window",
+    await expect(runCodexAppServerAttempt(params, { bindingStore })).rejects.toThrow(
+      "Codex session generation is no longer current: session-1",
     );
 
     expect(compact).not.toHaveBeenCalled();
@@ -1769,6 +1741,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     ]);
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-new");
+    const replacementRoute = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: "thread-old",
+    });
+    replacementRoute.release();
+    expect(releaseLease).toHaveBeenCalledWith(harness.client);
   });
   it("does not pre-compact over-budget rendered context-engine prompts before Codex turn/start", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

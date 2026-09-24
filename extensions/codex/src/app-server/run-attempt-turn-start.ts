@@ -109,10 +109,17 @@ export async function startCodexAttemptTurn(
           "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
           { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
         );
-        const clearedBinding = await bindingStore.mutate(bindingIdentity, {
-          kind: "clear",
-          threadId: resourceState.thread.threadId,
-        });
+        const clearedBinding = resourceState.thread.clientId
+          ? await bindingStore.mutate(
+              bindingIdentity,
+              {
+                kind: "clear",
+                threadId: resourceState.thread.threadId,
+                clientId: resourceState.thread.clientId,
+              },
+              connection.assertCurrent,
+            )
+          : false;
         if (!clearedBinding) {
           embeddedAgentLog.warn(
             "codex app-server preserved newer context-engine binding after resume overflow; skipping fresh retry",
@@ -169,7 +176,13 @@ export async function startCodexAttemptTurn(
         await clearCodexBindingAfterInvalidImagePayload(
           bindingStore,
           bindingIdentity,
-          { phase: "turn_start", threadId: resourceState.thread.threadId, error: message },
+          {
+            phase: "turn_start",
+            threadId: resourceState.thread.threadId,
+            ...(resourceState.thread.clientId ? { clientId: resourceState.thread.clientId } : {}),
+            error: message,
+          },
+          connection.assertCurrent,
           params.expectedSessionRuntimeOwnership,
         );
       }

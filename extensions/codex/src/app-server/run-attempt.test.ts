@@ -25,7 +25,6 @@ import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   buildCodexOpenClawPromptContext,
@@ -60,6 +59,13 @@ import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import {
+  createGoogleCalendarRequest,
+  googleCalendarAppInfo,
+  GOOGLE_CALENDAR_PLUGIN_CONFIG,
+  type GoogleCalendarCacheKeyInput,
+  primeGoogleCalendarAppInventory,
+} from "./google-calendar.test-helpers.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import {
@@ -142,6 +148,7 @@ import {
   createCodexLifecycleHarness,
   createLeasedCodexLifecycleHarness,
 } from "./thread-lifecycle.test-fixtures.js";
+import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 const agentHarnessRuntimeMocks = vi.hoisted(() => ({
   forceModelToolsUnsupported: false,
@@ -541,152 +548,6 @@ function openRunSession(sessionFile: string) {
 function createRunParams() {
   const { sessionFile, workspaceDir } = createRunPaths();
   return createParams(sessionFile, workspaceDir);
-}
-
-const GOOGLE_CALENDAR_PLUGIN_CONFIG = {
-  codexPlugins: {
-    enabled: true,
-    plugins: {
-      "google-calendar": {
-        marketplaceName: "openai-curated",
-        pluginName: "google-calendar",
-      },
-    },
-  },
-} as const;
-
-type GoogleCalendarCacheKeyInput = {
-  appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
-  agentDir: string;
-};
-
-function googleCalendarAppInfo(isEnabled: boolean): v2.AppInfo {
-  return {
-    id: "google-calendar-app",
-    name: "Google Calendar",
-    description: null,
-    logoUrl: null,
-    logoUrlDark: null,
-    distributionChannel: null,
-    branding: null,
-    appMetadata: null,
-    labels: null,
-    installUrl: null,
-    isAccessible: true,
-    isEnabled,
-    pluginDisplayNames: [],
-  };
-}
-
-const GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT = {
-  marketplaces: [
-    {
-      name: "openai-curated",
-      path: "/marketplaces/openai-curated",
-      interface: null,
-      plugins: [
-        {
-          id: "google-calendar",
-          name: "google-calendar",
-          source: { type: "remote" },
-          installed: true,
-          enabled: true,
-          installPolicy: "AVAILABLE",
-          authPolicy: "ON_USE",
-          availability: "AVAILABLE",
-          interface: null,
-        },
-      ],
-    },
-  ],
-  marketplaceLoadErrors: [],
-} satisfies v2.PluginInstalledResponse;
-
-const GOOGLE_CALENDAR_PLUGIN_LIST_RESULT = {
-  ...GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT,
-  featuredPluginIds: [],
-} satisfies v2.PluginListResponse;
-
-const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
-  plugin: {
-    marketplaceName: "openai-curated",
-    marketplacePath: "/marketplaces/openai-curated",
-    summary: {
-      id: "google-calendar",
-      name: "google-calendar",
-      source: { type: "remote" },
-      installed: true,
-      enabled: true,
-      installPolicy: "AVAILABLE",
-      authPolicy: "ON_USE",
-      availability: "AVAILABLE",
-      interface: null,
-    },
-    description: null,
-    skills: [],
-    apps: [
-      {
-        id: "google-calendar-app",
-        name: "Google Calendar",
-        description: null,
-        installUrl: null,
-        category: null,
-      },
-    ],
-    mcpServers: ["google-calendar"],
-  },
-} as const;
-
-function createGoogleCalendarRequest(
-  appInventory?: (method: "app/installed" | "app/read") => unknown,
-) {
-  let threadAppEnabled = false;
-  return vi.fn(async (method: string, params?: unknown) => {
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
-    if (method === "config/read") {
-      expect((params as { includeLayers?: boolean } | undefined)?.includeLayers).toBe(true);
-      return { config: {}, layers: [] };
-    }
-    if (
-      method === "app/installed" &&
-      typeof (params as { threadId?: unknown } | undefined)?.threadId === "string"
-    ) {
-      return codexAppInventoryResponse("app/installed", [googleCalendarAppInfo(threadAppEnabled)]);
-    }
-    if ((method === "app/installed" || method === "app/read") && appInventory) {
-      return appInventory(method);
-    }
-    if (method === "plugin/installed") {
-      return GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT;
-    }
-    if (method === "plugin/list") {
-      return GOOGLE_CALENDAR_PLUGIN_LIST_RESULT;
-    }
-    if (method === "plugin/read") {
-      return GOOGLE_CALENDAR_PLUGIN_READ_RESULT;
-    }
-    if (method === "thread/start") {
-      const config = (params as { config?: { apps?: Record<string, { enabled?: boolean }> } })
-        ?.config;
-      threadAppEnabled = config?.apps?.["google-calendar-app"]?.enabled === true;
-      return threadStartResult("thread-1");
-    }
-    if (method === "turn/start") {
-      return turnStartResult("turn-1", "inProgress");
-    }
-    return undefined;
-  });
-}
-
-async function primeGoogleCalendarAppInventory(key: string, isEnabled: boolean): Promise<void> {
-  defaultCodexAppInventoryCache.clear();
-  await defaultCodexAppInventoryCache.refreshNow({
-    key,
-    request: async (method, params) =>
-      codexAppInventoryResponse(method, [googleCalendarAppInfo(isEnabled)], params),
-  });
 }
 
 async function writeTokenPressureState(
@@ -4985,6 +4846,135 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
+  });
+
+  it("preserves a same-thread successor client after an invalid image turn/start failure", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const successor = createStartedThreadHarness(
+      async (method) => (method === "thread/resume" ? threadStartResult("thread-1") : undefined),
+      { persistedThreads: ["thread-1"] },
+    );
+    createStartedThreadHarness(
+      async (method) => {
+        if (method === "turn/start") {
+          const binding = await readCodexAppServerBinding(sessionFile);
+          expect(binding).toMatchObject({ threadId: "thread-1" });
+          expect(binding?.clientId).toBeTruthy();
+          await writeCodexAppServerBinding(sessionFile, {
+            ...binding!,
+            clientId: successor.client.getInstanceId(),
+          });
+          throw new Error("invalid image_url base64 payload");
+        }
+        return undefined;
+      },
+      { persistedThreads: [] },
+    );
+
+    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+      "invalid image_url base64 payload",
+    );
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-1",
+      clientId: successor.client.getInstanceId(),
+    });
+    await expect(
+      successor.client.request("thread/resume", { threadId: "thread-1" }),
+    ).resolves.toMatchObject({ thread: { id: "thread-1" } });
+    await expect(
+      successor.client.request("turn/start", { threadId: "thread-1", input: [] }),
+    ).resolves.toMatchObject({ turn: { id: "turn-1" } });
+  });
+
+  it("preserves a same-thread successor client after an invalid image terminal failure", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const successor = createStartedThreadHarness(
+      async (method) => (method === "thread/resume" ? threadStartResult("thread-1") : undefined),
+      { persistedThreads: ["thread-1"] },
+    );
+    const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding).toMatchObject({ threadId: "thread-1" });
+    expect(binding?.clientId).toBeTruthy();
+    await writeCodexAppServerBinding(sessionFile, {
+      ...binding!,
+      clientId: successor.client.getInstanceId(),
+    });
+
+    await harness.notify(
+      turnCompleted({
+        id: "turn-1",
+        status: "failed",
+        error: {
+          message: "invalid image_url base64 payload",
+          codexErrorInfo: "other",
+          additionalDetails: null,
+        },
+      }),
+    );
+    await run;
+
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-1",
+      clientId: successor.client.getInstanceId(),
+    });
+    await expect(
+      successor.client.request("thread/resume", { threadId: "thread-1" }),
+    ).resolves.toMatchObject({ thread: { id: "thread-1" } });
+    await expect(
+      successor.client.request("turn/start", { threadId: "thread-1", input: [] }),
+    ).resolves.toMatchObject({ turn: { id: "turn-1" } });
+  });
+
+  it("releases startup resources when invalid-image cleanup rejects stale authority", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const sessionKey = "agent:main:dashboard:incognito-stale-cleanup";
+    const storePath = path.join(tempDir, "stale-cleanup-sessions.json");
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: { sessionId: "session-1", updatedAt: Date.now() },
+    });
+    const turnStarted = createDeferred<void>();
+    const turnFailure = createDeferred<never>();
+    const releaseLease = vi.spyOn(sharedClientModule, "releaseLeasedSharedCodexAppServerClient");
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        turnStarted.resolve();
+        return await turnFailure.promise;
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = sessionKey;
+    params.config = { ...params.config, session: { store: storePath } };
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
+
+    await turnStarted.promise;
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: { sessionId: "session-successor", updatedAt: Date.now() },
+    });
+    turnFailure.reject(new Error("invalid image_url base64 payload"));
+
+    await expect(run).rejects.toThrow("Codex session generation is no longer current: session-1");
+    expect(harness.requests.map((request) => request.method)).not.toContain("thread/unsubscribe");
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-1",
+      clientId: "test-client-1",
+    });
+    const replacementRoute = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: "thread-1",
+    });
+    replacementRoute.release();
+    expect(releaseLease).toHaveBeenCalledWith(harness.client);
   });
 
   it("preserves a healthy binding when the server rejects unsupported image input", async () => {
