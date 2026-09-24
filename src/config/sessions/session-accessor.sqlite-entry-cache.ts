@@ -57,14 +57,17 @@ export {
   publishSessionSharingMemberChange,
   readCommittedIncognitoSessionSharing,
   readSessionEntryCreationTransition,
+  retainPreparedSessionGenerationFacts,
   retainPreparedSessionSharingFacts,
   retainSessionEntryWorkerPublication,
   withSessionEntryCreationPublication,
   runWithSessionEntryCreationPublication,
-  type SessionEntryPlaceholder,
   type SessionEntryReplacementPublication,
-  type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
+export type {
+  SessionEntryPlaceholder,
+  SessionTranscriptInitializationPublication,
+} from "./session-accessor.sqlite-entry-cache.types.js";
 
 type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
 

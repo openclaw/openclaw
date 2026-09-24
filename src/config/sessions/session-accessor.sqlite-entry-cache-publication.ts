@@ -18,13 +18,14 @@ import {
 import {
   createSessionEntryCreationOperation,
   type SessionEntryCreationOperation,
+  type SessionEntryPlaceholder,
+  type SessionTranscriptInitializationPublication,
   type SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 type CommittedSessionSharingFacts = {
   entry: SessionSharingEntry | undefined;
   placeholder?: SessionEntryPlaceholder;
@@ -58,12 +59,6 @@ type PlaceholderReceipt = {
   committed: boolean;
 };
 
-export type SessionTranscriptInitializationPublication = {
-  kind: "session-transcript-initialized";
-  sessionKey: string;
-  placeholder?: SessionEntryPlaceholder;
-};
-
 export type SessionEntryReplacementPublication = {
   kind: "session-entry-replacements";
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
@@ -75,6 +70,9 @@ export type SessionEntryReplacementPublication = {
 type PreparedSessionSharingRead = {
   pending: Set<object>;
   facts: CommittedSessionSharingFacts | undefined;
+  generation?: {
+    current: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | null | undefined;
+  };
 };
 const preparedSharingReads = resolveGlobalSingleton(
   Symbol.for("openclaw.preparedSessionSharingReads"),
@@ -284,6 +282,7 @@ export function publishSessionEntryPlaceholderInsertion(
         ? { entry: undefined, placeholder, membership: new Set() }
         : undefined;
       for (const read of retainedSharingReads(database, sessionKey) ?? []) {
+        publishRetainedSessionGeneration(read, undefined, staged);
         read.facts = facts;
       }
       if (incognito) {
@@ -316,17 +315,28 @@ export function retainPreparedSessionSharingFacts(params: {
   entry: SessionSharingEntry | undefined;
   placeholder?: SessionEntryPlaceholder;
   membership: ReadonlySet<string>;
+  generation?: PreparedSessionSharingRead["generation"];
 }) {
   const key = `${params.databaseIdentity}\0${params.sessionKey}`;
   const read: PreparedSessionSharingRead = {
     pending: new Set(),
     facts: { entry: params.entry, placeholder: params.placeholder, membership: params.membership },
+    generation: params.generation,
   };
   const reads = preparedSharingReads.get(key) ?? new Set<PreparedSessionSharingRead>();
   reads.add(read);
   preparedSharingReads.set(key, reads);
   let active = true;
   return {
+    readGeneration: () =>
+      read.pending.size > 0 ||
+      [...(pendingSessionEntryPublications.get(key) ?? [])].some(
+        (pending) => !pending.settled && !pending.superseded.has(params.sessionKey),
+      )
+        ? undefined
+        : active
+          ? read.generation?.current
+          : undefined,
     readCurrent: () =>
       read.pending.size > 0 ||
       [...(pendingSessionEntryPublications.get(key) ?? [])].some(
@@ -349,6 +359,40 @@ export function retainPreparedSessionSharingFacts(params: {
       }
     },
   };
+}
+
+/** Generation custody shares the entry publication owner, independently of membership. */
+export function retainPreparedSessionGenerationFacts(params: {
+  databaseIdentity: string;
+  sessionKey: string;
+  entry: SessionSharingEntry | undefined;
+}) {
+  const retained = retainPreparedSessionSharingFacts({
+    ...params,
+    membership: new Set(),
+    generation: { current: params.entry ?? null },
+  });
+  return { readCurrent: retained.readGeneration, release: retained.release };
+}
+
+function publishRetainedSessionGeneration(
+  read: PreparedSessionSharingRead,
+  entry: SessionSharingEntry | undefined,
+  known: boolean,
+) {
+  const generation = read.generation;
+  if (!generation?.current) {
+    return;
+  }
+  if (!known) {
+    generation.current = undefined;
+  } else if (
+    !entry ||
+    generation.current.sessionId !== entry.sessionId ||
+    generation.current.lifecycleRevision !== entry.lifecycleRevision
+  ) {
+    generation.current = null;
+  }
 }
 
 function retainedSharingReads(database: SessionEntryCacheDatabase, sessionKey: string) {
@@ -482,6 +526,11 @@ export function publishSessionSharingEntryChange(
       () => {
         recordCommittedSessionEntryPublication(database, update.sessionKey, sharingEntry);
         for (const read of retainedSharingReads(database, update.sessionKey) ?? []) {
+          publishRetainedSessionGeneration(
+            read,
+            sharingEntry,
+            sharingEntry !== undefined || facts?.kind === "removed",
+          );
           const previous = read.facts;
           read.facts =
             sharingEntry &&
@@ -619,6 +668,11 @@ export function retainSessionEntryWorkerPublication(params: {
         const placeholder =
           initialization?.sessionKey === sessionKey ? initialization.placeholder : undefined;
         for (const read of preparedSharingReads.get(`${identityKey}\0${sessionKey}`) ?? []) {
+          publishRetainedSessionGeneration(
+            read,
+            sharingEntry,
+            replacement !== undefined || placeholder !== undefined,
+          );
           const previous = read.facts;
           read.facts = placeholder
             ? { entry: undefined, placeholder, membership: new Set() }

@@ -101,6 +101,7 @@ import type {
   GatewaySessionCommitResult,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
+import { readSessionCreateTarget } from "./session-create-target.js";
 import {
   prepareGatewaySessionLifecycleTargets,
   projectPreparedSessionWorkspace,
@@ -417,17 +418,17 @@ export async function createGatewaySession(
     key: targetSessionKey,
     agentId,
   });
-  let capturedTargetEntry: SessionEntry | undefined;
+  const initialTargetEntry = explicitTargetKey
+    ? resolveSessionEntryAccessTarget({
+        cfg: params.cfg,
+        sessionKey: creationTarget.canonicalKey,
+        agentId: creationTarget.agentId,
+      }).entry
+    : undefined;
   if (explicitTargetKey && !params.initialEntry) {
     // A trusted initializer holds the lifecycle fence through afterCreate. Waiting
     // on that fence would deadlock callers that must reject its visible pending row.
-    const pendingEntry = resolveSessionEntryAccessTarget({
-      cfg: params.cfg,
-      sessionKey: creationTarget.canonicalKey,
-      agentId: creationTarget.agentId,
-    }).entry;
-    capturedTargetEntry = pendingEntry;
-    if (pendingEntry?.initializationPending === true) {
+    if (initialTargetEntry?.initializationPending === true) {
       return {
         ok: false,
         error: errorShape(
@@ -453,7 +454,7 @@ export async function createGatewaySession(
 
   const authorityTargets = params.operatorAuthority
     ? [
-        { target: creationTarget, entry: capturedTargetEntry },
+        { target: creationTarget, entry: initialTargetEntry },
         ...(parentSessionTarget
           ? [{ target: parentSessionTarget, entry: parentSessionEntry }]
           : []),
@@ -472,7 +473,7 @@ export async function createGatewaySession(
             ready: operatorReady,
             assertCurrent: () => commitGuard?.(),
             selectTargetInLifecycle: Boolean(
-              explicitTargetKey && !capturedTargetEntry && !params.initialEntry,
+              explicitTargetKey && !initialTargetEntry && !params.initialEntry,
             ),
           },
         }
@@ -701,31 +702,16 @@ export async function createGatewaySession(
       parent: currentParentSessionEntry,
     });
     const target = creationTarget;
-    const currentTargetEntry = loadGatewaySessionEntryReadOnly(target.canonicalKey, {
-      agentId: target.agentId,
-    }).entry;
-    // Lifecycle custody keeps this owner stable through naming and filesystem preparation.
-    const existingOwnershipError = resolvePluginSessionOwnershipError({
-      action: "adopt",
-      entry: currentTargetEntry,
-      key: target.canonicalKey,
-      pluginOwnerId: params.authorizedPluginId,
-    });
-    if (existingOwnershipError) {
-      return { ok: false, error: existingOwnershipError };
+    const targetRead = readSessionCreateTarget(
+      params,
+      target,
+      initialTargetEntry?.sessionId,
+      targetLifecycleIdentities,
+    );
+    if (!targetRead.ok) {
+      return targetRead;
     }
-    if (!currentTargetEntry) {
-      const creationError = authorizeGatewaySessionCreation({
-        cfg: params.cfg,
-        agentId: target.agentId,
-        ...(params.operatorRoleActor
-          ? { actor: params.operatorRoleActor }
-          : { profileId: params.requestingOperatorProfileId }),
-      });
-      if (creationError) {
-        return { ok: false, error: creationError };
-      }
-    }
+    const currentTargetEntry = targetRead.value;
     const creationSandbox =
       creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
     const sandboxRequired =
@@ -1447,10 +1433,16 @@ export async function createGatewaySession(
     };
   };
 
+  const targetLifecycleIdentities = [
+    creationTarget.canonicalKey,
+    ...creationTarget.storeKeys,
+    ...(requestedKey ? [requestedKey] : []),
+    ...(initialTargetEntry?.sessionId ? [initialTargetEntry.sessionId] : []),
+  ];
   const lifecycleTargets = [
     {
       scope: creationTarget.storePath,
-      identities: [creationTarget.canonicalKey],
+      identities: targetLifecycleIdentities,
     },
   ];
   if (

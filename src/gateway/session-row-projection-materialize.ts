@@ -138,6 +138,7 @@ export function createSessionRowMaterializer(owner: {
             owner.forgetBackfill(id);
           } else if (row) {
             row.pendingDatabaseFacts = databaseFacts;
+            row.retainedDatabaseFacts = databaseFacts;
           }
         }
       });

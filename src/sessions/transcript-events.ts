@@ -67,6 +67,19 @@ export function readSessionTranscriptRunId(message: unknown): string | undefined
   return normalizeOptionalString(metadata["runId"]);
 }
 
+/** Failure receipts precede assistant rows and carry their run identity in report details. */
+export function readSessionTranscriptFailureRunId(entry: unknown): string | undefined {
+  if (
+    !isRecord(entry) ||
+    (entry.type !== "custom_message" && entry.role !== "custom") ||
+    entry.customType !== "run-failed-before-reply" ||
+    !isRecord(entry.details)
+  ) {
+    return undefined;
+  }
+  return normalizeOptionalString(entry.details.runId);
+}
+
 /** Correlates only terminal assistant rows with the run that actually produced them. */
 export function resolveTerminalAssistantTranscriptRunId(
   message: unknown,

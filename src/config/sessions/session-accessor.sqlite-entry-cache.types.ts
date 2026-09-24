@@ -28,6 +28,14 @@ export type SessionSharingEntry = Pick<
   | "sandbox"
 >;
 
+export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
+
+export type SessionTranscriptInitializationPublication = {
+  kind: "session-transcript-initialized";
+  sessionKey: string;
+  placeholder?: SessionEntryPlaceholder;
+};
+
 const creationBrand = Symbol("sessionEntryCreation");
 export type SessionEntryCreationOperation = Readonly<{ [creationBrand]: true }>;
 

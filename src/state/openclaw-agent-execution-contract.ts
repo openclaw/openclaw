@@ -3,7 +3,7 @@ import type {
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
 } from "../config/sessions/session-accessor.sqlite-archive-types.js";
-import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type {
   SessionEntryReplacementCommit,
   SessionEntryReplacementCommitted,

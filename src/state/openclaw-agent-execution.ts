@@ -251,7 +251,12 @@ export function captureOpenClawAgentDatabaseExecution(
       assertCurrent();
     }
     if (cleanupFailure) {
-      throw cleanupFailure.error;
+      // A transient lifecycle refusal must not poison every later borrower.
+      // Retire the original generation before admitting any replacement work.
+      await closeNative();
+      assertCurrent();
+      assertCallerCurrent?.();
+      source.assertCurrent();
     }
     assertCallerCurrent?.();
     if (!generation) {
@@ -456,11 +461,20 @@ export function captureOpenClawAgentDatabaseExecution(
             if (
               creationReference === reference &&
               !fileIdentity &&
-              !generation &&
               !nativeClosing &&
               !cleanupFailure
             ) {
-              creationReference = undefined;
+              if (generation) {
+                // Source refusal can leave an unaccepted generation allocated before native open.
+                try {
+                  await closeNative(generation);
+                } catch (error) {
+                  reportCleanupFailure(error);
+                }
+              }
+              if (!generation && !nativeClosing && !cleanupFailure) {
+                creationReference = undefined;
+              }
             }
             borrowers -= 1;
             if (borrowers !== 0 || retired || cleanupFailure) {
@@ -492,9 +506,6 @@ export function captureOpenClawAgentDatabaseExecution(
       };
     },
     async closeIdle() {
-      if (cleanupFailure) {
-        throw cleanupFailure.error;
-      }
       await closeNative();
       // A reborrow may have retained the owner or started its next native generation.
       if (borrowers === 0 && !generation) {

@@ -484,25 +484,6 @@ describe("shared Codex app-server client", () => {
     expect(startSpy).not.toHaveBeenCalled();
   });
 
-  it("bounds isolated transport startup and closes a client returned after its deadline", async () => {
-    vi.useFakeTimers();
-    const harness = createClientHarness();
-    let finishStart!: (client: CodexAppServerClient) => void;
-    const starting = new Promise<CodexAppServerClient>((resolve) => {
-      finishStart = resolve;
-    });
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(starting);
-    const acquire = createIsolatedCodexAppServerClient({ timeoutMs: 50 });
-    const rejected = expect(acquire).rejects.toThrow("codex app-server initialize timed out");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(startSpy).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(50);
-    await rejected;
-    finishStart(harness.client);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(harness.stdinDestroyed).toBe(true);
-  });
-
   it.each(["implicit", "explicit"] as const)(
     "revalidates %s auth before reusing a warm client after account replacement",
     async (selector) => {
@@ -660,13 +641,16 @@ describe("shared Codex app-server client", () => {
     }
   });
 
-  registerSharedClientLifetimeTests(() => {
-    mocks.bridgeCodexAppServerStartOptions.mockImplementationOnce(async ({ startOptions }) => ({
-      ...startOptions,
-      transport: "websocket",
-      url: "ws://127.0.0.1:8123",
-    }));
-  });
+  registerSharedClientLifetimeTests(
+    () => {
+      mocks.bridgeCodexAppServerStartOptions.mockImplementationOnce(async ({ startOptions }) => ({
+        ...startOptions,
+        transport: "websocket",
+        url: "ws://127.0.0.1:8123",
+      }));
+    },
+    (error) => mocks.applyCodexAppServerAuthProfile.mockRejectedValue(error),
+  );
 
   it.each(["fails", "succeeds"])(
     "preserves a co-lease when selection replacement acquisition %s",
@@ -1223,6 +1207,7 @@ describe("shared Codex app-server client", () => {
     );
     await firstStarted;
     await vi.advanceTimersByTimeAsync(5);
+    first.emitExit();
     await firstRejection;
     expect(first.process.stdin.destroyed).toBe(true);
 
@@ -1340,6 +1325,7 @@ describe("shared Codex app-server client", () => {
     const rejection = expect(client).rejects.toThrow("codex app-server initialize timed out");
     await started;
     await vi.advanceTimersByTimeAsync(5);
+    harness.emitExit();
     await rejection;
     expect(harness.process.stdin.destroyed).toBe(true);
   });

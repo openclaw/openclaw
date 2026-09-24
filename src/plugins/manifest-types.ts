@@ -46,13 +46,14 @@ export type PluginDiagnosticCode =
   | "configured-plugin-path-inspection-failed"
   | "configured-plugin-path-unavailable"
   | "dashboard-declaration-invalid"
+  | "explicit-config-plugin-selection"
   | "plugin-verification"
   | "sdk-incompatible"
   | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
 export type PluginDiagnostic = {
-  level: "warn" | "error";
+  level: "info" | "warn" | "error";
   message: string;
   pluginId?: string;
   source?: string;

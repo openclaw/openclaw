@@ -197,7 +197,7 @@ Switching agents refreshes the session list even while other conversations are a
 
 An older list response preserves newer session names and run status already loaded in another open session list.
 
-Loaded persistent child-session rows stay visible while an expanded or selected parent fetches updated child data after a session-list refresh. Child loads preserve newer names and run status already observed in other session lists. A selected child also adopts its refreshed name and run status as soon as its details arrive, including while its ancestors are still loading. Its ancestor path refreshes when the session is replaced or its parent changes, including in filtered lists. Collapsed, unselected parents drop stale child snapshots on refresh and reload when reopened; the selected session's ancestry stays available. A loading placeholder appears only when the parent has no loaded child rows yet. Child-load errors remain visible until you choose **Retry** or collapse and reopen the parent.
+Loaded persistent child-session rows stay visible while an expanded or selected parent fetches updated child data after a session-list refresh. Child loads preserve newer names and run status already observed in other session lists. A selected child also adopts its refreshed name and run status as soon as its details arrive, including while its ancestors are still loading. Its ancestor path refreshes when the session is replaced or its parent changes, including in filtered lists. Collapsed, unselected parents drop stale child snapshots on refresh and reload when reopened; the selected session's ancestry stays available. A loading placeholder appears only when the parent has no loaded child rows yet. Child-load errors remain visible until you choose **Retry** or collapse and reopen the parent. In **Active**, archived children stop contributing to the parent’s child count. A completed child load also removes links to absent children after a reload; unloaded or failed child reads keep their discovery controls.
 
 **Archived** hides active sessions even when their conversation remains open. In **Active**, a directly opened archived session can retain its selected row. Archiving a visible session hides its row immediately while keeping its conversation open. Repeated archive actions stay disabled while the Gateway confirms the request. Confirmation offers **Undo**, including when you leave the Sessions page before the archive finishes or navigate away from the archived chat while the notification remains visible. Undo targets the original conversation and expires on a Gateway reconnect. If the request fails, the row returns with an error explaining what prevented archiving. Confirmed archive, restore, and pin changes remain applied to loaded rows if the follow-up refresh fails. If archiving already removed a row from every loaded list, Undo needs a successful refresh to show it again. The refresh error is shown separately; it does not undo a successful archive or restore. Refresh the session list to recover missing rows.
 
@@ -360,6 +360,9 @@ of the new session; they never share a session, invite people, or grant access.
 - **Command+Enter** on macOS or **Ctrl+Enter** on Windows/Linux starts a new session
   in the background. You can also choose **New session** beside the input.
 
+Selecting an installed plugin search result opens that plugin's overview, including
+disabled plugins. The **Plugins** navigation command opens the catalog hub.
+
 Open **New session settings** beside the input to choose the agent, workspace and
 machine, or whether to use a new worktree. These controls reuse the permissions
 and device/cloud availability rules of the full New session page. Model,
@@ -371,7 +374,9 @@ the checkbox restores your usual choices immediately and leaves the prompt
 intact. One-off choices are not remembered for the next palette session.
 
 Accepted creation closes the palette and offers **Open session** without changing
-the foreground view or its draft. A failed submission retains the prompt, selected mentions, images, and
+the foreground view or its draft. Creation and completion notices can open a session
+only while the original Gateway and account remain selected; reconnecting to the
+same account keeps the action available. A failed submission retains the prompt, selected mentions, images, and
 choices with an error. These settings do not affect sessions opened from search,
 and the existing conversation composer keeps its own send and steer/queue
 shortcuts. Long prompts remain intact for session creation and are never sent as

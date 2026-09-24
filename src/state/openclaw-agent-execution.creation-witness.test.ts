@@ -147,6 +147,87 @@ it.each(["missing", "schema-missing"] as const)(
   },
 );
 
+it.each(["missing", "schema-missing"] as const)(
+  "releases a %s creation reservation after source refusal before native opening",
+  async (kind) => {
+    const options = fixture();
+    if (kind === "schema-missing") {
+      fs.mkdirSync(path.dirname(options.path), { recursive: true });
+      fs.writeFileSync(options.path, "");
+    }
+    const observed = readDatabasePathIdentitySync(options.path);
+    const creator = captureOpenClawAgentDatabaseExecution(options, {
+      expectedCreationIdentity: observed,
+    });
+    const sibling = captureOpenClawAgentDatabaseExecution(options);
+    const refusal = new Error("Original creation source ended before native opening");
+    const revoked = source();
+    revoked.assertCurrent = () => {
+      throw refusal;
+    };
+    const admit = vi.spyOn(revoked, "createAdmission");
+    try {
+      await expect(creator.prepare(revoked)).rejects.toBe(refusal);
+      expect(admit).not.toHaveBeenCalled();
+      expect(creator.fileIdentity).toBeUndefined();
+      expect(readDatabasePathIdentitySync(options.path)).toEqual(observed);
+      await creator.release();
+      await sibling.prepare(source());
+      expect(sibling.fileIdentity).toMatchObject({ kind: "file" });
+      await expect(sibling.runExisting(source(), async () => "prepared")).resolves.toBe("prepared");
+    } finally {
+      admit.mockRestore();
+      await Promise.allSettled([creator.release(), sibling.release()]);
+    }
+  },
+);
+
+it("joins native creating admission before releasing its original reservation", async () => {
+  const options = fixture();
+  const creator = captureOpenClawAgentDatabaseExecution(options, {
+    expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
+  });
+  const sibling = captureOpenClawAgentDatabaseExecution(options);
+  const order: string[] = [];
+  let releasing: Promise<void> | undefined;
+  let siblingAttempt: Promise<unknown> | undefined;
+  const preparing = creator
+    .prepare(
+      source((request) => {
+        if (request.stage !== "open" || releasing) {
+          return;
+        }
+        expect(sibling.fileIdentity).toBeUndefined();
+        releasing = creator.release().then(() => {
+          order.push("released");
+        });
+        siblingAttempt = sibling.prepare(source()).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      }),
+    )
+    .then(() => {
+      order.push("prepared");
+    });
+  try {
+    await preparing;
+    expect(releasing).toBeDefined();
+    expect(await siblingAttempt).toMatchObject({
+      message: expect.stringContaining("captured creating reference"),
+    });
+    await releasing;
+    expect(order).toEqual(["prepared", "released"]);
+    const identity = sibling.fileIdentity;
+    expect(identity).toMatchObject({ kind: "file" });
+    await sibling.prepare(source());
+    expect(sibling.fileIdentity).toEqual(identity);
+    await expect(sibling.runExisting(source(), async () => "retained")).resolves.toBe("retained");
+  } finally {
+    await Promise.allSettled([preparing, creator.release(), sibling.release()]);
+  }
+});
+
 it("reserves absent first birth and refuses a competitor introduced at the native open boundary", async () => {
   const options = fixture();
   const creator = captureOpenClawAgentDatabaseExecution(options, {

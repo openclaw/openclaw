@@ -3,6 +3,7 @@ import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../agent
 import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -142,7 +143,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           }
         })
         .catch((error: unknown) => {
-          log.warn(`skill experience review failed: ${String(error)}`);
+          log.warn(`skill experience review failed: ${formatErrorMessage(error)}`);
           if (pendingBySession.get(key) === pending && pending.generation === generation) {
             pendingBySession.delete(key);
           }

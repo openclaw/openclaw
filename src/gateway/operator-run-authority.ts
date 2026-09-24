@@ -208,13 +208,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
         manifestPlugins: metadata ?? [],
       });
       modelPolicy =
-        original && current
+        original &&
+        current &&
+        readOperatorModelPolicyMembership(original) !== readOperatorModelPolicyMembership(current)
           ? Object.freeze({
               models: Object.freeze(current.models.filter(original.allows)),
               allows: (ref: Parameters<typeof original.allows>[0]) =>
                 original.allows(ref) && current.allows(ref),
             })
-          : (original ?? current);
+          : (current ?? original);
       modelPolicyConfig = cfg;
       modelPolicyMetadata = metadata;
     }

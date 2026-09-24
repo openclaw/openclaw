@@ -100,6 +100,15 @@ it.each(["capture", "operator tool"])(
             expect(
               retained.authority.modelPolicy?.allows({ provider: "fixture", model: "a" }),
             ).toBe(true);
+            cfg = {
+              ...cfg,
+              agents: { defaults: { model: { primary: "fixture/b", fallbacks: ["fixture/a"] } } },
+            };
+            publishOperatorRoleConfigChange(context);
+            expect(retained.authority.modelPolicy?.models).toEqual([
+              { provider: "fixture", model: "b" },
+              { provider: "fixture", model: "a" },
+            ]);
             const roles = expectDefined(cfg.gateway?.roles, "configured roles");
             cfg = {
               ...cfg,

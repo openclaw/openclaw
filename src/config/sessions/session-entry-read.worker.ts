@@ -24,6 +24,7 @@ import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sql
 import { readSessionBackingFactsInDatabase } from "./session-backing-facts.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
+  assertCanonicalSqliteSessionRowsCurrent,
   canonicalSessionKeyMigrationRequiredError,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
@@ -226,7 +227,7 @@ export function readSessionRowDatabaseFacts(
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
         withSqlitePostCommitPublications(database.db, () =>
           runSqliteDeferredTransactionSync(database.db, () => {
-            assertCanonicalSqliteSessionKeysCurrent(database);
+            assertCanonicalSqliteSessionRowsCurrent(database, request.sessionKeys);
             const selected = expectDefined(
               readExactSessionEntryCandidatesInDatabase(database, [request.sessionKeys], "list")[0],
               "session row facts read result",

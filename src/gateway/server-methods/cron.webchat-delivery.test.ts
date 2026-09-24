@@ -26,7 +26,7 @@ import {
   normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient } from "./types.js";

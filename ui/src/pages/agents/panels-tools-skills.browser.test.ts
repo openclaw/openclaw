@@ -4,6 +4,7 @@ import { assert, describe, expect, it, vi } from "vitest";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
+import { createBaseParams } from "./panels-tools-skills.test-support.ts";
 import { renderAgentTools } from "./panels-tools-skills.ts";
 
 installBrowserHistoryIsolation();
@@ -29,53 +30,6 @@ const toolPreview: ToolsEffectiveResult = {
   ],
   notices: [{ id: "mcp-not-yet-listed", severity: "info", message: "Discovery is incomplete." }],
 };
-
-function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
-  const githubIdentity = new GitHubIdentityController({
-    requestUpdate: () => undefined,
-    runExternalMutation: async () => ({
-      ok: false,
-      reason: "unavailable",
-      error: "Mutation unavailable in rendering test.",
-    }),
-  });
-  githubIdentity.sync({
-    client: null,
-    connected: false,
-    target: { kind: "shared", scope: "agent", agentId: "main", config: null },
-    statusReadable: true,
-    configurable: false,
-    authorizable: false,
-    clientRevision: 0,
-  });
-  return {
-    agentId: "main",
-    canUpdateConfig: true,
-    configForm: {
-      agents: {
-        entries: { main: { default: true, tools: { profile: "full" } } },
-      },
-    } as Record<string, unknown>,
-    configLoading: false,
-    configSaving: false,
-    configDirty: false,
-    toolsCatalogLoading: false,
-    toolsCatalogError: null,
-    toolsCatalogResult: null,
-    toolsEffectiveLoading: false,
-    toolsEffectiveError: null,
-    toolsEffectiveResult: null,
-    runtimeSessionKey: "main",
-    runtimeSessionMatchesSelectedAgent: true,
-    githubIdentity,
-    onOpenGitHubConnections: vi.fn(),
-    onProfileChange: () => undefined,
-    onOverridesChange: () => undefined,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
-    ...overrides,
-  };
-}
 
 describe("agents tools panel (browser)", () => {
   it.each([
@@ -103,12 +57,31 @@ describe("agents tools panel (browser)", () => {
     },
   ])("does not treat a $name preview as zero tools or denied access", ({ overrides, status }) => {
     const container = document.createElement("div");
-    render(renderAgentTools(createBaseParams(overrides)), container);
+    const params = createBaseParams(overrides);
+    if (params.toolsEffectiveResult) {
+      params.toolsEffectiveResult = {
+        ...params.toolsEffectiveResult,
+        toolAccess: {
+          checked: "live-session",
+          profiles: [],
+          tools: [
+            {
+              id: "exec",
+              status: "excluded",
+              reasons: [{ kind: "profile", label: "Old profile exclusion" }],
+            },
+          ],
+        },
+      };
+    }
+    render(renderAgentTools(params), container);
 
     expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe(status);
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
     expect(container.querySelector(".agent-tools-notices")).toBeNull();
-    const row = container.querySelector(".agent-tool-card");
+    const row = container.querySelector("#agent-tool-exec");
+    expect(row?.textContent).not.toContain("Old profile exclusion");
+    expect(row?.querySelector(".agent-tool-policy")).toBeNull();
     expect(row?.querySelectorAll(".agent-tool-summary__fact dd")[1]?.textContent?.trim()).toBe(
       status,
     );
@@ -680,7 +653,7 @@ describe("agents tools panel (browser)", () => {
         value: detail.lastElementChild?.textContent?.trim(),
       })),
     ).toEqual([
-      { label: "Access", value: "Enabled by the current profile." },
+      { label: "Agent setting", value: "Enabled by the current profile." },
       { label: "Source", value: "Plugin: voice-call" },
       { label: "Default Presets", value: "full" },
       { label: "Tool preview", value: "Not loaded" },

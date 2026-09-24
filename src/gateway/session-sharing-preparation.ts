@@ -38,7 +38,12 @@ import {
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 
-type ExistingSessionMutationFacts = PreparedSessionMutationFacts & {
+type PreparedSessionSourceFacts = PreparedSessionMutationFacts & {
+  /** Physical source retained by the same read custody as the sharing facts. */
+  sourcePath?: string;
+};
+
+type ExistingSessionMutationFacts = PreparedSessionSourceFacts & {
   target: NonNullable<PreparedSessionMutationFacts["target"]>;
 };
 
@@ -83,13 +88,13 @@ type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
 /** Negative reads retain the same keyed publication and source guards as existing rows. */
 export function prepareSessionMutationFacts(
   params: SessionFactsRequest & { allowMissing: true },
-): Promise<SessionFactsRead<PreparedSessionMutationFacts>>;
+): Promise<SessionFactsRead<PreparedSessionSourceFacts>>;
 export function prepareSessionMutationFacts(
   params: SessionFactsRequest,
 ): Promise<SessionFactsRead<ExistingSessionMutationFacts>>;
 export async function prepareSessionMutationFacts(
   params: SessionFactsRequest & { allowMissing?: true },
-): Promise<SessionFactsRead<PreparedSessionMutationFacts>> {
+): Promise<SessionFactsRead<PreparedSessionSourceFacts>> {
   const assertRoutingCurrent = captureSessionMutationRouting(params.cfg);
   const { canonicalKey, agentId } = resolveSessionStoreIdentity(params);
   const incognito = isIncognitoSessionKey(canonicalKey);
@@ -97,7 +102,7 @@ export async function prepareSessionMutationFacts(
   let active = true;
   let beforeDiscovery = params.storageReady !== undefined;
   let invalidated = false;
-  let facts: PreparedSessionMutationFacts | undefined;
+  let facts: PreparedSessionSourceFacts | undefined;
   let creation: SessionEntryCreationOperation | undefined;
   let expectedPlaceholder: SessionEntryPlaceholder | undefined;
   let assertSource: () => void;
@@ -262,6 +267,7 @@ export async function prepareSessionMutationFacts(
           return { target: null, membership: new Set<string>() };
         }
         return {
+          sourcePath: storePath,
           target: {
             agentId,
             canonicalKey,
@@ -438,6 +444,7 @@ export async function prepareSessionMutationFacts(
           storeKey: match.key,
         };
         facts = {
+          sourcePath: sharing.source.path,
           target,
           membership: new Set(
             sharing.members.find((member) => member.sessionKey === match.key)?.identityIds,
@@ -467,6 +474,7 @@ export async function prepareSessionMutationFacts(
             throw new SessionMutationFactsUnavailableError();
           }
           return {
+            sourcePath: sharing.source.path,
             target: { ...target, entry: current.entry },
             membership: current.membership,
           };

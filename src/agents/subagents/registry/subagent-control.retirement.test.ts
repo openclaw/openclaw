@@ -645,13 +645,15 @@ describe("restored historical cancellation ownership", () => {
     expect(saved.killReconciliation).toBeUndefined();
     expect(saved.requesterSettleWake).toBeUndefined();
     expect(saved.execution).toEqual(input.subagent.execution);
-    expect(saved.cleanupCompletedAt).toBe(input.subagent.cleanupCompletedAt);
-    expect(saved.delivery).toMatchObject({ status: "failed", lastError: "requester unavailable" });
-    expect(saved.completion).toEqual({
-      required: true,
-      capturedAt: input.subagent.execution.endedAt,
-      resultText: null,
+    expect(saved.cleanupCompletedAt).not.toBe(input.subagent.cleanupCompletedAt);
+    expect(saved.cleanupCompletedAt).toBe(saved.delivery?.discardedAt);
+    expect(saved.delivery).toMatchObject({
+      status: "discarded",
+      disposition: "permanent_failure",
+      discardReason: "task-missing",
+      discardedAt: expect.any(Number),
     });
+    expect(saved.completion).toEqual(input.subagent.completion);
     expect(getTaskById(input.task.taskId)).toBeUndefined();
     expect(wake).toHaveBeenCalledOnce();
     expectNoExecutionReplay();

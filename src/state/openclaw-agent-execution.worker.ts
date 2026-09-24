@@ -1,6 +1,6 @@
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import type { Result } from "@openclaw/normalization-core/result";
-import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";

@@ -36,7 +36,10 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
-import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
+import {
+  releaseGatewaySessionStoreFixture,
+  settleGatewaySessionStoreFixture,
+} from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -502,6 +505,7 @@ it.each(["explicit", "automatic"] as const)(
       expect(announce).not.toHaveBeenCalled();
       expect(findTaskByRunId(previousRunId)?.taskId).toBe(taskId);
       release.resolve();
+      await settleGatewaySessionStoreFixture(root);
       await vi.waitFor(() => expect(announce).toHaveBeenCalledTimes(1));
       expect(announce).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -514,7 +518,11 @@ it.each(["explicit", "automatic"] as const)(
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
-      announce.mockRestore();
+      try {
+        await settleGatewaySessionStoreFixture(root);
+      } finally {
+        announce.mockRestore();
+      }
     }
   },
 );
