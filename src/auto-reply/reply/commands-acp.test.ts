@@ -1806,7 +1806,7 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Viewed diver package.");
   });
 
-  it("resolves ACP reset targets through the configured default account when AccountId is omitted", () => {
+  it("resolves ACP reset targets through the configured default account when AccountId is omitted", async () => {
     const cfg = {
       ...baseCfg,
       channels: {
@@ -1838,7 +1838,7 @@ describe("/acp command", () => {
           : null,
     );
 
-    const result = resolveEffectiveResetTargetSessionKey({
+    const result = await resolveEffectiveResetTargetSessionKey({
       cfg,
       channel: "discord",
       conversationId: defaultThreadId,

@@ -145,8 +145,12 @@ export async function applyWorkspaceDirectoryChanges(params: {
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
   applyPaths: ReadonlySet<string>;
+  assertCurrent?: () => void;
 }): Promise<void> {
-  const workspaceRoot = await openFsSafeRoot(params.root, { mode: 0o700 });
+  const workspaceRoot = await openFsSafeRoot(params.root, {
+    mode: 0o700,
+    assertBeforeMutation: params.assertCurrent,
+  });
   const baseNodes = manifestNodes(params.base);
   const currentNodes = manifestNodes(params.current);
   const directoryPaths = [...params.applyPaths].filter(

@@ -324,19 +324,33 @@ export function setOpenClawAgentDatabaseValidation(
   return validation;
 }
 
-export function invalidateOpenClawAgentDatabaseValidation(pathname: string): void {
+export function invalidateOpenClawAgentDatabaseValidation(
+  pathname: string,
+  identity = validatedPaths.get(path.resolve(pathname))?.validation?.identity,
+): void {
   const resolved = path.resolve(pathname);
-  const validation = validatedPaths.get(resolved)?.validation;
-  if (validation) {
-    Atomics.store(new Int32Array(validation.valid), 0, 0);
+  const paths = new Set([resolved]);
+  if (identity) {
+    for (const [candidate, entry] of validatedPaths) {
+      if (entry.validation?.identity === identity) {
+        paths.add(candidate);
+      }
+    }
   }
-  // Replace even an empty/revoked entry so an in-flight native handoff cannot revive it.
-  validatedPaths.set(resolved, {
-    agentId: validatedPaths.get(resolved)?.agentId,
-    validation,
-    integrityVerified: false,
-    revoked: true,
-  });
+  for (const candidate of paths) {
+    const entry = validatedPaths.get(candidate);
+    const validation = entry?.validation;
+    if (validation) {
+      Atomics.store(new Int32Array(validation.valid), 0, 0);
+    }
+    // Replace even an empty/revoked entry so an in-flight handoff cannot revive it.
+    validatedPaths.set(candidate, {
+      agentId: entry?.agentId,
+      validation,
+      integrityVerified: false,
+      revoked: true,
+    });
+  }
 }
 
 export function invalidateOpenClawAgentDatabaseValidationsForAgent(

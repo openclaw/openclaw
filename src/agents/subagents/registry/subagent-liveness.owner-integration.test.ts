@@ -64,7 +64,10 @@ const fixture = useSubagentControlFixture();
 const parent = "agent:main:liveness-parent";
 const start = Date.parse("2026-09-13T12:00:00Z");
 const olderThanCutoff = start + 2 * 60 * 60 * 1000 + 1;
-afterEach(() => resetCommandQueueStateForTest());
+afterEach(async () => {
+  await fixture.settle();
+  resetCommandQueueStateForTest();
+});
 
 async function register(id: string, collect = false, expectsCompletionMessage = false) {
   const childSessionKey = `agent:main:subagent:${id}`;

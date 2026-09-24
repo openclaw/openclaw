@@ -5,6 +5,7 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import type { ComputerToolTransport } from "../../agents/tools/computer-tool.js";
 import {
   claimAgentRunDelegatedAuthority,
+  claimAgentRunApprovalAuthority,
   releaseAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
@@ -166,7 +167,7 @@ describe("session computer transport", () => {
     const desktopRegistry = createDesktopSessionRegistry();
     const service = createWorkerComputerService({ ...h.options, desktopRegistry });
     const prepared = await service.prepare(h.claim);
-    const transport = prepared!.bind(h.run);
+    const transport = prepared!.bind(h.run, h.workerSource);
     await desktopRegistry.activate({
       sourceKey: h.state.environment.environmentId,
       ownerEpoch: h.state.environment.ownerEpoch,
@@ -219,7 +220,7 @@ describe("session computer transport", () => {
     if (!prepared) {
       throw new Error("Expected a prepared session desktop");
     }
-    prepared.bind(h.run);
+    prepared.bind(h.run, h.workerSource);
     const rpc = createWorkerComputerRpc({
       execute: service.execute,
       validate: () => ({ ok: true }),
@@ -357,7 +358,7 @@ describe("session computer transport", () => {
     async (sharedHost) => {
       const h = createHarness(sharedHost);
       const { transport, prepared } = await h.prepare();
-      const projection = prepared.bind(h.run);
+      const projection = prepared.bind(h.run, h.workerSource);
       await transport.invoke(request("snapshot"));
       const firstPhysicalId = h.nativeExecutionIds[0]!;
       expect(firstPhysicalId).not.toBe(EXECUTION_ID);
@@ -374,7 +375,7 @@ describe("session computer transport", () => {
       await transport.invoke(request("close"));
       await expect(transport.invoke(request("snapshot"))).rejects.toThrow(/closed/);
 
-      const next = prepared.bind(h.run);
+      const next = prepared.bind(h.run, h.workerSource);
       await next.invoke(request("snapshot", firstPhysicalId));
       expect(h.nativeExecutionIds.at(-1)).not.toBe(firstPhysicalId);
       expect(h.nativeExecutionIds.at(-1)).not.toBe(EXECUTION_ID);
@@ -487,7 +488,7 @@ describe("session computer transport", () => {
       if (!prepared) {
         throw new Error("Expected a prepared session desktop");
       }
-      prepared.bind(h.run);
+      prepared.bind(h.run, h.workerSource);
       const identity = connectionIdentity(h);
       let granted = true;
       const rpc = createWorkerComputerRpc({
@@ -554,7 +555,7 @@ describe("session computer transport", () => {
       if (!prepared) {
         throw new Error("Expected a prepared session desktop");
       }
-      prepared.bind(h.run);
+      prepared.bind(h.run, h.workerSource);
       const rpc = createWorkerComputerRpc({
         execute: service.execute,
         validate: () => ({ ok: true }),
@@ -680,14 +681,17 @@ describe("session computer transport", () => {
 
   it("closes only the captured execution after run and claim release, and never resumes input", async () => {
     const h = createHarness();
+    const sourceCheck = vi.spyOn(h.workerSource, "assertCurrent");
     const { transport, prepared } = await h.prepare();
     await transport.invoke(request("snapshot"));
     releaseAgentRunDelegatedAuthority(h.authority);
     h.releaseClaim();
     h.privateInvoke.mockClear();
+    sourceCheck.mockClear();
     await prepared.close("cancellation");
     await prepared.close("cancellation");
     await expect(transport.invoke(request("type"))).rejects.toThrow(/closed/);
+    expect(sourceCheck).not.toHaveBeenCalled();
     expect(h.privateInvoke).toHaveBeenCalledOnce();
     expect(h.privateInvoke.mock.calls[0]?.[0].params).toEqual({
       operation: "close",
@@ -823,7 +827,7 @@ describe("session computer transport", () => {
     await transport.invoke(request("snapshot"));
     await transport.invoke(request("close"));
     await expect(transport.invoke(request("type"))).rejects.toThrow(/closed/);
-    await prepared.bind(h.run).invoke(request("type", NEXT_EXECUTION_ID));
+    await prepared.bind(h.run, h.workerSource).invoke(request("type", NEXT_EXECUTION_ID));
     const nextPhysicalId = h.nativeExecutionIds.at(-1);
     expect(nextPhysicalId).not.toBe(h.nativeExecutionIds[0]);
     expect(nextPhysicalId).not.toBe(NEXT_EXECUTION_ID);
@@ -846,7 +850,7 @@ describe("session computer transport", () => {
       if (!prepared) {
         throw new Error("Expected a prepared session desktop");
       }
-      const transport = prepared.bind(h.run);
+      const transport = prepared.bind(h.run, h.workerSource);
       await transport.invoke(request("snapshot"));
       h.privateInvoke.mockClear();
       const entered = createDeferredCore();
@@ -891,7 +895,7 @@ describe("session computer transport", () => {
       if (!first) {
         throw new Error("Expected session computer");
       }
-      const retained = first.bind(h.run);
+      const retained = first.bind(h.run, h.workerSource);
       const rpc = createWorkerComputerRpc({
         execute: service.execute,
         validate: () => ({ ok: true }),
@@ -933,12 +937,22 @@ describe("session computer transport", () => {
           },
         };
         const nextRun = createOperationalRunInstanceRef(nextClaim.runId);
-        claimAgentRunDelegatedAuthority(nextRun);
+        const nextAuthority = claimAgentRunApprovalAuthority(
+          claimAgentRunDelegatedAuthority(nextRun),
+          [replacement.signal],
+        );
         const next = await service.prepare(nextClaim);
         if (!next) {
           throw new Error("Expected replacement session computer");
         }
-        next.bind(nextRun);
+        next.bind(nextRun, {
+          authority: nextAuthority,
+          assertCurrent() {
+            if (!validateAgentRunDelegatedAuthority(nextAuthority)) {
+              throw new Error("Session desktop placement authority changed");
+            }
+          },
+        });
         const nextIdentity = { ...identity, turnClaim: nextClaim, runId: nextClaim.runId };
         await expect(rpc(nextIdentity, frame, replacement.signal)).resolves.toMatchObject({
           ok: true,

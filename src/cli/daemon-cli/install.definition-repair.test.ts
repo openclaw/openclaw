@@ -400,6 +400,7 @@ async function runStandaloneDoctor(
       writeConfig: native.writeConfig,
       options: { repair: true, yes: true, nonInteractive: true },
       runtime: native.runtime,
+      signal: new AbortController().signal,
       warnings: [],
       settle: (operation) => operation(),
     });

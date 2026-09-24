@@ -86,7 +86,10 @@ export async function prepareCompactionSessionAgent(params: {
       transformSystemPrompt: false,
     }) as never;
   }
-  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel);
+  const providerThinkingLevel = mapThinkingLevelForProvider(
+    params.thinkLevel,
+    params.effectiveModel,
+  );
   const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
     thinkingLevel: providerThinkingLevel,
     agentId: params.sessionAgentId,

@@ -41,4 +41,6 @@ export type SidebarLayout = {
   dashboardPresentationOverride?: "split" | "expanded" | null;
   /** Focus the active side panel without swapping its saved main/side placement. */
   expandedSide?: boolean;
+  /** Explicit panel dismissal suppresses automatic resource reveals for this session. */
+  resourceAutoOpenDismissed?: boolean;
 };

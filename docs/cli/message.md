@@ -25,6 +25,11 @@ openclaw message <subcommand> [flags]
 - Channel-prefixed targets (for example `discord:channel:123`) resolve the
   owning plugin without an explicit `--channel`.
 
+With an explicit channel, Gateway-owned actions such as `read --channel discord`
+validate config without running local state migrations. They require a reachable
+Gateway. Local actions, broadcasts, dry-runs, and commands that need local channel
+discovery retain local config and plugin preparation.
+
 ## Agent ownership
 
 `openclaw message` uses the configured

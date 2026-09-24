@@ -16,6 +16,19 @@ import type {
   OperatorApprovalTerminalReason,
   ResolveOperatorApprovalResult,
 } from "./operator-approval-store.js";
+import type { OperatorApprovalStoreGuard } from "./operator-approval-store.types.js";
+
+export type ExecApprovalReadAuthority = {
+  assertCurrent: () => void;
+  guard: OperatorApprovalStoreGuard;
+};
+
+export type ExecApprovalResolveOptions = {
+  /** Explicit grant expiry override; undefined defers to the configured default. */
+  grantExpiresAtMs?: number | null;
+  assertCurrent?: () => void;
+  guard?: OperatorApprovalStoreGuard;
+};
 
 // Node replay distinguishes a trusted auto-review verdict from an operator decision.
 export type ExecApprovalResolutionSource = "operator" | "auto-review";

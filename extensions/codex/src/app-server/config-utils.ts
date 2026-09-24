@@ -1,11 +1,9 @@
 import { createHmac, randomBytes } from "node:crypto";
-import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { splitCommandArgs } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString as readNonEmptyString,
-  parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawExecAsk, OpenClawExecSecurity } from "./config-contracts.shared.js";
 import type { CodexServiceTier } from "./protocol.js";
@@ -38,10 +36,6 @@ export function isCodexFastServiceTier(value: unknown): boolean {
   return normalizeCodexServiceTier(value) === "priority";
 }
 
-export function normalizePositiveNumber(value: unknown, fallback: number): number {
-  return resolvePositiveTimerTimeoutMs(value, fallback);
-}
-
 export function normalizeHeaders(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -52,7 +46,7 @@ export function normalizeHeaders(value: unknown): Record<string, string> {
         ([key, child]) =>
           [
             key.trim(),
-            normalizeCodexAppServerSecretInput({
+            normalizeResolvedSecretInputString({
               value: child,
               path: `plugins.entries.codex.config.appServer.headers.${key}`,
             }),
@@ -60,17 +54,6 @@ export function normalizeHeaders(value: unknown): Record<string, string> {
       )
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])),
   );
-}
-
-export function normalizeCodexAppServerSecretInput(params: {
-  value: unknown;
-  path: string;
-}): string | undefined {
-  return normalizeResolvedSecretInputString(params);
-}
-
-export function readBooleanEnv(value: string | undefined): boolean | undefined {
-  return parseBooleanValue(value);
 }
 
 export function readExecSecurity(value: unknown): OpenClawExecSecurity | undefined {

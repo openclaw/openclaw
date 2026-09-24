@@ -5,6 +5,7 @@ import type { ComputerToolTransport } from "../../agents/tools/computer-tool.js"
 import {
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { NODE_WORKER_DESKTOP_COMPUTER_COMMAND } from "../../infra/node-commands.js";
 import { parseComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
@@ -42,7 +43,10 @@ type WorkerComputerTransport = Omit<ComputerToolTransport, "invoke"> & {
 
 export type PreparedWorkerComputer = {
   descriptor: WorkerComputerLaunchDescriptor;
-  bind(operationalRunInstance: OperationalRunInstanceRef): WorkerComputerTransport;
+  bind(
+    operationalRunInstance: OperationalRunInstanceRef,
+    workerSource?: { authority: AgentRunDelegatedAuthority; assertCurrent: () => void },
+  ): WorkerComputerTransport;
   close(reason: string): Promise<void>;
 };
 
@@ -269,9 +273,19 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
 
     return {
       descriptor,
-      bind(operationalRunInstance) {
-        const authority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
-        if (!authority || operationalRunInstance.runId !== source.runId) {
+      bind(operationalRunInstance, workerSource) {
+        const worker = source.turnClaim?.owner.kind === "worker";
+        workerSource?.assertCurrent();
+        const authority = worker
+          ? workerSource?.authority
+          : getActiveAgentRunDelegatedAuthority(operationalRunInstance);
+        if (
+          !authority ||
+          !validateAgentRunDelegatedAuthority(authority) ||
+          authority.operationalRunInstance.instanceId !== operationalRunInstance.instanceId ||
+          authority.operationalRunInstance.runId !== operationalRunInstance.runId ||
+          operationalRunInstance.runId !== source.runId
+        ) {
           throw new Error("Session computer requires the exact admitted run");
         }
         const identity: AgentRuntimeIdentity = {
@@ -304,6 +318,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
           ) {
             throw new Error("Session computer run authority closed");
           }
+          workerSource?.assertCurrent();
           assertPlacement();
         };
         assertCurrent();

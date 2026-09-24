@@ -376,7 +376,7 @@ describe("registered Discord metadata reads", () => {
       expect(shouldDeferExternalMessageActionTargetResolution(context)).toBe(true);
       expect((await dispatchChannelMessageAction(context))?.details).toEqual(read.result);
       expect(
-        prepareExternalMessageActionTargetForResolution(context).assertReadAuthorityCurrent,
+        (await prepareExternalMessageActionTargetForResolution(context)).assertReadAuthorityCurrent,
       ).toBeTypeOf("function");
       expect(fixture.requests).toContainEqual({ method: "GET", path: read.path });
       expect(fixture.requests.every((request) => request.method === "GET")).toBe(true);

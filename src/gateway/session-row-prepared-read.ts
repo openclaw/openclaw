@@ -1,4 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import type { CapturedSessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
 import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -10,12 +11,17 @@ export type SessionRowPreparationOptions = { includeAncestors?: boolean };
 
 export type SessionRowReadView = {
   describe(query: records.Lookup, captured?: records.Row): records.MaterializedRow | undefined;
+  readSource(row: records.MaterializedRow): CapturedSessionEntryReadSource | undefined;
   present(
     record: records.MaterializedRow,
     options?: records.SnapshotOptions,
   ): ReturnType<typeof records.present>;
   selectEntries(query: { key: string }): records.EntryRow[];
-  readonly state: { cfg: OpenClawConfig; rowContext: SessionListRowContext };
+  readonly state: {
+    cfg: OpenClawConfig;
+    policyConfig: OpenClawConfig;
+    rowContext: SessionListRowContext;
+  };
 };
 
 export async function withPreparedSessionRows<T>(
@@ -97,7 +103,11 @@ function consumePreparedSessionRows<T>(
   }
   // Targeted materialization may refresh the owner's metadata context. Capture its final facts.
   const preparedState = owner.state;
-  state = { cfg: preparedState.cfg, rowContext: preparedState.rowContext };
+  state = {
+    cfg: preparedState.cfg,
+    policyConfig: preparedState.policyConfig,
+    rowContext: preparedState.rowContext,
+  };
   let active = true;
   const assertActive = () => {
     if (!active || !isActive()) {
@@ -105,6 +115,10 @@ function consumePreparedSessionRows<T>(
     }
   };
   const read: SessionRowReadView = {
+    readSource(row) {
+      assertActive();
+      return owner.readSource(row);
+    },
     describe(query, captured) {
       assertActive();
       const key = privateKey(query);

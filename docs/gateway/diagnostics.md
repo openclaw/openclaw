@@ -348,6 +348,14 @@ including when diagnostic event collection is disabled. Active operations keep
 their custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
 
+When a task pool recreates an idle-retired Worker within five minutes, it keeps
+one replacement warm for five minutes of inactivity. Other slots retain their
+normal idle timeout. Node Code Mode likewise retains at most one completed
+Worker for five minutes, reusing it only when its runtime entry and heap limit
+match. Warm task workers still collect released payloads in place; critical
+pressure, cancellation, rotation, and shutdown retain their existing cleanup
+paths. No configuration setting is needed.
+
 ## Related
 
 - [Health checks](/gateway/health)

@@ -202,10 +202,10 @@ test("expires task cursors when a profile merge changes the same caller's sessio
       } finally {
         admin.close();
         viewer.close();
-        resetTaskRegistryForTests({ persist: false });
       }
     });
   } finally {
+    resetTaskRegistryForTests({ persist: false });
     invalidateOperatorRolePolicy(adminProfile.id);
     invalidateOperatorRolePolicy(viewerProfile.id);
   }

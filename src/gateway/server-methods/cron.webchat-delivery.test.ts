@@ -17,6 +17,7 @@ import {
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
+  createDirectOutboundTestAdapter,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -25,7 +26,7 @@ import {
   normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient } from "./types.js";
@@ -54,7 +55,10 @@ async function withWebchatTool(
       createTestRegistry(
         ["discord", "telegram"].map((id) => ({
           pluginId: id,
-          plugin: createChannelTestPluginBase({ id, config: { isConfigured: () => true } }),
+          plugin: {
+            ...createChannelTestPluginBase({ id, config: { isConfigured: () => true } }),
+            outbound: createDirectOutboundTestAdapter({ channel: id }),
+          },
           source: "test:webchat-cron",
         })),
       ),

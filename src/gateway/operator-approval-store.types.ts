@@ -174,3 +174,8 @@ export type ListTerminalOperatorApprovalsInput = {
   kind?: OperatorApprovalKind;
   nowMs?: number;
 };
+/** Opaque v2026.9.4 SDK guards require a native commit boundary. */
+export type OperatorApprovalStoreGuard = {
+  family: "worker" | "native-compatibility";
+  assertCurrent: () => void;
+};

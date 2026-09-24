@@ -136,6 +136,7 @@ describe("AgentSession runtime and transcript projections", () => {
       guardSessionManager(manager, { config, allowedToolNames: ["exec", "wait"] });
       const originalArgs = {
         ...args,
+        title: "Compute the harmless number",
         note: source,
         nested: { code: source, command: source },
         apiKey: "fixture-structured-secret",
@@ -351,7 +352,15 @@ describe("AgentSession runtime and transcript projections", () => {
           case "collision":
             return { ...message, content: [call, { ...call }] };
           case "replace-with-literal":
-            return { ...message, content: [{ ...call, arguments: { code: maskedSource } }] };
+            return {
+              ...message,
+              content: [
+                {
+                  ...call,
+                  arguments: { title: "Compute the harmless number", code: maskedSource },
+                },
+              ],
+            };
           default:
             return { ...message, content: [{ type: "text", text: "Hook preserved call." }, call] };
         }
@@ -408,6 +417,7 @@ describe("AgentSession runtime and transcript projections", () => {
                     id: `hook_${action}`,
                     name: "exec",
                     arguments: {
+                      title: "Compute the harmless number",
                       code: source,
                       ...(action === "javascript-to-default" ? { language: "javascript" } : {}),
                     },
@@ -529,7 +539,12 @@ describe("AgentSession runtime and transcript projections", () => {
             model,
             [
               { type: "toolCall", id: "mixed_rejected", name: "unavailable", arguments: {} },
-              { type: "toolCall", id: "mixed_code", name: "exec", arguments: { code: source } },
+              {
+                type: "toolCall",
+                id: "mixed_code",
+                name: "exec",
+                arguments: { title: "Compute the harmless number", code: source },
+              },
               { type: "toolCall", id: "mixed_other", name: "other", arguments: { code: source } },
             ],
             "toolUse",
@@ -633,7 +648,10 @@ describe("AgentSession runtime and transcript projections", () => {
                     type: "toolCall",
                     id: "reused_id",
                     name: "exec",
-                    arguments: mode === "code" ? { code: source } : { command: source },
+                    arguments:
+                      mode === "code"
+                        ? { title: "Compute the harmless number", code: source }
+                        : { command: source },
                   },
                 ],
                 "toolUse",

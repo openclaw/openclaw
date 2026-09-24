@@ -4,6 +4,7 @@ import {
   replaceSessionEntry,
   appendTranscriptMessage,
 } from "../config/sessions/session-accessor.js";
+import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import {
   registerAgentRunContext,
   clearAgentRunContext,
@@ -11,6 +12,7 @@ import {
   getAgentRunLifecycleGeneration,
 } from "../infra/agent-run-registry.js";
 import {
+  captureAgentHarnessCompletionCustody,
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
 } from "../plugin-sdk/agent-harness-task-runtime.js";
@@ -20,6 +22,7 @@ import {
   createHarnessCompletionSourceAssertion,
 } from "../tasks/agent-harness-completion-recovery.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
+import { updateTask } from "../tasks/task-registry-mutation.js";
 import { getTaskById } from "../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../tasks/task-registry.test-support.js";
 import {
@@ -31,9 +34,11 @@ import {
   createOperationalRunInstanceRef,
   resolveAdmittedRunActiveAssertion,
 } from "./admitted-run-context.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { buildCurrentRunRestartRecoveryClaim } from "./agent-command-restart-recovery.js";
 import { reconcileHarnessCompletionDelivery } from "./agent-harness-completion-delivery.js";
 import { deliverSubagentAnnouncement } from "./subagents/announce/subagent-announce-delivery.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 vi.mock("./subagents/announce/subagent-announce-delivery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./subagents/announce/subagent-announce-delivery.js")>()),
   deliverSubagentAnnouncement: vi.fn(async () => ({ delivered: true, path: "steered" })),
@@ -85,7 +90,12 @@ async function setup(
   await replaceSessionEntry(target, entry);
   return { scope, runtime, create, task, target, entry };
 }
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(deliverSubagentAnnouncement)
+    .mockReset()
+    .mockResolvedValue({ delivered: true, path: "steered" });
+});
 describe("live harness cancellation reporting", () => {
   it.each(
     (["succeeded", "failed", "cancelled"] as const).flatMap((stored) =>
@@ -133,6 +143,59 @@ describe("live harness cancellation reporting", () => {
 });
 
 describe("review4 exact task ownership", () => {
+  it.each(["requester", "task"] as const)(
+    "rechecks retained %s identity after an asynchronous delivery boundary",
+    async (changed) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const { task, target, entry } = await setup(state);
+        const context = createContext();
+        const resolver = () => context;
+        context.resolveGatewayContext = resolver;
+        const scope = createAgentHarnessTaskRuntimeScope({
+          requesterSessionKey: key,
+          gatewayContextResolver: resolver,
+        });
+        const custody = (await withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: key,
+            gatewayContextResolver: resolver,
+            operationalRunInstance:
+              createTestAdmittedRunContext("parent-run").operationalRunInstance,
+            receiptAuthority: () => true,
+          },
+          () => captureAgentHarnessCompletionCustody(scope),
+        ))!;
+        vi.mocked(deliverSubagentAnnouncement).mockImplementationOnce(async (params) => {
+          expect(params.isSourceSessionEffectsAllowed?.()).toBe(true);
+          await Promise.resolve();
+          if (changed === "requester") {
+            await replaceSessionEntry(target, { ...entry, sessionId: "replacement-session" });
+          } else {
+            updateTask(task.taskId, { createdAt: task.createdAt - 1 });
+            expect(getTaskById(task.taskId)?.createdAt).toBe(task.createdAt - 1);
+          }
+          expect(params.isSourceSessionEffectsAllowed?.()).toBe(false);
+          return { delivered: false, path: "none" };
+        });
+        try {
+          const result = await deliverAgentHarnessTaskCompletion({
+            scope,
+            completionCustody: custody,
+            childSessionKey: child,
+            childSessionId: "child",
+            announceId: source.slice("announce:".length),
+            status: "succeeded",
+            result: "result",
+          });
+          expect(result.delivered).toBe(false);
+        } finally {
+          custody.release();
+        }
+      });
+    },
+  );
+
   it.each(["single", "duplicate", "late-duplicate"])(
     "uses real task creation for %s ownership",
     async (kind) => {

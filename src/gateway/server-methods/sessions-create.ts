@@ -23,6 +23,7 @@ import { assertPreparedSkillLibrarySelection } from "../../skills/library/select
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveSessionCreateCatalogSelectionError } from "../session-create-model-selection.js";
 import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
@@ -42,7 +43,7 @@ import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { registerCreatedSessionCategory } from "./session-create-category.js";
+import { registerCommittedSessionCategory } from "./session-create-category.js";
 import { idempotentSessionCreate } from "./session-create-idempotency.js";
 import {
   resolveSessionCreateInitialTurn,
@@ -77,6 +78,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       sessionMutationCommitGuard,
       sessionMutationAuthorization,
       signal,
+      hasCurrentClientAuthority,
     } = options;
     if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {
       return;
@@ -459,7 +461,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!authority.ensureActive()) {
       return;
     }
-    const created = await createGatewaySession({
+    const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,
       key: sessionKey,
       agentId: sessionAgentId,
@@ -524,6 +526,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       loadGatewayModelCatalogSnapshot: () =>
         context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
       commitGuard,
+      afterSessionCommitted: (entry, source) =>
+        registerCommittedSessionCategory(
+          entry.category === normalizeOptionalString(p.category) ? entry.category : undefined,
+          context,
+          source,
+        ),
       onCreatedSessionCommitted: (committed) => {
         sessionMutationAuthorization?.recordCreatedSession?.({
           agentId: committed.agentId,
@@ -567,13 +575,31 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         );
         await handleDirectExternalChatSend(sendOptions);
       },
-    }).catch((error: unknown) => {
-      if (error instanceof ModelAccountConnectAuthorityError) {
-        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
-        return undefined;
-      }
-      return authority.handleClosedError(error);
-    });
+    };
+    let capturedOperator: ReturnType<typeof captureGatewayOperatorRunAuthority>;
+    try {
+      capturedOperator = captureGatewayOperatorRunAuthority({
+        client,
+        context,
+        hasCurrentClientAuthority,
+        invocationAuthority: { assertCurrent: commitGuard, signal },
+      });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error)));
+      return;
+    }
+    const created = await createGatewaySession({
+      ...createParams,
+      operatorAuthority: capturedOperator?.authority,
+    })
+      .catch((error: unknown) => {
+        if (error instanceof ModelAccountConnectAuthorityError) {
+          respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+          return undefined;
+        }
+        return authority.handleClosedError(error);
+      })
+      .finally(() => capturedOperator?.release());
     if (!created) {
       return;
     }
@@ -584,7 +610,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (created.postCommit.status === "failed") {
       runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
-    await registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
     const createdWorktree = preparedWorktree?.worktree
       ? {
           id: preparedWorktree.worktree.id,

@@ -91,6 +91,7 @@ function createFixture(acknowledged: boolean) {
   const requestRuntime = {
     startCodexTurn,
     buildLlmInputEvent: vi.fn(),
+    buildLlmOutputEvent: vi.fn(),
     codexModelCallDiagnostics: { emitStarted: vi.fn(), emitError: vi.fn() },
   } as unknown as Parameters<typeof startCodexAttemptTurn>[3];
   return {
