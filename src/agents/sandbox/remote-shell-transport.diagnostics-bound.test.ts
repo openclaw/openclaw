@@ -143,18 +143,36 @@ type FakeChildProcess = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
 };
 
-/** Resolve once the uploader has wired its close/data listeners onto the child. */
-function waitForListeners(child: FakeChildProcess): Promise<void> {
+/** Resolve once `emitter` gains a listener for `event`, observed through its own `newListener`. */
+function waitForAttachedListener(emitter: EventEmitter, event: string): Promise<void> {
   return new Promise((resolve) => {
-    const check = () => {
-      if (child.listenerCount("close") > 0 && child.stdout.listenerCount("data") > 0) {
-        resolve();
-      } else {
-        setTimeout(check, 5);
+    const onNewListener = (added: string | symbol) => {
+      if (added !== event) {
+        return;
       }
+      emitter.off("newListener", onNewListener);
+      resolve();
     };
-    check();
+    emitter.on("newListener", onNewListener);
   });
+}
+
+/**
+ * Resolve once the uploader has wired its close/data listeners onto the child.
+ *
+ * The uploader signals readiness by attaching those listeners, so follow the emitters'
+ * `newListener` events instead of polling on a timer: a regression that never attaches them
+ * then leaves nothing rescheduling after `withTestTimeout` rejects.
+ */
+async function waitForListeners(child: FakeChildProcess): Promise<void> {
+  const waits: Promise<void>[] = [];
+  if (child.listenerCount("close") === 0) {
+    waits.push(waitForAttachedListener(child, "close"));
+  }
+  if (child.stdout.listenerCount("data") === 0) {
+    waits.push(waitForAttachedListener(child.stdout, "data"));
+  }
+  await Promise.all(waits);
 }
 
 function createFakeChildProcess(): FakeChildProcess {
