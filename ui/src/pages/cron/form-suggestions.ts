@@ -68,8 +68,11 @@ export function buildCronSuggestions(params: {
         : "";
     }),
   ]);
+  const savedDeliveryTargets = normalizeSortedUniqueTrimmedStringList(
+    params.cron.cronJobs.map((job) => job.delivery?.to),
+  );
   const deliveryTargets = normalizeSortedUniqueTrimmedStringList([
-    ...params.cron.cronJobs.map((job) => job.delivery?.to),
+    ...savedDeliveryTargets,
     ...(params.cron.cronForm.deliveryMode === "announce" ? (params.conversationTargets ?? []) : []),
   ]);
   const accountTargets = (
@@ -86,6 +89,10 @@ export function buildCronSuggestions(params: {
     modelSuggestions,
     timezoneSuggestions: resolveCronTimezoneSuggestions(params.cron.cronJobs),
     accountTargets,
+    failureAlertToSuggestions:
+      params.cron.cronForm.deliveryMode === "webhook"
+        ? savedDeliveryTargets.filter((value) => /^https?:\/\//i.test(value))
+        : savedDeliveryTargets,
     deliveryToSuggestions:
       params.cron.cronForm.deliveryMode === "webhook"
         ? deliveryTargets.filter((value) => /^https?:\/\//i.test(value))

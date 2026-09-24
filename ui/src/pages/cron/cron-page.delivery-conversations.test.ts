@@ -211,6 +211,49 @@ afterEach(() => {
 });
 
 describe("CronPage lifecycle", () => {
+  it("keeps primary account directory targets out of failure-alert suggestions", async () => {
+    const savedJob = createCronViewJob("saved-route", {
+      delivery: { mode: "announce", channel: "telegram", to: "-100saved" },
+    });
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return cronListResponse([savedJob]);
+      }
+      if (method === "conversations.list") {
+        return {
+          conversations: [
+            { ...conversationTarget("-100work"), accountId: "work" },
+            { ...conversationTarget("-100personal"), accountId: "personal" },
+          ],
+        };
+      }
+      return fallbackRequest(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway, "writer"), { render: true });
+    await waitForCronPage(() => expect(page.cron.cronJobs).toHaveLength(1));
+    page.selectJob(
+      createCronViewJob("editing-route", {
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "Send the digest" },
+        delivery: { mode: "announce", channel: "telegram", accountId: "work" },
+        failureAlert: { channel: "telegram", accountId: "personal", to: "-100personal" },
+      }),
+    );
+
+    const optionsFor = (selector: string) => {
+      const input = page.querySelector<HTMLInputElement>(selector);
+      expect(input).not.toBeNull();
+      return Array.from(input?.list?.options ?? [], (option) => option.value);
+    };
+    await waitForCronPage(() => expect(optionsFor("#cron-delivery-to")).toContain("-100work"));
+    expect(optionsFor("#cron-failure-alert-to")).toEqual(["-100saved"]);
+    expect(page.querySelector<HTMLInputElement>("#cron-failure-alert-to")?.value).toBe(
+      "-100personal",
+    );
+  });
+
   it("loads configured conversation targets for the selected announce channel", async () => {
     const fallbackRequest = createRequest();
     const request = vi.fn(async (method: string, _params?: unknown) => {

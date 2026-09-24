@@ -710,6 +710,7 @@ class CronPage extends OpenClawLightDomElement {
           thinkingSuggestions: THINKING_SUGGESTIONS,
           timezoneSuggestions: suggestions.timezoneSuggestions,
           deliveryToSuggestions: suggestions.deliveryToSuggestions,
+          failureAlertToSuggestions: suggestions.failureAlertToSuggestions,
           accountSuggestions: suggestions.accountTargets,
           onListTabChange: (tab) => {
             this.listTab = tab;
