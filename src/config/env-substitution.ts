@@ -103,30 +103,15 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
     return null;
   }
 
-  const next = value[index + 1];
-  const afterNext = value[index + 2];
-
-  // Escaped: $${VAR} -> ${VAR}
-  if (next === "$" && afterNext === "{") {
-    // Parse escaped placeholders before substitutions so "$${VAR}" never resolves from env.
-    const start = index + 3;
+  // Parse escaped placeholders first so "$${VAR}" never resolves from env.
+  const escaped = value[index + 1] === "$" && value[index + 2] === "{";
+  if (escaped || value[index + 1] === "{") {
+    const start = index + (escaped ? 3 : 2);
     const end = value.indexOf("}", start);
     if (end !== -1) {
       const body = parseEnvTokenBody(value.slice(start, end));
       if (body) {
-        return { kind: "escaped", ...body, end };
-      }
-    }
-  }
-
-  // Substitution: ${VAR} -> value
-  if (next === "{") {
-    const start = index + 2;
-    const end = value.indexOf("}", start);
-    if (end !== -1) {
-      const body = parseEnvTokenBody(value.slice(start, end));
-      if (body) {
-        return { kind: "substitution", ...body, end };
+        return { kind: escaped ? "escaped" : "substitution", ...body, end };
       }
     }
   }

@@ -2,7 +2,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { releasePluginCacheInstance } from "./plugin-cache.js";
+import { releasePluginCacheInstance, withPluginCache, type PluginCache } from "./plugin-cache.js";
 import {
   PluginInstanceDrainTimeoutError,
   PluginInstanceUnavailableError,
@@ -66,6 +66,7 @@ export class PluginInstance {
   controlPlaneInitialized = false;
   sourceDigest?: string;
   private moduleLoader?: (source: string) => unknown;
+  private setupCache?: PluginCache;
   private captureModuleRecovery?: () => PluginModuleLoaderRecovery;
   private moduleSourceExists?: false | ((source: string) => boolean);
   private accepting = true;
@@ -100,15 +101,17 @@ export class PluginInstance {
 
   constructor(
     readonly pluginId: string,
-    owner?: { record: PluginRecord; registry: PluginRegistry },
+    owner?: { record: PluginRecord; registry: PluginRegistry } | { cache: PluginCache },
   ) {
-    if (owner) {
+    if (owner && "record" in owner) {
       this.owner = resolvePluginInstanceOwner(owner.record, owner.registry);
       if (this.owner.instance) {
         throw new Error(`Plugin ${pluginId} already owns a runtime instance`);
       }
       this.owner.instance = this;
       pluginInstanceState.records.set(this, this.owner);
+    } else {
+      this.setupCache = owner?.cache;
     }
     this.lifecycle = Object.freeze({
       signal: this.controller.signal,
@@ -371,7 +374,9 @@ export class PluginInstance {
     const call =
       current?.instance === this && current.token === token ? current : { instance: this, token };
     if (!this.owner) {
-      return invocation.run(call, run);
+      const enter = () => invocation.run(call, run);
+      // Deferred setup imports use the same SDK resolver facts as their initial load.
+      return this.setupCache ? withPluginCache(this.setupCache, enter) : enter();
     }
     const { record } = this.owner;
     const generation = getPluginRuntimeGenerationRegistry();
@@ -720,6 +725,7 @@ export class PluginInstance {
     this.calls.clear();
     this.waiters.forEach((wake) => wake());
     this.moduleLoader = undefined;
+    this.setupCache = undefined;
     this.captureModuleRecovery = undefined;
     // Release captured paths without reopening the never-bound bundled-library fallback.
     this.moduleSourceExists &&= false;

@@ -4850,7 +4850,7 @@ describe("buildCachedChatItems", () => {
     expect(preview.title).toBe("Streamed demo");
   });
 
-  it("explains compaction boundaries without a recovery action", () => {
+  it("keeps compaction boundaries concise without a recovery action", () => {
     const items = buildCachedChatItems(
       createProps({
         messages: [compactionMessage("checkpoint-1")],
@@ -4862,9 +4862,7 @@ describe("buildCachedChatItems", () => {
     expect(divider.kind).toBe("divider");
     expect(divider.label).toBe("Context compacted");
     expect(divider.compaction).toBe("complete");
-    expect(divider.description).toBe(
-      "Earlier messages were summarized to make room in the context window.",
-    );
+    expect(divider).not.toHaveProperty("description");
     expect(divider).not.toHaveProperty("action");
   });
 

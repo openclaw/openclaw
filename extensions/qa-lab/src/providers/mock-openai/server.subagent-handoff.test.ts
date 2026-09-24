@@ -347,8 +347,8 @@ describe("mock terminal subagents through structured Tool Search", () => {
         const input = [user(prompt), metadataCarrier];
         const parent = {
           model: "gpt-5.6-luna",
-          instructions:
-            "Runtime: embedded | agent=qa | session=agent:qa:main | sessionId=structured-parent",
+          instructions: "Runtime: embedded | agent=qa | session=agent:qa:main",
+          client_metadata: { session_id: "structured-parent" },
           tools: structuredTools,
         };
         const spawn = await expectNonStreamingResponsesJson(server, { ...parent, input });
@@ -406,7 +406,8 @@ describe("mock terminal subagents through structured Tool Search", () => {
         });
         const child = {
           model: "gpt-5.6-luna",
-          instructions: `Runtime: embedded | sessionId=structured-child\n- Your session: ${childSessionKey}.`,
+          instructions: `Runtime: embedded\n- Your session: ${childSessionKey}.`,
+          client_metadata: { session_id: "structured-child" },
           tools: structuredTools,
           input: [user(String(requireRecord(args.args, "spawn arguments").task)), metadataCarrier],
         };

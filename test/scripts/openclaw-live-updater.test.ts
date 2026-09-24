@@ -67,6 +67,7 @@ const fixtureOrigins = new Map<string, string>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let fixtureTemplate: ReturnType<typeof initializeFixture> | undefined;
 const posixTest = process.platform === "win32" ? test.skip : test;
+const linuxTest = process.platform === "linux" ? test : test.skip;
 
 function writeSystemLaunchDaemonFixture(contents: string, name = "fixture.plist") {
   const file = path.join(tempDirs.make("updater-plist-"), name);
@@ -91,6 +92,19 @@ function fetchFixtureMain(checkout: string, remote: string) {
     throw new Error(`missing fixture origin for ${checkout}`);
   }
   git(checkout, "fetch", origin, `main:refs/remotes/${remote}/main`);
+}
+
+function writeFixtureGitBin(root: string, origin: string) {
+  const binDir = path.join(root, "bin");
+  const gitShim = path.join(binDir, "git");
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  mkdirSync(binDir);
+  writeFileSync(
+    gitShim,
+    `#!/bin/sh\nif [ "$3" = "fetch" ]; then\n  exec "${realGit}" -C "$2" fetch "${origin}" "main:refs/remotes/origin/main"\nfi\nexec "${realGit}" "$@"\n`,
+  );
+  chmodSync(gitShim, 0o755);
+  return binDir;
 }
 
 async function runFixtureManagedCommand({
@@ -3579,24 +3593,25 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const { root, mirror, origin } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
-    const binDir = path.join(root, "bin");
+    const binDir = writeFixtureGitBin(root, origin);
     const pnpm = path.join(binDir, "pnpm");
-    const gitShim = path.join(binDir, "git");
-    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-    mkdirSync(binDir);
     writeFileSync(pnpm, "#!/bin/sh\necho child-output\n");
-    writeFileSync(
-      gitShim,
-      `#!/bin/sh\nif [ "$3" = "fetch" ]; then\n  exec "${realGit}" -C "$2" fetch "${origin}" "main:refs/remotes/origin/main"\nfi\nexec "${realGit}" "$@"\n`,
-    );
     chmodSync(pnpm, 0o755);
-    chmodSync(gitShim, 0o755);
 
     const result = spawnSync(process.execPath, [script], {
       cwd: mirror,
       encoding: "utf8",
       env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
     });
+
+    if (process.platform !== "darwin") {
+      expect(result.status, result.stderr).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "unsupported_gateway_control_platform" },
+      });
+      return;
+    }
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
@@ -3841,6 +3856,39 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       }
     },
   );
+
+  linuxTest("refuses Linux systemd hosts before moving HEAD", () => {
+    const { root, mirror, origin, seed } = makeFixture({ includeSeed: true });
+    writeFileSync(path.join(seed, "linux-preflight.txt"), "advance origin\n");
+    git(seed, "add", "linux-preflight.txt");
+    git(seed, "commit", "-m", "advance origin");
+    git(seed, "push");
+    const before = git(mirror, "rev-parse", "HEAD");
+    const beforeTracking = git(mirror, "rev-parse", "refs/remotes/origin/main");
+    const binDir = writeFixtureGitBin(root, origin);
+
+    const result = spawnSync(process.execPath, [script, "--checkout", mirror], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+    });
+    expect(result.status).toBe(1);
+    expect(git(mirror, "rev-parse", "HEAD")).toBe(before);
+    expect(git(mirror, "rev-parse", "refs/remotes/origin/main")).toBe(beforeTracking);
+    const payload = JSON.parse(result.stdout.trim());
+    expect(payload).toEqual({
+      schemaVersion: 1,
+      ok: false,
+      error: {
+        code: "unsupported_gateway_control_platform",
+        message:
+          "live updater managed Gateway control requires macOS LaunchAgent inspection; Linux systemd installs must use the standard update CLI instead of this helper",
+        diagnostics: {
+          kind: "invariant",
+          code: "unsupported_gateway_control_platform",
+        },
+      },
+    });
+  });
 
   test("refuses dirty work without moving HEAD", () => {
     const { mirror } = makeFixture();

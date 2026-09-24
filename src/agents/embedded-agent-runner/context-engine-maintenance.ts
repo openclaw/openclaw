@@ -31,11 +31,9 @@ import {
 import {
   completeTaskRunByRunIdAsync,
   failTaskRunByRunIdAsync,
+  startTaskRunByRunIdAsync,
 } from "../../tasks/detached-task-runtime.async.js";
-import {
-  recordTaskRunProgressByRunId,
-  startTaskRunByRunId,
-} from "../../tasks/detached-task-runtime.js";
+import { recordTaskRunProgressByRunId } from "../../tasks/detached-task-runtime.js";
 import {
   cancelTaskByIdForOwner,
   findTaskByRunIdForOwner,
@@ -320,13 +318,17 @@ async function runDeferredTurnMaintenanceWorker(
 
   try {
     const runningAt = Date.now();
-    startTaskRunByRunId({
-      ...taskRun,
-      startedAt: runningAt,
-      lastEventAt: runningAt,
-      progressSummary: "Running deferred maintenance.",
-      eventSummary: "Starting deferred maintenance.",
-    });
+    // Admit running state through the same retained workers that will settle completion.
+    await startTaskRunByRunIdAsync(
+      {
+        ...taskRun,
+        startedAt: runningAt,
+        lastEventAt: runningAt,
+        progressSummary: "Running deferred maintenance.",
+        eventSummary: "Starting deferred maintenance.",
+      },
+      params.assertActive,
+    );
     const longRunningTimer = setTimeout(() => {
       try {
         makeTaskVisible("state_changes");
@@ -405,10 +407,7 @@ async function runDeferredTurnMaintenanceWorker(
 function scheduleDeferredTurnMaintenance(
   params: DeferredTurnMaintenanceScheduleParams,
 ): Promise<void> | undefined {
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  if (!sessionKey) {
-    return undefined;
-  }
+  const { sessionKey } = params;
   if (isGatewayDraining()) {
     params.onScheduleFailure?.(new GatewayDrainingError());
     return undefined;

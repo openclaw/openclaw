@@ -118,6 +118,8 @@ export type ToolApprovalReview = {
   rationale?: string;
 };
 
+export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true };
+
 export type ChatQueueItem = {
   id: string;
   /** UI question associated with this input; delivery and retry stay outbox-owned. */
@@ -127,7 +129,7 @@ export type ChatQueueItem = {
   text: string;
   mentions?: readonly HumanMention[];
   createdAt: number;
-  /** Operator-owned queue position; absent means "wherever arrival put it". */
+  /** Stable arrival position; only an explicit reorder moves an existing input. */
   orderKey?: number;
   /** Immutable bytes belong to this queued input; routing belongs to the outbox metadata. */
   attachmentPayload?: { key: string; recoveryScope: string; tabId: string };
@@ -170,7 +172,14 @@ export type ChatQueueItem = {
 
 /** Union type for items in the chat thread */
 export type ChatItem =
-  | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
+  | {
+      kind: "message";
+      key: string;
+      message: unknown;
+      duplicateCount?: number;
+      /** A distinct input remains a presentation boundary before execution starts. */
+      startsTurn?: true;
+    }
   | {
       kind: "notice";
       key: string;
@@ -209,7 +218,6 @@ export type ChatItem =
       kind: "reading-indicator";
       key: string;
       startedAt: number;
-      preamble?: string;
       runId?: string;
       boundaryId?: string;
     }

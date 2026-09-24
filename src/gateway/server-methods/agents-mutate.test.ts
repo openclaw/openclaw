@@ -9,6 +9,14 @@ import { AgentDeletionAuthorityRollbackError } from "../../agents/agent-lifecycl
 import { WORKSPACE_BOOTSTRAP_FILENAMES } from "../../agents/workspace.js";
 import { FsSafeError, root } from "../../infra/fs-safe.js";
 import { registerAgentIdentityUpdateTests } from "./agents-identity-update.test-support.js";
+import {
+  expectRecordFields,
+  expectRespondErrorContaining,
+  expectRespondOk,
+  expectStringContaining,
+  firstRespondResult,
+  mockCallArg,
+} from "./agents-mutate.test-support.js";
 /* ------------------------------------------------------------------ */
 /* Mocks                                                              */
 /* ------------------------------------------------------------------ */
@@ -278,9 +286,13 @@ vi.mock("../../state/agent-deletion-journal.js", () => ({
 }));
 
 vi.mock("../../state/openclaw-agent-db-registry.js", () => ({
+  unregisterOpenClawAgentDatabase: mocks.unregisterOpenClawAgentDatabase,
+}));
+
+vi.mock("../../state/openclaw-agent-db.paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-agent-db.paths.js")>()),
   isSameOpenClawAgentDatabasePath: (left: string, right: string) =>
     path.resolve(left) === path.resolve(right),
-  unregisterOpenClawAgentDatabase: mocks.unregisterOpenClawAgentDatabase,
 }));
 
 vi.mock("../../state/openclaw-agent-db-lease.js", () => ({
@@ -494,53 +506,6 @@ function makeCall(method: keyof typeof agentsHandlers, params: Record<string, un
   return { respond, promise };
 }
 
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
-function expectRespondOk(respond: ReturnType<typeof vi.fn>, expected: Record<string, unknown>) {
-  expect(mockCallArg(respond)).toBe(true);
-  const payload = expectRecordFields(mockCallArg(respond, 0, 1), expected);
-  expect(mockCallArg(respond, 0, 2)).toBeUndefined();
-  return payload;
-}
-
-function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: string) {
-  expect(mockCallArg(respond)).toBe(false);
-  expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-  const error = expectRecordFields(mockCallArg(respond, 0, 2), {});
-  expectStringContaining(error.message, text);
-  return error;
-}
-
-function firstRespondResult(respond: ReturnType<typeof vi.fn>): unknown {
-  return mockCallArg(respond, 0, 1);
-}
-
-function expectStringContaining(value: unknown, text: string) {
-  expect(typeof value).toBe("string");
-  expect(value as string).toContain(text);
-}
-
-function expectStringNotContaining(value: unknown, text: string) {
-  expect(typeof value).toBe("string");
-  expect(value as string).not.toContain(text);
-}
 function createEnoentError() {
   const err = new Error("ENOENT") as NodeJS.ErrnoException;
   err.code = "ENOENT";
@@ -1004,12 +969,6 @@ describe("agents.update", () => {
     makeCall,
     makeFileStat,
     createEnoentError,
-    mockCallArg,
-    expectRecordFields,
-    expectRespondOk,
-    expectRespondErrorContaining,
-    expectStringContaining,
-    expectStringNotContaining,
   });
 });
 

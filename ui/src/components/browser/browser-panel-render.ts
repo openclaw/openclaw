@@ -152,10 +152,12 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         placeholder=${t("browser.urlPlaceholder")}
         .value=${controller.urlDraft}
         @focus=${(event: FocusEvent) => {
-          controller.setUrlDraftEditing(true);
+          controller.urlDraftEditing = true;
           (event.target as HTMLInputElement).select();
         }}
-        @blur=${() => controller.setUrlDraftEditing(false)}
+        @blur=${() => {
+          controller.urlDraftEditing = false;
+        }}
         @input=${(event: InputEvent) =>
           controller.setState("urlDraft", (event.target as HTMLInputElement).value)}
         @keydown=${(event: KeyboardEvent) => {

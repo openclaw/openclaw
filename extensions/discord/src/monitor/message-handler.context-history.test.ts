@@ -494,13 +494,9 @@ describe("Discord native recent history through process context", () => {
     expect(second?.ctxPayload.Body).not.toContain("first account discussion");
   });
 
-  it.each([
-    { allowBots: false, expected: ["898"] },
-    { allowBots: true, expected: ["894", "895", "896", "897", "898", "899"] },
-    { allowBots: "mentions", expected: ["895", "896", "898"] },
-  ])(
-    "excludes own-bot history while respecting allowBots=$allowBots",
-    async ({ allowBots, expected }) => {
+  it.each([undefined, false, true, "mentions"] as const)(
+    "retains other bots as context independently of allowBots=%s",
+    async (allowBots) => {
       const bot = { ...nativeMessage(900).author, id: "other-bot", bot: true };
       const reply = {
         author: bot,
@@ -529,7 +525,14 @@ describe("Discord native recent history through process context", () => {
       ctx.cfg = { ...ctx.cfg, messages: { groupChat: { mentionPatterns: ["history-helper"] } } };
       const result = await buildContext(ctx);
 
-      expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual(expected);
+      expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual([
+        "894",
+        "895",
+        "896",
+        "897",
+        "898",
+        "899",
+      ]);
       expect(result?.ctxPayload.Body).not.toContain("own bot output");
     },
   );

@@ -735,7 +735,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
 
       expect(packageJson.dependencies?.openclaw).toBe(`file:${packageRoot}`);
       expect(packageJson.dependencies?.["@types/ws"]).toBe("8.18.1");
-      expect(packageJson.dependencies?.typescript).toBe("6.0.3");
+      expect(packageJson.dependencies?.typescript).toBe("7.0.2");
       expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
       expect(tsconfig.compilerOptions?.skipLibCheck).toBe(false);
       expect(source).toBe(fixtureSource);

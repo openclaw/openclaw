@@ -7,6 +7,7 @@ import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
 } from "../../config/sessions/session-accessor.js";
+import { admitAgentRestartRecovery } from "../../gateway/agent-turn/agent-run-recovery-admission.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -201,9 +202,120 @@ describe("main session recovery store", () => {
       sessionId: "session-1",
     });
 
-    expect(admitted.transition).toEqual({ kind: "admitted_recovery" });
+    expect(admitted.transition).toEqual({
+      kind: "admitted_recovery",
+      admission: {
+        cycleId: "cycle-1",
+        attempt: 1,
+        lifecycleGeneration,
+        runId: "recovery-1",
+        sessionId: "session-1",
+      },
+    });
     expect(read().restartRecoveryRuns).toEqual([{ runId: "recovery-1", lifecycleGeneration }]);
     expect(read().abortedLastRun).toBe(false);
+  });
+
+  it.each(["recovery-1", "recovery-2"])(
+    "does not let delayed restoration interrupt a newer admission of %s",
+    async (successorRunId) => {
+      await write(
+        interruptedEntry({
+          restartRecoveryDeliveryRunId: "recovery-1",
+          restartRecoveryDeliverySourceRunId: "source-1",
+        }),
+      );
+      await reserve();
+      const restorePrevious = await admitAgentRestartRecovery({
+        lifecycleGeneration,
+        runId: "recovery-1",
+        sessionId: "session-1",
+        sessionKey,
+        storePath,
+      });
+      // Orphan reconciliation can win while the previous admission's cleanup is deferred.
+      await commitRecovery({ kind: "mark_interrupted", cycleId: "unused", now: 400 });
+      const observed = await commitRecovery({
+        kind: "observe",
+        cycleId: "unused",
+        lifecycleGeneration,
+        sessionKey,
+      });
+      if (
+        observed.transition.kind !== "observed" ||
+        observed.transition.view.status !== "recoverable"
+      ) {
+        throw new Error("expected recoverable session");
+      }
+      await commitRecovery({
+        kind: "prepare_attempt",
+        attempt: observed.transition.view.nextAttempt,
+        lifecycleGeneration,
+        now: 500,
+        observation: observed.transition.view.observation,
+        runId: successorRunId,
+        executionIdentity: { state: "disabled" },
+      });
+      await sessionAccessor.updateSessionEntry({ sessionKey, storePath }, () => ({
+        restartRecoveryDeliveryRunId: successorRunId,
+      }));
+      const restoreSuccessor = await admitAgentRestartRecovery({
+        lifecycleGeneration,
+        runId: successorRunId,
+        sessionId: "session-1",
+        sessionKey,
+        storePath,
+      });
+      const admittedSuccessor = read();
+
+      await expect(restorePrevious()).resolves.toBeUndefined();
+      expect(read()).toEqual(admittedSuccessor);
+      await expect(restoreSuccessor()).resolves.toMatchObject({
+        sessionId: "session-1",
+        sessionKey,
+      });
+      expect(read()).toMatchObject({
+        abortedLastRun: true,
+        restartRecoveryDeliverySourceRunId: "source-1",
+        mainRestartRecovery: { cycleId: "cycle-1", chargedAttempts: 2 },
+      });
+      expect(read().lifecycleRunId).toBeUndefined();
+      expect(read().restartRecoveryDeliveryRunId).toBeUndefined();
+    },
+  );
+
+  it("retries the exact restored attempt after its committed response is lost", async () => {
+    await write(
+      interruptedEntry({
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "source-1",
+      }),
+    );
+    await reserve();
+    const restore = await admitAgentRestartRecovery({
+      lifecycleGeneration,
+      runId: "recovery-1",
+      sessionId: "session-1",
+      sessionKey,
+      storePath,
+    });
+    const applyReplacements = sessionAccessor.applySessionEntryReplacements;
+    vi.spyOn(sessionAccessor, "applySessionEntryReplacements").mockImplementationOnce(
+      async (params) => {
+        await applyReplacements(params);
+        throw new Error("restoration response lost");
+      },
+    );
+
+    await expect(restore()).rejects.toThrow("restoration response lost");
+    await expect(restore()).resolves.toMatchObject({ sessionId: "session-1", sessionKey });
+    expect(read()).toMatchObject({
+      abortedLastRun: true,
+      restartRecoveryDeliverySourceRunId: "source-1",
+      mainRestartRecovery: { cycleId: "cycle-1", chargedAttempts: 1 },
+    });
+    expect(read().lifecycleRunId).toBeUndefined();
+    expect(read().restartRecoveryDeliveryRunId).toBeUndefined();
   });
 
   it("rejects an observation after the session is replaced", async () => {
@@ -924,6 +1036,8 @@ describe("main session recovery store", () => {
 
     const result = await commitRecovery({
       kind: "mark_admitted_recovery_interrupted",
+      cycleId: "cycle-1",
+      attempt: 0,
       lifecycleGeneration,
       now: 300,
       runId: "recovery-1",

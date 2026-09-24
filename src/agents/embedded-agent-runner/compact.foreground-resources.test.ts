@@ -322,6 +322,7 @@ it.for([
               event.task.taskKind === CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND &&
               isTerminalTaskStatus(event.task.status)
             ) {
+              expect.soft(disposalCalls).toBe(0);
               taskSettled.resolve(event.task.status);
             }
           })

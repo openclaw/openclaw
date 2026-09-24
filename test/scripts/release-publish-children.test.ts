@@ -3,11 +3,18 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const roots: string[] = [];
 const workflowSha = "a".repeat(40);
 const repository = "openclaw/openclaw";
 const dispatchArgs = ["-f", "publish_scope=all-publishable", "-f", `ref=${"b".repeat(40)}`];
+const workflow = parse(readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8")) as {
+  jobs: { publish: { steps: { name?: string; run?: string }[] } };
+};
+const startCorePublication = workflow.jobs.publish.steps.find(
+  (step) => step.name === "Start core npm publication",
+)?.run;
 
 type Job = { name: string; status: string; conclusion: string | null };
 type RunState = { status: string; conclusion?: string; jobs: Job[] };
@@ -44,8 +51,15 @@ function fixture(runs: Record<string, RunState[]>) {
   mkdirSync(join(root, "bin"));
   writeFileSync(join(root, "calls"), "");
   writeFileSync(join(root, "summary"), "");
+  writeFileSync(join(root, "output"), "");
   writeFileSync(join(root, "state.json"), JSON.stringify({ index: {}, dispatched: 0 }));
   writeFileSync(join(root, "plugin-npm-dispatch-args"), dispatchArgs.join("\0") + "\0");
+  const harnessRoot = join(root, ".release-harness/scripts/lib");
+  mkdirSync(harnessRoot, { recursive: true });
+  writeFileSync(
+    join(harnessRoot, "release-publish-children.sh"),
+    'source "$HELPER_SCRIPT"\nverify_release_tag_target() { :; }\ncleanup_clawhub_children() { echo cleanup >> "$GITHUB_OUTPUT"; echo cleanup >> "$FIXTURE_ROOT/calls"; }\nsleep() { :; }\n',
+  );
   writeFileSync(
     join(root, "bin", "gh"),
     `#!${process.execPath}
@@ -64,7 +78,10 @@ if (args[0] === 'run' && args[1] === 'view') {
   const timeline = runs[id];
   if (json === 'status,url,updatedAt') { state.index[id] = (state.index[id] ?? -1) + 1; save(); }
   const current = timeline[Math.min(Math.max(state.index[id] ?? 0, 0), timeline.length - 1)];
-  if (json === 'status,url,updatedAt') console.log(JSON.stringify({ status: current.status, url: url(id), updatedAt: 'T' + state.index[id] }));
+  if (json === 'status,url,updatedAt') {
+    appendFileSync(root + '/calls', 'observed ' + id + ' ' + current.status + '\\n');
+    console.log(JSON.stringify({ status: current.status, url: url(id), updatedAt: 'T' + state.index[id] }));
+  }
   else if (json === 'headSha,url') console.log(JSON.stringify({ headSha: ${JSON.stringify(workflowSha)}, url: url(id) }));
   else if (json === 'jobs') console.log(jq === '.jobs' ? JSON.stringify(current.jobs) : '');
   else if (json === 'conclusion,url,createdAt,updatedAt') console.log(JSON.stringify({ conclusion: current.conclusion, url: url(id), createdAt: '2026-09-23T20:00:00Z', updatedAt: '2026-09-23T20:05:00Z' }));
@@ -83,24 +100,24 @@ if (args[0] === 'run' && args[1] === 'view') {
   );
   return {
     run(command: string) {
-      const result = spawnSync(
-        "bash",
-        ["-c", `source "$HELPER_SCRIPT"\nsleep() { :; }\n${command}`],
-        {
-          encoding: "utf8",
-          env: {
-            PATH: `${join(root, "bin")}:${process.env.PATH}`,
-            FIXTURE_ROOT: root,
-            HELPER_SCRIPT: resolve("scripts/lib/release-publish-children.sh"),
-            GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-123",
-            GITHUB_REPOSITORY: repository,
-            GITHUB_STEP_SUMMARY: join(root, "summary"),
-            RUNNER_TEMP: root,
-            CHILD_WORKFLOW_REF: "release-publish/aaaaaaaaaaaa-123",
-            PARENT_WORKFLOW_SHA: workflowSha,
-          },
+      const result = spawnSync("bash", ["-c", command], {
+        encoding: "utf8",
+        env: {
+          PATH: `${join(root, "bin")}:${process.env.PATH}`,
+          FIXTURE_ROOT: root,
+          HELPER_SCRIPT: resolve("scripts/lib/release-publish-children.sh"),
+          GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-123",
+          GITHUB_REPOSITORY: repository,
+          GITHUB_STEP_SUMMARY: join(root, "summary"),
+          GITHUB_OUTPUT: join(root, "output"),
+          GITHUB_WORKSPACE: root,
+          RUNNER_TEMP: root,
+          CHILD_WORKFLOW_REF: "release-publish/aaaaaaaaaaaa-123",
+          CHILD_PLUGIN_NPM_RUN_ID: "91",
+          PARENT_WORKFLOW_SHA: workflowSha,
+          PUBLISH_OPENCLAW_NPM: "false",
         },
-      );
+      });
       return {
         ...result,
         dispatches: readFileSync(join(root, "calls"), "utf8")
@@ -108,33 +125,31 @@ if (args[0] === 'run' && args[1] === 'view') {
           .filter((line) => line.startsWith("dispatch "))
           .map((line) => JSON.parse(line.slice("dispatch ".length)) as { inputs: unknown }),
         summary: readFileSync(join(root, "summary"), "utf8"),
+        outputs: readFileSync(join(root, "output"), "utf8"),
+        events: readFileSync(join(root, "calls"), "utf8").trim().split("\n"),
       };
     },
   };
 }
 
-const watchPlugins =
-  'plugin_npm_run_id=91\nwait_for_plugin_npm_release || status=$?\necho "final=${plugin_npm_run_id}"\nexit "${status:-0}"';
-
-describe("plugin npm child pre-publish flake tolerance", () => {
-  it("waits for the run, dispatches a fresh child after a pre-publish failure, and continues on its success", () => {
-    const result = fixture({ 91: failedBeforePublish, 92: succeeded }).run(watchPlugins);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.dispatches.map((dispatch) => dispatch.inputs)).toEqual([
-      { publish_scope: "all-publishable", ref: "b".repeat(40) },
-    ]);
-    expect(result.stdout).toContain(
-      "waiting for the run to finish before deciding whether to retry",
-    );
-    expect(result.stdout).toContain(
-      "run 91 failed before any 'Publish plugin npm package' job ran",
-    );
-    expect(result.stdout).toContain("dispatching a fresh child (1 of 2)");
-    expect(result.stdout).toContain("final=92");
-    expect(result.summary).toContain("fresh child 92 dispatched (1 of 2)");
-  });
-
+describe("plugin npm child failure propagation", () => {
   it.each([
+    {
+      label: "a pre-publish failure while the child is still running",
+      states: failedBeforePublish,
+    },
+    {
+      label: "a terminal pre-publish failure",
+      states: [failedBeforePublish[1]!],
+    },
+    {
+      label: "a failed job while a sibling publisher is still running",
+      states: [
+        { status: "in_progress", jobs: [previewFailed, publish(null, "in_progress")] },
+        { status: "in_progress", jobs: [previewFailed, publish(null, "in_progress")] },
+        { status: "completed", conclusion: "failure", jobs: [previewFailed, publish("success")] },
+      ],
+    },
     {
       label: "a failure after publication started",
       states: [
@@ -148,7 +163,6 @@ describe("plugin npm child pre-publish flake tolerance", () => {
           ],
         },
       ],
-      stderr: "failed after publication started; not dispatching a replacement",
     },
     {
       label: "a cancelled pre-publish job",
@@ -159,35 +173,26 @@ describe("plugin npm child pre-publish flake tolerance", () => {
           jobs: [job(previewFailed.name, "cancelled"), publish("skipped")],
         },
       ],
-      stderr: "with a non-retryable job conclusion; not dispatching a replacement",
     },
-  ])("aborts without a fresh child on $label", ({ states, stderr }) => {
-    const result = fixture({ 91: states, 92: succeeded }).run(watchPlugins);
+  ])("fails the publication step without replacing $label", ({ states }) => {
+    expect(startCorePublication).toBeDefined();
+    const result = fixture({ 91: states, 92: succeeded }).run(startCorePublication!);
     expect(result.status).toBe(1);
     expect(result.dispatches).toHaveLength(0);
-    expect(result.stderr).toContain(stderr);
-    expect(result.stdout).toContain("final=91");
+    expect(result.stderr).toContain("Plugin npm publish failed");
+    expect(result.outputs).toBe("cleanup\n");
+    expect(result.events).toEqual([
+      ...states.map(({ status }) => `observed 91 ${status}`),
+      "cleanup",
+    ]);
   });
 
-  it("aborts after two fresh children fail before publication", () => {
-    const result = fixture({
-      91: failedBeforePublish,
-      92: failedBeforePublish,
-      93: failedBeforePublish,
-      94: succeeded,
-    }).run(watchPlugins);
-    expect(result.status).toBe(1);
-    expect(result.dispatches).toHaveLength(2);
-    expect(result.stderr).toContain("failed after 2 fresh dispatches; not dispatching again");
-    expect(result.stdout).toContain("final=93");
-  });
-
-  it("keeps failing fast for watchers without a publish stage", () => {
-    const result = fixture({ 91: failedBeforePublish }).run(
-      'wait_for_run ci.yml 91 "$PARENT_WORKFLOW_SHA" "" false',
-    );
-    expect(result.status).toBe(1);
+  it("records the successful original child before continuing publication", () => {
+    expect(startCorePublication).toBeDefined();
+    const result = fixture({ 91: succeeded }).run(startCorePublication!);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.dispatches).toHaveLength(0);
-    expect(result.stderr).toContain("has failed jobs before the workflow completed");
+    expect(result.outputs).toBe("plugin_npm_completed=true\nplugin_npm_run_id=91\n");
+    expect(result.summary).toContain("plugin-npm-release.yml: success");
   });
 });

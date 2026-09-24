@@ -61,6 +61,7 @@ import {
   COMPACT_EMBEDDED_BASE_GROUP_NAME,
   canSplitWholeConfigGroup,
   listScopedOwnerTestFiles,
+  listNodeTestConfigFiles,
   listWholeConfigFiles,
   listWholeConfigSplitFiles,
 } from "./ci-node-test-inventory.mts";
@@ -203,6 +204,14 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches = [
+  ...["test/scripts/android-app-i18n.test.ts", "test/scripts/apple-app-i18n.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      // Both suites read this inventory by filename, not through the import graph.
+      testFile,
+      ownerGlobs: ["apps/.i18n/native-source.json"],
+      watchGlobs: ["apps/.i18n/native-source.json"],
+    }),
+  ),
   {
     testFile: "test/scripts/tsgo-core-test-shards.test.ts",
     watchGlobs: [
@@ -281,14 +290,24 @@ const policyTestWatches = [
       "src/agents/sandbox/ssh-backend.ts",
     ],
   },
+  {
+    testFile: "src/tasks/task-boundaries.test.ts",
+    watchGlobs: ["src/**/!(*.test|*.test-harness|*.test-utils|*.e2e-harness).ts"],
+  },
 ] satisfies readonly PolicyTestWatch[];
 
-/** Resolve policy tests whose scanned source surface intersects this diff. */
-export function resolvePolicyTestTargets(changedPaths: readonly string[]): string[] {
+/** Resolve watched tests, optionally restricting to complete owners of the changed input. */
+export function resolvePolicyTestTargets(
+  changedPaths: readonly string[],
+  options: { completeOwnersOnly?: boolean } = {},
+): string[] {
   return policyTestWatches
-    .filter(({ watchGlobs }) =>
-      changedPaths.some((changedPath) =>
-        watchGlobs.some((watchGlob) => matchesGlob(changedPath, watchGlob)),
+    .filter(({ watchGlobs, ownerGlobs }) =>
+      changedPaths.some(
+        (changedPath) =>
+          watchGlobs.some((watchGlob) => matchesGlob(changedPath, watchGlob)) &&
+          (!options.completeOwnersOnly ||
+            ownerGlobs?.some((ownerGlob) => matchesGlob(changedPath, ownerGlob))),
       ),
     )
     .map(({ testFile }) => testFile);
@@ -334,8 +353,7 @@ const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
 // Startup-core transforms the broad gateway graph before its assertions run.
 // Keep enough CPU here to avoid spending minutes in Vitest imports on 4 vCPU.
 const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
-// This cold gateway graph can stall after warming Vitest's module cache; its
-// retry completes in seconds, so do not spend the global five-minute timeout.
+// Fail the known warm-cache startup stall at its existing scoped deadline.
 const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
 };
@@ -2580,6 +2598,119 @@ const canonicalNodeTestOwners = fullSuiteVitestShards.map((shard) => ({
   projects: [...shard.projects],
 }));
 let canonicalMetadataConfigs: ReadonlySet<string> | undefined;
+type CanonicalTargetInventory = {
+  configsByFile: Map<string, Set<string>>;
+  configs: Set<string>;
+  completeConfigs: Set<string>;
+  releaseOnlyConfigs: Set<string>;
+};
+const canonicalTargetInventories = new Map<
+  (typeof canonicalNodeTestOwners)[number] | undefined,
+  CanonicalTargetInventory
+>();
+
+function resolveCanonicalTargetInventory(requestedConfig?: string) {
+  const complete = canonicalTargetInventories.get(undefined);
+  if (complete) {
+    return complete;
+  }
+  const matchingOwners = requestedConfig
+    ? canonicalNodeTestOwners.filter((owner) => owner.projects.includes(requestedConfig))
+    : [];
+  const owner = matchingOwners.length === 1 ? matchingOwners[0] : undefined;
+  const cached = canonicalTargetInventories.get(owner);
+  if (cached) {
+    return cached;
+  }
+  const configsByFile = new Map<string, Set<string>>();
+  const configs = new Set<string>();
+  const incompleteConfigs = new Set<string>();
+  const releaseOnlyConfigs = new Set<string>();
+  for (const shard of createNodeTestShardsForOwners(owner ? [owner] : canonicalNodeTestOwners, {
+    includeReleaseOnlyPluginShards: true,
+    includeReleaseOnlyToolingShards: true,
+    includeProofTests: false,
+  })) {
+    if (RELEASE_ONLY_PLUGIN_SHARDS.has(shard.shardName)) {
+      for (const config of shard.configs) {
+        releaseOnlyConfigs.add(config);
+      }
+      continue;
+    }
+    const envelope = shard.includePatterns ?? listWholeConfigFiles(shard.shardName);
+    const included = envelope ? new Set(envelope) : undefined;
+    for (const config of shard.configs) {
+      configs.add(config);
+      const files =
+        listNodeTestConfigFiles(config) ?? (shard.configs.length === 1 ? envelope : undefined);
+      if (!files) {
+        incompleteConfigs.add(config);
+        continue;
+      }
+      for (const file of files) {
+        if (included && !included.has(file)) {
+          continue;
+        }
+        const owners = configsByFile.get(file) ?? new Set<string>();
+        owners.add(config);
+        configsByFile.set(file, owners);
+      }
+    }
+  }
+  const inventory = {
+    configsByFile,
+    configs,
+    completeConfigs: new Set([...configs].filter((config) => !incompleteConfigs.has(config))),
+    releaseOnlyConfigs,
+  };
+  canonicalTargetInventories.set(owner, inventory);
+  return inventory;
+}
+
+export function isCanonicalNodeTestConfig(config: string): boolean {
+  return resolveCanonicalTargetInventory(config).configs.has(config);
+}
+
+/** Null excludes a file from a complete inventory; undefined leaves ownership unresolved. */
+export function resolveCanonicalNodeTestConfig(
+  target: string,
+  config: string,
+): string | null | undefined {
+  let inventory = resolveCanonicalTargetInventory(config);
+  let owners = inventory.configsByFile.get(target);
+  if (
+    owners?.has(config) ||
+    (inventory.configs.has(config) && !inventory.completeConfigs.has(config))
+  ) {
+    return config;
+  }
+  // A direct owner should not discover unrelated suites. Aggregate or moved
+  // targets still need the complete inventory to prove a unique replacement.
+  inventory = resolveCanonicalTargetInventory();
+  owners = inventory.configsByFile.get(target);
+  if (
+    owners?.has(config) ||
+    (inventory.configs.has(config) && !inventory.completeConfigs.has(config))
+  ) {
+    return config;
+  }
+  if (owners?.size === 1) {
+    return owners.values().next().value;
+  }
+  if (
+    inventory.releaseOnlyConfigs.has(config) ||
+    EXCLUDED_PROJECT_CONFIGS.has(config) ||
+    canonicalNodeTestOwners.some(
+      (owner) => EXCLUDED_FULL_SUITE_SHARDS.has(owner.config) && owner.projects.includes(config),
+    )
+  ) {
+    return null;
+  }
+  if (!owners && inventory.configs.has(config)) {
+    return inventory.completeConfigs.has(config) ? null : config;
+  }
+  return undefined;
+}
 
 function resolveSplitNodeShards(name: string): NodeTestSplitShard[] | undefined {
   const entry = SPLIT_NODE_SHARDS.get(name);
@@ -3148,7 +3279,113 @@ export function createNodeTestShardBundles(
     }
   }
 
-  return [...unbundled, ...bundled].toSorted(compareFullNodeTestAdmissionOrder);
+  const full = [...unbundled, ...bundled];
+  return (
+    options.runnerBackend === "github" ? full.flatMap(splitHostedReleaseShard) : full
+  ).toSorted(compareFullNodeTestAdmissionOrder);
+}
+
+// Full release jobs include setup and can execute both runtimes. Keep their
+// measured walls separate from compact test-group spans and reserve eight minutes
+// of the 20-minute objective for changes in setup and cold-run overhead.
+function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
+  const budget = 720;
+  const parentShardName = `release-full-${shard.shardName}`;
+  const timings = readCompactGroupTimings("github");
+  const files = canSplitWholeConfigGroup(shard.shardName)
+    ? (shard.includePatterns ?? listWholeConfigSplitFiles(shard.shardName))
+    : undefined;
+  if (!isRuntimePlacementIncludePatterns(files)) {
+    const seconds = timings[parentShardName];
+    if (seconds !== undefined && seconds > budget) {
+      throw new Error(
+        `Release shard ${shard.shardName} cannot fit the hosted budget; split its test owner before release`,
+      );
+    }
+    return [
+      {
+        ...shard,
+        timing_key: parentShardName,
+        ...(seconds === undefined ? {} : { predictedSeconds: seconds }),
+      },
+    ];
+  }
+  const generation = (stripes: string[][]) =>
+    createCompactSplitTimingGeneration({
+      configs: shard.configs,
+      env: shard.env,
+      parentShardName,
+      stripes,
+    });
+  const original = generation([files]);
+  const singletonCosts = new Map<string, number>();
+  for (const [key, cost] of Object.entries(timings)) {
+    const singleton = key.match(/#include-1-[a-f0-9]{12}$/u)?.[0];
+    if (singleton && key.startsWith(`${original.selectorKey}#generation-`)) {
+      singletonCosts.set(singleton, Math.max(singletonCosts.get(singleton) ?? 0, cost));
+    }
+  }
+  if ([...singletonCosts.values()].some((cost) => cost > budget)) {
+    throw new Error(
+      `Release shard ${shard.shardName} contains an indivisible test above the hosted budget; split that test before release`,
+    );
+  }
+  const seconds = Math.max(
+    timings[parentShardName] ?? 0,
+    timings[original.timingKeys[0]!] ?? 0,
+    readCompleteSplitGenerationSeconds(timings, original.selectorKey) ?? 0,
+  );
+  if (seconds <= budget) {
+    return [
+      {
+        ...shard,
+        timing_key: original.timingKeys[0]!,
+        ...(seconds === 0 ? {} : { predictedSeconds: seconds }),
+      },
+    ];
+  }
+  const weight = (entries: readonly string[]) =>
+    entries.reduce((sum, file) => sum + stripeFileWeight(file), 0);
+  const totalWeight = weight(files);
+  let count = Math.min(
+    files.length,
+    Math.max(
+      2,
+      Math.ceil(seconds / budget),
+      Math.ceil(files.length / MAX_BUNDLED_NODE_TEST_PATTERNS),
+    ),
+  );
+  for (;;) {
+    const stripes = createStripedBatches(files, count, stripeFileWeight);
+    const keys = generation(stripes).timingKeys;
+    const predicted = stripes.map((stripe, index) =>
+      Math.ceil(timings[keys[index]!] ?? (seconds * weight(stripe)) / totalWeight),
+    );
+    if (
+      predicted.every((cost) => cost <= budget) &&
+      stripes.every((stripe) => stripe.length <= MAX_BUNDLED_NODE_TEST_PATTERNS)
+    ) {
+      const result: NodeTestShard[] = [];
+      for (const [index, includePatterns] of stripes.entries()) {
+        const shardName = `${shard.shardName}-hosted-${index + 1}`;
+        result.push({
+          ...shard,
+          shardName,
+          checkName: formatNodeTestShardCheckName(shardName),
+          timing_key: keys[index]!,
+          includePatterns,
+          predictedSeconds: predicted[index]!,
+        });
+      }
+      return result;
+    }
+    if (count === files.length) {
+      throw new Error(
+        `Release shard ${shard.shardName} contains an indivisible test above the hosted budget; split that test before release`,
+      );
+    }
+    count += 1;
+  }
 }
 
 type HostedToolingTailDonation = {
@@ -3690,7 +3927,8 @@ export function packNodeTestGroups<Group>(
 /** Select exact files without losing their canonical process and artifact owners. */
 export function createSelectedNodeTestShardBundles(
   targets: readonly string[],
-  options: Pick<NodeTestPlanOptions, "runnerBackend"> & RuntimeTestSelection = {},
+  options: Pick<NodeTestPlanOptions, "runnerBackend"> &
+    RuntimeTestSelection & { onFallback?: (reason: string) => void } = {},
 ): CompactNodeTestShard[] | null {
   const selected = new Set(
     targets.filter((file) => !isCiProofTestFile(file) && isRuntimeTestFileIncluded(file, options)),
@@ -3698,18 +3936,31 @@ export function createSelectedNodeTestShardBundles(
   const configs = new Map<string, string>();
   for (const target of selected) {
     const plans = buildVitestRunPlans([target]);
+    const exactFilter =
+      plans.length === 1 &&
+      plans[0]!.forwardedArgs.length === 1 &&
+      plans[0]!.forwardedArgs[0] === target;
     if (
       !isTestFileTarget(target) ||
       !statSync(target, { throwIfNoEntry: false })?.isFile() ||
       plans.length !== 1 ||
       plans[0]!.watchMode ||
-      plans[0]!.forwardedArgs.length > 0 ||
-      plans[0]!.includePatterns?.length !== 1 ||
-      plans[0]!.includePatterns[0] !== target
+      (plans[0]!.forwardedArgs.length > 0 && !exactFilter) ||
+      (plans[0]!.includePatterns
+        ? plans[0]!.includePatterns.length !== 1 || plans[0]!.includePatterns[0] !== target
+        : !exactFilter)
     ) {
+      options.onFallback?.(
+        `unsupported canonical target: ${target} (${plans.map((plan) => plan.config).join(", ")})`,
+      );
       return null;
     }
-    configs.set(target, plans[0]!.config);
+    const config = resolveCanonicalNodeTestConfig(target, plans[0]!.config);
+    if (!config) {
+      options.onFallback?.(`missing canonical config: ${target} (${plans[0]!.config})`);
+      return null;
+    }
+    configs.set(target, config);
   }
   if (selected.size === 0) {
     return targets.length > 0 ? [] : null;
@@ -3729,6 +3980,7 @@ export function createSelectedNodeTestShardBundles(
         shard.includePatterns?.includes(target),
     );
     if (matches.length !== 1) {
+      options.onFallback?.(`canonical tooling owner count ${matches.length}: ${target}`);
       return null;
     }
     owners.add(matches[0]!);
@@ -3752,15 +4004,14 @@ export function createSelectedNodeTestShardBundles(
     }
     const matches = canonicalGroups.filter(
       (group) =>
-        !group.requiresDist &&
-        ((group.configs.includes(configs.get(target)!) &&
-          group.configs.some(isExclusiveCiTestConfig)) ||
-          (group.configs.length === 1 && group.configs[0] === configs.get(target)) ||
-          (isWholeToolingPair(group) && group.configs.includes(configs.get(target)!))) &&
+        group.configs.includes(configs.get(target)!) &&
         group.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON === undefined &&
         (!group.includePatterns || group.includePatterns.includes(target)),
     );
     if (matches.length !== 1) {
+      options.onFallback?.(
+        `canonical owner count ${matches.length}: ${target} (${configs.get(target)})`,
+      );
       return null;
     }
     const owner = matches[0]!;
@@ -3769,7 +4020,7 @@ export function createSelectedNodeTestShardBundles(
   return [
     ...(tooling.size
       ? createCompactNodeTestShardBundles(
-          shards.filter((shard) => owners.has(shard) || shard.requiresDist),
+          shards.filter((shard) => owners.has(shard)),
           options,
           "pull-request",
           tooling,
@@ -3781,21 +4032,32 @@ export function createSelectedNodeTestShardBundles(
         if (!files?.length) {
           return [];
         }
-        // The paired configs share one canonical isolation and timing owner.
-        if (isWholeToolingPair(group)) {
+        // Build-artifact descriptors and the paired tooling configs retain
+        // their complete execution owner instead of becoming Node file jobs.
+        if (group.requiresDist || isWholeToolingPair(group)) {
           return [group];
         }
         const includePatterns =
           group.includePatterns?.filter((file) => files.includes(file)) ?? files;
+        const selectedConfigs = group.configs.filter((config) =>
+          files.some((file) => configs.get(file) === config),
+        );
         // Refit folds complete selector generations into their parent. Keep that
         // parent separate: a complete subset is not a full-suite observation.
         const { timingKeys } = createCompactSplitTimingGeneration({
-          configs: group.configs,
+          configs: selectedConfigs,
           env: group.env,
           parentShardName: `changed-${group.shard_name}`,
           stripes: [includePatterns],
         });
-        return [{ ...group, includePatterns, timing_key: timingKeys[0]! }];
+        return [
+          {
+            ...group,
+            configs: selectedConfigs,
+            includePatterns,
+            timing_key: timingKeys[0]!,
+          },
+        ];
       });
       // Retain the original admission floor and preparation until subset costs
       // have independent measurements; fewer files alone do not price cold imports.

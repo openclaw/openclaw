@@ -1,6 +1,7 @@
 // Gateway service lifecycle runners, including unmanaged-process fallbacks and restart health checks.
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import {
   assertGatewayServiceUpdateCurrent,
   assertGatewayServiceFallbackAllowed,
@@ -125,7 +126,11 @@ async function stopGatewayWithoutServiceManager(
   if (managed) {
     return managed;
   }
-  const listenerPids = resolveVerifiedGatewayListenerPids(port);
+  const env = mergeGatewayServiceEnv(
+    serviceContext?.env ?? process.env,
+    serviceContext?.command ?? null,
+  );
+  const listenerPids = resolveVerifiedGatewayListenerPids(port, env);
   // Listener discovery needs lsof, which minimal containers omit. The gateway
   // lock already names the verified owner of this port, so signal it instead of
   // reporting the gateway as not running while it keeps serving.
@@ -143,7 +148,7 @@ async function stopGatewayWithoutServiceManager(
     return null;
   }
   for (const pid of pids) {
-    signalVerifiedGatewayPidSync(pid, "SIGTERM");
+    signalVerifiedGatewayPidSync(pid, "SIGTERM", { env, port });
     appendGatewayLifecycleAudit({
       action: "stop",
       source: "cli",

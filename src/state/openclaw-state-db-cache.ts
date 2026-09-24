@@ -15,7 +15,7 @@ import {
   confirmSqliteFileIntegrity,
   type SqliteIntegrityConfirmation,
 } from "../infra/sqlite-integrity.js";
-import { admitSqliteSchema, waitForSqliteSchemaProbeTurn } from "../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { registerSqliteCacheExitClose, type SqliteWalHealth } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
@@ -309,11 +309,6 @@ function publishOpenClawStateDatabase(database: OpenClawStateDatabase): OpenClaw
   });
   terminalOpenLatch.clear(pathname);
   return database;
-}
-
-function waitForCachedOpenClawStateSchemaProbe(pathname: string): Promise<void> | undefined {
-  const database = cachedDatabases.get(pathname);
-  return database ? waitForSqliteSchemaProbeTurn(database.db) : undefined;
 }
 
 function getCachedOpenClawStateDatabase(pathname: string): OpenClawStateDatabase | undefined {
@@ -628,7 +623,6 @@ export const openClawStateDatabaseCache = {
   evictCachedOpenClawStateDatabase,
   evictOpenClawStateDatabaseAfterCorruption,
   getCachedOpenClawStateDatabase,
-  waitForCachedOpenClawStateSchemaProbe,
   getOpenClawStateDatabaseRuntimeFailure: runtimeFailures.get,
   getOpenClawStateDatabaseRecordedFailure: terminalOpenLatch.peek,
   getOpenClawStateDatabaseIfOpenAtPath,

@@ -4,7 +4,11 @@ import { readPackageVersion } from "./package-json.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import { getUpdateDoctorConfigFailureReason } from "./update-doctor-config.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
-import { readBuiltGatewayBuildId, verifyGitUpdateRecovery } from "./update-git-runtime.js";
+import {
+  readBuiltGatewayBuildId,
+  readBuiltRuntimeCommit,
+  verifyGitUpdateRecovery,
+} from "./update-git-runtime.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
@@ -65,9 +69,10 @@ export async function updateGitCheckout(params: {
     timeoutMs,
   });
   const beforeSha = beforeShaResult.stdout.trim() || null;
-  const [beforeVersion, beforeBuildId] = await Promise.all([
+  const [beforeVersion, beforeBuildId, beforeBuiltCommit] = await Promise.all([
     readPackageVersion(gitRoot),
     readBuiltGatewayBuildId(gitRoot),
+    readBuiltRuntimeCommit(gitRoot),
   ]);
   const before = {
     sha: beforeSha,
@@ -103,27 +108,19 @@ export async function updateGitCheckout(params: {
     reason: "Installed checkout was not changed",
   };
   const prepareMutation = async (revision: string, root = gitRoot, runner = runCommand) => {
-    if (mutationPrepared) {
-      // Remote transport can outlive the earlier service inspection. Recheck
-      // its frozen contexts before checkout without repeating stop/preparation.
-      await prepareGitMutation({
-        runCommand: runner,
-        root,
-        revision,
-        timeoutMs,
-        beforeGitMutation: opts.inspectGitTarget,
-      });
-      return;
-    }
+    // Remote transport can outlive the earlier service inspection. Recheck
+    // its frozen contexts before checkout without repeating stop/preparation.
     await prepareGitMutation({
       runCommand: runner,
       root,
       revision,
       timeoutMs,
-      beforeGitMutation: opts.beforeGitMutation,
+      beforeGitMutation: mutationPrepared ? opts.inspectGitTarget : opts.beforeGitMutation,
     });
-    mutationPrepared = true;
-    recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    if (!mutationPrepared) {
+      mutationPrepared = true;
+      recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    }
   };
   const buildError = (reason: string, status: "error" | "skipped" = "error"): UpdateRunResult => ({
     status,
@@ -414,6 +411,7 @@ export async function updateGitCheckout(params: {
         devTarget,
         refreshedRemotes: fetched.refreshedRemotes,
         beforeSha,
+        beforeBuiltCommit,
         beforeGitStaging: opts.beforeGitStaging,
         needsCheckoutMain,
         timeoutMs,

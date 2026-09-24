@@ -888,6 +888,8 @@ jobs:
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         env:
           STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
+          # A sealed waiver stays authoritative only while the variable still holds it.
+          OPENCLAW_RELEASE_STABLE_SOAK_WAIVER: ${{ vars.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER }}
           LANE_WAIVER: ${{ inputs.lane_waiver }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}

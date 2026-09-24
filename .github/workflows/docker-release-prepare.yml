@@ -55,7 +55,7 @@ env:
 
 jobs:
   resolve:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       version: ${{ steps.identity.outputs.version }}
       include_browser: ${{ steps.identity.outputs.include_browser }}
@@ -116,7 +116,7 @@ jobs:
   build:
     name: Prepare Docker images (${{ matrix.architecture }})
     needs: resolve
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(matrix.runner))) || (matrix.runner) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -166,6 +166,7 @@ jobs:
           for attempt in 1 2 3 4; do
             if docker pull "${BUILDKIT_IMAGE}"; then break; fi
             if [[ "${attempt}" == 4 ]]; then exit 1; fi
+            echo "::warning::BuildKit image acquisition failed; retrying Docker registry transport (${attempt}/4)."
             sleep "$((attempt * 10))"
           done
       - name: Set up Docker Buildx
@@ -287,7 +288,7 @@ jobs:
   seal:
     name: Seal prepared Docker images
     needs: [resolve, build]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     permissions:
       actions: read
       contents: read

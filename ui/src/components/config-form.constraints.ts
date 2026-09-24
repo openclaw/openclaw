@@ -415,13 +415,11 @@ export function numericInputConstraints(schema: JsonSchema): NumericInputConstra
         : undefined;
   const lowerBound = effectiveNumericBound(schemas, "lower");
   const upperBound = effectiveNumericBound(schemas, "upper");
-  const rawMinimum = lowerBound.exclusive ? undefined : lowerBound.value;
-  const rawMaximum = upperBound.exclusive ? undefined : upperBound.value;
   const exclusiveMinimum = lowerBound.exclusive ? lowerBound.value : undefined;
   const exclusiveMaximum = upperBound.exclusive ? upperBound.value : undefined;
 
-  let min = rawMinimum ?? exclusiveMinimum;
-  let max = rawMaximum ?? exclusiveMaximum;
+  let min = lowerBound.value;
+  let max = upperBound.value;
   if (numericStep) {
     if (min !== undefined) {
       min = alignToStep(min, numericStep, "ceil");

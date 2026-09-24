@@ -1,4 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import type { CapturedSessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
 import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -10,6 +11,7 @@ export type SessionRowPreparationOptions = { includeAncestors?: boolean };
 
 export type SessionRowReadView = {
   describe(query: records.Lookup, captured?: records.Row): records.MaterializedRow | undefined;
+  readSource(row: records.MaterializedRow): CapturedSessionEntryReadSource | undefined;
   present(
     record: records.MaterializedRow,
     options?: records.SnapshotOptions,
@@ -113,6 +115,10 @@ function consumePreparedSessionRows<T>(
     }
   };
   const read: SessionRowReadView = {
+    readSource(row) {
+      assertActive();
+      return owner.readSource(row);
+    },
     describe(query, captured) {
       assertActive();
       const key = privateKey(query);
