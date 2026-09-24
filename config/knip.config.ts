@@ -502,6 +502,8 @@ const rootBundledPluginRuntimeDependencies = [
   "@trycua/cua-driver",
   // Root bundles the browser plugin's patched MCP server for npm installations.
   "chrome-devtools-mcp",
+  // Browser and Teams import Express; bundled Browser chunks resolve it from root.
+  "express",
   "grammy",
   "linkedom",
   "minimatch",
