@@ -31,10 +31,10 @@ import {
 } from "./io.observe-state.js";
 import { resolveConfigReadRecoveryContext } from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type {
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
-  NormalizedConfigIoDeps,
   PrepareConfigRecoveryCandidate,
 } from "./io.types.js";
 import { chmodConfigBestEffort, chmodConfigBestEffortSync } from "./io.write-safety.js";

@@ -13,6 +13,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -37,12 +38,14 @@ describe("legacy media persistence doctor migration", () => {
   it("preserves the typed maintenance cause when lease acquisition fails", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-lease-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
+    createLegacyDatabaseFixture({ env, eventsBySession: {} });
+    closeOpenClawStateDatabaseForTest();
     const sharedPath = resolveOpenClawStateSqlitePath(env);
     const openDatabase = nodeSqlite.openNodeSqliteDatabase;
     const spy = vi
       .spyOn(nodeSqlite, "openNodeSqliteDatabase")
       .mockImplementation((file, options) => {
-        if (file === sharedPath) {
+        if (file === sharedPath && !options?.readOnly) {
           throw Object.assign(new Error("fixture lease storage failure"), { code: "SQLITE_IOERR" });
         }
         return openDatabase(file, options);

@@ -26,7 +26,7 @@ import {
   type OpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-error.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
-import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
 const OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS = 5_000;
@@ -267,10 +267,6 @@ function createOpenClawDatabaseVerificationError(
   );
   error.name = "SqliteIntegrityError";
   return error;
-}
-
-export function resolveQuarantineStorePath(env: NodeJS.ProcessEnv): string {
-  return path.join(resolveOpenClawStateSqliteDir(env), "openclaw-quarantine.sqlite");
 }
 
 function ensureQuarantineStoreDirectory(storePath: string): void {

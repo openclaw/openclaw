@@ -339,6 +339,7 @@ src/config/agent-dirs.ts
 src/config/agent-limits.ts
 src/config/agent-list-projection.ts
 src/config/agent-roster-provenance.ts
+src/config/agent-store-source.ts
 src/config/allowed-values.ts
 src/config/backup-rotation.ts
 src/config/bundled-channel-config-metadata.generated.ts
@@ -386,6 +387,7 @@ src/config/io.owner-display-secret.ts
 src/config/io.plugin-metadata.ts
 src/config/io.read-helpers.ts
 src/config/io.recovery.ts
+src/config/io.runtime-env.ts
 src/config/io.runtime-write-finalization.ts
 src/config/io.runtime.ts
 src/config/io.snapshot-preparation-scope.ts
@@ -459,8 +461,10 @@ src/config/sessions/artifacts.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
+src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-store-config.ts
 src/config/sessions/session-store-owner.ts
+src/config/sessions/targets-configured-agents.ts
 src/config/shell-env-expected-keys.ts
 src/config/source-value-projection.ts
 src/config/state-dir.ts
@@ -1240,6 +1244,7 @@ src/state/openclaw-state-db-existing-write.ts
 src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
+src/state/openclaw-state-db-initialization.ts
 src/state/openclaw-state-db-legacy-backfills.ts
 src/state/openclaw-state-db-maintenance.ts
 src/state/openclaw-state-db-open.ts

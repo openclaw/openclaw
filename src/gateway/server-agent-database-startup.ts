@@ -8,7 +8,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { withAgentDatabasePreparationGuard } from "../state/agent-database-admission.js";
 import type { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db-registry.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 
 /** Finish only the deferred agent's preparation before its admission owner recovers it. */
 export function activateGatewayAgentDatabaseStartup(params: {

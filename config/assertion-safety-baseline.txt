@@ -2881,7 +2881,7 @@ src/infra/state-migrations.channel-pairing.ts	5
 src/infra/state-migrations.config-machine-state.ts	1
 src/infra/state-migrations.cron-run-logs.ts	4
 src/infra/state-migrations.debug-proxy.ts	5
-src/infra/state-migrations.doctor.ts	7
+src/infra/state-migrations.doctor.ts	5
 src/infra/state-migrations.exec-approvals.ts	1
 src/infra/state-migrations.fs.ts	1
 src/infra/state-migrations.legacy-session-store.ts	3
@@ -3306,12 +3306,10 @@ src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	2
-src/state/openclaw-agent-db-registry.ts	1
 src/state/openclaw-agent-db-schema.ts	1
 src/state/openclaw-agent-db-session-migrations.ts	4
 src/state/openclaw-agent-db-session-provenance.ts	2
 src/state/openclaw-agent-standing-intents-schema.ts	1
-src/state/openclaw-database-preflight.ts	1
 src/state/openclaw-database-verify.impl.ts	1
 src/state/openclaw-database-verify.worker.ts	1
 src/state/openclaw-quarantine-store.ts	2

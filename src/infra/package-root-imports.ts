@@ -99,7 +99,10 @@ function union(...values: Origin[][]): Origin[] {
 }
 
 /** Read dependency ownership without resolving or executing the inspected package. */
-export function collectPackageRootImports(source: string): string[] {
+export function collectPackageRootImports(
+  source: string,
+  onImport?: (specifier: string, start: number, kind: "static" | "runtime") => void,
+): string[] {
   // SAFETY: The pinned TypeScript runtime implements the compiler API in its declarations.
   const ts = require("typescript") as typeof import("typescript");
   const file = ts.createSourceFile(
@@ -110,8 +113,13 @@ export function collectPackageRootImports(source: string): string[] {
     ts.ScriptKind.JS,
   );
   const imports: string[] = [];
-  const recordImport = (specifier: string) => {
+  const recordImport = (
+    specifier: string,
+    node: ts.Node,
+    kind: "static" | "runtime" = "runtime",
+  ) => {
     imports.push(specifier);
+    onImport?.(specifier, node.getStart(file), kind);
   };
   const calls: ts.CallExpression[] = [];
   const scopes: Array<ts.SourceFile | ts.FunctionLikeDeclaration> = [file];
@@ -193,13 +201,13 @@ export function collectPackageRootImports(source: string): string[] {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       const specifier = literal(node.moduleSpecifier);
       if (specifier !== undefined) {
-        recordImport(specifier);
+        recordImport(specifier, node, "static");
       }
     }
     if (ts.isCallExpression(node)) {
       const specifier = literal(node.arguments[0]);
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword && specifier !== undefined) {
-        recordImport(specifier);
+        recordImport(specifier, node);
       } else {
         calls.push(node);
       }
@@ -658,7 +666,7 @@ export function collectPackageRootImports(source: string): string[] {
         callee.text === "require" &&
         !values.every((value) => value === "caller"))
     ) {
-      recordImport(specifier);
+      recordImport(specifier, node);
     }
   }
   return imports;

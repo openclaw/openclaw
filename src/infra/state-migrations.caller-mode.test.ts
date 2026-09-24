@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -602,6 +605,7 @@ describe("legacy state migration caller mode", () => {
       const fixture = await makeFixture();
       const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
       fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
+      openOpenClawStateDatabase({ env: fixture.env });
       const sources = writeAgentScopedLegacySources(fixture.stateDir);
       const externalAgentDir = path.join(fixture.root, `custom-${overrideKey.toLowerCase()}`);
       const externalDatabasePath = path.join(externalAgentDir, "openclaw-agent.sqlite");
