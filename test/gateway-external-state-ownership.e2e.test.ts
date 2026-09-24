@@ -250,7 +250,7 @@ describe("Gateway external shared-state ownership", () => {
       }
       const refused = await instance.cli(["update", "repair", "--json"]);
       expect(refused.code).not.toBe(0);
-      expect(`${refused.stderr}\n${refused.stdout}`).toMatch(/still in progress/u);
+      expect(`${refused.stderr}\n${refused.stdout}`).toMatch(/remains recorded as running/u);
       for (const run of [inactive, live, recent]) {
         expect(readUpdateOutcome(observer, run.runId)).toMatchObject({
           status: "running",

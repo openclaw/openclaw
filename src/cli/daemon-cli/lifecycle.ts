@@ -31,6 +31,7 @@ import {
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -327,7 +328,12 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     stopWhenNotLoaded: process.platform === "darwin" && Boolean(opts.disable),
     onNotLoaded: async ({ stdout }) => {
       if (process.platform === "linux") {
-        const runtime = await service.readRuntime(process.env).catch(() => null);
+        const runtime = await service.readRuntime(process.env).catch((error: unknown) => {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          return null;
+        });
         if (runtime?.status === "running") {
           // systemd can run a disabled unit with Restart=always. Stop it through
           // systemctl so a process-level SIGTERM cannot trigger a respawn.
@@ -344,7 +350,14 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
       // for discovery the way restart already does; otherwise a valid port
       // override makes the running gateway look like it is already stopped.
       const lock = await readActiveGatewayLockIdentity().catch(() => undefined);
-      const ctx = lock ? null : await resolveGatewayLifecycleContext(service).catch(() => null);
+      const ctx = lock
+        ? null
+        : await resolveGatewayLifecycleContext(service).catch((error: unknown) => {
+            if (hasCommandProcessCleanupError(error)) {
+              throw error;
+            }
+            return null;
+          });
       const port = lock?.port ?? ctx?.port ?? (await resolveGatewayConfigPorts()).fallback;
       return await stopGatewayWithoutServiceManager(port, lock?.pid, ctx ?? undefined);
     },
@@ -381,6 +394,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     service,
     preserveDefinition,
   ).catch(async (error: unknown) => {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     if (preserveDefinition) {
       throw error;
     }

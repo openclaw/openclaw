@@ -68,6 +68,8 @@ const runtimePartitions = new Map<
       nodeRequired: new Set([
         ...nativeCompilerTestFiles,
         "packages/markdown-core/src/render-aware-chunking.test.ts",
+        // Bun skips a sibling diagnostics subscriber when warm-worker cleanup unsubscribes.
+        "src/agents/code-mode-node.test.ts",
         "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
         // Native heap accounting, GC, and Worker limits require V8.

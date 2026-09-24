@@ -3,36 +3,36 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
-import { resolveSessionStorePathCore } from "../../../../src/config/sessions/paths.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
-} from "../../../../src/config/sessions/session-accessor.js";
-import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
+} from "../config/sessions/session-accessor.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { createTaskRecord, deleteTaskRecordById } from "../tasks/task-registry.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   attachManagedOutgoingMediaToMessage,
   cleanupManagedOutgoingMediaRecords,
   createManagedOutgoingMediaBlocks,
-} from "../../../../src/gateway/managed-image-attachments.js";
-import { listManagedImageRecordEntries } from "../../../../src/gateway/managed-image-record-store.js";
-import { ADMIN_SCOPE, READ_SCOPE } from "../../../../src/gateway/method-scopes.js";
-import { startGatewayServer } from "../../../../src/gateway/server.js";
+} from "./managed-image-attachments.js";
+import { listManagedImageRecordEntries } from "./managed-image-record-store.js";
+import { ADMIN_SCOPE, READ_SCOPE } from "./method-scopes.js";
+import { startGatewayServer } from "./server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
   getGatewayE2ePortBlock,
-} from "../../../../src/gateway/test-helpers.e2e.js";
-import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
-import type { WorkerEnvironmentServiceRecord } from "../../../../src/gateway/worker-environments/service-contract.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../../../src/state/openclaw-state-db.js";
-import { createTaskRecord, deleteTaskRecordById } from "../../../../src/tasks/task-registry.js";
-import { captureEnv, setTestEnvValue } from "../../../../src/test-utils/env.js";
-import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+} from "./test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
 
 const injectedWorkerService = vi.hoisted(() => {
   const records = new Map<string, WorkerEnvironmentServiceRecord>();
@@ -42,6 +42,8 @@ const injectedWorkerService = vi.hoisted(() => {
   const service = {
     list: () => [...records.values()],
     get: (environmentId: string) => records.get(environmentId),
+    readPreparedPoolSummary: () => ({ maxTotal: 4, reservedEnvironmentIds: [] }),
+    readReadyWorkerTarget: () => 1,
     create: async (profileId: string, idempotencyKey: string) => {
       const existingId = idempotency.get(idempotencyKey);
       if (existingId) {
@@ -59,6 +61,7 @@ const injectedWorkerService = vi.hoisted(() => {
         ownerEpoch: 1,
         createdAtMs: 1_800_000_000_000,
         idleSinceAtMs: null,
+        destroyRequestedAtMs: null,
         attachedSessionIds: [],
         desktopAvailable: false,
         desktopApps: [],
@@ -92,10 +95,10 @@ const injectedWorkerService = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../../../src/gateway/server-request-context.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../../../src/gateway/server-request-context.js")
-  >("../../../../src/gateway/server-request-context.js");
+vi.mock("./server-request-context.js", async () => {
+  const actual = await vi.importActual<typeof import("./server-request-context.js")>(
+    "./server-request-context.js",
+  );
   return {
     ...actual,
     createGatewayRequestContext: (

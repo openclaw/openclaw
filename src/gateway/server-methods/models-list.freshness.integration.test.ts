@@ -31,8 +31,8 @@ it.for([
       },
     });
     const provider = "freshness-fixture";
-    const sibling = "z-failing-fixture";
-    const providers = withSibling ? [provider, sibling] : [provider];
+    const sibling = "a-failing-fixture";
+    const providers = withSibling ? [sibling, provider] : [provider];
     let requests = 0;
     let hold = false;
     const renewal = createDeferred();
@@ -166,10 +166,10 @@ it.for([
         });
         expect(initial.models.map((row) => row.id)).toEqual(original);
         const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ agentId: "main" });
-        if (!owner?.readPublishedModelCatalog) {
+        if (!owner?.readFullModelCatalog) {
           throw new Error("Missing published freshness fixture inventory");
         }
-        const readPublished = async () => owner.readPublishedModelCatalog!();
+        const readPublished = async () => owner.readFullModelCatalog!();
         const expire = (providerIds: string[]) => {
           for (const id of providerIds) {
             const facts =
@@ -206,6 +206,7 @@ it.for([
           expect(requests).toBe(initialRequests);
         }
         // Arm the response hold before making any accepted inventory due.
+        failSibling = withSibling && !initiallyEmpty;
         expire(withSibling && !initiallyEmpty ? providers : [provider]);
         const saved = await withTestTimeout(
           list(),
@@ -229,7 +230,6 @@ it.for([
           original,
         ]);
         expect(requests).toBe(initialRequests + 1);
-        failSibling = withSibling && !initiallyEmpty;
         const renewed = await acceptRenewal(() => {
           hold = false;
           for (const response of held.splice(0)) {

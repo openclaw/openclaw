@@ -1437,7 +1437,7 @@ packages/memory-host-sdk/src/host/memory-schema.ts	7
 packages/memory-host-sdk/src/host/multimodal.ts	1
 packages/memory-host-sdk/src/host/read-file.ts	1
 packages/memory-host-sdk/src/host/read-retry.ts	4
-packages/memory-host-sdk/src/host/session-files.ts	9
+packages/memory-host-sdk/src/host/session-files.ts	8
 packages/memory-host-sdk/src/host/session-reset-recall.ts	3
 packages/memory-host-sdk/src/host/sqlite-vec.ts	3
 packages/memory-host-sdk/src/host/sqlite.ts	1
@@ -2019,7 +2019,7 @@ src/channels/message/ingress-claim-owner.ts	1
 src/channels/message/ingress-drain.ts	1
 src/channels/message/ingress-monitor.ts	4
 src/channels/message/ingress-queue.ts	6
-src/channels/message/outbound-bridge.ts	2
+src/channels/message/outbound-bridge.ts	1
 src/channels/message/outbound-echo-state.ts	2
 src/channels/model-overrides.ts	1
 src/channels/plugins/account-config-mutation.ts	1
@@ -2044,7 +2044,7 @@ src/channels/plugins/message-action-dispatch.ts	3
 src/channels/plugins/meta-normalization.ts	1
 src/channels/plugins/package-state-probes.ts	2
 src/channels/plugins/read-only-command-defaults.ts	2
-src/channels/plugins/read-only.ts	4
+src/channels/plugins/read-only.ts	2
 src/channels/plugins/registry.ts	1
 src/channels/plugins/setup-contract.ts	3
 src/channels/plugins/setup-helpers.ts	3
@@ -2053,14 +2053,14 @@ src/channels/plugins/setup-promotion-keys.ts	1
 src/channels/plugins/setup-registry.ts	2
 src/channels/plugins/setup-wizard-helpers.ts	12
 src/channels/plugins/setup-wizard-proxy.ts	1
-src/channels/plugins/setup-wizard.ts	5
+src/channels/plugins/setup-wizard.ts	3
 src/channels/plugins/threading-helpers.ts	1
 src/channels/read-only-account-inspect.ts	1
 src/channels/registry-lookup.ts	1
 src/channels/registry.ts	1
 src/channels/status/read-model.ts	1
 src/channels/streaming-config-readers.ts	1
-src/channels/streaming.ts	6
+src/channels/streaming.ts	5
 src/channels/thread-bindings-policy.ts	2
 src/channels/turn/agent-run-terminal-outcome.ts	1
 src/channels/turn/execution.ts	2
@@ -2395,7 +2395,7 @@ src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
-src/config/sessions/session-accessor.sqlite-read.ts	10
+src/config/sessions/session-accessor.sqlite-read.ts	9
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
@@ -2708,7 +2708,6 @@ src/hooks/bundled/session-memory/transcript.ts	2
 src/hooks/frontmatter.ts	1
 src/hooks/gmail-setup-utils.ts	4
 src/hooks/internal-hook-types.ts	2
-src/hooks/internal-hooks.ts	1
 src/hooks/loader.ts	1
 src/hooks/message-hook-mappers.ts	2
 src/hooks/module-loader.ts	3
@@ -3053,7 +3052,6 @@ src/plugins/channel-validation.ts	1
 src/plugins/clawhub.ts	4
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
-src/plugins/computer-use-contract.ts	3
 src/plugins/config-normalization-shared.ts	1
 src/plugins/config-schema.ts	5
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
