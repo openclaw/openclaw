@@ -425,10 +425,21 @@ class SidebarNewSessionMenu extends AgentRosterElement {
   @property({ attribute: false }) host!: RosterHost;
   @property({ attribute: false }) triggerClass = "";
 
+  constructor() {
+    super();
+    new SubscriptionsController(this).watch(
+      () => this.context?.navigation,
+      (navigation, notify) => navigation.subscribe(notify),
+    );
+  }
+
   override render() {
     return this.avatars.withActiveRoutes(() => {
       const access = this.host.readNewSessionAccess();
-      const cards = this.cards();
+      const cards = orderSidebarAgents(
+        this.cards(),
+        this.context.navigation.snapshot.sidebarAgentOrder ?? [],
+      );
       return html`<wa-dropdown
         class="sidebar-new-session-menu"
         placement="bottom-end"

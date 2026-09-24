@@ -130,6 +130,17 @@ suite.define(() => {
         )
         .toBe(true);
       await captureSidebarUiProof(suite, page, "agent-order-after.png");
+      await sidebar.locator(".sidebar-brand__new-thread").click();
+      const newMenu = sidebar.locator(".sidebar-brand .sidebar-new-session-menu");
+      await expect.poll(() => newMenu.locator("wa-dropdown-item").first().isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          newMenu
+            .locator("wa-dropdown-item[value]")
+            .evaluateAll((items) => items.map((item) => item.getAttribute("value"))),
+        )
+        .toEqual(["research", "main", "writing"]);
+      await page.keyboard.press("Escape");
       await page.reload();
       await waitForControlUiRoute(page, { routeId: "chat" });
       await expect.poll(order).toEqual(["research", "main", "writing"]);
