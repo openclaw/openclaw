@@ -122,6 +122,15 @@ const UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES = new Set<CommandExplanation["sha
   "group",
 ]);
 
+// Membership check only, for callers outside this module that want to name a
+// hasBlockingRisk() reason without re-deriving or duplicating this vocabulary.
+export function isCuratedUnbindableReason(reason: string): boolean {
+  return (
+    UNANALYZABLE_RISKS.has(reason as CommandRisk["kind"]) ||
+    UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES.has(reason as CommandExplanation["shapes"][number])
+  );
+}
+
 function normalizePlanningPlatform(platform?: string | null): NodeJS.Platform | undefined {
   switch (platform) {
     case "aix":
