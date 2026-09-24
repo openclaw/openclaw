@@ -31,10 +31,7 @@ import { readCodexNativeSubagentHistoryOwner } from "./native-subagent-history-o
 import {
   CodexNativeSubagentHistoryRecovery,
   isNoFinalCompletion,
-  normalizeIdentifier,
   readNativeTurnEnd,
-  readThreadParentThreadId,
-  readThreadSpawnSource,
   systemErrorFallbackCompletion,
 } from "./native-subagent-history-recovery.js";
 import {
@@ -94,9 +91,12 @@ import {
 import { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
 import {
   codexNativeSubagentRunId,
+  normalizeIdentifier,
   readCodexNativeSubagentRunId,
   readNativeSubagentThreadIds,
   readNativeTaskAssignment,
+  readThreadParentThreadId,
+  readThreadSpawnSource,
   type NativeSubagentAssignment,
 } from "./native-subagent-task-ids.js";
 import { CodexNativeSubagentTurnObservation } from "./native-subagent-turn-observation.js";

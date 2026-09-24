@@ -15,10 +15,11 @@ import {
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
-import { normalizeIdentifier, readThreadSpawnSource } from "./native-subagent-history-recovery.js";
 import {
   codexNativeSubagentRunId,
+  normalizeIdentifier,
   readNativeSubagentThreadIds,
+  readThreadSpawnSource,
 } from "./native-subagent-task-ids.js";
 import type {
   CodexServerNotification,

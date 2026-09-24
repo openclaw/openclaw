@@ -588,7 +588,7 @@ export type CodexModel = {
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
 
-export type CodexReasoningEffortOption = {
+type CodexReasoningEffortOption = {
   reasoningEffort?: string | null;
 };
 

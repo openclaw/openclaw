@@ -44,7 +44,7 @@ export function createWebSocketTransport(
   const socket = unixSocketPath
     ? new WebSocket("ws://localhost/", {
         ...websocketOptions,
-        createConnection: () => net.createConnection(unixSocketPath),
+        createConnection: () => connectCodexAppServerUnixSocket(unixSocketPath),
       })
     : new WebSocket(options.url, websocketOptions);
   const pendingFrames: string[] = [];
@@ -226,6 +226,11 @@ export function createWebSocketTransport(
     once: (event, listener) => events.once(event, listener),
     off: (event, listener) => events.off(event, listener),
   };
+}
+
+/** Named local-only socket boundary for the egress classifier. */
+function connectCodexAppServerUnixSocket(socketPath: string): net.Socket {
+  return net.createConnection(socketPath);
 }
 
 /** Resolves the canonical or explicitly configured Codex control socket. */

@@ -1,8 +1,4 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  readThreadParentThreadId,
-  readThreadSpawnSource,
-} from "./native-subagent-history-recovery.js";
 import { resolveNativeModelParentOwner } from "./native-subagent-model-lookup.js";
 import {
   createNativeModelSourceOwner,
@@ -22,6 +18,7 @@ import type {
   ParentOwner,
   ParentState,
 } from "./native-subagent-monitor-types.js";
+import { readThreadParentThreadId, readThreadSpawnSource } from "./native-subagent-task-ids.js";
 import { isJsonObject } from "./protocol.js";
 
 /** Equality joins input to one live source; it never grants another source's models. */

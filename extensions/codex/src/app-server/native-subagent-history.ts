@@ -12,10 +12,10 @@ import {
   codexNativeSubagentHistoryConnectionFingerprint,
   readCodexNativeSubagentHistoryOwner,
 } from "./native-subagent-history-owner.js";
-import { readThreadParentThreadId } from "./native-subagent-history-recovery.js";
 import {
   CODEX_NATIVE_SUBAGENT_TASK_KIND,
   readCodexNativeSubagentRunId,
+  readThreadParentThreadId,
 } from "./native-subagent-task-ids.js";
 import {
   buildCodexAppServerConnectionFingerprint,

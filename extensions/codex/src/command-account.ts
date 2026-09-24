@@ -20,14 +20,14 @@ import {
   summarizeCodexAccountUsage,
   type CodexAccountUsageSummary,
 } from "./app-server/rate-limits.js";
-import type { CodexCommandDeps } from "./command-handler-deps.js";
-import type { SafeValue } from "./command-rpc.js";
+import type {
+  SafeCodexControlRequestFn as SafeCodexControlRequest,
+  SafeValue,
+} from "./command-rpc.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
-
-type SafeCodexControlRequest = CodexCommandDeps["safeCodexControlRequest"];
 
 type CodexAccountAuthRow = {
   profileId: string;
