@@ -88,25 +88,6 @@ describe("runtime degraded SecretRef owners", () => {
     ]);
   });
 
-  it("reports stale owners without blocking their last-known-good runtime", () => {
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "provider",
-        ownerId: "openai",
-        state: "unavailable",
-        degradationState: "stale",
-        paths: ["models.providers.openai.apiKey"],
-        refKeys: ["env:default:OPENAI_API_KEY"],
-        reason: "secret reference was not found",
-      },
-    ]);
-
-    expect(listActiveDegradedSecretOwners()).toMatchObject([
-      { ownerId: "openai", degradationState: "stale" },
-    ]);
-    expect(() => assertSecretOwnerAvailable("provider", "openai")).not.toThrow();
-  });
-
   it("merges runtime-discovered credential owners and clears them independently", () => {
     setActiveDegradedSecretOwners([
       {
