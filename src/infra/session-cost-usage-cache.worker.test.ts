@@ -513,6 +513,42 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
   });
 }, 30_000);
 
+it("settles a queued refresh when its selected transcript disappears", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-missing-transcript";
+    const sessionFile = state.path("disappearing.jsonl");
+    const sessions = [{ sessionFile }];
+    await fs.writeFile(sessionFile, usageLine("selected"));
+    expect(
+      await loadSessionCostSummariesFromCache({ agentId, sessions, requestRefresh: false }),
+    ).toMatchObject({ summaries: [null], cacheStatus: { status: "stale" } });
+    await fs.rm(sessionFile);
+    const work = new AsyncWorkScope();
+    const published = vi.fn();
+    const unsubscribe = onSessionCostUsageUpdated(published);
+    try {
+      expect(
+        await work.track(() => loadSessionCostSummariesFromCache({ agentId, sessions })),
+      ).toMatchObject({ summaries: [null], cacheStatus: { status: "refreshing" } });
+      await work.runWhenIdle(() => undefined);
+      expect(published).toHaveBeenCalledExactlyOnceWith({
+        agentId,
+        usageUpdatedAt: expect.any(Number),
+        usageRefreshFailed: true,
+      });
+      await fs.writeFile(sessionFile, usageLine("restored"));
+      await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+      expect(published).toHaveBeenCalledTimes(2);
+      expect(published).toHaveBeenLastCalledWith({ agentId, usageUpdatedAt: expect.any(Number) });
+      await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+      expect(published).toHaveBeenCalledTimes(2);
+    } finally {
+      await work.drain();
+      unsubscribe();
+    }
+  });
+});
+
 it("preserves the original host failure when lock cleanup fails and retries that cleanup on close", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-host-failure";
