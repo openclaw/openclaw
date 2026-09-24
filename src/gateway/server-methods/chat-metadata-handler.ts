@@ -135,32 +135,51 @@ export async function handleChatMetadataRequest(
   if (!assertValidParams(params, validateChatMetadataParams, "chat.metadata", respond)) {
     return;
   }
-  let scope: ChatMetadataReadParams | undefined;
-  try {
-    scope = resolveChatMetadataReadParams(options, params);
-    if (!scope) {
+  // Session lifecycle and access facts can advance while model metadata is being prepared.
+  // Rebind the complete read scope instead of failing a foreground navigation for a
+  // snapshot that became stale during that same request.
+  const maxPublicationAttempts = 3;
+  for (let attempt = 0; attempt < maxPublicationAttempts; attempt += 1) {
+    let scope: ChatMetadataReadParams | undefined;
+    try {
+      scope = resolveChatMetadataReadParams(options, params);
+      if (!scope) {
+        return;
+      }
+      const metadata = await context.readChatMetadata(scope);
+      scope.draftAccountSelection?.assertCurrent();
+      scope.assertCurrent?.();
+      const cfg = context.getRuntimeConfig();
+      const policy = prepareOperatorModelPresentation({
+        cfg,
+        policyConfig: context.getCommittedRuntimeConfig?.() ?? cfg,
+        client,
+      })?.forAgent(scope.agentId, metadata.models);
+      respond(true, policy ? policy.metadata(metadata) : metadata);
       return;
-    }
-    const metadata = await context.readChatMetadata(scope);
-    scope.draftAccountSelection?.assertCurrent();
-    scope.assertCurrent?.();
-    const cfg = context.getRuntimeConfig();
-    const policy = prepareOperatorModelPresentation({
-      cfg,
-      policyConfig: context.getCommittedRuntimeConfig?.() ?? cfg,
-      client,
-    })?.forAgent(scope.agentId, metadata.models);
-    respond(true, policy ? policy.metadata(metadata) : metadata);
-  } catch (error) {
-    if (error instanceof SessionMutationAuthorizationChangedError) {
-      respond(false, undefined, error.error);
+    } catch (error) {
+      if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+        if (attempt + 1 < maxPublicationAttempts && options.signal?.aborted !== true) {
+          continue;
+        }
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true, retryAfterMs: 0 }),
+        );
+        return;
+      }
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        respond(false, undefined, error.error);
+        return;
+      }
+      if (!(error instanceof ModelAccountConnectAuthorityError)) {
+        throw error;
+      }
+      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
       return;
+    } finally {
+      scope?.release?.();
     }
-    if (!(error instanceof ModelAccountConnectAuthorityError)) {
-      throw error;
-    }
-    respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
-  } finally {
-    scope?.release?.();
   }
 }

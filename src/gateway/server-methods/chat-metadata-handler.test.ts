@@ -515,13 +515,13 @@ describe("chat metadata dispatch authority", () => {
         await settled;
       }
 
-      await expect(pending).rejects.toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
-      expect(respond).not.toHaveBeenCalled();
+      await expect(pending).resolves.toBeUndefined();
+      expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
     });
   });
 
   it.each(["role loss", "config replacement", "profile replacement", "abort"] as const)(
-    "rejects a neutral draft after %s during metadata preparation",
+    "rebinds or rejects a neutral draft after %s during metadata preparation",
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
@@ -562,11 +562,45 @@ describe("chat metadata dispatch authority", () => {
           await settled;
         }
 
-        await expect(pending).rejects.toBeInstanceOf(
-          PreparedModelRuntimePublicationSupersededError,
-        );
-        expect(respond).not.toHaveBeenCalled();
+        if (change === "abort") {
+          await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+          expect(respond).not.toHaveBeenCalled();
+        } else {
+          await expect(pending).resolves.toBeUndefined();
+          if (change === "config replacement") {
+            expect(fixture.readChatMetadata).toHaveBeenCalledTimes(2);
+            expect(respond).toHaveBeenCalledExactlyOnceWith(true, fixture.metadata);
+          } else {
+            expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+          }
+        }
       });
     },
   );
+
+  it("bounds repeated metadata supersession and returns a retryable unavailable error", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
+      await state.writeConfig(fixture.config);
+      fixture.readChatMetadata.mockRejectedValue(
+        new PreparedModelRuntimePublicationSupersededError(
+          "Session changed while preparing its metadata. Retry the request.",
+        ),
+      );
+
+      const { pending, respond } = dispatchMetadata(fixture, { agentId: "main" });
+      await expect(pending).resolves.toBeUndefined();
+
+      expect(fixture.readChatMetadata).toHaveBeenCalledTimes(3);
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          retryable: true,
+          retryAfterMs: 0,
+        }),
+      );
+    });
+  });
 });

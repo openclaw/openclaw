@@ -2,7 +2,6 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptEventSync,
@@ -62,7 +61,7 @@ const cases = [
   { write: "raw before sibling participant", allowed: false },
   { write: "raw after sibling participant", allowed: false },
   { write: "tracked selected update", allowed: false },
-  { write: "selected lifecycle change", allowed: false },
+  { write: "selected lifecycle change", allowed: true },
   { write: "external sibling update", allowed: true },
   // Identical target facts remain publishable even if the row was recreated.
   { write: "external selected identical recreation", allowed: true },
@@ -173,8 +172,13 @@ it.each(
           "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'raw') WHERE session_key = ?",
         )
         .run(selected.sessionKey);
+    let metadataReadCount = 0;
     const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async (scope) => {
+      metadataReadCount += 1;
       expect(scope.isCurrent?.()).toBe(true);
+      if (metadataReadCount > 1) {
+        return metadata;
+      }
       if (write === "tracked sibling update") {
         await upsertSessionEntryCore(sibling, { label: "changed sibling" });
       } else if (write === "raw sibling update" || write === "sibling cache replacement") {
@@ -281,7 +285,7 @@ it.each(
         }, selected);
       } else if (write === "tracked selected update") {
         await upsertSessionEntryCore(selected, { label: "changed selected" });
-      } else if (write === "selected lifecycle change") {
+      } else if (write === "selected lifecycle change" && metadataReadCount === 1) {
         await upsertSessionEntryCore(selected, { lifecycleRevision: "selected-replaced" });
       } else {
         const external = new DatabaseSync(database.path);
@@ -359,9 +363,15 @@ it.each(
         (error: unknown) => ({ error }),
       );
     const after = loadSessionEntry(selected);
-    expect(readChatMetadata).toHaveBeenCalledTimes(1);
+    expect(readChatMetadata).toHaveBeenCalledTimes(
+      write === "selected lifecycle change" || !allowed ? 2 : 1,
+    );
     if (allowed) {
-      expect(after).toEqual(before);
+      if (write === "selected lifecycle change") {
+        expect(after).toMatchObject({ lifecycleRevision: "selected-replaced" });
+      } else {
+        expect(after).toEqual(before);
+      }
       expect(outcome.error).toBeUndefined();
       expect(respond).toHaveBeenCalledWith(true, metadata);
       if (write === "canonical sibling owner") {
@@ -402,14 +412,8 @@ it.each(
         }
       }
     } else {
-      expect(outcome.error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
-      expect(outcome.error).toMatchObject({
-        message:
-          write === "runtime config replacement" || write === "access revision change"
-            ? "Chat metadata access changed while preparing its metadata. Retry the request."
-            : "Session changed while preparing its metadata. Retry the request.",
-      });
-      expect(respond).not.toHaveBeenCalled();
+      expect(outcome.error).toBeUndefined();
+      expect(respond).toHaveBeenCalledWith(true, metadata);
     }
     if (selectedParticipantChange) {
       const participantIds =
