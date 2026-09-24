@@ -74,6 +74,11 @@ import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-group
 import { buildSessionsListQuery } from "./list-query.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
 import type { SessionsRouteData } from "./route.ts";
+import {
+  reconcileSelectedSessions,
+  updateSelectedSessions,
+  type SessionDeleteRow,
+} from "./selection.ts";
 import { renderSessionManagementMenu } from "./session-menu.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
@@ -92,11 +97,6 @@ type SessionsPageMutationResult = "completed" | "failed" | "stale";
 
 /** Type-only, so the dialog itself stays behind its lazy boundary. */
 type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
-
-type SessionDeleteRow = Pick<
-  GatewaySessionRow,
-  "key" | "archived" | "sessionId" | "label" | "displayName"
->;
 
 type SessionsPageListBinding = {
   sessions: ApplicationContext["sessions"];
@@ -128,7 +128,7 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private groupBy: SessionsGroupBy = loadStoredGroupBy();
   @state() private page = 0;
   @state() private pageSize = 25;
-  @state() private selectedKeys = new Set<string>();
+  @state() private selectedSessions = new Map<string, SessionDeleteRow>();
   @state() private sessionMenu:
     | (Pick<GatewaySessionRow, "key" | "sessionId"> & { x: number; y: number })
     | null = null;
@@ -160,7 +160,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.resetTranscriptSearchState(this.transcriptSearchQuery);
     if (!this.deepLinkSessionKey) {
       this.page = 0;
-      this.selectedKeys = new Set();
+      this.selectedSessions = new Map();
       this.routeDataEnabled = false;
       this.clearSearchTimer();
       this.bindSessionList();
@@ -276,7 +276,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.loading = false;
     this.refreshing = false;
     this.resetTranscriptSearchState("");
-    this.selectedKeys = new Set();
+    this.selectedSessions = new Map();
     this.expandedSessionKey = null;
     this.deepLinkSessionKey = null;
     this.appliedListResult = undefined;
@@ -333,14 +333,12 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private selectedDeleteDisabledReason(): string | undefined {
-    const rowsByKey = new Map(this.result?.sessions.map((row) => [row.key, row]) ?? []);
-    for (const key of this.selectedKeys) {
-      const row = rowsByKey.get(key);
+    for (const row of this.selectedSessions.values()) {
       const reason = this.mutationDisabledReason({
         method: "sessions.delete",
         params: {
-          key,
-          ...(row?.archived === true ? { archivedOnly: true } : {}),
+          key: row.key,
+          ...(row.archived === true ? { archivedOnly: true } : {}),
         },
       });
       if (reason) {
@@ -364,19 +362,14 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     this.statusFilter = data.statusFilter;
+    this.activeMinutes = "";
+    this.limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
+    this.includeGlobal = true;
+    this.includeUnknown = Boolean(data.expandedSessionKey);
     if (data.expandedSessionKey) {
-      this.activeMinutes = "";
-      this.limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
-      this.includeGlobal = true;
-      this.includeUnknown = true;
       this.searchQuery = "";
       this.page = 0;
-      this.selectedKeys = new Set();
-    } else {
-      this.activeMinutes = "";
-      this.limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
-      this.includeGlobal = true;
-      this.includeUnknown = false;
+      this.selectedSessions = new Map();
     }
     this.expandedSessionKey = data.expandedSessionKey;
     // Only route-driven expansion narrows the list query; interactive drawer
@@ -442,7 +435,7 @@ class SessionsPage extends OpenClawLightDomElement {
       // Retired rows cannot be selected under replacement text, even during debounce.
       this.result = null;
       this.error = null;
-      this.selectedKeys = new Set();
+      this.selectedSessions = new Map();
       this.page = 0;
       this.listBinding = { sessions, query, key, transcriptKey };
       this.appliedListResult = undefined;
@@ -474,12 +467,23 @@ class SessionsPage extends OpenClawLightDomElement {
     this.loading = snapshot.loading;
     this.error = snapshot.error;
     const result = snapshot.result;
-    if (!result || result === this.appliedListResult) {
+    if (!result) {
       return;
     }
-    this.appliedListResult = result;
-    this.result = filterSessionRows(result, { archivedFilter: this.statusFilter });
-    ensureSessionAgentIdentities(this.context?.agentIdentity, this.result);
+    if (result !== this.appliedListResult) {
+      this.appliedListResult = result;
+      this.result = filterSessionRows(result, { archivedFilter: this.statusFilter });
+      ensureSessionAgentIdentities(this.context?.agentIdentity, this.result);
+    }
+    if (!snapshot.loading && !snapshot.error && this.result && this.selectedSessions.size > 0) {
+      this.selectedSessions = reconcileSelectedSessions(
+        this.selectedSessions,
+        this.result.sessions,
+        (row) =>
+          binding.sessions.deletionState(row.key, this.sessionAgentId(row.key), row.sessionId) ===
+            "pending" || binding.sessions.archiveVisibility(row.key) === "pending",
+      );
+    }
   }
 
   private async refreshSessionList(scope = this.captureRequestScope()) {
@@ -584,7 +588,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.includeGlobal = next.includeGlobal;
     this.includeUnknown = next.includeUnknown;
     this.page = 0;
-    this.selectedKeys = new Set();
+    this.selectedSessions = new Map();
     // Explicit filter edits leave deep-link mode; load the full roster.
     this.deepLinkSessionKey = null;
     void this.refreshSessionList();
@@ -598,7 +602,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.statusFilter = statusFilter;
     this.clearSearchTimer();
     this.page = 0;
-    this.selectedKeys = new Set();
+    this.selectedSessions = new Map();
     this.deepLinkSessionKey = null;
     // Route navigation changes the managed query; mask the old view's rows
     // until its current list subscription publishes.
@@ -610,23 +614,29 @@ class SessionsPage extends OpenClawLightDomElement {
     );
   }
 
+  private updateSelection(keys: string[], mode: "select" | "toggle" | "deselect") {
+    this.selectedSessions = updateSelectedSessions(
+      this.selectedSessions,
+      this.result?.sessions ?? [],
+      keys,
+      mode,
+    );
+  }
+
   private async deleteSelected() {
-    const keys = [...this.selectedKeys];
-    if (keys.length === 0 || this.loading || this.sessionMutationPending) {
+    const rows = [...this.selectedSessions.values()];
+    if (rows.length === 0 || this.loading || this.sessionMutationPending) {
       return;
     }
     const scope = this.captureRequestScope();
     if (!scope) {
       return;
     }
-    // Snapshot identity and archive authority before a replacement can change them.
-    const rowsByKey = new Map(this.result?.sessions.map((row) => [row.key, row]) ?? []);
-    const rows = keys.map((key) => rowsByKey.get(key) ?? { key });
     const message = t(
-      keys.length === 1
+      rows.length === 1
         ? "sessionsView.deleteSelectedConfirmOne"
         : "sessionsView.deleteSelectedConfirm",
-      { count: String(keys.length) },
+      { count: String(rows.length) },
     );
     if (
       !(await showConfirmDialog({
@@ -639,7 +649,7 @@ class SessionsPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    await this.deleteSessions(rows);
+    await this.deleteSessions(rows.filter((row) => this.selectedSessions.get(row.key) === row));
   }
 
   private async deleteSessions(
@@ -701,11 +711,11 @@ class SessionsPage extends OpenClawLightDomElement {
       }
       if (result.deleted.length > 0) {
         const deleted = new Set(result.deleted);
-        const selected = new Set(this.selectedKeys);
+        const selected = new Map(this.selectedSessions);
         for (const key of result.deleted) {
           selected.delete(key);
         }
-        this.selectedKeys = selected;
+        this.selectedSessions = selected;
         if (this.expandedSessionKey && deleted.has(this.expandedSessionKey)) {
           this.expandedSessionKey = null;
         }
@@ -1120,9 +1130,9 @@ class SessionsPage extends OpenClawLightDomElement {
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";
       }
-      const selectedKeys = new Set(this.selectedKeys);
-      selectedKeys.delete(key);
-      this.selectedKeys = selectedKeys;
+      const selected = new Map(this.selectedSessions);
+      selected.delete(key);
+      this.selectedSessions = selected;
       return "completed";
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
@@ -1462,7 +1472,7 @@ class SessionsPage extends OpenClawLightDomElement {
           knownCategories: this.knownCategories(),
           page: this.page,
           pageSize: this.pageSize,
-          selectedKeys: this.selectedKeys,
+          selectedKeys: new Set(this.selectedSessions.keys()),
           sessionMenu: this.sessionMenu,
           expandedSessionKey: this.expandedSessionKey,
           labelDisabledReason: (row) =>
@@ -1493,7 +1503,7 @@ class SessionsPage extends OpenClawLightDomElement {
             this.includeUnknown = false;
             this.searchQuery = "";
             this.page = 0;
-            this.selectedKeys = new Set();
+            this.selectedSessions = new Map();
             this.deepLinkSessionKey = null;
             void this.refreshSessionList();
           },
@@ -1502,7 +1512,7 @@ class SessionsPage extends OpenClawLightDomElement {
             this.deepLinkSessionKey = null;
             this.searchQuery = query;
             this.page = 0;
-            this.selectedKeys = new Set();
+            this.selectedSessions = new Map();
             this.clearSearchTimer();
             if (this.captureRequestScope()) {
               this.searchTimer = setTimeout(() => {
@@ -1542,27 +1552,11 @@ class SessionsPage extends OpenClawLightDomElement {
           onDeleteAllArchived: () => void this.deleteAllArchived(),
           onPatch: (key, patch, options) =>
             void this.patchSession(key, patch, undefined, undefined, options),
-          onToggleSelect: (key) => {
-            const next = new Set(this.selectedKeys);
-            if (next.has(key)) {
-              next.delete(key);
-            } else {
-              next.add(key);
-            }
-            this.selectedKeys = next;
-          },
-          onSelectPage: (keys) => {
-            this.selectedKeys = new Set([...this.selectedKeys, ...keys]);
-          },
-          onDeselectPage: (keys) => {
-            const next = new Set(this.selectedKeys);
-            for (const key of keys) {
-              next.delete(key);
-            }
-            this.selectedKeys = next;
-          },
+          onToggleSelect: (key) => this.updateSelection([key], "toggle"),
+          onSelectPage: (keys) => this.updateSelection(keys, "select"),
+          onDeselectPage: (keys) => this.updateSelection(keys, "deselect"),
           onDeselectAll: () => {
-            this.selectedKeys = new Set();
+            this.selectedSessions = new Map();
           },
           onDeleteSelected: () => void this.deleteSelected(),
           onNavigateToChat: (sessionKey) => {

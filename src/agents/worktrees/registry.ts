@@ -3,6 +3,7 @@ import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -12,6 +13,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
+  getRegistryWorktreeInDatabase,
   getRegistryWorktreeProvisionedStateInDatabase,
   listRegistryWorktreesInDatabase,
   rowToRecord,
@@ -25,6 +27,7 @@ import {
   WORKTREE_REMOVING_LEASE_KEY,
   type RunLeaseOwnerChecks,
 } from "./run-lease-owner.js";
+import { releaseWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import type {
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
@@ -138,13 +141,7 @@ export function getRegistryWorktree(
   env: NodeJS.ProcessEnv,
   id: string,
 ): ManagedWorktreeRecord | undefined {
-  const db = dbFor(env);
-  const query = kyselyFor(db)
-    .selectFrom("worktrees")
-    .select(WORKTREE_RECORD_COLUMNS)
-    .where("id", "=", id);
-  const row = executeSqliteQuerySync(db, query).rows[0];
-  return row ? rowToRecord(row) : undefined;
+  return getRegistryWorktreeInDatabase(dbFor(env), id);
 }
 
 export function discardLegacyRegistryWorktrees(
@@ -437,53 +434,6 @@ export function deleteRegistryWorktree(
   );
 }
 
-export function retireMissingRegistryWorktree(
-  env: NodeJS.ProcessEnv,
-  observed: Pick<
-    ManagedWorktreeRecord,
-    "id" | "path" | "lastActiveAt" | "repoRoot" | "repoFingerprint"
-  >,
-  removedAt: number,
-): ManagedWorktreeRecord | undefined {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // A path probe cannot retire a restored lifecycle or a rebound repository.
-      const retired = executeSqliteQuerySync(
-        db,
-        kyselyFor(db)
-          .updateTable("worktrees")
-          .set({ removed_at: removedAt })
-          .where("id", "=", observed.id)
-          .where("removed_at", "is", null)
-          // A private exact-state retirement path may still hold the complete
-          // source. Only its explicit recovery owner can finalize that lifecycle.
-          .where((eb) =>
-            eb.or([
-              eb("snapshot_ref", "is", null),
-              eb("snapshot_ref", "not like", "refs/openclaw/snapshots/exact-%"),
-            ]),
-          )
-          .where("path", "=", observed.path)
-          .where("last_active_at", "=", observed.lastActiveAt)
-          .where("repo_root", "=", observed.repoRoot)
-          .where("repo_fingerprint", "=", observed.repoFingerprint)
-          .returning(WORKTREE_RECORD_COLUMNS),
-      ).rows[0];
-      const current =
-        retired ??
-        executeSqliteQuerySync(
-          db,
-          kyselyFor(db)
-            .selectFrom("worktrees")
-            .select(WORKTREE_RECORD_COLUMNS)
-            .where("id", "=", observed.id),
-        ).rows[0];
-      return current ? rowToRecord(current) : undefined;
-    },
-    { env },
-  );
-}
-
 export function admitWorktreeRunLeaseRow(
   env: NodeJS.ProcessEnv,
   params: {
@@ -661,18 +611,11 @@ export function releaseWorktreeRunLeaseRow(
   worktreeId: string,
   token: string,
 ): void {
-  const db = dbFor(env);
+  // Process exit cannot await the worker. Runtime cleanup uses its async command.
   runOpenClawStateWriteTransaction(
-    () => {
-      executeSqliteQuerySync(
-        db,
-        kyselyLeaseFor(db)
-          .deleteFrom("state_leases")
-          .where("scope", "=", worktreeRunLeaseScope(worktreeId))
-          .where("lease_key", "=", token),
-      );
-    },
+    ({ db }) => releaseWorktreeRunLeaseInDatabase(db, worktreeId, token),
     { env },
+    { operationLabel: "worktrees.releaseRunLease" },
   );
 }
 
@@ -719,18 +662,17 @@ export function hasLiveWorktreeRunLeaseRow(
   worktreeId: string,
   checks?: RunLeaseOwnerChecks,
 ): boolean {
-  return runOpenClawStateWriteTransaction(
-    (database) => {
-      const db = database.db;
-      const k = kyselyLeaseFor(db);
-      const { livePids } = collectLiveRunLeases(
-        db,
-        k,
-        worktreeRunLeaseScope(worktreeId),
-        checks ?? {},
-      );
-      return livePids.length > 0;
-    },
-    { env },
+  return (
+    withExistingOpenClawStateDatabaseCurrentReadOnly(
+      ({ db }) =>
+        collectLiveRunLeases(
+          db,
+          kyselyLeaseFor(db),
+          worktreeRunLeaseScope(worktreeId),
+          checks ?? {},
+          false,
+        ).livePids.length > 0,
+      { env },
+    ) ?? false
   );
 }

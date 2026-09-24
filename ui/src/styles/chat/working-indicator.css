@@ -13,6 +13,7 @@
 
   position: relative;
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   color: var(--accent);
 }
@@ -21,6 +22,8 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
   min-height: 28px;
   animation: chatWorkingIndicatorEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -59,16 +62,12 @@
 .chat-working-indicator__status {
   display: inline-flex;
   flex-wrap: wrap;
+  min-width: 0;
   align-items: baseline;
   gap: 6px;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
-}
-
-.chat-working-indicator__preamble {
-  flex-basis: 100%;
-  overflow-wrap: anywhere;
 }
 
 .chat-working-indicator__elapsed {

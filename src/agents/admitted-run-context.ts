@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
   getAgentRunLifecycleGeneration,
+  readAgentRunDelegatedAuthorityFailure,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
@@ -120,25 +121,33 @@ export function assertOperatorModelAllowed(
 export function bindOperatorModelExecution(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: ModelRef | undefined,
+  mapAuthorizationError?: (error: unknown) => Error,
 ): Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined {
   if (!authority) {
     return undefined;
   }
   const selected = model ? { ...model } : undefined;
-  assertOperatorModelAllowed(authority, selected);
-  const releaseAuthority = authority.retain?.();
+  const mapError = (error: unknown) => mapAuthorizationError?.(error) ?? error;
+  let releaseAuthority: (() => void) | undefined;
+  try {
+    assertOperatorModelAllowed(authority, selected);
+    releaseAuthority = authority.retain?.();
+  } catch (error) {
+    throw mapError(error);
+  }
   const revoked = new AbortController();
   let released = false;
   const assertCurrent = () => {
     if (released) {
-      throw new Error("operator model execution authority is no longer active");
+      throw mapError(new Error("operator model execution authority is no longer active"));
     }
     revoked.signal.throwIfAborted();
     try {
       assertOperatorModelAllowed(authority, selected);
     } catch (error) {
-      revoked.abort(error);
-      throw error;
+      const failure = mapError(error);
+      revoked.abort(failure);
+      throw failure;
     }
   };
   const recheck = () => {
@@ -148,7 +157,7 @@ export function bindOperatorModelExecution(
       // The latched signal owns cancellation; notification must reach other executions.
     }
   };
-  const onSourceAbort = () => revoked.abort(authority.signal?.reason);
+  const onSourceAbort = () => revoked.abort(mapError(authority.signal?.reason));
   authority.signal?.addEventListener("abort", onSourceAbort, { once: true });
   const unsubscribe = authority.onModelPolicyChanged?.(recheck);
   recheck();
@@ -289,7 +298,10 @@ export function resolveAdmittedRunActiveAssertion(
       context.operationalRunInstance !== operationalRunInstance ||
       getAdmittedRunDelegatedAuthority(context) !== authority
     ) {
-      throw new Error("admitted run authority is no longer active");
+      throw new Error(
+        "admitted run authority is no longer active",
+        readAgentRunDelegatedAuthorityFailure(authority),
+      );
     }
   };
 }
@@ -441,18 +453,20 @@ export function prepareAgentRunAdmission(params: {
   }
   const assertOperatorCurrent = operatorAuthority?.assertCurrent;
   const releaseOperatorAuthority = operatorAuthority?.retain?.();
-  let sourceClosed = false;
+  let sourceFailure: Error | undefined;
   const assertSourceCurrent =
     (sourceAssertion || assertOperatorCurrent) &&
     (() => {
-      if (sourceClosed) {
-        throw new Error("source execution authority is no longer active");
+      if (sourceFailure) {
+        throw sourceFailure;
       }
       try {
         sourceAssertion?.();
         assertOperatorCurrent?.();
       } catch (error) {
-        sourceClosed = true;
+        sourceFailure = new Error("source execution authority is no longer active", {
+          cause: error,
+        });
         throw error;
       }
     });

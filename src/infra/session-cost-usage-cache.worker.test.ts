@@ -5,6 +5,7 @@ import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { maybeRepairLegacyRuntimeFiles } from "../commands/doctor-usage-cost-cache.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   createSessionEntryWithTranscript,
@@ -22,6 +23,7 @@ import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.
 import * as usageCacheSqlite from "./session-cost-usage-cache.sqlite.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
+import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import {
   loadCostUsageSummaryFromCache,
@@ -30,6 +32,9 @@ import {
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { WorkerTaskInput, WorkerTaskOptions } from "./worker-task-pool.types.js";
+
+const note = vi.hoisted(() => vi.fn());
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 const observed = vi.hoisted(() => ({
   workers: new Set<Worker>(),
@@ -553,6 +558,47 @@ it("preserves the original host failure when lock cleanup fails and retries that
     }
   });
 }, 30_000);
+
+it("reports the failed session in doctor and clears it after successful refresh", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-failure-health";
+    const sessionFile = state.path("failed-refresh.jsonl");
+    await fs.writeFile(sessionFile, usageLine("failed-refresh"));
+    const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
+    const observer = vi
+      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
+      .mockImplementation((...args) => ({
+        ...prepareLock(...args),
+        writeRollup: async () => {
+          throw new Error("private transcript content");
+        },
+      }));
+    try {
+      await expect(
+        refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] }),
+      ).rejects.toThrow("private transcript content");
+    } finally {
+      observer.mockRestore();
+    }
+    const failures = await openUsageCostRefreshFailures(state.env).entries();
+    expect(failures).toMatchObject([
+      { value: { agentId, sessionFile, failedAt: expect.any(Number) } },
+    ]);
+    expect(JSON.stringify(failures)).not.toContain("private transcript content");
+    note.mockClear();
+    await maybeRepairLegacyRuntimeFiles(false, state.env);
+    expect(note).toHaveBeenCalledWith(expect.stringContaining(sessionFile), "Usage cost cache");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("cached totals may be incomplete"),
+      "Usage cost cache",
+    );
+    await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    expect(await openUsageCostRefreshFailures(state.env).entries()).toEqual([]);
+    note.mockClear();
+    await maybeRepairLegacyRuntimeFiles(false, state.env);
+    expect(note.mock.calls.filter(([, title]) => title === "Usage cost cache")).toEqual([]);
+  });
+});
 
 it("retains a late host write failure after cancellation and releases the lock only after settlement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

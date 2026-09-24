@@ -1,3 +1,4 @@
+import { truncateNativeToolTranscriptText } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   inferToolMetaFromArgs,
   projectAgentToolActivity,
@@ -11,10 +12,7 @@ import {
   unknownItemStatus,
   isProjectedNativeToolItem,
 } from "./event-projector-items.js";
-import {
-  collectDynamicToolContentText,
-  truncateToolTranscriptText,
-} from "./event-projector-tool-output.js";
+import { collectDynamicToolContentText } from "./event-projector-tool-output.js";
 import { normalizeNonEmptyString, readNonEmptyString } from "./event-projector-values.js";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 import {
@@ -386,7 +384,7 @@ export function itemOutputText(
   outputTextByItem?: ReadonlyMap<string, string>,
 ): string | undefined {
   const output = itemObservedOutputText(item, outputTextByItem)?.trim();
-  return output ? truncateToolTranscriptText(output) : undefined;
+  return output ? truncateNativeToolTranscriptText(output, "Codex") : undefined;
 }
 
 function itemObservedOutputText(

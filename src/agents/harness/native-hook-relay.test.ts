@@ -13,10 +13,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runNativeHookRelayCliFromArgv } from "../../cli/native-hook-relay-cli.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import {
-  createAgentRuntimeApprovalAuthorityValidator,
-  mintAgentRuntimeIdentityToken,
-} from "../../gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
+import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import { nativeHookRelayHandlers } from "../../gateway/server-methods/native-hook-relay.js";
 import { validateAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import {
@@ -1283,11 +1281,11 @@ describe("native hook relay registry", () => {
       }
       // Hold successor startup, while keeping the retired listener and real
       // read-only locator lookup intact across the CLI registration deadline.
-      const listen = vi
-        .spyOn(Server.prototype, "listen")
-        .mockImplementation(function (this: Server) {
-          return this;
-        });
+      const listen = vi.spyOn(Server.prototype, "listen").mockImplementation(function (
+        this: Server,
+      ) {
+        return this;
+      });
       try {
         registerNativeHookRelay({
           provider: "codex",

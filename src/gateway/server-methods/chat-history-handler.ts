@@ -13,21 +13,17 @@ import {
   prepareOptionalSubagentSessionListReadCache,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
-import {
-  listSessionPendingInputReceipts,
-  resolveTranscriptSessionKeyBySessionId,
-} from "../../config/sessions/session-accessor.js";
+import { listSessionPendingInputReceipts } from "../../config/sessions/session-accessor.js";
+import { readSessionHistoryPageInWorker } from "../../config/sessions/session-history-worker-runtime.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
-import {
-  boundInFlightRunSnapshotForChatHistory,
-  resolveInFlightRunSnapshot,
-} from "../chat-abort.js";
+import { resolveInFlightRunSnapshot } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
+import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
@@ -42,6 +38,7 @@ import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
 import { prepareSessionWorkspaceIcon } from "../workspace-icon-http.js";
 import {
+  boundInFlightRunSnapshotForChatHistory,
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   createChatHistoryByteCounter,
   createChatHistoryActivityProjection,
@@ -80,10 +77,14 @@ export async function handleChatHistoryRequest({
   method,
   signal,
   sessionMutationAuthorization,
-  retainedSessionId,
+  retainedTranscript,
 }: GatewayRequestHandlerOptions & {
   method: ChatHistoryMethod;
-  retainedSessionId?: string;
+  retainedTranscript?: {
+    sessionId: string;
+    run?: { id: string; maxBytes: number };
+    requireCurrentSession?: boolean;
+  };
 }) {
   if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
     return;
@@ -100,6 +101,7 @@ export async function handleChatHistoryRequest({
     pendingBefore,
     inputRunIds,
   } = params;
+  const retainedSessionId = retainedTranscript?.sessionId;
   const requestedSessionId = retainedSessionId ?? wireSessionId;
   let selectorError: string | undefined;
   if (offset !== undefined && messageId !== undefined) {
@@ -136,26 +138,39 @@ export async function handleChatHistoryRequest({
   try {
     const { selectedSession, entry, queries, readCurrentSharing, rowProjection } = selection;
     const { cfg, agentId: sessionAgentId, storePath, canonicalKey } = selectedSession;
-    if (requestedSessionId) {
-      const transcriptSessionKey = resolveTranscriptSessionKeyBySessionId({
-        agentId: sessionAgentId,
-        sessionId: requestedSessionId,
-        storePath,
-      });
-      if (
-        !transcriptSessionKey ||
+    const readTranscriptOwner = async () => {
+      if (!requestedSessionId) {
+        return true;
+      }
+      const transcript = await readSessionHistoryPageInWorker(
+        {
+          kind: "transcript-binding",
+          params: {
+            target: { agentId: sessionAgentId, sessionId: requestedSessionId, storePath },
+            run: retainedTranscript?.run,
+          },
+        },
+        signal,
+      );
+      return Boolean(
+        transcript &&
         scopeLegacySessionKeyToAgent({
-          sessionKey: transcriptSessionKey,
+          sessionKey: transcript.sessionKey,
           agentId: sessionAgentId,
-        }) !== scopeLegacySessionKeyToAgent({ sessionKey: canonicalKey, agentId: sessionAgentId })
-      ) {
+        }) === scopeLegacySessionKeyToAgent({ sessionKey: canonicalKey, agentId: sessionAgentId }),
+      );
+    };
+    if (!(await readTranscriptOwner())) {
+      if (retainedTranscript) {
+        respondChatHistoryUnavailable(method, respond, "task transcript is no longer available");
+      } else {
         respond(
           false,
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, "sessionId does not belong to sessionKey"),
         );
-        return;
       }
+      return;
     }
     if (method === "chat.startup") {
       void prepareSessionWorkspaceIcon({ sessionKey, agentId: sessionAgentId }).catch(
@@ -211,7 +226,12 @@ export async function handleChatHistoryRequest({
               sessionId,
               storePath,
             },
-            { before: pendingBefore, limit: max, maxChars: effectiveMaxChars },
+            {
+              before: pendingBefore,
+              limit: max,
+              maxChars: effectiveMaxChars,
+              queuedTurns: context.chatQueuedTurns,
+            },
           )
         : { items: [], total: 0 };
     // Receipts belong to the currently selected physical session, never archived history.
@@ -220,6 +240,15 @@ export async function handleChatHistoryRequest({
         ? listSessionPendingInputReceipts(
             { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
             { runIds: inputRunIds },
+          ).map((receipt) =>
+            receipt.state === "pending" &&
+            isQueuedChatTurnForSession(context.chatQueuedTurns, receipt.runId, {
+              agentId: sessionAgentId,
+              sessionKey: canonicalKey,
+              sessionId,
+            })
+              ? { runId: receipt.runId, state: receipt.state, queued: true as const }
+              : receipt,
           )
         : []
       : undefined;
@@ -609,6 +638,15 @@ export async function handleChatHistoryRequest({
         ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
         ...(startupMetadata ? { metadata: startupMetadata } : {}),
       };
+      if (retainedTranscript) {
+        return () =>
+          selection.publishRetainedTranscript({
+            verify: readTranscriptOwner,
+            requireCurrentSession: retainedTranscript.requireCurrentSession === true,
+            sharing: currentSharing,
+            publish: () => respond(true, projectOperatorModelRead(modelReadScope, payload)),
+          });
+      }
       respond(true, projectOperatorModelRead(modelReadScope, payload));
       return undefined;
     });

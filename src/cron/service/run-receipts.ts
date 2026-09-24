@@ -366,7 +366,7 @@ export function cronRunReceiptPersistHooks(params: {
       const recordsUnavailableGuard =
         terminal?.status === "error" && params.terminal?.disposition === "owner-unavailable";
       if (
-        params.state.deps.isAgentAvailable?.(params.handle.agentId) === false &&
+        params.state.deps.isAgentAvailable?.(params.handle.agentId, database) === false &&
         !recordsUnavailableGuard
       ) {
         throw new CronRunReceiptRevisionError(

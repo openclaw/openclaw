@@ -1,4 +1,3 @@
-import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import {
@@ -28,13 +27,11 @@ import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadStartResponse,
 } from "./protocol-validators.js";
-import type { CodexThread } from "./protocol.js";
 import { isCodexThreadReadMissingError } from "./rpc-error.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { getCurrentSharedClientEntry } from "./shared-client-lifecycle.js";
 import {
   fingerprintCodexThreadConfig,
-  fingerprintRestrictedThreadConfig,
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
 import {
@@ -53,21 +50,13 @@ import type {
 import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
 import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
+import {
+  assertRestrictedThreadConfigFingerprint,
+  buildRestrictedThreadConfigFingerprint,
+} from "./thread-restricted-resume.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
+import { resolveCodexThreadRolloutPath } from "./thread-rollout-path.js";
 import { hasCodexAppServerSiblingRouteWork } from "./turn-router.js";
-
-function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined {
-  const rolloutPath = thread.path?.trim();
-  if (
-    !rolloutPath ||
-    !path.isAbsolute(rolloutPath) ||
-    path.extname(rolloutPath) !== ".jsonl" ||
-    !path.basename(rolloutPath).includes(thread.id)
-  ) {
-    return undefined;
-  }
-  return rolloutPath;
-}
 
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
@@ -186,29 +175,7 @@ export async function resumeExistingCodexThread(
         disableLoginShell: params.disableLoginShell,
       }),
     );
-    if (context.requireRestrictedThreadConfigFingerprint) {
-      if (
-        !restrictedToolSurface ||
-        resumeBinding.nativeToolPolicyRestricted !== true ||
-        params.nativeCodeModeEnabled !== false ||
-        !resumeBinding.restrictedThreadConfigFingerprint
-      ) {
-        throw new Error(
-          "Codex restricted thread policy attestation is unavailable; no thread was started",
-        );
-      }
-      const candidate = fingerprintRestrictedThreadConfig(
-        resumeParams,
-        authProfileId,
-        dynamicToolsFingerprint,
-        params.params,
-        hostSystemAgentActive,
-        environmentSelectionFingerprint,
-      );
-      if (candidate !== resumeBinding.restrictedThreadConfigFingerprint) {
-        throw new Error("Codex restricted thread policy changed; no thread was started");
-      }
-    }
+    assertRestrictedThreadConfigFingerprint(params, context, resumeParams, authProfileId);
     await context.releaseRetainedThread(configuration.assertCurrent);
     configuration.assertCurrent();
     const requestModelProvider =
@@ -623,6 +590,7 @@ export async function startFreshCodexThread(
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
   const modelProvider = resolveCodexAppServerModelProvider({
+    homeScope: params.appServer.start.homeScope,
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
     authProfileStore: params.params.authProfileStore,
@@ -633,17 +601,12 @@ export async function startFreshCodexThread(
     params.params.authProfileId,
     response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
   );
-  const restrictedThreadConfigFingerprint =
-    restrictedToolSurface && !preserveExistingBinding
-      ? fingerprintRestrictedThreadConfig(
-          { ...startParams, modelProvider: bindingModelProvider ?? null },
-          params.params.authProfileId,
-          dynamicToolsFingerprint,
-          params.params,
-          hostSystemAgentActive,
-          environmentSelectionFingerprint,
-        )
-      : undefined;
+  const restrictedThreadConfigFingerprint = buildRestrictedThreadConfigFingerprint(
+    params,
+    context,
+    startParams,
+    bindingModelProvider,
+  );
   const nextMcpServersFingerprint =
     params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
   const startedBinding: CodexAppServerThreadBinding = {

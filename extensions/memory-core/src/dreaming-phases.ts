@@ -70,7 +70,7 @@ import {
   type SessionIngestionSource,
   type SessionIngestionState,
 } from "./session-ingestion.js";
-import { compareStoreTimestampDesc } from "./short-term-promotion-utils.js";
+import { compareStoreTimestampDesc, isGenericDailyHeading } from "./short-term-promotion-utils.js";
 import {
   filterLiveShortTermRecallEntries,
   filterFreshLightDreamingEntries,
@@ -83,23 +83,8 @@ import {
 } from "./short-term-promotion.js";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
-type DreamingPhaseStorageConfig = {
-  timezone?: string;
-  storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-  execution?: { model?: string };
-};
-type LightDreamingConfig = DreamingPhaseStorageConfig & {
-  enabled: boolean;
-  lookbackDays: number;
-  limit: number;
-  dedupeSimilarity: number;
-};
-type RemDreamingConfig = DreamingPhaseStorageConfig & {
-  enabled: boolean;
-  lookbackDays: number;
-  limit: number;
-  minPatternStrength: number;
-};
+type LightDreamingConfig = ReturnType<typeof resolveMemoryLightDreamingConfig>;
+type RemDreamingConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
 type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingConfig> = {
   agentId?: string;
   workspaceDir: string;
@@ -119,8 +104,6 @@ const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
 const SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE = /\.checkpoint\..+\.jsonl$/i;
 const LIGHT_DIARY_HISTORY_LIMIT = 4;
 const LIGHT_DIARY_SNIPPET_SIMILARITY_THRESHOLD = 0.35;
-const GENERIC_DAY_HEADING_RE =
-  /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
   {
     heading: "## Light Sleep",
@@ -161,21 +144,6 @@ function normalizeDailyHeading(line: string): string | null {
     return null;
   }
   return truncateUtf16Safe(heading, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ");
-}
-
-function isGenericDailyHeading(heading: string): boolean {
-  const normalized = heading.trim().replace(/\s+/g, " ");
-  if (!normalized) {
-    return true;
-  }
-  const lower = normalized.toLowerCase();
-  if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
-    return true;
-  }
-  if (lower === "morning" || lower === "afternoon" || lower === "evening" || lower === "night") {
-    return true;
-  }
-  return GENERIC_DAY_HEADING_RE.test(normalized);
 }
 
 function normalizeDailySnippet(line: string): string | null {

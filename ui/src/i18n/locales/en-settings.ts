@@ -3,6 +3,203 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  configForm: {
+    sections: {
+      env: {
+        label: "Environment Variables",
+        description: "Environment variables passed to the gateway process",
+      },
+      update: {
+        label: "Updates",
+        description: "Auto-update settings and release channel",
+      },
+      agents: {
+        label: "Agents",
+        description: "Agent configurations, models, and identities",
+      },
+      auth: {
+        label: "Authentication",
+        description: "API keys and authentication profiles",
+      },
+      channels: {
+        label: "Channels",
+        description: "Messaging channels (Telegram, Discord, Slack, etc.)",
+      },
+      messages: {
+        label: "Messages",
+        description: "Message handling and routing settings",
+      },
+      commands: {
+        label: "Commands",
+        description: "Custom slash commands",
+      },
+      hooks: {
+        label: "Hooks",
+        description: "Webhooks and event hooks",
+      },
+      skills: {
+        label: "Skills",
+        description: "Skill packs and capabilities",
+      },
+      tools: {
+        label: "Tools",
+        description: "Tool configurations (browser, search, etc.)",
+      },
+      gateway: {
+        label: "Gateway",
+        description: "Gateway server settings (port, auth, binding)",
+      },
+      wizard: {
+        label: "Setup",
+        description: "Discovery preferences for setup and read-only setup history.",
+      },
+      meta: {
+        label: "Metadata",
+        description: "Gateway metadata and version information",
+      },
+      logging: {
+        label: "Logging",
+        description: "Log levels and output configuration",
+      },
+      browser: {
+        label: "Browser",
+        description: "Browser automation settings",
+      },
+      ui: {
+        label: "UI",
+        description: "User interface preferences",
+      },
+      models: {
+        label: "Models",
+        description: "AI model configurations and providers",
+      },
+      bindings: {
+        label: "Bindings",
+        description: "Key bindings and shortcuts",
+      },
+      broadcast: {
+        label: "Broadcast",
+        description: "Broadcast and notification settings",
+      },
+      tts: {
+        label: "Voice",
+        description: "Text-to-speech output, voices, and personas",
+      },
+      session: {
+        label: "Session",
+        description: "Session management and persistence",
+      },
+      cron: {
+        label: "Automations",
+        description: "Scheduled tasks and automation",
+      },
+      discovery: {
+        label: "Discovery",
+        description: "Service discovery and networking",
+      },
+      talk: {
+        label: "Talk",
+        description: "Voice and speech settings",
+      },
+      plugins: {
+        label: "Plugins",
+        description: "Plugin management and extensions",
+      },
+      diagnostics: {
+        label: "Diagnostics",
+        description: "Instrumentation, OpenTelemetry, and cache-trace settings",
+      },
+      cli: {
+        label: "CLI",
+        description: "CLI banner and startup behavior",
+      },
+      secrets: {
+        label: "Secrets",
+        description: "Secret provider configuration",
+      },
+      acp: {
+        label: "ACP",
+        description: "Agent Communication Protocol runtime and streaming settings",
+      },
+      mcp: {
+        label: "MCP",
+        description: "Model Context Protocol server definitions",
+      },
+    },
+  },
+  agentTools: {
+    pluginSource: "Plugin",
+    channelSource: "Channel: {id}",
+    channel: "Channel",
+    builtIn: "Built-In",
+    plugin: "Plugin: {id}",
+    optional: "Optional",
+    inPreview: "Included in preview",
+    disabledByOverride: "Disabled by agent override.",
+    enabledByProfile: "Enabled by the current profile.",
+    enabledByOverride: "Enabled by agent override.",
+    notIncluded: "Not included in the current profile.",
+    overrideOff: "Override Off",
+    enabled: "Enabled",
+    overrideOn: "Override On",
+    profileOff: "Profile Off",
+    notListed: "Not listed",
+    otherAgent: "Other Agent",
+    title: "Tool access",
+    subtitle:
+      "Choose tools for this agent. Full selects tools; it does not grant Full Access execution permissions.",
+    enabledSummary: "{enabled}/{total} enabled.",
+    enableAll: "Enable All",
+    disableAll: "Disable All",
+    loadConfig: "Load the gateway config to adjust tool profiles.",
+    explicitAllowlist:
+      "This agent is using an explicit allowlist in config. Tool overrides are managed in the Config tab.",
+    globalAllowlist:
+      "Global tools.allow is set. Agent overrides cannot enable tools that are globally blocked.",
+    loadingCatalog: "Loading runtime tool catalog…",
+    catalogFallback: "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+    previewTitle: "Tool preview",
+    previewSubtitle:
+      "Based on saved session settings and discovered tools. Availability is checked when a run starts, and additional tools may become available then. Changes may take time to appear here; unsaved edits are not included. Session:",
+    noSession: "no session",
+    switchAgent: "Switch chat to this agent to view its tool preview.",
+    previewLoading: "Loading…",
+    previewUnavailable: "Unavailable",
+    previewNotLoaded: "Not loaded",
+    loadingPreview: "Loading tool preview…",
+    previewError: "Could not load the tool preview for this session.",
+    emptyPreview:
+      "No tools are listed in this preview. Run-specific tools may still become available.",
+    morePreviewTitle: "{count} more tools are listed in the groups below.",
+    morePreview: "+{count} more listed tools",
+    quickPresets: "Tool Presets",
+    catalogTitle: "Tool Catalog",
+    inherit: "Inherit",
+    profile: "Tool profile",
+    source: "Source",
+    listed: "Listed in preview",
+    status: "Status",
+    profileSourceAgent: "agent override",
+    profileSourceGlobal: "global default",
+    profileSourceDefault: "default",
+    statusSaving: "saving…",
+    statusUnsaved: "unsaved",
+    statusSaved: "saved",
+    toolPreview: "Tool preview",
+    more: "+{count} more",
+    toolsOne: "{count} Tool",
+    tools: "{count} Tools",
+    enabledToolsOne: "{count} Enabled Tool",
+    enabledTools: "{count} Enabled Tools",
+    listedToolsOne: "{count} Listed Tool",
+    listedTools: "{count} Listed Tools",
+    access: "Agent setting",
+    disableNamed: "Disable {name}",
+    enableNamed: "Enable {name}",
+    defaultPresets: "Default Presets",
+    previewVia: "Listed in preview via {source}.",
+    linkTool: "Link to This Tool",
+  },
   searchPage: {
     enabled: "Web search",
     advanced: "Advanced search settings",
@@ -672,6 +869,7 @@ const enSettings = {
       failedStep: "Failure details",
       viewDetails: "View details",
       recoveryActions: "Recovery",
+      diagnoseFailure: "Diagnose update",
       checkStatus: "Check status",
       retryUpdate: "Retry update",
       reportFailure: "Report update failure",
@@ -1490,6 +1688,8 @@ const enSettings = {
 
 export const registerSettingsEnglish = Object.assign(
   () => {
+    Object.assign(en.agentTools, enSettings.agentTools);
+    Object.assign(en.configForm.sections, enSettings.configForm.sections);
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;
     en.searchPage = enSettings.searchPage;

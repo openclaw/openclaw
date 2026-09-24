@@ -72,7 +72,7 @@ it.each([
       const ports: MessagePort[] = [];
       const modes: SessionTranscriptReconcileWorkerInput["mode"][] = [];
       let leaseId: string | undefined;
-      let triggerInstalled = false;
+      const rejectLeaseRelease = new Int32Array(new SharedArrayBuffer(4));
       try {
         await persistSessionTranscriptTurn(scope, {
           messages: [{ eventId: "seed", message: { role: "user", content: "lease fixture" } }],
@@ -161,6 +161,38 @@ it.each([
               options: { ...workerOptions, eval: true },
             };
           }
+          if (planner && fault === "release-delete") {
+            // Fail the real DELETE without changing the admitted main schema.
+            return {
+              filename: `const {workerData}=require('node:worker_threads');
+               const {DatabaseSync}=require('node:sqlite');
+               const rejected=new Int32Array(workerData.rejectLeaseRelease);
+               const prepare=DatabaseSync.prototype.prepare;
+               DatabaseSync.prototype.prepare=function(sql){
+                 const statement=prepare.call(this,sql);
+                 if(sql.startsWith('delete from "agent_database_leases"')) {
+                   const run=statement.run.bind(statement), database=this;
+                   statement.run=(...args)=>{
+                     if(Atomics.load(rejected,0)) {
+                       const leaseId=args[0];
+                       if(typeof leaseId!=='string'||!/^[a-f0-9-]+$/u.test(leaseId)) throw new Error('unexpected lease fixture binding');
+                       database.exec("CREATE TEMP TRIGGER IF NOT EXISTS reject_test_lease_release BEFORE DELETE ON main.agent_database_leases WHEN OLD.lease_id = '"+leaseId+"' BEGIN SELECT RAISE(FAIL, 'lease release fixture'); END;");
+                     } else {
+                       database.exec('DROP TRIGGER IF EXISTS temp.reject_test_lease_release');
+                     }
+                     return run(...args);
+                   };
+                 }
+                 return statement;
+               };
+               void import(${JSON.stringify(String(filename))});`,
+              options: {
+                ...workerOptions,
+                workerData: { rejectLeaseRelease: rejectLeaseRelease.buffer },
+                eval: true,
+              },
+            };
+          }
           return { filename, options: workerOptions };
         };
         observer.onTask = ({ input, worker, observeMessage }) => {
@@ -179,11 +211,7 @@ it.each([
               void worker.terminate();
             } else if (fault === "release-delete") {
               expect(input.leaseId).toMatch(/^[a-f0-9-]+$/u);
-              // A persistent trigger affects the already-open worker connection, unlike TEMP.
-              state.db.exec(`CREATE TRIGGER reject_test_lease_release
-                BEFORE DELETE ON agent_database_leases WHEN OLD.lease_id = '${input.leaseId}'
-                BEGIN SELECT RAISE(FAIL, 'lease release fixture'); END;`);
-              triggerInstalled = true;
+              Atomics.store(rejectLeaseRelease, 0, 1);
             }
           });
         };
@@ -197,6 +225,9 @@ it.each([
         }
         if (fault === "release-delete") {
           expect(workers[0]?.threadId).toBeGreaterThan(0);
+          expect(result.error).toMatchObject({
+            message: expect.stringContaining("lease release fixture"),
+          });
         } else {
           expect(workers[0]?.threadId).toBe(-1);
           if (fault === "release-exit" || fault === "release-error") {
@@ -227,10 +258,7 @@ it.each([
           expect(database.db.isOpen).toBe(true);
           observer.beforeCreate = undefined;
           observer.onTask = undefined;
-          if (triggerInstalled) {
-            state.db.exec("DROP TRIGGER reject_test_lease_release");
-            triggerInstalled = false;
-          }
+          Atomics.store(rejectLeaseRelease, 0, 0);
           const closing = closeOpenClawAgentDatabaseByPathAsync(database.path);
           const poolClosing = closeSessionTranscriptReconcileWorkerPool();
           await expect(closing).resolves.toBe(true);
@@ -241,12 +269,10 @@ it.each([
           expect(readLeases()).toEqual(baseline);
         }
       } finally {
+        Atomics.store(rejectLeaseRelease, 0, 0);
         await Promise.all(workers.map((worker) => worker.terminate()));
         for (const port of ports) {
           port.close();
-        }
-        if (triggerInstalled) {
-          openOpenClawStateDatabase().db.exec("DROP TRIGGER reject_test_lease_release");
         }
         observer.beforeCreate = undefined;
         observer.onTask = undefined;

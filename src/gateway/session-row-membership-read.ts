@@ -29,6 +29,7 @@ export function createSessionRowMembershipReadAccess(params: {
   topologyDirty: () => boolean;
   topology: () => void;
   lookup: (query: records.Lookup) => records.Row | undefined;
+  stores: () => ReadonlyMap<string, records.SessionRowStore>;
   owner: () => SessionRowReadView & { isCurrent(row: records.Row): boolean };
 }) {
   const { membership } = params;
@@ -42,7 +43,41 @@ export function createSessionRowMembershipReadAccess(params: {
       await params.runInOwner(() => membership.prepare());
     } while (needsMembershipPreparation());
   }
+  const sharingTarget = (query: records.Lookup) => {
+    if (!params.isActive() || params.topologyDirty() || isIncognitoSessionKey(query.key)) {
+      return null;
+    }
+    const row = params.lookup(query);
+    const entry = row?.sharingEntry;
+    return row && entry
+      ? {
+          agentId: row.agentId,
+          generation: row.generation,
+          canonicalKey: row.key,
+          entry,
+          storeKey: row.key,
+          storeKeys: [row.key],
+          storePath: row.storeTarget.storePath,
+        }
+      : null;
+  };
   return {
+    readSource(row: records.MaterializedRow) {
+      const source = params.stores().get(row.storeTarget.storePath);
+      // Incognito rows retain their process-local locator and native lifetime guard.
+      if (!source && isIncognitoSessionKey(row.key)) {
+        return undefined;
+      }
+      if (!source || !params.owner().isCurrent(row)) {
+        throw new Error("Session store changed while preparing authorization");
+      }
+      return {
+        agentId: source.target.agentId,
+        path: source.filename,
+        databaseIdentity: source.identity,
+        databaseBirthtime: source.birthtime,
+      };
+    },
     prepareMembership,
     needsMembershipPreparation,
     sessionGroupTargets() {
@@ -51,22 +86,23 @@ export function createSessionRowMembershipReadAccess(params: {
       }
       return membership.groupTargets();
     },
-    sharingTarget(query: records.Lookup) {
-      if (!params.isActive() || params.topologyDirty() || isIncognitoSessionKey(query.key)) {
-        return null;
+    sharingTarget,
+    /** Refresh uncertainty fences effects but does not retire a shared session resource. */
+    sharingTargetState(query: records.Lookup) {
+      if (!params.isActive() || isIncognitoSessionKey(query.key)) {
+        return { status: "missing" as const };
       }
-      const row = params.lookup(query);
-      const entry = row?.sharingEntry;
-      return row && entry
-        ? {
-            agentId: row.agentId,
-            canonicalKey: row.key,
-            entry,
-            storeKey: row.key,
-            storeKeys: [row.key],
-            storePath: row.storeTarget.storePath,
-          }
-        : null;
+      if (params.topologyDirty()) {
+        return { status: "pending" as const };
+      }
+      const target = sharingTarget(query);
+      if (!target) {
+        return { status: "missing" as const };
+      }
+      if (!membership.ready(target.storePath, target.storeKey)) {
+        return { status: "pending" as const };
+      }
+      return { status: "ready" as const, target };
     },
     hasMembership: (storePath: string, key: string, identity: string) =>
       membership.membership(storePath, key)?.includes(identity) ?? false,

@@ -161,11 +161,11 @@ class ChatImagePreviewTest {
     composeRule.onNodeWithContentDescription("Close image preview").assertIsDisplayed()
     composeRule.onNode(isDialog()).performTouchInput { click(Offset(4f, 30f)) }
     composeRule.onNode(isDialog()).assertDoesNotExist()
-    composeRule.onNodeWithContentDescription("Open image preview").performClick()
+    composeRule.onNodeWithContentDescription("Sample image", useUnmergedTree = true).performTouchInput { click(center) }
     repeat(4) { composeRule.onNodeWithContentDescription("Zoom in").performClick() }
     composeRule.onNode(isDialog()).performTouchInput { click(Offset(180f, 30f)) }
     composeRule.onNode(isDialog()).assertDoesNotExist()
-    composeRule.onNodeWithContentDescription("Open image preview").performClick()
+    composeRule.onNodeWithContentDescription("Sample image", useUnmergedTree = true).performTouchInput { click(center) }
     composeRule.onNodeWithContentDescription("Close image preview").performClick()
     composeRule.onNode(isDialog()).assertDoesNotExist()
   }
@@ -196,7 +196,7 @@ class ChatImagePreviewTest {
       checkNotNull(owner).onBackPressedDispatcher.onBackPressed()
     }
     composeRule.onNode(isDialog()).assertDoesNotExist()
-    composeRule.onNodeWithContentDescription("Open image preview").performClick()
+    composeRule.onNodeWithContentDescription("Sample image", useUnmergedTree = true).performTouchInput { click(center) }
     composeRule.onNodeWithText("100%").assertIsDisplayed()
   }
 
@@ -270,7 +270,7 @@ class ChatImagePreviewTest {
     }
     if (restoration == null) composeRule.setContent(content) else restoration.setContent(content)
     composeRule.waitUntil { composeRule.onAllNodesWithContentDescription("Sample image").fetchSemanticsNodes().isNotEmpty() }
-    composeRule.onNodeWithContentDescription("Open image preview").performClick()
+    composeRule.onNodeWithContentDescription("Sample image", useUnmergedTree = true).performTouchInput { click(center) }
     composeRule.onNodeWithContentDescription("Close image preview").assertIsDisplayed()
   }
 

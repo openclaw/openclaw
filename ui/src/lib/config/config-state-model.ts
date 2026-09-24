@@ -107,6 +107,7 @@ export type RuntimeConfigGateway = {
 };
 
 export type LoadConfigOptions = {
+  preservePendingChanges?: boolean;
   discardPendingChanges?: boolean;
 };
 

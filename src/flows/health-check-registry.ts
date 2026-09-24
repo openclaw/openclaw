@@ -5,7 +5,7 @@ import type { HealthCheck, HealthFinding } from "./health-checks.js";
 const REGISTRY = new Map<string, HealthCheck>();
 
 /** Raised when two checks claim the same stable health-check id. */
-export class HealthCheckRegistrationError extends Error {
+class HealthCheckRegistrationError extends Error {
   readonly code = "OC_DOCTOR_DUPLICATE_CHECK";
   constructor(readonly checkId: string) {
     super(`health check already registered: ${checkId}`);

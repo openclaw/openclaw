@@ -203,6 +203,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           if (instance.scrollElement !== this.scrollElement || !rect.width || !rect.height) {
             return;
           }
+          this.commitComposerResize(true);
           const previousHeight = this.observedHeight;
           const widthChanged = this.observedWidth !== null && this.observedWidth !== rect.width;
           const heightChanged = previousHeight !== null && previousHeight !== rect.height;
@@ -235,6 +236,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
             isProgrammaticScroll: () => this.isProgrammaticScroll,
             cancelScroll: () => this.cancelScroll(),
             requestUpdate: () => this.host.requestUpdate(),
+            onComposerInput: () => this.endAnchor.invalidateComposerResize(this.canAutoFollow()),
+            onComposerLayout: (changed) => this.commitComposerResize(changed),
+            cancelComposerResize: () => this.endAnchor.cancelComposerResize(),
             onReaderScroll: (towardEnd) => {
               this.endAnchor.releaseCommit();
               this.callbacks.onReaderScroll?.(towardEnd);
@@ -342,7 +346,27 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
   }
 
+  private commitComposerResize(changed: boolean): void {
+    const correction = this.endAnchor.commitComposerResize(
+      this.scrollElement,
+      changed,
+      this.canAutoFollow(),
+      this.offsetState.pendingScrollOffset !== null ||
+        this.offsetState.pendingInteractionAnchor !== null ||
+        (this.offsetState.scrollCommand !== null &&
+          this.offsetState.scrollCommand.target !== "end") ||
+        this.offsetState.touching ||
+        this.offsetState.touchScrolling,
+    );
+    if (correction?.resumeFollow) {
+      this.callbacks.onReaderScroll?.(true);
+    }
+  }
+
   prepareUpdate(): void {
+    // Native editing can precede a structural footer commit in this task.
+    // Settle its known displacement before checking for reader departure.
+    this.commitComposerResize(true);
     this.endAnchor.prepareUpdate(this.scrollElement, this.canAutoFollow(), this.offsetState);
   }
 
@@ -373,6 +397,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     } else if (this.connected) {
       this.endAnchor.scheduleReconcile(() => {
         if (this.connected && !this.offsetState.pendingInteractionAnchor) {
+          this.commitComposerResize(true);
           this.reconcileImplicitEndAnchor();
           this.endAnchor.reconcile(
             this.scrollElement,

@@ -13,11 +13,12 @@ concurrency:
 jobs:
   react:
     # Custom commands may be any text; only defaults require a slash.
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
     if: >-
-      ${{
+      ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (
         !endsWith(github.actor, '[bot]') &&
         (vars.MAINTAINER_COMMAND_REACTIONS != '' || contains(github.event.comment.body, '/'))
-      }}
+      ) }}
     runs-on: ubuntu-24.04
     permissions:
       issues: write

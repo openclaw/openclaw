@@ -132,9 +132,7 @@ import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
 import {
   buildCodexRuntimeThreadConfig,
   CODEX_NATIVE_PERSONALITY_NONE,
-  resolveCodexAppServerRequestModelSelection,
-  resolveCodexAppServerModelProvider,
-  resolveCodexBindingModelProviderFallback,
+  resolveCodexAppServerThreadModelSelection,
 } from "./thread-lifecycle.js";
 import {
   assertCodexSupervisionThreadLineage,
@@ -239,29 +237,6 @@ export async function runCodexAppServerSideQuestion(
     nativeAuthProfile: preparedNativeAuthProfile,
     preparedAuth: startupPreparedAuth,
   } = authHandoff;
-  const modelProvider = supervisionModelSelection
-    ? supervisionModelSelection.modelProvider
-    : (resolveCodexAppServerModelProvider({
-        provider: params.provider,
-        authProfileId,
-        authProfileStore: preparedRuntimeAuth.authProfileStore,
-        agentDir: params.agentDir,
-        config: params.cfg,
-      }) ??
-      resolveCodexBindingModelProviderFallback({
-        provider: params.provider,
-        currentModel: params.model,
-        bindingModel: binding.model,
-        bindingModelProvider: binding.modelProvider,
-      }));
-  const modelSelection = resolveCodexAppServerRequestModelSelection({
-    model: supervisionModelSelection?.model ?? options.runtimeModelId ?? params.model,
-    modelProvider,
-    authProfileId,
-    authProfileStore: preparedRuntimeAuth.authProfileStore,
-    agentDir: params.agentDir,
-    config: params.cfg,
-  });
   const reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
     provider: usesSupervisionConnection ? "codex" : params.provider,
     model: supervisionModelSelection?.model ?? params.model,
@@ -302,6 +277,21 @@ export async function runCodexAppServerSideQuestion(
     ...reviewerContext,
     provider: reviewerContext.modelProvider,
   });
+  const modelSelection =
+    supervisionModelSelection ??
+    resolveCodexAppServerThreadModelSelection({
+      homeScope: appServer.start.homeScope,
+      provider: params.provider,
+      model: params.model,
+      requestModel: options.runtimeModelId ?? params.model,
+      binding,
+      inheritBindingAuthProfile: false,
+      authProfileId,
+      authProfileStore: preparedRuntimeAuth.authProfileStore,
+      agentDir: params.agentDir,
+      config: params.cfg,
+    });
+
   const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
     appServer,
     permissionMode: params.sessionEntry.permissionMode,
@@ -556,7 +546,7 @@ export async function runCodexAppServerSideQuestion(
       }
       if (request.method === "item/tool/requestUserInput") {
         return isSideUserInputRequest(request.params, childThreadId, turnId)
-          ? emptySideUserInputResponse()
+          ? { answers: {} }
           : undefined;
       }
       if (isCodexAppServerApprovalRequest(request.method)) {
@@ -1156,10 +1146,6 @@ async function createCodexSideToolBridge(input: {
     }),
     webSearchPlan,
   };
-}
-
-function emptySideUserInputResponse(): JsonObject {
-  return { answers: {} };
 }
 
 function isSideUserInputRequest(

@@ -8,6 +8,7 @@ import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-en
 import * as sessionGroupCategories from "../config/sessions/session-group-categories.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -21,6 +22,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { ensureSessionGroupCatalog } from "./session-group-catalog.js";
 import { readSessionGroupCatalogSnapshot } from "./session-group-catalog.kernel.js";
 import { registerSessionGroupInDatabase } from "./session-group-registration.kernel.js";
@@ -295,14 +297,8 @@ describe("session groups catalog", () => {
 
   it("publishes catalog writes and serves repeated viewers without parent-thread SQLite", async () => {
     await putSessionGroups({ cfg, names: ["Work"], env });
-    const native = requireNodeSqlite();
-    const counters = [
-      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-      vi.spyOn(native.DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const counters = observeMainThreadSql();
     try {
       expect(await ensureSessionGroupRegistered("  Travel  ", env)).toBe(true);
       expect(await ensureSessionGroupRegistered("Travel", env)).toBe(false);
@@ -331,11 +327,9 @@ describe("session groups catalog", () => {
           }),
         ).toBe(expected);
       }
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
     } finally {
-      for (const counter of counters) {
-        counter.mockRestore();
-      }
+      counters.restore();
     }
     expect(listSessionGroups(env)).toEqual([
       { name: "Work", position: 0 },
@@ -419,6 +413,19 @@ describe("session groups catalog", () => {
 
   it("rechecks a missing category after another writer registers it", async () => {
     await putSessionGroups({ cfg, names: ["Work"], env });
+    // This native kernel fixture interleaves the optimistic read and BEGIN.
+    // The real worker grants/refusals are covered in session-groups.registration.test.ts.
+    const stages: string[] = [];
+    vi.spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission").mockImplementation(
+      (request) => {
+        stages.push(request.stage);
+        expect(request).toEqual(
+          request.stage === "transaction"
+            ? { stage: "transaction", facts: { names: expect.arrayContaining(["Work", "Travel"]) } }
+            : { stage: "commit", facts: undefined },
+        );
+      },
+    );
     const originalTransaction = stateDatabase.runOpenClawStateWriteTransaction;
     vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction").mockImplementationOnce(
       (operation, options, transactionOptions) => {
@@ -448,6 +455,7 @@ describe("session groups catalog", () => {
     expect(
       readSessionGroupCatalogSnapshot(openOpenClawStateDatabase({ env }).db).groups.at(-1),
     ).toEqual({ name: "Later", position: 2 });
+    expect(stages).toEqual(["transaction", "commit", "transaction", "commit"]);
   });
 
   it("renames a group and repoints member categories without bumping updatedAt", async () => {

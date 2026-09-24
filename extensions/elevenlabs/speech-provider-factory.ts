@@ -75,10 +75,6 @@ type ElevenLabsProviderConfig = {
   };
 };
 
-function parseNumberValue(value: string): number | undefined {
-  return parseStrictFiniteNumber(value);
-}
-
 function normalizeVoiceSetting(value: unknown, min: number, max: number): number | undefined {
   const number = asFiniteNumber(value);
   return number !== undefined && number >= min && number <= max ? number : undefined;
@@ -167,22 +163,9 @@ function normalizeElevenLabsProviderConfig(
 }
 
 function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsProviderConfig {
-  const defaults = normalizeElevenLabsProviderConfig({});
-  const voiceSettings = asOptionalRecord(config.voiceSettings);
-  return {
-    apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
-    voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
-    modelId: normalizeElevenLabsTtsModelId(trimToUndefined(config.modelId)) ?? defaults.modelId,
-    seed: normalizeElevenLabsSeed(config.seed) ?? defaults.seed,
-    applyTextNormalization:
-      trimToUndefined(config.applyTextNormalization) ?? defaults.applyTextNormalization,
-    languageCode: trimToUndefined(config.languageCode) ?? defaults.languageCode,
-    voiceSettings: {
-      ...defaults.voiceSettings,
-      ...normalizeVoiceSettings(voiceSettings),
-    },
-  };
+  return normalizeElevenLabsProviderConfig({
+    elevenlabs: { ...config, apiKey: trimToUndefined(config.apiKey) },
+  });
 }
 
 function resolveElevenLabsApiKey(...candidates: Array<string | undefined>): string | undefined {
@@ -213,17 +196,6 @@ function mergeVoiceSettingsOverride(
       ...asOptionalRecord(ctx.currentOverrides?.voiceSettings),
       ...next,
     },
-  };
-}
-
-function resolveVoiceSettingsOverride(
-  base: ElevenLabsProviderConfig["voiceSettings"],
-  overrides: unknown,
-): ElevenLabsProviderConfig["voiceSettings"] {
-  const voiceSettings = asOptionalRecord(overrides);
-  return {
-    ...base,
-    ...normalizeVoiceSettings(voiceSettings),
   };
 }
 
@@ -269,7 +241,7 @@ function parseDirectiveToken(
           return { handled: true };
         }
         const setting = ctx.key.startsWith("similarity") ? "similarityBoost" : ctx.key;
-        const value = parseNumberValue(ctx.value);
+        const value = parseStrictFiniteNumber(ctx.value);
         if (value == null) {
           return { handled: true, warnings: [`invalid ${setting} value`] };
         }
@@ -416,7 +388,10 @@ function resolveElevenLabsTtsRequest(
       trimToUndefined(overrides.applyTextNormalization) ?? config.applyTextNormalization,
     languageCode: trimToUndefined(overrides.languageCode) ?? config.languageCode,
     latencyTier: options.latencyTier,
-    voiceSettings: resolveVoiceSettingsOverride(config.voiceSettings, overrides.voiceSettings),
+    voiceSettings: {
+      ...config.voiceSettings,
+      ...normalizeVoiceSettings(asOptionalRecord(overrides.voiceSettings)),
+    },
     timeoutMs: req.timeoutMs,
   };
 }
@@ -475,23 +450,13 @@ export function buildElevenLabsSpeechProvider({
       const normalize = trimToUndefined(params.normalize);
       const language = normalizeLowercaseStringOrEmpty(trimToUndefined(params.language));
       const latencyTier = normalizeElevenLabsLatencyTier(params.latencyTier);
-      const voiceSettings = {
-        ...(normalizeVoiceSetting(params.speed, 0.5, 2) == null
-          ? {}
-          : { speed: normalizeVoiceSetting(params.speed, 0.5, 2) }),
-        ...(normalizeVoiceSetting(params.stability, 0, 1) == null
-          ? {}
-          : { stability: normalizeVoiceSetting(params.stability, 0, 1) }),
-        ...(normalizeVoiceSetting(params.similarity, 0, 1) == null
-          ? {}
-          : { similarityBoost: normalizeVoiceSetting(params.similarity, 0, 1) }),
-        ...(normalizeVoiceSetting(params.style, 0, 1) == null
-          ? {}
-          : { style: normalizeVoiceSetting(params.style, 0, 1) }),
-        ...(asBoolean(params.speakerBoost) == null
-          ? {}
-          : { useSpeakerBoost: asBoolean(params.speakerBoost) }),
-      };
+      const voiceSettings = normalizeVoiceSettings({
+        speed: params.speed,
+        stability: params.stability,
+        similarityBoost: params.similarity,
+        style: params.style,
+        useSpeakerBoost: params.speakerBoost,
+      });
       return {
         ...(trimToUndefined(params.voiceId) == null
           ? {}

@@ -92,6 +92,7 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
 
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.test-helpers.js");
+  let taskRuntime: typeof import("../../../tasks/detached-task-runtime.js");
 
   function hydrateAndActivateRegistry() {
     registry.initSubagentRegistry();
@@ -135,6 +136,7 @@ describe("announce loop guard (#18264)", () => {
   beforeAll(async () => {
     vi.resetModules();
     registry = await import("./subagent-registry.test-helpers.js");
+    taskRuntime = await import("../../../tasks/detached-task-runtime.js");
   });
 
   beforeEach(() => {
@@ -159,6 +161,7 @@ describe("announce loop guard (#18264)", () => {
   afterEach(() => {
     registry.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
@@ -258,6 +261,23 @@ describe("announce loop guard (#18264)", () => {
       expectsCompletionMessage: true,
       delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 30_000 },
     };
+    vi.spyOn(taskRuntime, "findDetachedTaskRun").mockReturnValue({
+      lookup: "available",
+      task: {
+        taskId: "task-retry-budget",
+        runId: entry.runId,
+        runtime: "subagent",
+        requesterSessionKey: entry.requesterSessionKey,
+        ownerKey: entry.requesterSessionKey,
+        scopeKind: "session",
+        childSessionKey: entry.childSessionKey,
+        task: entry.task,
+        status: "succeeded",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: entry.createdAt,
+      },
+    });
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
     hydrateAndActivateRegistry();

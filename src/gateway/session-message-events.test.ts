@@ -2054,79 +2054,6 @@ describe("session.message websocket events", () => {
     });
   });
 
-  test("derives message sequence for selected-session transcript subscribers", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
-      },
-      storePath,
-    });
-    const transcriptMessage = {
-      role: "user",
-      content: [{ type: "text", text: "early selected prompt" }],
-      timestamp: Date.now(),
-    };
-    const persisted = await persistSessionTranscriptTurn(
-      {
-        agentId: "main",
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath,
-      },
-      {
-        messages: [{ eventId: "msg-selected", message: transcriptMessage }],
-        updateMode: "none",
-      },
-    );
-    expect(persisted.appendedCount).toBe(1);
-
-    const ws = await harness.openWs();
-    try {
-      await connectOk(ws, { scopes: ["operator.read"] });
-      const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", {
-        key: "main",
-      });
-      expect(subscribeRes.ok).toBe(true);
-      expect(subscribeRes.payload?.key).toBe("agent:main:main");
-
-      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
-      emitSessionTranscriptUpdate({
-        target: {
-          agentId: "main",
-          sessionId: "sess-main",
-          sessionKey: "agent:main:main",
-          storePath,
-        },
-        message: {
-          ...transcriptMessage,
-          content: [{ type: "text", text: "stale queued prompt" }],
-        },
-        messageId: "msg-selected",
-      });
-
-      const messageEvent = await messageEventPromise;
-      expectRecordFields(messageEvent.payload, {
-        sessionKey: "agent:main:main",
-        messageId: "msg-selected",
-        messageSeq: 1,
-      });
-      expect(requireRecord(messageEvent.payload, "selected session event").message).toMatchObject({
-        ...transcriptMessage,
-        __openclaw: {
-          id: "msg-selected",
-          seq: 1,
-          transcriptPosition: { source: expect.any(String), rawSeq: expect.any(Number) },
-        },
-      });
-    } finally {
-      ws.close();
-    }
-  });
-
   test("routes selected-agent global transcript updates to matching message subscribers", async () => {
     const storePath = await createSessionStoreFile();
     testState.agentsConfig = {
@@ -2705,11 +2632,12 @@ describe("session.message websocket events", () => {
       },
       storePath,
     });
-    const { committer, identity, receiver, sessionTarget, source } = createWorkerFanoutFixture({
-      storePath,
-      sessionId,
-      sessionKey,
-    });
+    const { committer, identity, receiver, push, sessionTarget, source } =
+      createWorkerFanoutFixture({
+        storePath,
+        sessionId,
+        sessionKey,
+      });
     const ws = await harness.openWs();
     const workerChats: Record<string, unknown>[] = [];
     const collectWorkerChats = (data: RawData) => {
@@ -2794,13 +2722,6 @@ describe("session.message websocket events", () => {
             (payload as Record<string, unknown>).runId === runId,
           timeoutMs,
         );
-      const liveEvent = {
-        event: { kind: "assistant", payload: { text: "hello", delta: "hello" } },
-        lastAckedSeq: 0,
-        seq: 1,
-      } as const;
-      const push = (runEpoch = 4, runId = "worker") =>
-        receiver.apply({ identity, source, request: { ...liveEvent, runEpoch, runId } });
       const [workerEvent] = await Promise.all([
         waitForChat("worker"),
         expectNoMessageWithin({

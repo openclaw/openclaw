@@ -32,7 +32,10 @@ import {
   captureCodexAppServerClientLifetime,
   retainSharedCodexAppServerClientByInstanceId,
 } from "./shared-client.js";
-import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
+import {
+  fingerprintCodexThreadConfig,
+  fingerprintRestrictedThreadConfig,
+} from "./thread-fingerprints.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type {
@@ -55,6 +58,7 @@ type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
   params: CodexStartOrResumeThreadParams;
   binding: CodexAppServerThreadBinding;
   clientId?: string;
+  requireRestrictedThreadConfigFingerprint?: boolean;
   buildLoadedPluginThreadConfig: (
     binding: CodexAppServerThreadBinding,
   ) => Promise<CodexPluginThreadConfig | undefined>;
@@ -343,6 +347,31 @@ export async function tryReuseCodexLiveThread(
           : undefined),
       params.inferenceProviderRoutes,
     );
+    if (options.requireRestrictedThreadConfigFingerprint) {
+      if (
+        !restrictedToolSurface ||
+        binding.nativeToolPolicyRestricted !== true ||
+        params.nativeCodeModeEnabled !== false ||
+        !binding.restrictedThreadConfigFingerprint
+      ) {
+        preserveSubscription = true;
+        throw new Error(
+          "Codex restricted thread policy attestation is unavailable; no thread was started",
+        );
+      }
+      const candidate = fingerprintRestrictedThreadConfig(
+        resumeParams,
+        resumeAuthProfileId,
+        dynamicToolsFingerprint,
+        params.params,
+        hostSystemAgentActive,
+        environmentSelectionFingerprint,
+      );
+      if (candidate !== binding.restrictedThreadConfigFingerprint) {
+        preserveSubscription = true;
+        throw new Error("Codex restricted thread policy changed; no thread was started");
+      }
+    }
     const liveThreadConfigFingerprint = incognito
       ? retainedThread.configFingerprint
       : fingerprintCodexThreadConfig(

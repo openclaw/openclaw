@@ -50,29 +50,6 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
   const { asNullableRecord: readNullableRecord } =
     await import("@openclaw/normalization-core/record-coerce");
 
-  function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
-    const current = readNullableRecord(parent[key]);
-    if (current) {
-      return current;
-    }
-    const next: Record<string, unknown> = {};
-    parent[key] = next;
-    return next;
-  }
-
-  function migrateThreadBinding(value: unknown, changes: string[], pathLabel: string): void {
-    const record = readNullableRecord(value);
-    const bindings = readNullableRecord(record?.threadBindings);
-    if (!bindings || !("ttlHours" in bindings)) {
-      return;
-    }
-    if (!("idleHours" in bindings)) {
-      bindings.idleHours = bindings.ttlHours;
-    }
-    delete bindings.ttlHours;
-    changes.push(`Moved ${pathLabel}.threadBindings.ttlHours to idleHours.`);
-  }
-
   function migrateStreamingAlias(channel: Record<string, unknown>): boolean {
     if (
       !("streamMode" in channel) &&
@@ -103,40 +80,6 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
     const next = structuredClone(root);
     const changes: string[] = [];
 
-    const heartbeat = readNullableRecord(next.heartbeat);
-    if (heartbeat) {
-      const agents = ensureRecord(next, "agents");
-      const agentDefaults = ensureRecord(agents, "defaults");
-      const channels = ensureRecord(next, "channels");
-      const channelDefaults = ensureRecord(channels, "defaults");
-      const agentHeartbeat: Record<string, unknown> = {};
-      const channelHeartbeat: Record<string, unknown> = {};
-      for (const key of ["model", "every"]) {
-        if (key in heartbeat) {
-          agentHeartbeat[key] = heartbeat[key];
-        }
-      }
-      for (const key of ["showOk", "showAlerts", "useIndicator"]) {
-        if (key in heartbeat) {
-          channelHeartbeat[key] = heartbeat[key];
-        }
-      }
-      if (Object.keys(agentHeartbeat).length > 0) {
-        agentDefaults.heartbeat = {
-          ...readNullableRecord(agentDefaults.heartbeat),
-          ...agentHeartbeat,
-        };
-      }
-      if (Object.keys(channelHeartbeat).length > 0) {
-        channelDefaults.heartbeat = {
-          ...readNullableRecord(channelDefaults.heartbeat),
-          ...channelHeartbeat,
-        };
-      }
-      delete next.heartbeat;
-      changes.push("Moved heartbeat to agents.defaults.heartbeat and channels.defaults.heartbeat.");
-    }
-
     const internalHooks = readNullableRecord(readNullableRecord(next.hooks)?.internal);
     if (internalHooks && "handlers" in internalHooks) {
       delete internalHooks.handlers;
@@ -166,7 +109,6 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
       changes.push("Normalized gateway.bind host alias.");
     }
 
-    migrateThreadBinding(next.session, changes, "session");
     const sessionMaintenance = readNullableRecord(readNullableRecord(next.session)?.maintenance);
     if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
       delete sessionMaintenance.rotateBytes;
@@ -181,7 +123,6 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
       if (!channel) {
         continue;
       }
-      migrateThreadBinding(channel, changes, `channels.${channelId}`);
       if (migrateStreamingAlias(channel)) {
         changes.push(`Normalized channels.${channelId} streaming aliases.`);
       }
@@ -189,20 +130,10 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
         readNullableRecord(channel.accounts) ?? {},
       )) {
         const account = readNullableRecord(accountRaw);
-        migrateThreadBinding(account, changes, `channels.${channelId}.accounts.${accountId}`);
         if (account && migrateStreamingAlias(account)) {
           changes.push(`Normalized channels.${channelId}.accounts.${accountId} streaming aliases.`);
         }
       }
-    }
-
-    const sandbox = readNullableRecord(
-      readNullableRecord(readNullableRecord(next.agents)?.defaults)?.sandbox,
-    );
-    if (sandbox && "perSession" in sandbox) {
-      sandbox.scope = sandbox.perSession === true ? "session" : "workspace";
-      delete sandbox.perSession;
-      changes.push("Moved agents.defaults.sandbox.perSession to scope.");
     }
 
     return changes.length > 0 ? { next, changes } : { next: null, changes: [] };
@@ -361,13 +292,6 @@ vi.mock("../config/legacy.js", async () => {
       const sourceRoot = readNullableRecord(sourceRaw) ?? root;
       const issues: Array<{ path: string; message: string }> = [];
 
-      if ("heartbeat" in root) {
-        addIssue(
-          issues,
-          ["heartbeat"],
-          'heartbeat is legacy; use agents.defaults.heartbeat and channels.defaults.heartbeat. Run "openclaw doctor --fix".',
-        );
-      }
       if ("memorySearch" in root) {
         addIssue(
           issues,
@@ -381,16 +305,6 @@ vi.mock("../config/legacy.js", async () => {
           issues,
           ["gateway", "bind"],
           'gateway.bind host aliases are legacy; use the canonical bind mode. Run "openclaw doctor --fix".',
-        );
-      }
-      const sessionThreadBindings = readNullableRecord(
-        readNullableRecord(root.session)?.threadBindings,
-      );
-      if (sessionThreadBindings && "ttlHours" in sessionThreadBindings) {
-        addIssue(
-          issues,
-          ["session", "threadBindings", "ttlHours"],
-          'session.threadBindings.ttlHours is legacy; use session.threadBindings.idleHours. Run "openclaw doctor --fix".',
         );
       }
       const sessionMaintenance = readNullableRecord(readNullableRecord(root.session)?.maintenance);
@@ -409,16 +323,6 @@ vi.mock("../config/legacy.js", async () => {
           issues,
           ["tools", "web", "x_search", "apiKey"],
           'tools.web.x_search.apiKey is legacy; use plugins.entries.xai.config.webSearch.apiKey. Run "openclaw doctor --fix".',
-        );
-      }
-      const sandbox = readNullableRecord(
-        readNullableRecord(readNullableRecord(root.agents)?.defaults)?.sandbox,
-      );
-      if (sandbox && "perSession" in sandbox) {
-        addIssue(
-          issues,
-          ["agents", "defaults", "sandbox"],
-          'agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope. Run "openclaw doctor --fix".',
         );
       }
       const internalHooks = readNullableRecord(readNullableRecord(root.hooks)?.internal);
@@ -447,27 +351,6 @@ vi.mock("../config/legacy.js", async () => {
               ? `channels.${channelId}.streamMode is legacy and no longer used. Run "openclaw doctor --fix".`
               : `channels.${channelId}.streamMode, channels.${channelId}.streaming aliases are legacy. Run "openclaw doctor --fix".`,
           );
-        }
-        const threadBindings = readNullableRecord(channel.threadBindings);
-        if (threadBindings && "ttlHours" in threadBindings) {
-          addIssue(
-            issues,
-            ["channels", channelId, "threadBindings", "ttlHours"],
-            'channels.<id>.threadBindings.ttlHours is legacy; use channels.<id>.threadBindings.idleHours. Run "openclaw doctor --fix".',
-          );
-        }
-        for (const [accountId, accountRaw] of Object.entries(
-          readNullableRecord(channel.accounts) ?? {},
-        )) {
-          const account = readNullableRecord(accountRaw);
-          const accountThreadBindings = readNullableRecord(account?.threadBindings);
-          if (accountThreadBindings && "ttlHours" in accountThreadBindings) {
-            addIssue(
-              issues,
-              ["channels", channelId, "accounts", accountId, "threadBindings", "ttlHours"],
-              'channels.<id>.threadBindings.ttlHours is legacy; use channels.<id>.threadBindings.idleHours. Run "openclaw doctor --fix".',
-            );
-          }
         }
       }
 
@@ -3105,12 +2988,6 @@ describe("doctor config flow", () => {
     try {
       await runDoctorConfigWithInput({
         config: {
-          heartbeat: {
-            model: "anthropic/claude-3-5-haiku-20241022",
-            every: "30m",
-            showOk: true,
-            showAlerts: false,
-          },
           memorySearch: {
             provider: "local",
             fallback: "none",
@@ -3121,18 +2998,6 @@ describe("doctor config flow", () => {
           channels: {
             telegram: {
               groupMentionsOnly: true,
-            },
-            discord: {
-              threadBindings: {
-                ttlHours: 12,
-              },
-              accounts: {
-                alpha: {
-                  threadBindings: {
-                    ttlHours: 6,
-                  },
-                },
-              },
             },
           },
           tools: {
@@ -3151,20 +3016,10 @@ describe("doctor config flow", () => {
             maintenance: {
               rotateBytes: "10mb",
             },
-            threadBindings: {
-              ttlHours: 24,
-            },
           },
           talk: {
             voiceId: "voice-1",
             modelId: "eleven_v3",
-          },
-          agents: {
-            defaults: {
-              sandbox: {
-                perSession: true,
-              },
-            },
           },
         },
         run: loadAndMaybeMigrateDoctorConfig,
@@ -3175,9 +3030,6 @@ describe("doctor config flow", () => {
         .map(([message]) => message)
         .join("\n");
 
-      expect(legacyMessages).toContain("heartbeat:");
-      expect(legacyMessages).toContain("agents.defaults.heartbeat");
-      expect(legacyMessages).toContain("channels.defaults.heartbeat");
       expect(legacyMessages).toContain("memorySearch:");
       expect(legacyMessages).toContain("use memory.search");
       expect(legacyMessages).toContain("gateway.bind:");
@@ -3190,18 +3042,12 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("HOOK.md + handler file");
       expect(legacyMessages).toContain("before running");
       expect(legacyMessages).toContain("does not materialize executable files");
-      expect(legacyMessages).toContain("session.threadBindings.ttlHours");
-      expect(legacyMessages).toContain("session.threadBindings.idleHours");
       expect(legacyMessages).toContain("session.maintenance.rotateBytes");
       expect(legacyMessages).toContain("deprecated and ignored");
-      expect(legacyMessages).toContain("channels.<id>.threadBindings.ttlHours");
-      expect(legacyMessages).toContain("channels.<id>.threadBindings.idleHours");
       expect(legacyMessages).toContain("talk:");
       expect(legacyMessages).toContain(
         "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey",
       );
-      expect(legacyMessages).toContain("agents.defaults.sandbox:");
-      expect(legacyMessages).toContain("agents.defaults.sandbox.perSession is legacy");
       expect(
         noteSpy.mock.calls.some(
           ([message, title]) =>
@@ -3266,10 +3112,7 @@ describe("doctor config flow", () => {
     try {
       await runDoctorConfigWithInput({
         config: {
-          heartbeat: {
-            model: "anthropic/claude-3-5-haiku-20241022",
-            every: "30m",
-          },
+          gateway: { bind: "localhost" },
         },
         run: loadAndMaybeMigrateDoctorConfig,
       });
@@ -3278,7 +3121,7 @@ describe("doctor config flow", () => {
       expect(changeTitles).not.toContain("Doctor changes");
       const previewPanel = noteSpy.mock.calls.find(
         ([message, title]) =>
-          title === "Doctor changes preview" && message.includes("Moved heartbeat to"),
+          title === "Doctor changes preview" && message.includes("Normalized gateway.bind"),
       );
       expect(previewPanel).toBeDefined();
     } finally {
@@ -3292,10 +3135,7 @@ describe("doctor config flow", () => {
       const result = await runDoctorConfigWithInput({
         repair: true,
         config: {
-          heartbeat: {
-            model: "anthropic/claude-3-5-haiku-20241022",
-            every: "30m",
-          },
+          gateway: { bind: "localhost" },
         },
         run: loadAndMaybeMigrateDoctorConfig,
       });
@@ -3411,7 +3251,7 @@ describe("doctor config flow", () => {
     try {
       const result = await runDoctorConfigWithInput({
         config: {
-          heartbeat: { model: "openai/gpt-4o", every: 60 },
+          gateway: { bind: "localhost" },
           tools: { web: { search: { provider: "brave" } } },
         },
         repair: true,

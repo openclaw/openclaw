@@ -46,7 +46,7 @@ import {
   captureAdmittedChatSendSessionSettings,
   SESSION_SETTINGS_CHANGED_ERROR_REASON,
 } from "./chat-send-session-settings.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
+import type { LoadedChatSendSession } from "./chat-send-session.js";
 import { resolveChatSendStopOwnerScope } from "./chat-send-stop-owner-scope.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -117,7 +117,7 @@ export function respondChatSendAdmissionError(
 
 type ChatSendPreAdmissionParams = {
   request: NormalizedChatSendRequest;
-  session: PreparedChatSendSession;
+  session: LoadedChatSendSession;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
@@ -131,7 +131,7 @@ type ChatSendRetryParams = {
     "goalOperation" | "requestIdentity" | "rawMessage" | "mentions" | "workContext"
   >;
   session: Pick<
-    PreparedChatSendSession,
+    LoadedChatSendSession,
     | "clientRunId"
     | "pendingChatSendKey"
     | "entry"

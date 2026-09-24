@@ -11,10 +11,7 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  readSessionRowHasBoard,
-  type readSessionRowFacts,
-} from "./server-methods/session-placement-read-projection.js";
+import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
@@ -53,6 +50,10 @@ export type Row = {
   storedEntry?: SessionEntry;
   /** Accepted under retained database custody; presentation consumes the whole snapshot. */
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
+  /** Catalog changes reuse the accepted snapshot until a data publication or demotion. */
+  retainedDatabaseFacts?: PreparedSessionRowDatabaseFacts;
+  /** Durable search metadata survives archive demotion, until its owner invalidates it. */
+  preparedAcpMeta?: SessionAcpMeta | null;
   databaseFactsRevision: number;
   /** Current committed sharing facts remain usable while display materialization is dirty. */
   sharingEntry?: SessionEntry;
@@ -163,6 +164,8 @@ export function markAutomation(
 export function invalidateDatabaseFacts(row: Row) {
   row.databaseFactsRevision++;
   row.pendingDatabaseFacts = undefined;
+  row.retainedDatabaseFacts = undefined;
+  row.preparedAcpMeta = undefined;
 }
 
 export function create(target: RowTarget, entry?: SessionEntry): Row {
@@ -227,6 +230,8 @@ export function renewGeneration(row: Row): Row {
     entry: undefined,
     storedEntry: undefined,
     pendingDatabaseFacts: undefined,
+    retainedDatabaseFacts: undefined,
+    preparedAcpMeta: undefined,
     sharingEntry: undefined,
     materialized: undefined,
     lastMessagePreview: undefined,
@@ -464,6 +469,7 @@ export function dematerialize(row: Row): Row {
     materializedSequence: undefined,
     facts: undefined,
     pendingDatabaseFacts: undefined,
+    retainedDatabaseFacts: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
@@ -565,17 +571,21 @@ export function acquireSessionRowEntry(params: {
     ...row,
     storedEntry,
     pendingDatabaseFacts: undefined,
+    retainedDatabaseFacts: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
     ...lineage,
     sharingEntry: entry,
     generation,
-    hasBoard:
-      entry.archivedAt !== undefined ? (row.hasBoard ?? readSessionRowHasBoard(row)) : row.hasBoard,
     fallbackModel: sameFallbackModelFacts(row.storedEntry, storedEntry)
       ? row.fallbackModel
       : undefined,
     ...(generation !== row.generation
-      ? { lastMessagePreview: undefined, fallbackModel: undefined, materialized: undefined }
+      ? {
+          lastMessagePreview: undefined,
+          fallbackModel: undefined,
+          materialized: undefined,
+          preparedAcpMeta: undefined,
+        }
       : {}),
   };
   put(next);
