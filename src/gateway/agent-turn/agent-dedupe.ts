@@ -122,9 +122,15 @@ export function setGatewayDedupeEntries(params: {
   }
 }
 
-export function buildAbortedAgentPayload(runId: string, stopReason: string) {
+export function buildAbortedAgentPayload(
+  runId: string,
+  stopReason: string,
+  session?: { agentId?: string; sessionKey?: string },
+) {
   return {
     runId,
+    ...(session?.agentId ? { agentId: session.agentId } : {}),
+    ...(session?.sessionKey ? { sessionKey: session.sessionKey } : {}),
     status: "timeout" as const,
     summary: "aborted",
     stopReason,
@@ -149,11 +155,7 @@ export function setAbortedAgentDedupeEntries(params: {
     entry: {
       ts: Date.now(),
       ok: true,
-      payload: {
-        ...buildAbortedAgentPayload(params.runId, params.stopReason),
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      },
+      payload: buildAbortedAgentPayload(params.runId, params.stopReason, params),
     },
   });
 }
