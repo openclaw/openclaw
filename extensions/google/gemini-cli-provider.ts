@@ -1,5 +1,4 @@
 // Google provider module implements model/runtime integration.
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { GOOGLE_GEMINI_CLI_PROVIDER_ID } from "./gemini-cli-auth-home.js";
 import { formatGoogleOauthApiKey } from "./oauth-token-shared.js";
@@ -26,8 +25,4 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
   };
-}
-
-export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
-  api.registerProvider(buildGoogleGeminiCliProvider());
 }

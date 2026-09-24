@@ -5,6 +5,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   DEFAULT_PACKAGE_CHANNEL,
   normalizeUpdateChannel,
@@ -18,6 +19,7 @@ import {
   normalizeUpdatePostInstallDoctorWarnings,
 } from "../../infra/update-doctor-result.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
+import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
   getUpdateRun,
@@ -39,7 +41,6 @@ import {
   parseUpdateTimeoutMs,
   readPackageVersion,
   resolveUpdateRoot,
-  tryResolveInvocationCwd,
   tryWriteCompletionCache,
   type UpdateFinalizeOptions,
 } from "./shared.js";
@@ -82,7 +83,7 @@ export async function updateFinalizeCommand(
   opts: UpdateFinalizeOptions,
   recoveryRunIds?: readonly string[],
 ): Promise<void> {
-  const invocationCwd = tryResolveInvocationCwd();
+  const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   if (timeoutMs === null) {
@@ -320,6 +321,9 @@ async function updateFinalizeCommandInternal(
     const owned = maintenance;
     maintenance = undefined;
     await owned?.finish(cfg);
+    if (owned?.warnings?.length) {
+      onDoctorWarnings(owned.warnings);
+    }
   };
   let outcome: { complete: () => Promise<void> } | { error: unknown };
   try {
@@ -469,10 +473,11 @@ async function updateFinalizeCommandInternal(
           // Publish successful recovery only after convergence and the ledger's
           // transactional inactivity/driver check both finish.
           reconcileAbandonedUpdateRuns({ explicit: true, runIds: recoveryRunIds });
-          if (recoveryRunIds.some((runId) => getUpdateRun(runId)?.status === "running")) {
-            throw new Error(
-              "An update resumed while repair was running; wait for that update before retrying repair.",
-            );
+          const unresolved = recoveryRunIds
+            .map((runId) => getUpdateRun(runId))
+            .find((run) => run?.status === "running");
+          if (unresolved) {
+            throw new Error(formatUpdateRunOwnership(unresolved));
           }
           for (const runId of recoveryRunIds) {
             if (acknowledgeAbandonedUpdateRun(runId)) {

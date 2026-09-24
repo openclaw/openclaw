@@ -61,6 +61,7 @@ import {
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import type {
+  GatewayConfigReloader,
   GatewayHotReloadApplication,
   GatewayHotReloadStatus,
 } from "./config-reload-status.types.js";
@@ -95,16 +96,6 @@ function resolveChokidarUsePolling(degradedToPolling: boolean): boolean {
   }
   return Boolean(process.env.VITEST) || degradedToPolling;
 }
-
-type GatewayConfigReloader = {
-  /** Candidate validation and watcher creation; stop owns this work immediately. */
-  ready: Promise<void>;
-  isReady: () => boolean;
-  stop: () => Promise<void>;
-  hotReloadStatus: () => GatewayHotReloadStatus | undefined;
-  applyPluginLifecycleChange: PluginLifecycleRuntimeApply;
-  isReloading: () => boolean;
-};
 
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
 
@@ -856,6 +847,8 @@ export function startGatewayConfigReloader(opts: {
       ],
       candidateConfig: nextConfig,
       previousConfig: currentConfig,
+      previousCompareConfig: currentCompareConfig,
+      candidateCompareConfig: nextCompareConfig,
     });
     if (pluginLifecycle) {
       plan.pluginLifecycle = pluginLifecycle;

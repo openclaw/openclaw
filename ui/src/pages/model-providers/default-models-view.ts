@@ -23,8 +23,9 @@ import {
 import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
+import { renderMutationMessage } from "./view-status.ts";
 
-type DefaultModelsViewProps = {
+export type DefaultModelsViewProps = {
   models: ModelPickerEntry[];
   decisionModels: DecisionModelEntry[];
   selection: DefaultModelSelection;
@@ -367,21 +368,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
         `,
       })}
       ${renderCatalogProgress(props)}
-      ${
-        props.canMutate && props.message
-          ? html`<div
-              class="callout ${props.message.kind}"
-              role=${props.message.kind === "error" ? "alert" : "status"}
-            >
-              ${props.message.text}
-            </div>`
-          : nothing
-      }
-      ${
-        props.canMutate && props.message?.warning
-          ? html`<div class="callout warning" role="status">${props.message.warning}</div>`
-          : nothing
-      }
+      ${props.canMutate ? renderMutationMessage(props.message) : nothing}
     </div>
   `;
   return renderSettingsSection(

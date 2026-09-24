@@ -186,6 +186,38 @@ Inside a container, the same next action also directs you to pull or build the
 target OpenClaw image and redeploy with the same state/config mounts. Package
 changes inside a running container are not durable.
 
+### System-scope systemd services
+
+A system-scope Gateway service does not prevent a package update when the
+invoking account can write the installation. Both `openclaw update --yes` and
+the Gateway update action update the package and record a warning with the
+exact operator restart command, such as `sudo systemctl restart
+openclaw-gateway.service`. The updater does not stop or restart the system
+service and never invokes `sudo`. The running Gateway can exit when it detects
+that its installation has been replaced; restart the unit after the update.
+Use the unit name printed in your result, including any instance name, then
+check `openclaw gateway status --deep`.
+
+The restart remains operator-managed even when the updater runs as root:
+managed update handoffs own user-scope service supervision and recovery, not
+the system service's lifecycle. Pending Doctor or plugin maintenance is recorded
+as a warning when it cannot safely run alongside the current Gateway. Run
+`openclaw update repair` after resolving the reported maintenance condition.
+
+If the installation is not writable, the update stops before package mutation
+with `managed-service-handoff-failed` and prints the exact package-update and
+restart commands. Have the installation's owning account run those commands
+while preserving the Gateway's service account, state, and configuration.
+Do not run the whole updater under a different home or recursively change
+ownership of a shared system prefix.
+
+An installed updater that reports `Managed update handoff requires a user-scope
+systemd unit` refuses before loading the candidate. A candidate cannot repair
+that admission decision. Use the [manual package-manager
+procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+once, then restart the named system unit; subsequent updates can use the fixed
+updater.
+
 ## Published 2026.9.4 on large agent fleets
 
 The published 2026.9.4 updater shares a five-minute deadline across snapshot
@@ -308,11 +340,20 @@ workers reuse the selected runtime capture for provider discovery and remove
 their scratch tree when its owner retires.
 
 Upgrade the host, then run `openclaw doctor` to inspect legacy captures.
-`openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
+On Linux and macOS, `openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
 when no other OpenClaw process is running. Do not delete captures based on their
 age or absence from open-file or memory-map lists: an idle owner can still need
 them. Modern captures use SQLite custody to prove retirement. See
 [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
+Unrelated Node services running `node dist/index.js` do not count as OpenClaw
+owners. Doctor resolves generic entrypoints against their installation's package
+identity and honors OpenClaw service markers. If a live PID cannot be classified,
+Doctor preserves the captures and reports that PID and the inspection failure
+(including a missing or unreadable package manifest);
+this remains a maintenance warning and does not fail the update. Retry
+`openclaw doctor --fix` after resolving the reported inspection problem.
+Windows host-wide capture cleanup remains report-only.
 
 ## Reason codes
 

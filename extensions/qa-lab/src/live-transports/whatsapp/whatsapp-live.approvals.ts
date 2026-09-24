@@ -115,29 +115,27 @@ async function resolveApprovalDecision(params: {
   );
 }
 
-function matchesWhatsAppApprovalPendingText(params: {
-  approvalId: string;
-  approvalKind: ChannelApprovalKind;
-  text: string;
-  token: string;
-}) {
-  const heading =
-    params.approvalKind === "exec" ? "Exec approval required" : "Plugin approval required";
-  return (
-    params.text.includes(heading) &&
-    params.text.includes(params.approvalId) &&
-    params.text.includes(params.token) &&
-    params.text.includes("React with:") &&
-    params.text.includes("👍")
-  );
-}
-
-function matchesWhatsAppApprovalResolvedText(params: {
-  approvalId: string;
-  approvalKind: ChannelApprovalKind;
-  decision?: WhatsAppQaApprovalDecision;
-  text: string;
-}) {
+function matchesWhatsAppApprovalText(
+  params: {
+    approvalId: string;
+    approvalKind: ChannelApprovalKind;
+    decision?: WhatsAppQaApprovalDecision;
+    state: "pending" | "resolved";
+    token: string;
+  },
+  text: string,
+) {
+  if (params.state === "pending") {
+    const heading =
+      params.approvalKind === "exec" ? "Exec approval required" : "Plugin approval required";
+    return (
+      text.includes(heading) &&
+      text.includes(params.approvalId) &&
+      text.includes(params.token) &&
+      text.includes("React with:") &&
+      text.includes("👍")
+    );
+  }
   const decision = params.decision ?? "allow-once";
   const decisionText =
     params.approvalKind === "exec"
@@ -149,7 +147,7 @@ function matchesWhatsAppApprovalResolvedText(params: {
     params.approvalKind === "exec"
       ? `Exec approval ${decisionText}`
       : `Plugin approval ${decisionText}`;
-  return params.text.includes(params.approvalId) && params.text.includes(heading);
+  return text.includes(params.approvalId) && text.includes(heading);
 }
 
 function formatWhatsAppApprovalWaitDiagnostics(params: {
@@ -175,20 +173,7 @@ function formatWhatsAppApprovalWaitDiagnostics(params: {
   const formatted = messages.slice(-5).map((message, index) => {
     const fromExpectedSender =
       !message.fromPhoneE164 || message.fromPhoneE164 === params.sutPhoneE164;
-    const approvalTextMatches =
-      params.state === "pending"
-        ? matchesWhatsAppApprovalPendingText({
-            approvalId: params.approvalId,
-            approvalKind: params.approvalKind,
-            text: message.text,
-            token: params.token,
-          })
-        : matchesWhatsAppApprovalResolvedText({
-            approvalId: params.approvalId,
-            approvalKind: params.approvalKind,
-            decision: params.decision,
-            text: message.text,
-          });
+    const approvalTextMatches = matchesWhatsAppApprovalText(params, message.text);
     return [
       `#${index + 1}`,
       `observedAt=${message.observedAt}`,
@@ -224,22 +209,7 @@ async function waitForWhatsAppApprovalMessage(params: {
       match: (message) => {
         const fromExpectedSender =
           !message.fromPhoneE164 || message.fromPhoneE164 === params.sutPhoneE164;
-        return (
-          fromExpectedSender &&
-          (params.state === "pending"
-            ? matchesWhatsAppApprovalPendingText({
-                approvalId: params.approvalId,
-                approvalKind: params.approvalKind,
-                text: message.text,
-                token: params.token,
-              })
-            : matchesWhatsAppApprovalResolvedText({
-                approvalId: params.approvalId,
-                approvalKind: params.approvalKind,
-                decision: params.decision,
-                text: message.text,
-              }))
-        );
+        return fromExpectedSender && matchesWhatsAppApprovalText(params, message.text);
       },
     });
   } catch (error) {
@@ -284,7 +254,7 @@ export async function runWhatsAppApprovalScenario(params: {
     run: params.run,
     sutAccountId: params.sutAccountId,
   });
-  const pending = await waitForWhatsAppApprovalMessage({
+  const observation = {
     approvalId,
     approvalKind: params.run.approvalKind,
     decision: params.run.decision,
@@ -292,24 +262,12 @@ export async function runWhatsAppApprovalScenario(params: {
     observedAfter: requestStartedAt,
     observedMessages: params.observedMessages,
     scenario: params.scenario,
-    state: "pending",
     sutPhoneE164: params.sutPhoneE164,
     timeoutMs: params.scenario.timeoutMs,
     token: params.run.token,
-  });
-  const resolvedPromise = waitForWhatsAppApprovalMessage({
-    approvalId,
-    approvalKind: params.run.approvalKind,
-    decision: params.run.decision,
-    driver: params.driver,
-    observedAfter: requestStartedAt,
-    observedMessages: params.observedMessages,
-    scenario: params.scenario,
-    state: "resolved",
-    sutPhoneE164: params.sutPhoneE164,
-    timeoutMs: params.scenario.timeoutMs,
-    token: params.run.token,
-  });
+  };
+  const pending = await waitForWhatsAppApprovalMessage({ ...observation, state: "pending" });
+  const resolvedPromise = waitForWhatsAppApprovalMessage({ ...observation, state: "resolved" });
   try {
     if (params.run.decisionMode === "reaction") {
       if (!pending.fromJid || !pending.messageId) {

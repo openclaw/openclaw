@@ -34,7 +34,10 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-function observeSlowWriters(onWarning: (operation: unknown, fields: object) => void = () => {}) {
+function observeSlowWriters(
+  onWarning: (operation: unknown, fields: object) => void = () => {},
+  onPruning: (fields: object) => void = () => {},
+) {
   let clock = 0;
   // Cross the existing threshold deterministically; all storage and callback work remains real.
   vi.spyOn(performance, "now").mockImplementation(() => (clock += 1_001));
@@ -48,6 +51,9 @@ function observeSlowWriters(onWarning: (operation: unknown, fields: object) => v
         const operation = "operation" in fields ? fields.operation : undefined;
         operations.push(operation);
         onWarning(operation, fields);
+      } else if (message === "slow SQLite session archive pruning") {
+        assert(fields && typeof fields === "object");
+        onPruning(fields);
       }
       return undefined;
     });
@@ -262,11 +268,23 @@ it("records successful archive pruning stages", async () => {
       toDatabaseOptions(resolveSqliteScope({ sessionKey: historyKey, storePath })),
     );
     const pruning: unknown[] = [];
-    const operations = observeSlowWriters((operation, fields) => {
-      if (operation === "session.history.archive-prune" && "archivePruning" in fields) {
-        pruning.push(fields.archivePruning);
-      }
-    });
+    const aggregates: object[] = [];
+    const writerSegments: object[] = [];
+    const pageWrites: object[] = [];
+    observeSlowWriters(
+      (operation, fields) => {
+        if (operation === "session.history.archive-prune") {
+          writerSegments.push(fields);
+        }
+        if (operation === "session.history.free-pages") {
+          pageWrites.push(fields);
+        }
+      },
+      (fields) => {
+        aggregates.push(fields);
+        pruning.push("archivePruning" in fields ? fields.archivePruning : undefined);
+      },
+    );
     try {
       expect(
         await enforceSqliteSessionHistoryDiskBudget({
@@ -275,9 +293,20 @@ it("records successful archive pruning stages", async () => {
           maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
         }),
       ).toMatchObject({ removedEntries: 2 });
-      expect(operations).toEqual(
-        expect.arrayContaining(["session.history.archive-prune", "session.history.free-pages"]),
-      );
+      expect(writerSegments.length).toBeGreaterThan(0);
+      expect(pageWrites.length).toBeGreaterThan(0);
+      for (const fields of [...writerSegments, ...pageWrites]) {
+        expect(fields).toMatchObject({
+          queueWaitMs: expect.any(Number),
+          writerExecutionMs: expect.any(Number),
+        });
+      }
+      for (const fields of aggregates) {
+        expect(fields).toMatchObject({ elapsedMs: expect.any(Number) });
+        expect(fields).not.toHaveProperty("queueWaitMs");
+        expect(fields).not.toHaveProperty("writerExecutionMs");
+        expect(fields).not.toHaveProperty("completionDelayMs");
+      }
       expect(pruning).toEqual([
         expect.objectContaining({ trigger: "initial", completed: true }),
         expect.objectContaining({ trigger: "after-eviction", completed: true }),
@@ -286,8 +315,6 @@ it("records successful archive pruning stages", async () => {
       expect(pruning[0]).toMatchObject({ checkpointIncomplete: 0 });
       for (const diagnostic of pruning) {
         expect(diagnostic).toMatchObject({
-          admissionMs: expect.any(Number),
-          cachedAdmissions: expect.any(Number),
           checkpointCalls: expect.any(Number),
           checkpointMs: expect.any(Number),
           checkpointMaxMs: expect.any(Number),

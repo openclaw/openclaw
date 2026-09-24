@@ -1,5 +1,5 @@
 import path from "node:path";
-import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
+import { resolveVitestBunSourceArgs, resolveVitestNodeArgs } from "./vitest-process-env.mts";
 
 /** Select only the Vitest process; orchestration and preparation retain Node. */
 export function resolveVitestTestCommand(args: string[], env: NodeJS.ProcessEnv = process.env) {
@@ -19,6 +19,8 @@ export function resolveVitestTestCommand(args: string[], env: NodeJS.ProcessEnv 
     command: "bun",
     // Strip V8 flags only before the CLI; test names and filters stay byte-for-byte.
     args: [
+      // Workers inherit this resolver without adding aliases to child-process environments.
+      ...resolveVitestBunSourceArgs(),
       ...args.slice(0, cliIndex).filter((arg) => !nodeFlags.has(arg)),
       ...args.slice(cliIndex),
     ],

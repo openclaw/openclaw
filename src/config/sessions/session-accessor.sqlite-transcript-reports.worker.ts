@@ -26,8 +26,11 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.js";
 import {
+  appendAbortedSessionTranscriptPartialInTransaction,
   appendSelectedTranscriptReportInTransaction,
   prepareTranscriptReportSelection,
+  type AbortedSessionTranscriptPartial,
+  type AbortedSessionTranscriptPartialResult,
   type SelectedTranscriptReport,
   type TranscriptReport,
   type TranscriptReportSelection,
@@ -46,8 +49,16 @@ type ReportCommit = {
   committed: boolean;
   projectionNeedsReconcile: boolean;
   cliHistoryChanged?: boolean;
+  abortedPartial?: AbortedSessionTranscriptPartialResult;
+  sessionEntryChanged?: boolean;
 };
 export type TranscriptReportWorkerOperations = {
+  abortedPartial: {
+    input: AbortedSessionTranscriptPartial & {
+      preparedMessage: PreparedTranscriptMessageAppend<Record<string, unknown>>;
+    };
+    output: Result<ReportCommit, TranscriptAppendRefusal>;
+  };
   prepare: {
     input: TranscriptReportSelection;
     output: Result<PreparedReport, TranscriptAppendRefusal>;
@@ -145,7 +156,16 @@ export function bindSqliteWorkerBackend(
               projectionNeedsReconcile = true;
             },
           };
-          if (command.type === "assistant") {
+          let abortedPartial: AbortedSessionTranscriptPartialResult | undefined;
+          if (command.type === "abortedPartial") {
+            abortedPartial = appendAbortedSessionTranscriptPartialInTransaction(
+              database,
+              resolved,
+              command.input,
+              command.input.preparedMessage,
+              projection,
+            );
+          } else if (command.type === "assistant") {
             const facts = prepareTranscriptReportSelection(database, resolved, {
               kind: "assistant",
               responseId: command.input.message.responseId,
@@ -209,7 +229,17 @@ export function bindSqliteWorkerBackend(
             throw new SessionTranscriptWriterClaimReboundError(rebound);
           }
           authorizeCommit();
-          return ok({ committed: true, projectionNeedsReconcile, cliHistoryChanged });
+          return ok({
+            committed: true,
+            projectionNeedsReconcile,
+            cliHistoryChanged,
+            ...(abortedPartial
+              ? {
+                  abortedPartial,
+                  sessionEntryChanged: !abortedPartial.skipped && abortedPartial.append.appended,
+                }
+              : {}),
+          });
         },
         options,
         { operationLabel: "session.transcript.report" },

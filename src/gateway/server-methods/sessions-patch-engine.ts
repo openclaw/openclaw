@@ -2,6 +2,7 @@ import type {
   ErrorShape,
   SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import {
@@ -41,7 +42,7 @@ import {
   type SessionPatchCatalogResult,
 } from "./sessions-patch-catalog-preparation.js";
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
-import { publishSessionPatchEffects } from "./sessions-patch-effects.js";
+import * as patchEffects from "./sessions-patch-effects.js";
 import {
   assertSessionPatchCommitAllowed,
   invalidSessionPatchOutcome,
@@ -72,6 +73,7 @@ export async function executeSessionPatchMutations(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
   diagnostics?: SessionPatchDiagnostics;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
 }): Promise<MutationCoreResult> {
@@ -436,6 +438,7 @@ export async function executeSessionPatchMutations(params: {
                             patch: target.fullPatch,
                             archivedBy: archiveActor,
                             personalModelSelection,
+                            operatorAuthority: params.operatorAuthority,
                           },
                         });
                         if (projection.kind === "model-catalog") {
@@ -475,6 +478,7 @@ export async function executeSessionPatchMutations(params: {
                             expectedEntry: existingEntry,
                             callerCanConsent: callerIsAdmin,
                             catalog: (await catalogs.available(target.targetAgentId))?.entries,
+                            validateModelSelection: projected.validateModelSelection,
                             placement: { context: params.context, sessionKey: primaryKey },
                           });
                         if (!runtimeSelection.ok) {
@@ -561,6 +565,7 @@ export async function executeSessionPatchMutations(params: {
                     };
                   };
                   const groupStore = {
+                    afterCommitted: patchEffects.createSessionPatchCategoryRegistration(params),
                     assertCommitAllowed,
                     agentId: first.targetAgentId,
                     sessionKeys: selectedSessionKeys,
@@ -696,12 +701,11 @@ export async function executeSessionPatchMutations(params: {
   }
 
   timing?.mark("effects");
-  await publishSessionPatchEffects({
+  await patchEffects.publishSessionPatchEffects({
     cfg,
     context: params.context,
     callerScopes,
     callerCanManageCron: callerIsAdmin,
-    category: params.patch.category,
     targets: prepared.flatMap((target) => {
       const outcome = outcomes[target.index];
       return outcome?.ok && outcome.applied

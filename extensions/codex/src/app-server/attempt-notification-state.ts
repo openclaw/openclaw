@@ -1,4 +1,5 @@
-import { codexExecutionToolName, readCodexNotificationItem } from "./attempt-notifications.js";
+import { readCodexNotificationItem } from "./attempt-notifications.js";
+import { itemName } from "./event-projector-items.js";
 import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -28,7 +29,7 @@ export function reportCodexExecutionNotification(params: {
     return;
   }
   const item = readCodexNotificationItem(notification.params);
-  const tool = item ? codexExecutionToolName(item) : undefined;
+  const tool = item ? itemName(item) : undefined;
   if (!item || !tool) {
     return;
   }

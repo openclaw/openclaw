@@ -22,6 +22,7 @@ import {
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
@@ -53,6 +54,8 @@ import type {
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
 import { isTextAttachment } from "./chat-text-attachment.ts";
 import "./session-diff-panel.ts";
+
+registerFilePreviewEnglish();
 
 function renderSidebarAttachment(
   content: Extract<SidebarContent, { kind: "attachment" }>,

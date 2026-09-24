@@ -7,6 +7,7 @@ import {
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
@@ -33,6 +34,21 @@ vi.mock("../../../plugins/providers.runtime-core.js", () => ({
 let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
+
+async function admitPrompt(
+  config: NonNullable<EmbeddedRunAttemptParams["config"]>,
+  agentId = "main",
+) {
+  const admission = prepareSystemAgentRunAdmission(
+    config,
+    `prompt-fixture-${admissions.length}`,
+    agentId,
+    "system-prompt-test",
+  );
+  admissions.push(admission);
+  return admission.admit("embedded");
+}
 
 beforeAll(async () => {
   ({ buildAttemptSystemPrompt } = await import("./attempt-system-prompt.js"));
@@ -40,6 +56,9 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  for (const admission of admissions.splice(0)) {
+    admission.close();
+  }
   vi.restoreAllMocks();
   providerRegistryMocks.isPluginProvidersLoadInFlight.mockClear();
   providerRegistryMocks.resolvePluginProvidersCore.mockClear();
@@ -98,6 +117,7 @@ async function preparePermissionPrompt(
     ...session,
     workspaceDir: "/tmp/openclaw",
     config: {},
+    admittedRunContext: await admitPrompt({}),
     thinkLevel,
     sourceReplyDeliveryMode:
       requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
@@ -204,6 +224,7 @@ describe("buildAttemptSystemPrompt", () => {
       };
       const attempt = {
         config,
+        admittedRunContext: await admitPrompt(config, "marketing"),
         agentId: "marketing",
         sessionId: "global-system-prompt",
         sessionKey: "global",

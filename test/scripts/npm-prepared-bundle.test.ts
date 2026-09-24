@@ -603,6 +603,26 @@ describe("prepared npm bundle", () => {
     expect(pnpmPack.calls[0]?.env.OPENCLAW_PREPACK_PREPARED).toBe("1");
   });
 
+  it("sanitizes built declarations before packing the immutable bundle", () => {
+    const fixture = packageSourceFixture("2026.8.33");
+    const distRoot = join(fixture.sourceDir, "dist");
+    mkdirSync(distRoot);
+    const steps: string[] = [];
+    const sanitizeRootDeclarations = vi.fn((root: string) => {
+      expect(root).toBe(distRoot);
+      steps.push("sanitize");
+    });
+    const runPack = vi.fn((directory: string, destination: string) => {
+      steps.push("pack");
+      return fixture.runPack(directory, destination);
+    });
+
+    prepareNpmPackageBundle({ ...fixture, runPack, sanitizeRootDeclarations });
+
+    expect(sanitizeRootDeclarations).toHaveBeenCalledOnce();
+    expect(steps).toEqual(["sanitize", "pack"]);
+  });
+
   it.each([true, false])(
     "prepares a legacy root shrinkwrap before sealing (has shrinkwrap=%s)",
     (hasShrinkwrap) => {
@@ -838,8 +858,8 @@ describe("prepared npm bundle", () => {
         fixture.descriptor,
         {
           baseline: "published",
-          // Successful releases can carry multi-megabyte declaration diffs.
-          diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(150_000) }] },
+          // Extended-stable comparisons can exceed 16 MiB across declaration history.
+          diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(575_000) }] },
         },
         dependencyReports,
       );

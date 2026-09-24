@@ -293,7 +293,7 @@ function resolveChannelInboundSupplementalForFinalizer(params: {
 
   const quote = filtered.quote as ChannelInboundSupplementalQuoteFacts;
   const selfQuote = quote.isSelf === true;
-  const suppressSelfQuoteBody = params.suppressSelfQuoteBody ?? true;
+  const suppressSelfQuoteBody = params.suppressSelfQuoteBody ?? false;
   const suppressSelfQuoteMedia = params.suppressSelfQuoteMedia ?? true;
   const finalizeQuote = (quoteMedia?: readonly InboundMediaFacts[] | null) => {
     if (!(selfQuote && suppressSelfQuoteMedia)) {

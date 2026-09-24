@@ -30,7 +30,7 @@ import {
 } from "./update-command-post-core.js";
 import { convergePostCoreUpdatePlugins } from "./update-command-resume.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import { withOwnedManagedUpdateEnv, withUpdateEnv } from "./update-command-service-env.js";
 
 export async function convergeUpdatePlugins(params: {
   coreAlreadyCurrent?: boolean;
@@ -140,19 +140,17 @@ export async function convergeUpdatePlugins(params: {
     );
   }
 
-  return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
-    const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    const compatibilityHostVersion = params.candidateRuntime
-      ? (postUpdateInstalledVersion ?? VERSION)
-      : versionComparison != null && versionComparison > 0
-        ? postUpdateInstalledVersion
-        : null;
-    if (compatibilityHostVersion) {
-      // Downgraded parents and candidate workers both use the installed target,
-      // not a pre-update VERSION or an inherited compatibility-host override.
-      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityHostVersion;
-    }
-    try {
+  const compatibilityHostVersion = params.candidateRuntime
+    ? (postUpdateInstalledVersion ?? VERSION)
+    : versionComparison != null && versionComparison > 0
+      ? postUpdateInstalledVersion
+      : null;
+  // Downgraded parents and candidate workers select the installed target version.
+  const compatibilityEnv = compatibilityHostVersion
+    ? { OPENCLAW_COMPATIBILITY_HOST_VERSION: compatibilityHostVersion }
+    : {};
+  return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
+    withUpdateEnv(compatibilityEnv, async () => {
       let postCorePluginUpdate;
       const doctorWarnings: string[] = [];
       const collectDoctorWarnings = (warnings: string[]) => {
@@ -391,14 +389,6 @@ export async function convergeUpdatePlugins(params: {
       }
 
       return { resultWithPostUpdate, postUpdateConfigSnapshot };
-    } finally {
-      if (compatibilityHostVersion) {
-        if (previousCompatibilityHostVersion === undefined) {
-          delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-        } else {
-          process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
-        }
-      }
-    }
-  });
+    }),
+  );
 }

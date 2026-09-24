@@ -6,7 +6,6 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -16,7 +15,7 @@ import { WebSocketServer } from "ws";
 import { withZalouserIngressTestQueue } from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
 import { setZalouserRuntime } from "./runtime.js";
-import { loadStoredZaloCredentialsAsync, saveStoredZaloCredentials } from "./session-state.js";
+import { loadStoredZaloCredentials, saveStoredZaloCredentials } from "./session-state.js";
 import { createDefaultResolvedZalouserAccount, createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { API } from "./zca-client.js";
 
@@ -44,13 +43,13 @@ function sessionApi(
 }
 
 async function seedSession() {
-  saveStoredZaloCredentials("default", {
+  await saveStoredZaloCredentials("default", {
     imei: "fixture",
     userAgent: "openclaw-test",
     cookie: [],
     createdAt: new Date().toISOString(),
   });
-  expect(await loadStoredZaloCredentialsAsync("default")).not.toBeNull();
+  expect(await loadStoredZaloCredentials("default")).not.toBeNull();
 }
 
 beforeEach(() => {
@@ -58,8 +57,6 @@ beforeEach(() => {
   const runtime = createPluginRuntimeMock();
   runtime.state.openKeyedStore = (options) =>
     createPluginStateKeyedStoreForTests("zalouser", options);
-  runtime.state.openSyncKeyedStore = (options) =>
-    createPluginStateSyncKeyedStoreForTests("zalouser", options);
   setZalouserRuntime(runtime);
   createZaloMock.mockReset();
 });

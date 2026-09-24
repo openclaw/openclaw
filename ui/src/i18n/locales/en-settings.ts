@@ -3,6 +3,79 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  agentTools: {
+    pluginSource: "Plugin",
+    channelSource: "Channel: {id}",
+    channel: "Channel",
+    builtIn: "Built-In",
+    plugin: "Plugin: {id}",
+    optional: "Optional",
+    inPreview: "Included in preview",
+    disabledByOverride: "Disabled by agent override.",
+    enabledByProfile: "Enabled by the current profile.",
+    enabledByOverride: "Enabled by agent override.",
+    notIncluded: "Not included in the current profile.",
+    overrideOff: "Override Off",
+    enabled: "Enabled",
+    overrideOn: "Override On",
+    profileOff: "Profile Off",
+    notListed: "Not listed",
+    otherAgent: "Other Agent",
+    title: "Tool access",
+    subtitle:
+      "Choose tools for this agent. Full selects tools; it does not grant Full Access execution permissions.",
+    enabledSummary: "{enabled}/{total} enabled.",
+    enableAll: "Enable All",
+    disableAll: "Disable All",
+    loadConfig: "Load the gateway config to adjust tool profiles.",
+    explicitAllowlist:
+      "This agent is using an explicit allowlist in config. Tool overrides are managed in the Config tab.",
+    globalAllowlist:
+      "Global tools.allow is set. Agent overrides cannot enable tools that are globally blocked.",
+    loadingCatalog: "Loading runtime tool catalog…",
+    catalogFallback: "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+    previewTitle: "Tool preview",
+    previewSubtitle:
+      "Based on saved session settings and discovered tools. Availability is checked when a run starts, and additional tools may become available then. Changes may take time to appear here; unsaved edits are not included. Session:",
+    noSession: "no session",
+    switchAgent: "Switch chat to this agent to view its tool preview.",
+    previewLoading: "Loading…",
+    previewUnavailable: "Unavailable",
+    previewNotLoaded: "Not loaded",
+    loadingPreview: "Loading tool preview…",
+    previewError: "Could not load the tool preview for this session.",
+    emptyPreview:
+      "No tools are listed in this preview. Run-specific tools may still become available.",
+    morePreviewTitle: "{count} more tools are listed in the groups below.",
+    morePreview: "+{count} more listed tools",
+    quickPresets: "Tool Presets",
+    catalogTitle: "Tool Catalog",
+    inherit: "Inherit",
+    profile: "Tool profile",
+    source: "Source",
+    listed: "Listed in preview",
+    status: "Status",
+    profileSourceAgent: "agent override",
+    profileSourceGlobal: "global default",
+    profileSourceDefault: "default",
+    statusSaving: "saving…",
+    statusUnsaved: "unsaved",
+    statusSaved: "saved",
+    toolPreview: "Tool preview",
+    more: "+{count} more",
+    toolsOne: "{count} Tool",
+    tools: "{count} Tools",
+    enabledToolsOne: "{count} Enabled Tool",
+    enabledTools: "{count} Enabled Tools",
+    listedToolsOne: "{count} Listed Tool",
+    listedTools: "{count} Listed Tools",
+    access: "Agent setting",
+    disableNamed: "Disable {name}",
+    enableNamed: "Enable {name}",
+    defaultPresets: "Default Presets",
+    previewVia: "Listed in preview via {source}.",
+    linkTool: "Link to This Tool",
+  },
   searchPage: {
     enabled: "Web search",
     advanced: "Advanced search settings",
@@ -672,6 +745,7 @@ const enSettings = {
       failedStep: "Failure details",
       viewDetails: "View details",
       recoveryActions: "Recovery",
+      diagnoseFailure: "Diagnose update",
       checkStatus: "Check status",
       retryUpdate: "Retry update",
       reportFailure: "Report update failure",
@@ -1490,6 +1564,7 @@ const enSettings = {
 
 export const registerSettingsEnglish = Object.assign(
   () => {
+    Object.assign(en.agentTools, enSettings.agentTools);
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;
     en.searchPage = enSettings.searchPage;

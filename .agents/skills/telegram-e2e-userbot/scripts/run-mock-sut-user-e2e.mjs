@@ -92,7 +92,7 @@ export function ownChild(child) {
   return currentTelegramRun().ownChild(child, stopChildProcess);
 }
 
-export function removeRunnerScratch(root) {
+function removeRunnerScratch(root) {
   fs.rmSync(root, { recursive: true, force: true });
 }
 

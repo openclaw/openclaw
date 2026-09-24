@@ -1,9 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import {
+  isLegacySessionRecordOwnedByTarget,
+  shouldFilterLegacySessionRecordsByTarget,
+} from "../config/sessions/legacy-store-inspection.js";
+import { loadExactSessionEntryCandidates } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import {
+  resolveConfiguredAgentDatabaseTargets,
+  type SessionStoreTarget,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
   rebuildDeferredPluginSessionSourceIndex,
@@ -32,9 +41,14 @@ import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
+import { hasOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { planSessionJsonlArchiveMove } from "./doctor-session-sqlite-archive.js";
 import { countLegacyTranscript } from "./doctor-session-sqlite-diagnostics.js";
-import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
+import {
+  readLegacySessionRecords,
+  type LegacySessionRecord,
+} from "./doctor-session-sqlite-discovery.js";
 import type {
   DoctorSessionSqliteMode,
   DoctorSessionSqliteTargetReport,
@@ -51,12 +65,39 @@ export function prepareRetainedSessionImport(
   issues: DoctorSessionSqliteIssue[],
 ) {
   const isSqliteStore = params.target.storePath.endsWith(".sqlite");
+  const sqlitePath = resolveTargetSqlitePath(params.target, params.env);
+  if (!isSqliteStore && (params.mode === "import" || params.mode === "recover")) {
+    const isHeld = createRetainedAgentDatabaseMatcher(
+      params.env,
+      () => resolveConfiguredAgentDatabaseTargets(params.cfg, { env: params.env }),
+      { kind: "legacy-database", readDatabasePaths: () => [sqlitePath] },
+    );
+    const disposition =
+      isHeld(params.target.storePath, params.target.agentId) ||
+      isHeld(sqlitePath, params.target.agentId);
+    if (
+      disposition &&
+      (disposition !== "unavailable" ||
+        hasOrphanedSqliteSidecars(sqlitePath) ||
+        hasDeferredPluginSessionImport({
+          target: { ...params.target, sqlitePath },
+          sqlitePath,
+          env: params.env,
+        }))
+    ) {
+      issues.push({
+        code: "plugin_migration_source_retained",
+        message: `Retained session sources skipped: store held for agent ${params.target.agentId} database ${sqlitePath}. Run openclaw doctor --fix for deletion-history repair and explicit restoration guidance.`,
+      });
+      return undefined;
+    }
+  }
   let retainedImport: DeferredPluginSessionImport | undefined;
   const sourceConflicts = new Map<string, string>();
   const sourceVerification = {
     ...prepareSessionSourceVerification({
       ...params,
-      sqlitePath: resolveTargetSqlitePath(params.target, params.env),
+      sqlitePath,
     }),
     allowMissingIndex: true,
     onSourceConflict: (sourcePath: string, artifactPath = sourcePath, error?: unknown) => {
@@ -105,7 +146,75 @@ export function prepareRetainedSessionImport(
       params.env,
       sourceVerification.verification,
     );
+  if (
+    retainedImport &&
+    (params.mode === "import" || params.mode === "recover") &&
+    sourceConflicts.has(path.resolve(params.target.storePath))
+  ) {
+    appendRetainedIndexComparison(params, issues);
+  }
   return { retainedImport, sourceConflicts, sourceVerification, retainedIndexPath };
+}
+
+/** Compare current rows for diagnosis only; changed index values never gain receipt authority. */
+function appendRetainedIndexComparison(
+  params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv; target: SessionStoreTarget },
+  issues: DoctorSessionSqliteIssue[],
+): void {
+  try {
+    const parsingIssues: DoctorSessionSqliteIssue[] = [];
+    const records = readLegacySessionRecords(params.target, parsingIssues).filter(
+      ({ sessionKey }) =>
+        !shouldFilterLegacySessionRecordsByTarget(params.target) ||
+        isLegacySessionRecordOwnedByTarget(params.cfg, params.target, sessionKey),
+    );
+    if (parsingIssues.length || !records.length) {
+      return;
+    }
+    const current = new Map(
+      loadExactSessionEntryCandidates({
+        readOnly: true,
+        env: params.env,
+        readSource: {
+          agentId: params.target.agentId,
+          path: resolveTargetSqlitePath(params.target, params.env),
+        },
+        sessionKeys: records.map(({ sessionKey }) => sessionKey),
+      }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
+    for (const { sessionKey, entry } of records) {
+      const canonical = current.get(sessionKey);
+      let message: string;
+      if (!canonical || canonical.sessionId !== entry.sessionId) {
+        message = "Retained session identity differs from the current canonical SQLite row.";
+      } else {
+        const sourceFields = new Map(Object.entries(entry));
+        const canonicalFields = new Map(Object.entries(canonical));
+        const changedFields = [...new Set([...sourceFields.keys(), ...canonicalFields.keys()])]
+          // Import replaces file locators with SQLite references, independent of metadata drift.
+          .filter(
+            (field) =>
+              field !== "sessionFile" &&
+              !isDeepStrictEqual(sourceFields.get(field), canonicalFields.get(field)),
+          )
+          .toSorted();
+        if (!changedFields.length) {
+          continue;
+        }
+        message = `Retained session identity matches canonical SQLite, but metadata differs: ${changedFields.join(", ")}.`;
+      }
+      issues.push({
+        code: "retained_plugin_source_conflict",
+        sessionKey,
+        message: `${message} Canonical values were kept; the retained index remains protected for recovery.`,
+      });
+    }
+  } catch (error) {
+    issues.push({
+      code: "retained_plugin_source_conflict",
+      message: `Could not compare retained session metadata: ${formatErrorMessage(error)}. Canonical SQLite sessions were not changed.`,
+    });
+  }
 }
 
 /** Preserve unverifiable plugin inputs through the existing reversible archive lifecycle. */

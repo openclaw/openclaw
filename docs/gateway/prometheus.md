@@ -161,6 +161,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_worker_count`                              | gauge     | none                                                                                      |
 | `openclaw_worker_heap_sampled_count`                 | gauge     | none                                                                                      |
 | `openclaw_worker_heap_used_bytes`                    | gauge     | `script`                                                                                  |
+| `openclaw_worker_started_total`                      | counter   | `script`                                                                                  |
+| `openclaw_worker_retired_total`                      | counter   | `script`, `reason`                                                                        |
 | `openclaw_child_process_spawn_total`                 | counter   | `family`                                                                                  |
 | `openclaw_memory_rss_bytes`                          | histogram | none                                                                                      |
 | `openclaw_memory_pressure_total`                     | counter   | `level`, `reason`                                                                         |
@@ -307,13 +309,24 @@ are removed when the Worker exits. Compare `openclaw_worker_heap_sampled_count`
 with `openclaw_worker_count`: startup, unavailable APIs, and stalled Workers can
 produce partial totals. No heap snapshot or extra sampling timer is created.
 `openclaw_worker_heap_used_bytes{script="..."}` sums fresh heap samples for each
-Worker script. Labels use a fixed allowlist of runtime-entrypoint and pooled Worker basenames, normalized to
-`.js` in source and packaged runs; unknown, eval, and directly created Workers
+Worker script. Labels use a fixed allowlist of runtime-entrypoint, pooled, and bundled plugin Worker basenames, normalized to
+`.js` in source and packaged runs; unknown, eval, and unwrapped third-party Workers
 use `other`. Full paths and eval source are never recorded. A script's series
 disappears when it has no live, fresh samples. Memory-pressure logs include the
 same byte counts and Worker coverage counts, plus `workerHeaps`: the five largest
 individual fresh Worker heaps as `{script, heapUsed, heapTotal}` (bytes), using the same
 bounded script names.
+
+`openclaw_worker_started_total{script="..."}` and
+`openclaw_worker_retired_total{script="...",reason="..."}` expose cumulative
+starts and confirmed native exits through the same heartbeat. Retirement reasons
+are `idle_timeout`, `memory_pressure`, `closed`, `rotation`, `cancelled`,
+`failure`, or `exit` when an owner did not specify a reason. A retirement request
+does not count until the Worker exits; failed termination and retries do not
+double-count. Counters survive exporter restarts and reset with the process.
+Use `60 * rate(openclaw_worker_started_total[5m])` for starts per minute by
+script. These counts share the registry coverage limits above; they do not
+measure resident memory released by an exit.
 
 `openclaw_child_process_spawn_total{family="..."}` counts successful launches
 through OpenClaw's shared spawn and exec owners, including brokered launches.

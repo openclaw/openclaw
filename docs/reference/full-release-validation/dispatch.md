@@ -21,13 +21,12 @@ runs strict `control-ui-i18n` and `native-i18n` jobs; their failures remain visi
 in the run summary and fail validation. PR-side locale checks, release preparation,
 and publication requirements are unchanged.
 
-Linux (`ubuntu`) cross-OS fresh-install and upgrade lanes gate publication in
-the beta, stable, and full profiles. Windows and macOS cross-OS lanes run in
-parallel as **advisory** coverage: their pass/fail conclusions remain in the
-manifest and summary, but failures do not block Release Decision, npm publish,
-or `pnpm release:candidate`. Selected lanes still need terminal evidence.
-Normal CI, npm qualification, Docker, Package Acceptance, and the profile's
-performance and soak requirements keep their existing gates.
+Selected Linux, Windows, and macOS fresh-install and upgrade lanes gate
+validation in every release profile. Their actual conclusions remain in the
+manifest and summary. Test failures require a fix or an explicit operator waiver;
+release profiles do not automatically downgrade failed tests to advisory results.
+Normal CI, npm qualification, Docker, Package Acceptance, and selected performance
+and soak checks retain their gates.
 
 Prepare the complete history manifest and substantive version-matched release
 notes before freezing the product-complete commit and its target context as the
@@ -94,6 +93,36 @@ them for later Code-SHA, Release-SHA, and focused reruns. Main lineage
 authorizes the initial Tooling SHA selection; it does not authorize refreshing
 the tooling from moving `main`.
 
+## Exact frozen-target test omissions
+
+Declare narrowly justified omissions before dispatch with JSON arrays of exact
+repository-relative test paths. `plugin_prerelease_node_exclude_patterns_json`
+applies to the Plugin Prerelease Node lane, for example
+`["src/plugins/manifest-registry.test.ts"]`.
+`extension_test_exclude_patterns_json` applies to the Plugin Prerelease extension
+shards, for example
+`["extensions/codex/src/app-server/run-attempt.test.ts"]`. Both default to `[]`;
+there is no implicit Codex test omission. Normal CI keeps its own core lanes;
+Plugin Prerelease owns the full extension sweep.
+
+Pass them through the SHA-pinned helper as `-f name='["exact/path.test.ts"]'`.
+The helper packs the extension input into the existing trusted dispatch envelope
+to stay within GitHub's 25-input limit, and refuses tooling without the matching
+lane-input capability before creating remote refs or dispatching.
+
+Preflight rejects malformed, duplicate, nonexistent, and out-of-lane paths using
+the selected target's actual Vitest discovery. Globs and basenames are not
+accepted. Pinned tooling applies each exact omission to the executing config's
+inline projects, preserves the candidate's normal test runner and setup, and
+restores the original config bytes after the command. It does not depend on a
+new exclusion environment variable being supported by the frozen candidate.
+
+The immutable request, coverage identity, evidence reuse comparison, and final
+manifest retain both input values. Changing them requires a new validation
+request; continuation cannot widen an existing omission. Record the reason and
+owning fix for each omitted test in release evidence. An omission is untested
+coverage, not passing evidence.
+
 ## Retain and reconcile the root request
 
 Before creating remote refs, the helper writes a private operator artifact at
@@ -151,7 +180,7 @@ npm and Docker artifacts for `vYYYY.M.PATCH-N`. Tideclaw alpha validation uses
 its exact alpha tag and matching alpha branch. The helper maps beta releases and
 exact alpha tags to the `beta` profile and final versions to `stable`. Pass
 alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
-only for the broad advisory sweep.
+only for the broad provider sweep.
 `fail_fast` defaults to `false`, so dispatched child workflows finish and expose
 independent failures together. In that mode, the parent makes no child
 cancellation calls. Pass `-f fail_fast=true` only when the shorter
@@ -166,6 +195,11 @@ record and output receipt. Parent retries recover those exact producer IDs and
 attempts, recheck their source and Tooling SHAs, and reuse the successful builds.
 Historical parents that produced their own candidate or publication artifacts
 cannot continue: keep both SHAs frozen and start a fresh all-group validation.
+
+Automatic test retries are disabled. Dispatch rejects `known_flaky_jobs_json`;
+remove that retired input and investigate the original job failure. Explicit
+operator recovery remains available after diagnosis through
+[continuation commands](/reference/full-release-validation/continuation).
 
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in

@@ -31,7 +31,7 @@ export const EMPTY_STABILITY_SNAPSHOT = {
   summary: { byType: {} },
 };
 
-export async function startCronListGateway(token: string): Promise<{ url: string }> {
+export async function startCronListGateway(token?: string): Promise<{ url: string }> {
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   activeServers.add(wss);
   wss.on("connection", (ws) => {
@@ -47,7 +47,7 @@ export async function startCronListGateway(token: string): Promise<{ url: string
           ws,
           frame.id,
           buildMinimalGatewayHelloOkPayload({
-            methods: ["cron.list"],
+            methods: ["cron.list", "cron.status"],
             auth: { role: "operator", scopes: ["operator.admin"] },
           }),
         );
@@ -64,6 +64,9 @@ export async function startCronListGateway(token: string): Promise<{ url: string
           nextOffset: null,
           deliveryPreviews: {},
         });
+      }
+      if (frame.method === "cron.status") {
+        sendMinimalGatewayResponse(ws, frame.id, { enabled: true, jobs: 0 });
       }
     });
   });

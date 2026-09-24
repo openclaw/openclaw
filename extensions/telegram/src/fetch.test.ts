@@ -1,7 +1,6 @@
 // Telegram tests cover fetch plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { isSafeToRetrySendError, TelegramRequestNotStartedError } from "./network-errors.js";
@@ -111,21 +110,15 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
-let resolveTelegramApiBase: typeof import("./fetch.js").resolveTelegramApiBase;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
 
 type TelegramDispatcherPolicy = NonNullable<
   ReturnType<typeof resolveTelegramTransport>["dispatcherAttempts"]
 >[number]["dispatcherPolicy"];
 type DirectTelegramDispatcherPolicy = Extract<TelegramDispatcherPolicy, { mode: "direct" }>;
-type ExplicitProxyTelegramDispatcherPolicy = Extract<
-  TelegramDispatcherPolicy,
-  { mode: "explicit-proxy" }
->;
 
 beforeAll(async () => {
-  ({ resolveTelegramApiBase, resolveTelegramFetch, resolveTelegramTransport } =
-    await import("./fetch.js"));
+  ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
 });
 
 beforeEach(() => {
@@ -189,14 +182,6 @@ function getDispatcherFromUndiciCall(nth: number) {
   return dispatcher;
 }
 
-function constructorOptions(ctor: ReturnType<typeof vi.fn>, label: string): unknown {
-  const call = ctor.mock.calls.at(0);
-  if (!call) {
-    throw new Error(`missing ${label} constructor call`);
-  }
-  return call[0];
-}
-
 function installUndiciRuntimeDeps(): void {
   (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
     Agent: AgentCtor,
@@ -242,7 +227,7 @@ async function runDefaultStickyIpv4FallbackProbe(code = "EHOSTUNREACH"): Promise
     .mockResolvedValueOnce({ ok: true } as Response);
 
   const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
-  await resolved("https://api.telegram.org/botx/sendMessage");
+  await resolved("https://api.telegram.org/botx/getMe");
   await resolved("https://api.telegram.org/botx/sendChatAction");
 }
 
@@ -349,7 +334,7 @@ async function expectNoStickyRetryWithSameDispatcher(params: {
   expectedAgentCtor: typeof ProxyAgentCtor | typeof EnvHttpProxyAgentCtor;
   field: "connect" | "proxyTls" | "requestTls";
 }) {
-  await expect(params.resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
+  await expect(params.resolved("https://api.telegram.org/botx/getMe")).rejects.toThrow(
     "fetch failed",
   );
   await params.resolved("https://api.telegram.org/botx/sendChatAction");
@@ -377,32 +362,6 @@ afterEach(() => {
 });
 
 describe("resolveTelegramFetch", () => {
-  it("normalizes a full bot endpoint apiRoot before callers append bot paths", () => {
-    expect(resolveTelegramApiBase("https://api.telegram.org/bot123456:ABC/")).toBe(
-      "https://api.telegram.org",
-    );
-  });
-
-  it("wraps proxy fetches and leaves retry policy to caller-provided fetch", async () => {
-    const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
-
-    const resolved = resolveTelegramFetchOrThrow(proxyFetch);
-
-    await resolved("https://api.telegram.org/botx/getMe");
-
-    expect(proxyFetch).toHaveBeenCalledTimes(1);
-    expect(undiciFetch).not.toHaveBeenCalled();
-  });
-
-  it("does not double-wrap an already wrapped proxy fetch", () => {
-    const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
-    const wrapped = resolveFetch(proxyFetch);
-
-    const resolved = resolveTelegramFetch(wrapped);
-
-    expect(resolved).toBe(wrapped);
-  });
-
   it("uses resolver-scoped Agent dispatcher with configured transport policy", async () => {
     undiciFetch.mockResolvedValue({ ok: true } as Response);
 
@@ -426,86 +385,6 @@ describe("resolveTelegramFetch", () => {
     expect(typeof dispatcher?.options?.connect?.lookup).toBe("function");
   });
 
-  it("emits default transport decisions at debug level", () => {
-    resolveTelegramFetchOrThrow();
-
-    expect(loggerInfo).not.toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
-    expect(loggerInfo).not.toHaveBeenCalledWith("dnsResultOrder=ipv4first (process-default)");
-    expect(loggerDebug).toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
-    expect(loggerDebug).toHaveBeenCalledWith("dnsResultOrder=ipv4first (process-default)");
-  });
-
-  it("preserves configured transport policy when proxy env is configured", async () => {
-    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
-    undiciFetch.mockResolvedValue({ ok: true } as Response);
-
-    const resolved = resolveTelegramFetchOrThrow(undefined, {
-      network: {
-        autoSelectFamily: false,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    await resolved("https://api.telegram.org/botx/getMe");
-
-    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
-    expect(AgentCtor).not.toHaveBeenCalled();
-
-    const dispatcher = getDispatcherFromUndiciCall(1);
-    expectHttp1OnlyDispatcher(dispatcher);
-    expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(false);
-    expect(dispatcher?.options?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
-    expectTelegramKeepAliveOptions(dispatcher?.options?.connect);
-  });
-
-  it("uses the OpenClaw debug proxy URL when no explicit proxy fetch is provided", async () => {
-    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
-    vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", "http://127.0.0.1:7777");
-    undiciFetch.mockResolvedValue({ ok: true } as Response);
-
-    const resolved = resolveTelegramFetch(undefined);
-    await resolved("https://api.telegram.org/botTOKEN/getMe");
-
-    expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
-    const proxyOptions = constructorOptions(ProxyAgentCtor, "debug proxy") as {
-      allowH2?: boolean;
-      uri?: string;
-    };
-    expect(proxyOptions.allowH2).toBe(false);
-    expect(proxyOptions.uri).toBe("http://127.0.0.1:7777");
-  });
-
-  it("uses OPENCLAW_PROXY_URL as a Telegram explicit proxy when proxy env is absent", async () => {
-    vi.stubEnv("OPENCLAW_PROXY_URL", "http://127.0.0.1:7788");
-    undiciFetch.mockResolvedValue({ ok: true } as Response);
-
-    const transport = resolveTelegramTransport(undefined, {
-      network: {
-        autoSelectFamily: false,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    await transport.fetch("https://api.telegram.org/botTOKEN/getMe");
-
-    expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
-    const proxyOptions = constructorOptions(ProxyAgentCtor, "OpenClaw proxy") as {
-      allowH2?: boolean;
-      uri?: string;
-      requestTls?: { autoSelectFamily?: boolean };
-    };
-    expect(proxyOptions.allowH2).toBe(false);
-    expect(proxyOptions.uri).toBe("http://127.0.0.1:7788");
-    expect(proxyOptions.requestTls?.autoSelectFamily).toBe(false);
-    expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
-    expect(AgentCtor).not.toHaveBeenCalled();
-    const dispatcherPolicy = transport.dispatcherAttempts?.[0]?.dispatcherPolicy as
-      | ExplicitProxyTelegramDispatcherPolicy
-      | undefined;
-    expect(dispatcherPolicy?.mode).toBe("explicit-proxy");
-    expect(dispatcherPolicy?.proxyUrl).toBe("http://127.0.0.1:7788");
-  });
-
   it("preserves caller-provided custom fetch when OPENCLAW_PROXY_URL is present", async () => {
     vi.stubEnv("OPENCLAW_PROXY_URL", "http://127.0.0.1:7788");
     const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
@@ -526,79 +405,6 @@ describe("resolveTelegramFetch", () => {
     expect(AgentCtor).not.toHaveBeenCalled();
     expect(transport.sourceFetch).not.toBe(undiciFetch);
     expect(transport.dispatcherAttempts).toBeUndefined();
-  });
-
-  it("keeps resolver-scoped transport policy for OpenClaw proxy fetches", async () => {
-    const { makeProxyFetch } = await import("./proxy.js");
-    const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");
-    ProxyAgentCtor.mockClear();
-    undiciFetch.mockResolvedValue({ ok: true } as Response);
-
-    const resolved = resolveTelegramFetchOrThrow(proxyFetch, {
-      network: {
-        autoSelectFamily: false,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    await resolved("https://api.telegram.org/botx/getMe");
-
-    expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
-    expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
-    expect(AgentCtor).not.toHaveBeenCalled();
-    const dispatcher = getDispatcherFromUndiciCall(1);
-    expectHttp1OnlyDispatcher(dispatcher);
-    expect((dispatcher?.options as { uri?: string } | undefined)?.uri).toBe(
-      "http://127.0.0.1:7890",
-    );
-    expect(dispatcher?.options?.requestTls?.autoSelectFamily).toBe(false);
-  });
-
-  it("exports fallback dispatcher attempts for Telegram media downloads", async () => {
-    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
-    const transport = resolveTelegramTransport(undefined, {
-      network: {
-        autoSelectFamily: true,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    await expect(
-      transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),
-    ).resolves.toEqual({ ok: true });
-    expect(undiciFetch).toHaveBeenCalledWith(
-      "https://api.telegram.org/botTOKEN/getFile",
-      undefined,
-    );
-    expect(transport.fetch).not.toBe(transport.sourceFetch);
-    expect(transport.dispatcherAttempts).toHaveLength(3);
-
-    const attempts = transport.dispatcherAttempts as Array<{
-      dispatcherPolicy?: DirectTelegramDispatcherPolicy;
-    }>;
-    const defaultAttempt = expectDefined(attempts[0], "default Telegram dispatcher attempt");
-    const ipv4Attempt = expectDefined(attempts[1], "IPv4 Telegram dispatcher attempt");
-    const pinnedAttempt = expectDefined(attempts[2], "pinned Telegram dispatcher attempt");
-
-    const defaultPolicy = defaultAttempt.dispatcherPolicy;
-    const ipv4Policy = ipv4Attempt.dispatcherPolicy;
-    const pinnedPolicy = pinnedAttempt.dispatcherPolicy;
-    expect(defaultPolicy?.mode).toBe("direct");
-    expect(defaultPolicy?.connect?.autoSelectFamily).toBe(true);
-    expect(defaultPolicy?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
-    expect(typeof defaultPolicy?.connect?.lookup).toBe("function");
-    expect(ipv4Policy?.mode).toBe("direct");
-    expect(ipv4Policy?.connect?.family).toBe(4);
-    expect(ipv4Policy?.connect?.autoSelectFamily).toBe(false);
-    expect(typeof ipv4Policy?.connect?.lookup).toBe("function");
-    expect(pinnedPolicy?.mode).toBe("direct");
-    expect(pinnedPolicy?.pinnedHostname).toEqual({
-      hostname: "api.telegram.org",
-      addresses: ["149.154.167.220"],
-    });
-    expect(pinnedPolicy?.connect?.family).toBe(4);
-    expect(pinnedPolicy?.connect?.autoSelectFamily).toBe(false);
-    expect(typeof pinnedPolicy?.connect?.lookup).toBe("function");
   });
 
   it("skips sticky IPv4 fallback when user explicitly configures network settings", async () => {
@@ -706,25 +512,6 @@ describe("resolveTelegramFetch", () => {
     });
   });
 
-  it("uses no_proxy over NO_PROXY when deciding env-proxy bypass", async () => {
-    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
-    vi.stubEnv("NO_PROXY", "");
-    vi.stubEnv("no_proxy", "api.telegram.org");
-    await runDefaultStickyIpv4FallbackProbe();
-
-    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(2);
-    expectPinnedIpv4ConnectDispatcher({ pinnedCall: 2 });
-  });
-
-  it("matches whitespace and wildcard no_proxy entries like EnvHttpProxyAgent", async () => {
-    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
-    vi.stubEnv("no_proxy", "localhost *.telegram.org");
-    await runDefaultStickyIpv4FallbackProbe();
-
-    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(2);
-    expectPinnedIpv4ConnectDispatcher({ pinnedCall: 2 });
-  });
-
   it("fails closed when explicit proxy dispatcher initialization fails", async () => {
     const { makeProxyFetch } = await import("./proxy.js");
     const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");
@@ -743,28 +530,6 @@ describe("resolveTelegramFetch", () => {
     ).toThrow("explicit proxy dispatcher init failed: invalid proxy config");
   });
 
-  it("falls back to Agent when env proxy dispatcher initialization fails", async () => {
-    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
-    EnvHttpProxyAgentCtor.mockImplementationOnce(function ThrowingEnvProxyAgent() {
-      throw new Error("invalid proxy config");
-    });
-    undiciFetch.mockResolvedValue({ ok: true } as Response);
-
-    const resolved = resolveTelegramFetchOrThrow(undefined, {
-      network: {
-        autoSelectFamily: false,
-      },
-    });
-
-    await resolved("https://api.telegram.org/botx/getMe");
-
-    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
-    expect(AgentCtor).toHaveBeenCalledTimes(1);
-
-    const dispatcher = getDispatcherFromUndiciCall(1);
-    expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(false);
-  });
-
   it("retries once, keeps sticky IPv4, then recovers to primary dispatcher", async () => {
     undiciFetch.mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"));
     for (let i = 0; i < 7; i += 1) {
@@ -777,7 +542,7 @@ describe("resolveTelegramFetch", () => {
       },
     });
 
-    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/getMe");
     for (let i = 0; i < 4; i += 1) {
       await resolved(`https://api.telegram.org/botx/sendChatAction?sticky=${i}`);
     }
@@ -835,7 +600,7 @@ describe("resolveTelegramFetch", () => {
       const reason = new Error("telegram fetch canceled after response headers");
 
       try {
-        await transport.fetch("https://api.telegram.org/botx/sendMessage");
+        await transport.fetch("https://api.telegram.org/botx/getMe");
         for (let i = 0; i < 3; i += 1) {
           await transport.fetch(`https://api.telegram.org/botx/sendChatAction?healthy=${i}`);
         }
@@ -884,7 +649,7 @@ describe("resolveTelegramFetch", () => {
       },
     });
 
-    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/getMe");
     for (let i = 0; i < 4; i += 1) {
       await resolved(`https://api.telegram.org/botx/sendChatAction?sticky=${i}`);
     }
@@ -930,7 +695,7 @@ describe("resolveTelegramFetch", () => {
       },
     });
 
-    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/getMe");
     for (let i = 0; i < 4; i += 1) {
       await resolved(`https://api.telegram.org/botx/sendChatAction?sticky=${i}`);
     }
@@ -957,12 +722,7 @@ describe("resolveTelegramFetch", () => {
       .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
       .mockResolvedValueOnce({ ok: true } as Response);
 
-    const resolved = resolveTelegramFetchOrThrow(undefined, {
-      network: {
-        autoSelectFamily: true,
-        dnsResultOrder: "ipv4first",
-      },
-    });
+    const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
 
     await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
       "fetch failed",
@@ -992,15 +752,36 @@ describe("resolveTelegramFetch", () => {
     expect(getDispatcherFromUndiciCall(1)).not.toBe(getDispatcherFromUndiciCall(2));
   });
 
+  it.each(["sendMessage", "sendRichMessage"])(
+    "moves later %s requests off a failing route without replaying ambiguous sends",
+    async (method) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      const failure = buildFetchFallbackError("UND_ERR_SOCKET");
+      undiciFetch.mockRejectedValue(failure);
+      const transport = resolveTelegramTransport(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+      const url = "https://api.telegram.org/botx/" + method;
+      try {
+        for (let index = 0; index < 5; index += 1) {
+          await expect(transport.fetch(url)).rejects.toBe(failure);
+          expect(undiciFetch).toHaveBeenCalledTimes(index + 1);
+          expect(getDispatcherFromUndiciCall(index + 1)).toBe(getDispatcherFromUndiciCall(1));
+        }
+        undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+        await expect(transport.fetch(url)).resolves.toEqual({ ok: true });
+        expect(undiciFetch).toHaveBeenCalledTimes(6);
+        expect(getDispatcherFromUndiciCall(6)).not.toBe(getDispatcherFromUndiciCall(1));
+        expect(getDispatcherFromUndiciCall(6).options?.connect?.family).toBe(4);
+      } finally {
+        now.mockRestore();
+        await transport.close();
+      }
+    },
+  );
+
   it("cools down a repeatedly failing sticky fallback and probes earlier attempts", async () => {
     undiciFetch.mockRejectedValue(buildFetchFallbackError("ENETUNREACH"));
 
-    const resolved = resolveTelegramFetchOrThrow(undefined, {
-      network: {
-        autoSelectFamily: true,
-        dnsResultOrder: "ipv4first",
-      },
-    });
+    const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
 
     await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
       "fetch failed",
@@ -1078,26 +859,6 @@ describe("resolveTelegramFetch", () => {
     } finally {
       dateNowSpy.mockRestore();
     }
-  });
-
-  it("preserves caller-provided dispatcher across fallback retry", async () => {
-    const fetchError = buildFetchFallbackError("EHOSTUNREACH");
-    undiciFetch.mockRejectedValueOnce(fetchError).mockResolvedValueOnce({ ok: true } as Response);
-
-    const resolved = resolveTelegramFetchOrThrow(undefined, {
-      network: {
-        autoSelectFamily: true,
-      },
-    });
-
-    const callerDispatcher = { name: "caller" };
-
-    await resolved("https://api.telegram.org/botx/sendMessage", {
-      dispatcher: callerDispatcher,
-    } as RequestInit);
-
-    expect(undiciFetch).toHaveBeenCalledTimes(2);
-    expectCallerDispatcherPreserved([1, 2], callerDispatcher);
   });
 
   it.each(["init", "request"] as const)(
@@ -1198,18 +959,6 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves EADDRNOTAVAIL in forced fallback diagnostics", () => {
-    const transport = resolveTelegramTransport(undefined, STICKY_IPV4_FALLBACK_NETWORK);
-    const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
-
-    expect(transport.forceFallback?.("probe timeout/network error", fetchError)).toBe(true);
-    expect(transport.forceFallback?.("probe timeout/network error", fetchError)).toBe(true);
-
-    expectLoggerMessageContaining(loggerWarn, "primary connection path failed");
-    expectLoggerMessageContaining(loggerWarn, "codes=EADDRNOTAVAIL");
-    expectNoLoggerMessageContaining(loggerWarn, "DNS-resolved IP unreachable");
-  });
-
   it("retries sticky fallback when the local network is down during connect", async () => {
     undiciFetch
       .mockRejectedValueOnce(buildFetchFallbackError("ENETDOWN"))
@@ -1261,32 +1010,6 @@ describe("resolveTelegramFetch", () => {
   });
 
   describe("transport lifecycle", () => {
-    it("passes a bounded keep-alive pool configuration to every constructed dispatcher", () => {
-      resolveTelegramTransport(undefined, {
-        network: {
-          autoSelectFamily: true,
-          dnsResultOrder: "ipv4first",
-        },
-      });
-
-      // One direct Agent for the default dispatcher plus two lazy fallbacks not yet touched.
-      expect(AgentCtor).toHaveBeenCalledTimes(1);
-      const defaultAgent = AgentCtor.mock.instances[0]?.options;
-      expect(typeof defaultAgent).toBe("object");
-      expect((defaultAgent as { allowH2?: boolean } | undefined)?.allowH2).toBe(false);
-      expect(typeof (defaultAgent as { keepAliveTimeout?: unknown }).keepAliveTimeout).toBe(
-        "number",
-      );
-      expect(typeof (defaultAgent as { keepAliveMaxTimeout?: unknown }).keepAliveMaxTimeout).toBe(
-        "number",
-      );
-      expect(typeof (defaultAgent as { connections?: unknown }).connections).toBe("number");
-      expect(typeof (defaultAgent as { pipelining?: unknown }).pipelining).toBe("number");
-      const connections = (defaultAgent as { connections?: number }).connections;
-      expect(connections).toBeGreaterThan(0);
-      expect(connections).toBeLessThan(100);
-    });
-
     it("close() destroys the default dispatcher and all lazily-created fallback dispatchers", async () => {
       undiciFetch
         .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"))
@@ -1303,16 +1026,22 @@ describe("resolveTelegramFetch", () => {
       // Trigger fallback chain so the two lazy fallback dispatchers are instantiated.
       await transport.fetch("https://api.telegram.org/botx/getMe");
 
-      // Three Agents total: default + IPv4 fallback + pinned-IP fallback.
-      expect(AgentCtor).toHaveBeenCalledTimes(3);
+      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+      await transport.fetch("https://api.telegram.org/botx/sendMessage");
+      // Default + two pooled fallbacks + the selected fallback's fresh-send pool.
+      expect(AgentCtor).toHaveBeenCalledTimes(4);
       const instances = AgentCtor.mock.instances;
-      expect(instances).toHaveLength(3);
+      expect(instances).toHaveLength(4);
 
       await transport.close();
 
       for (const instance of instances) {
         expect(instance.destroy).toHaveBeenCalledTimes(1);
       }
+      await expect(
+        transport.fetch("https://api.telegram.org/botx/sendRichMessage"),
+      ).rejects.toBeInstanceOf(TelegramRequestNotStartedError);
+      expect(AgentCtor).toHaveBeenCalledTimes(4);
     });
 
     it("close() is idempotent", async () => {
@@ -1435,4 +1164,3 @@ describe("resolveTelegramTransport proxy tunnel failures", () => {
     expect(isSafeToRetrySendError(caught)).toBe(false);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -415,7 +415,7 @@ async function runEditFlow(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   options: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["options"];
-}): Promise<{ cfg: OpenClawConfig } | null> {
+}): Promise<{ cfg: OpenClawConfig }> {
   const { prompter, options } = params;
   const next = params.cfg;
   const feishuCfg = next.channels?.feishu as FeishuConfig | undefined;
@@ -479,18 +479,8 @@ export async function runFeishuLogin(params: {
   prompter: WizardPrompter;
 }): Promise<OpenClawConfig> {
   const { cfg, prompter } = params;
-  const options = {};
-  const alreadyConfigured = isFeishuConfigured(cfg);
-
-  if (alreadyConfigured) {
-    const result = await runEditFlow({ cfg, prompter, options });
-    if (result === null) {
-      return cfg;
-    }
-    return result.cfg;
-  }
-
-  const result = await runNewAppFlow({ cfg, prompter, options });
+  const runFlow = isFeishuConfigured(cfg) ? runEditFlow : runNewAppFlow;
+  const result = await runFlow({ cfg, prompter, options: {} });
   return result.cfg;
 }
 
@@ -542,16 +532,11 @@ export const feishuSetupWizard: ChannelSetupWizard = {
   // prepare: determine flow based on existing configuration
   // -------------------------------------------------------------------------
   prepare: async ({ cfg, credentialValues }) => {
-    const alreadyConfigured = isFeishuConfigured(cfg);
-
-    if (alreadyConfigured) {
-      return {
-        credentialValues: { ...credentialValues, [FEISHU_SETUP_FLOW_KEY]: "edit" },
-      };
-    }
-
     return {
-      credentialValues: { ...credentialValues, [FEISHU_SETUP_FLOW_KEY]: "new" },
+      credentialValues: {
+        ...credentialValues,
+        [FEISHU_SETUP_FLOW_KEY]: isFeishuConfigured(cfg) ? "edit" : "new",
+      },
     };
   },
 
@@ -564,11 +549,7 @@ export const feishuSetupWizard: ChannelSetupWizard = {
     const flow = credentialValues[FEISHU_SETUP_FLOW_KEY] ?? "new";
 
     if (flow === "edit") {
-      const result = await runEditFlow({ cfg, prompter, options });
-      if (result === null) {
-        return { cfg };
-      }
-      return result;
+      return runEditFlow({ cfg, prompter, options });
     }
 
     return runNewAppFlow({ cfg, prompter, options });

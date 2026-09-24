@@ -1309,6 +1309,13 @@ describe("native app i18n inventory", () => {
         }),
       },
       {
+        expected: "translation must be a string for native.apple.unknown",
+        mutate: (artifact) => ({
+          ...artifact,
+          translations: { ...artifact.translations, "native.apple.unknown": 12 },
+        }),
+      },
+      {
         expected: `translation must be nonempty for ${other.id}`,
         mutate: (artifact) => ({
           ...artifact,
@@ -1332,10 +1339,28 @@ describe("native app i18n inventory", () => {
     ];
 
     expect(validateNativeLocaleArtifact("sv", inventory, createArtifact())).toEqual([]);
+    const obsolete = {
+      ...createArtifact(),
+      translations: { ...createArtifact().translations, "native.apple.unknown": "Okänd" },
+    };
+    const warnings: string[] = [];
+    expect(
+      validateNativeLocaleArtifact("sv", inventory, obsolete, [], (message) =>
+        warnings.push(message),
+      ),
+    ).toEqual([]);
+    expect(warnings).toEqual(['native locale sv: unknown translation id "native.apple.unknown"']);
     for (const testCase of cases) {
       expect(() =>
         validateNativeLocaleArtifact("sv", inventory, testCase.mutate(createArtifact())),
       ).toThrow(testCase.expected);
+      if (testCase.expected !== 'unknown translation id "native.apple.unknown"') {
+        expect(() =>
+          validateNativeLocaleArtifact("sv", inventory, testCase.mutate(obsolete), [], (message) =>
+            warnings.push(message),
+          ),
+        ).toThrow(testCase.expected);
+      }
     }
   });
 

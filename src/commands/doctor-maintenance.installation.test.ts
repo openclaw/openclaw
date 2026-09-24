@@ -527,7 +527,7 @@ async function runInstallationCase(params: {
         if (params.inspectionScenario === "competing-update") {
           expect(competingUpdateStarted).toBe(true);
           expect(finishError).toMatchObject({
-            message: expect.stringContaining("is still in progress"),
+            message: expect.stringContaining("remains recorded as running"),
           });
           expect(events).toEqual(["stop", "repair-state"]);
           expect(running).toBe(false);

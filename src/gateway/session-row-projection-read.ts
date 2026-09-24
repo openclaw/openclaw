@@ -53,6 +53,7 @@ export async function withSessionRowDatabaseFacts(
     return;
   }
   const rows = ids.flatMap((id) => owner.rows.get(id) ?? []);
+  const rowRevisions = new Map(rows.map((row) => [identity(row), row.databaseFactsRevision]));
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const groups = new Map<
@@ -173,7 +174,9 @@ export async function withSessionRowDatabaseFacts(
                 (owner.dirty.has(identity(row)) ||
                   (owner.selected?.has(identity(row)) &&
                     isColdArchivedSessionRow(owner.rows.get(identity(row)) ?? row))) &&
-                isCurrentGeneration(row, owner.rows.get(identity(row))),
+                isCurrentGeneration(row, owner.rows.get(identity(row))) &&
+                owner.rows.get(identity(row))?.databaseFactsRevision ===
+                  rowRevisions.get(identity(row)),
             )
             .map(identity);
           consume.accept(currentIds, facts);

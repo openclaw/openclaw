@@ -380,6 +380,12 @@ Register each capability inside `register(api)` alongside your existing
     callback contract, including assignable async handlers and close-time final
     transcript flushing.
 
+    Providers with cumulative provisional transcripts can pass
+    `{ textMode: "snapshot" }` as the fourth `onTranscript` argument. The gateway
+    relay forwards it to the browser, which replaces the provisional text in place.
+    Omit this metadata for incremental fragments. Publish one final per utterance
+    at the provider's actual completion boundary, not for every provisional snapshot.
+
     A host `runAgentConsult` rejection named `AbortError` represents
     cancellation, even when the provider's own signal is still live. Do not
     turn it into a failed-task or retry reply. `TimeoutError` remains a

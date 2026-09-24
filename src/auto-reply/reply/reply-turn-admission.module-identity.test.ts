@@ -4,12 +4,19 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { expect, it } from "vitest";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { spawnNodeEvalSync } from "../../test-utils/node-process.js";
 
 it("keeps admitted session ownership when transformed plugins import the native SDK", async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "reply-admission-module-")));
   const repo = process.cwd();
   const dist = path.join(root, "dist");
+  const processDeclaration = resolveRuntimeWorkerUrl({
+    currentModuleUrl: runtimeProcessEntrypoints.stateRead.currentModuleUrl,
+    sourceWorkerName: "runtime-process-entrypoints",
+    distWorkerPath: "infra/runtime-process-entrypoints.js",
+  }).href;
   const deferredModules = new Set<string>();
   const source = (relativePath: string) => JSON.stringify(path.join(repo, relativePath));
   const ownerExports = `
@@ -34,18 +41,26 @@ it("keeps admitted session ownership when transformed plugins import the native 
       path.join(root, "plugin.ts"),
       'export * from "openclaw/plugin-sdk/admission-fixture";\n',
     );
-    // Keep lazy recovery/archival graphs out of this admission fixture. The child
-    // rejects and records any attempt to enter them, including caught import errors.
+    // Admission now reads through the real history worker. Borrow the maintained
+    // subprocess generation; keep unrelated recovery/archival graphs deferred.
     await build({
       plugins: [
         {
           name: "defer-unexercised-runtime",
           async resolveId(id, importer, options) {
-            if (options.kind !== "dynamic-import") {
-              return null;
-            }
             const resolved = await this.resolve(id, importer, { skipSelf: true });
             if (!resolved || resolved.external) {
+              return resolved;
+            }
+            const filename = path.normalize(resolved.id);
+            if (filename === path.join(repo, "src/infra/runtime-process-entrypoints.ts")) {
+              return { id: processDeclaration, external: true };
+            }
+            if (
+              options.kind !== "dynamic-import" ||
+              filename ===
+                path.join(repo, "src/config/sessions/session-transcript-worker-runtime.ts")
+            ) {
               return resolved;
             }
             const url = pathToFileURL(resolved.id).href;

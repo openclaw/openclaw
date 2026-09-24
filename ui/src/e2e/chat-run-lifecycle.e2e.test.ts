@@ -193,7 +193,6 @@ suite.define(() => {
       .getByText(reply.content, { exact: true });
     await replyBody.waitFor();
     const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
-    const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__duration");
     const refreshedSession = await currentPage.evaluate(async (key) => {
       const app = document.querySelector<
         HTMLElement & { runtime?: { context?: ApplicationContext } }
@@ -206,18 +205,23 @@ suite.define(() => {
       return sessions.state.result?.sessions.find((row) => row.key === key);
     }, sessionKey);
     expect(refreshedSession).toMatchObject({ lastRunId: runId, runtimeMs: 13_000 });
-    await elapsedLabel.waitFor();
-    await expect.poll(() => operationLabel.textContent()).toBe("1 command");
-    expect.soft(await elapsedLabel.textContent()).toBe("13s");
+    await operationLabel.waitFor();
+    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13s");
+    await captureMockStopProof(currentPage, "completed-work-heading");
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
     await currentPage.reload();
     await gateway.waitForRequest("chat.startup");
     await replyBody.waitFor();
-    await elapsedLabel.waitFor();
-    expect(await operationLabel.textContent()).toBe("1 command");
-    expect(await elapsedLabel.textContent()).toBe("13s");
+    await operationLabel.waitFor();
+    expect(await operationLabel.textContent()).toBe("Worked for 13s");
     expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
+    await operationLabel.click();
+    await expect
+      .poll(() => currentPage.locator(".chat-work-group > button").getAttribute("aria-expanded"))
+      .toBe("true");
+    await currentPage.locator(".chat-thread").getByText("bash", { exact: true }).waitFor();
+    expect(await replyBody.isVisible()).toBe(true);
   });
 
   it("keeps a continuing run inside its latest assistant reply", async () => {
