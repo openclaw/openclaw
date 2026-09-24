@@ -1,7 +1,12 @@
 // Authority checks at final platform handoff and restart-only transport cancellation.
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { AGENT_RUN_RESTART_ABORT_ERROR, isAgentRunRestartAbortReason } from "../run-termination.js";
+import {
+  AGENT_RUN_RESTART_ABORT_ERROR,
+  isAgentRunRestartAbortReason,
+  throwAgentRunRestartAbortReason,
+} from "../run-termination.js";
+import type { AgentCommandOpts } from "./types.js";
 
 export function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
   signal?: AbortSignal;
@@ -28,10 +33,13 @@ export function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
 }
 
 export function createAgentCommandDeliveryGuard(params: {
+  opts: Pick<AgentCommandOpts, "abortSignal">;
   assertDeliveryCurrent?: () => void;
 }): () => void {
   return () => {
     try {
+      // Restart may retire source authority while the durable final is still owed.
+      throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
       params.assertDeliveryCurrent?.();
     } catch (error) {
       if (isAgentRunRestartAbortReason(error)) {

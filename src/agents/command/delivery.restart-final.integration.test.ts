@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
 import {
@@ -48,9 +49,22 @@ afterEach(() => {
   privatePaths.root = undefined;
 });
 
-it.each(["restart", "revoked", "replaced"] as const)(
-  "fences old final delivery during %s and leaves only valid recovery custody",
-  async (boundary) => {
+it.each(
+  (["onPlatformSendDispatch", "assertDirectAdapterHandoff"] as const).flatMap((handoff) =>
+    (
+      [
+        "restart",
+        "restart-invalidated",
+        "restart-changed",
+        "restart-replaced",
+        "revoked",
+        "replaced",
+      ] as const
+    ).map((boundary) => ({ handoff, boundary })),
+  ),
+)(
+  "fences $boundary at $handoff and leaves only valid recovery custody",
+  async ({ boundary, handoff }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       // Confirm every database selector before the first session/queue write.
       expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
@@ -76,6 +90,16 @@ it.each(["restart", "revoked", "replaced"] as const)(
       };
       await replaceSessionEntry(target, entry);
       const payloads = [{ text: "Captured final answer" }, { text: "Final detail" }];
+      for (const payload of payloads) {
+        setReplyPayloadMetadata(payload, {
+          sessionWriterDeliveryAuthority: {
+            agentId: "main",
+            sessionKey,
+            storePath,
+            expectedSessionId: entry.sessionId,
+          },
+        });
+      }
       const marker = await persistPendingFinalDeliveryMarker({
         agentId: "main",
         deliver: true,
@@ -94,6 +118,12 @@ it.each(["restart", "revoked", "replaced"] as const)(
       const release = createDeferred();
       const writes: string[] = [];
       let held = true;
+      const hold = async () => {
+        if (held) {
+          entered.resolve();
+          await release.promise;
+        }
+      };
       setActivePluginRegistry(
         createTestRegistry([
           {
@@ -113,20 +143,18 @@ it.each(["restart", "revoked", "replaced"] as const)(
                 id: "matrix",
                 durableFinal: { capabilities: { text: true } },
                 send: {
-                  lifecycle: {
-                    beforeSendAttempt: async () => {
-                      if (held) {
-                        entered.resolve();
-                        await release.promise;
-                      }
-                    },
-                  },
                   text: async ({
                     text,
                     onPlatformSendDispatch,
                     assertDirectAdapterHandoff,
                   }: ChannelMessageSendTextContext) => {
+                    if (handoff === "onPlatformSendDispatch") {
+                      await hold();
+                    }
                     await onPlatformSendDispatch?.();
+                    if (handoff === "assertDirectAdapterHandoff") {
+                      await hold();
+                    }
                     assertDirectAdapterHandoff?.();
                     writes.push(text);
                     const messageId = `delivered-final-${writes.length}`;
@@ -181,38 +209,47 @@ it.each(["restart", "revoked", "replaced"] as const)(
             throw new Error("sender settled before preparation");
           }),
         ]);
+        // The real sender has admitted custody before either adapter callback.
+        expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(1);
         const captured = loadSessionEntry(target)!;
-        await replaceSessionEntry(target, { ...captured, abortedLastRun: true });
-        if (boundary === "restart") {
+        const replaced = boundary === "replaced" || boundary === "restart-replaced";
+        await replaceSessionEntry(target, {
+          ...captured,
+          abortedLastRun: true,
+          ...(replaced ? { sessionId: "replacement-session" } : {}),
+        });
+        const restarting = boundary.startsWith("restart");
+        const recoverable = restarting && !replaced;
+        if (restarting) {
           controller.abort(createAgentRunRestartAbortError());
-        } else {
+        }
+        if (boundary !== "restart") {
           custodyError =
-            boundary === "revoked"
-              ? new SessionWorkStartInvalidatedError("Task custody revoked")
-              : new SessionWorkStartChangedError("Session incarnation replaced");
+            boundary === "revoked" || boundary === "restart-invalidated"
+              ? new SessionWorkStartInvalidatedError("Source admission invalidated")
+              : new SessionWorkStartChangedError("Source admission changed");
         }
         release.resolve();
         await delivery;
         expect(writes).toEqual([]);
-        expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(
-          boundary === "restart" ? 1 : 0,
-        );
+        // Concurrent replacement may reject now or at recovery, but must never send.
+        if (!replaced) {
+          expect
+            .soft(await loadPendingDeliveries(state.stateDir))
+            .toHaveLength(recoverable ? 1 : 0);
+        }
         held = false;
         await drainMatrixReconnect({ stateDir: state.stateDir, deliver: deliverOutboundPayloads });
-        expect(writes).toEqual(
-          boundary === "restart" ? ["Captured final answer", "Final detail"] : [],
-        );
+        expect(writes).toEqual(recoverable ? ["Captured final answer", "Final detail"] : []);
         expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(0);
-        if (boundary === "restart") {
+        if (recoverable) {
           expect(loadSessionEntry(target)?.pendingFinalDelivery?.deliveries).toEqual([
             { id: expect.any(String), state: "delivered" },
           ]);
         }
         // Re-enter recovery after settlement; neither success nor revocation may replay.
         await drainMatrixReconnect({ stateDir: state.stateDir, deliver: deliverOutboundPayloads });
-        expect(writes).toEqual(
-          boundary === "restart" ? ["Captured final answer", "Final detail"] : [],
-        );
+        expect(writes).toEqual(recoverable ? ["Captured final answer", "Final detail"] : []);
       } finally {
         controller.abort();
         release.resolve();
