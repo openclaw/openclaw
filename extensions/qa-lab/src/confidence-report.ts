@@ -6,6 +6,8 @@ import {
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { evaluateDecisionEvaluationSummary } from "./decision-evaluation.js";
+import type { DecisionEvaluationReport } from "./decision-evaluation.js";
 import {
   formatGatewayLogSentinelSummary,
   type GatewayLogSentinelFinding,
@@ -34,6 +36,7 @@ type QaConfidenceLaneKind =
   | "token-efficiency-summary"
   | "jsonl-replay-summary"
   | "self-test-summary"
+  | "decision-evaluation-summary"
   | "generic-pass-summary";
 
 type QaConfidenceManifestLane = {
@@ -80,6 +83,7 @@ type QaConfidenceLaneResult = {
   skippedCount?: number;
   skipBackfillLane?: string;
   skipBackfilled?: boolean;
+  decisionEvaluation?: DecisionEvaluationReport;
 };
 
 type QaConfidenceReport = {
@@ -196,6 +200,7 @@ function readLaneKind(value: unknown): QaConfidenceLaneKind {
     case "token-efficiency-summary":
     case "jsonl-replay-summary":
     case "self-test-summary":
+    case "decision-evaluation-summary":
     case "generic-pass-summary":
       return text;
     default:
@@ -320,6 +325,7 @@ type QaConfidenceLaneEvaluation = {
   skippedCount?: number;
   status?: QaConfidenceLaneStatus;
   verdict?: QaConfidenceVerdict;
+  decisionEvaluation?: DecisionEvaluationReport;
 };
 
 // Explicit unknown evidence bypasses failureVerdict; status-less failures are classified separately.
@@ -610,6 +616,8 @@ function evaluateLaneArtifact(
       return evaluateJsonlReplaySummary(payload);
     case "self-test-summary":
       return evaluateSelfTestSummary(payload);
+    case "decision-evaluation-summary":
+      return evaluateDecisionEvaluationSummary(payload);
     default:
       return {
         passed: false,
@@ -666,35 +674,35 @@ function classifiedFailureResult(
   details: string,
 ): QaConfidenceLaneResult {
   const base = baseLaneResult(lane, artifactPath);
-  if (lane.failureVerdict) {
-    return {
-      ...base,
-      status: "fail",
-      verdict: lane.failureVerdict,
-      details,
-    };
-  }
   return {
     ...base,
-    status: "unknown",
+    status: lane.failureVerdict ? "fail" : "unknown",
+    ...(lane.failureVerdict ? { verdict: lane.failureVerdict } : {}),
     details,
   };
 }
 
-function evaluatedFailureResult(
+function evaluatedLaneResult(
   lane: QaConfidenceManifestLane,
   artifactPath: string,
   evaluated: QaConfidenceLaneEvaluation,
 ): QaConfidenceLaneResult {
-  if (evaluated.status || evaluated.verdict) {
-    return {
-      ...baseLaneResult(lane, artifactPath),
-      status: evaluated.status ?? "fail",
-      ...(evaluated.verdict ? { verdict: evaluated.verdict } : {}),
-      details: evaluated.details,
-    };
-  }
-  return classifiedFailureResult(lane, artifactPath, evaluated.details);
+  const base = baseLaneResult(lane, artifactPath);
+  const result = evaluated.passed
+    ? { ...base, ...statusFromPassed(true), details: evaluated.details }
+    : evaluated.status || evaluated.verdict
+      ? {
+          ...base,
+          status: evaluated.status ?? "fail",
+          ...(evaluated.verdict ? { verdict: evaluated.verdict } : {}),
+          details: evaluated.details,
+        }
+      : classifiedFailureResult(lane, artifactPath, evaluated.details);
+  return {
+    ...result,
+    ...(evaluated.skippedCount === undefined ? {} : { skippedCount: evaluated.skippedCount }),
+    ...(evaluated.decisionEvaluation ? { decisionEvaluation: evaluated.decisionEvaluation } : {}),
+  };
 }
 
 async function evaluateLane(
@@ -715,19 +723,7 @@ async function evaluateLane(
     }
     return resultForMissingLane(lane, artifactPath);
   }
-  const evaluated = evaluateLaneArtifact(lane, payload);
-  if (!evaluated.passed) {
-    return {
-      ...evaluatedFailureResult(lane, artifactPath, evaluated),
-      ...(evaluated.skippedCount === undefined ? {} : { skippedCount: evaluated.skippedCount }),
-    };
-  }
-  return {
-    ...baseLaneResult(lane, artifactPath),
-    ...statusFromPassed(true),
-    details: evaluated.details,
-    ...(evaluated.skippedCount === undefined ? {} : { skippedCount: evaluated.skippedCount }),
-  };
+  return evaluatedLaneResult(lane, artifactPath, evaluateLaneArtifact(lane, payload));
 }
 
 function applySkipBackfillState(

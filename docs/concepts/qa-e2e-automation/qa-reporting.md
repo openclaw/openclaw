@@ -115,6 +115,34 @@ selected scenario still needs the right provider mode, live transport,
 Multipass, Testbox, or release lane for the behavior under test. For
 scorecard context, see [Maturity scorecard](/maturity/scorecard).
 
+### Offline Decision evaluation
+
+A confidence manifest lane with `kind: "decision-evaluation-summary"` replays
+recorded typed Decision results without calling a provider. Its artifact has
+`version: 1`, a `fixtureId`, scheduled `cases`, and captured `outcomes`.
+See `qa/scenarios/decision-evaluation/synthetic-v1.json` for a synthetic example.
+Use the existing `qa confidence-report` command with that manifest and artifact root.
+
+Each case separates its candidate-visible `batch` from scorer-only `reference`
+data. Only send the batch to a candidate, never the complete case or artifact.
+Reviewed references declare `expectations` by question ID: acceptable Choice
+labels, an explicit Boolean threshold and operator, or an inclusive Score
+interval. Missing, unreviewed, disputed, and unscorable references are not scored.
+
+The lane checks **pipeline integrity, not model quality**. A complete replay can
+pass while answers disagree with references. The JSON Decision appendix records these
+disagreements separately from missing or failed executions. Reference agreement
+does not establish validated correctness, calibrated confidence, or permission
+to activate a model. Group IDs retain repeat/permutation relationships; counts
+are descriptive, not independent statistical samples.
+
+Markdown summarizes counts; JSON reports preserve every row, typed answers, probabilities, optional confidence, and
+recorded provenance without renormalizing distributions or inventing missing
+confidence. Replay is deterministic for the same inputs and build; the enclosing
+confidence report's generation timestamp is not part of that guarantee.
+Artifacts are data, not executable prompt plugins. Review their contents before
+sharing; the synthetic example makes no real-model quality claim.
+
 ### Character and style evaluation
 
 For character and style checks, run the same scenario across multiple live
