@@ -822,6 +822,12 @@ img.chat-avatar {
     height: var(--chat-touch-target);
     pointer-events: inherit;
   }
+
+  /* Links on the message's last line stay above that upward extension. */
+  :where(.chat-group-messages .chat-text a) {
+    position: relative;
+    z-index: 1;
+  }
 }
 
 /* In chat these render bare (no .btn chrome) so the ghost footer-button rules
