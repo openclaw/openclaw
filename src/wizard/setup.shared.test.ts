@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createTestConfigFileStore } from "../commands/test-runtime-config-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { WizardPrompter } from "./prompts.js";
 
 const configFiles = createTestConfigFileStore();
@@ -85,12 +86,29 @@ describe("resolveQuickstartGatewayDefaults", () => {
       expected: "Password",
       mode: "password",
     },
+    {
+      // Regression: a rerun must not rewrite a mode onboarding cannot offer.
+      config: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+        },
+      },
+      expected: "existing configuration kept",
+      mode: "trusted-proxy",
+    },
   ])(
     "summarizes the resolved $mode secret without offering an auth choice",
-    ({ config, expected, mode }) => {
-      const defaults = resolveQuickstartGatewayDefaults(config);
-      expect(defaults.authMode).toBe(mode);
-      expect(formatQuickstartGatewaySummary(defaults, defaults.hasExisting)).toContain(expected);
+    async ({ config, expected, mode }) => {
+      // The summary renders in the operator's locale; pin it so the assertion
+      // does not depend on the host's LANG.
+      await withEnvAsync({ OPENCLAW_LOCALE: "en" }, async () => {
+        const defaults = resolveQuickstartGatewayDefaults(config);
+        expect(defaults.authMode).toBe(mode);
+        expect(formatQuickstartGatewaySummary(defaults, defaults.hasExisting)).toContain(expected);
+      });
     },
   );
 

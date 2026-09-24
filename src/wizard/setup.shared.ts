@@ -1,10 +1,11 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
-import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import {
   transformConfigWithPendingPluginInstalls,
@@ -76,7 +77,9 @@ export function formatQuickstartGatewaySummary(
       auth:
         defaults.authMode === "token"
           ? t("wizard.setup.quickstartAuthTokenDefault")
-          : t("common.password"),
+          : defaults.authMode === "password"
+            ? t("common.password")
+            : t("wizard.setup.quickstartAuthKept"),
     }),
     t("wizard.setup.quickstartTailscaleExposure", {
       exposure: t(`wizard.gatewayTailscale.${defaults.tailscaleMode}`),
@@ -270,12 +273,19 @@ export function resolveQuickstartGatewayDefaults(
       ? bindRaw
       : "loopback";
 
-  let authMode: GatewayAuthChoice = "token";
-  if (baseConfig.gateway?.auth?.mode === "token" || baseConfig.gateway?.auth?.mode === "password") {
-    authMode = baseConfig.gateway.auth.mode;
-  } else if (baseConfig.gateway?.auth?.token) {
+  // Onboarding must not rewrite an auth mode it cannot offer. `none` stays the
+  // one exception: it has no secret to collect, and setup intentionally lands
+  // it on token so a rerun that also changes how the Gateway is exposed still
+  // writes a config the Gateway will start with. Every other configured mode is
+  // carried through verbatim, leaving the operator's gateway.auth block and its
+  // identity-bearing fields intact. An explicit CLI choice still wins below.
+  let authMode: GatewayAuthMode = "token";
+  const storedAuthMode = baseConfig.gateway?.auth?.mode;
+  if (storedAuthMode !== undefined && storedAuthMode !== "none") {
+    authMode = storedAuthMode;
+  } else if (storedAuthMode === undefined && baseConfig.gateway?.auth?.token) {
     authMode = "token";
-  } else if (baseConfig.gateway?.auth?.password) {
+  } else if (storedAuthMode === undefined && baseConfig.gateway?.auth?.password) {
     authMode = "password";
   }
 
