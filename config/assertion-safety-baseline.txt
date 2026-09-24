@@ -2964,7 +2964,6 @@ src/meeting-bot/session-runtime.ts	4
 src/meeting-bot/session-speech-readiness.ts	1
 src/meeting-bot/session-transcript-store.ts	1
 src/meeting-bot/voice-call-gateway.ts	1
-src/memory-host-sdk/dreaming.ts	3
 src/memory-host-sdk/event-store.ts	2
 src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1

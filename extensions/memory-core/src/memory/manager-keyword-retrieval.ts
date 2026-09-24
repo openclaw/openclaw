@@ -511,8 +511,16 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         pathScore: _pathScore,
         exactPathSpecificity: _exactPathSpecificity,
         hasBodyMatch: _hasBodyMatch,
-        ...result
-      }) => result,
+        path,
+        startLine,
+        endLine,
+        score,
+        textScore,
+        snippet,
+        source,
+        ...metadata
+      }) =>
+        Object.assign({ path, startLine, endLine, score, textScore, snippet, source }, metadata),
     );
   }
 }
