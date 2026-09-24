@@ -192,6 +192,7 @@ export const EnvironmentsListParamsSchema = closedObject({
   runtimeId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   projection: Type.Optional(Type.Literal("profiles")),
   includeDesktopSetup: Type.Optional(Type.Boolean()),
+  includePreparedDetails: Type.Optional(Type.Boolean()),
 });
 
 /** Provider-authored machine choice for one configured worker profile. */
@@ -258,7 +259,10 @@ export const EnvironmentsListResultSchema = closedObject({
 });
 
 /** Status lookup request for one environment id. */
-export const EnvironmentsStatusParamsSchema = closedObject({ environmentId: NonEmptyString });
+export const EnvironmentsStatusParamsSchema = closedObject({
+  environmentId: NonEmptyString,
+  includePreparedDetails: Type.Optional(Type.Boolean()),
+});
 
 /** Status lookup result for one environment id. */
 export const EnvironmentsStatusResultSchema = createEnvironmentSummarySchema();

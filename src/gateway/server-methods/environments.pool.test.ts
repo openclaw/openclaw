@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
+import { handleGatewayRequest } from "../server-methods.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../server-plugin-in-process-dispatch.test-support.js";
+import { environmentsHandlers } from "./environments.js";
 import {
   callEnvironmentMethod,
+  mockContext,
   pairedNodeDevice,
   workerRecord,
   workerService,
@@ -40,11 +49,18 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+const preparationRequests = [
+  { scope: "operator.read", requested: true, includeDetails: false },
+  { scope: "operator.write", requested: true, includeDetails: false },
+  { scope: "operator.admin", requested: undefined, includeDetails: false },
+  { scope: "operator.admin", requested: false, includeDetails: false },
+  { scope: "operator.admin", requested: true, includeDetails: true },
+];
+
 describe("prepared worker pool projection", () => {
-  it.each(["operator.read", "operator.write", "operator.admin"])(
-    "projects worker metadata within %s authority",
-    async (scope) => {
-      const includePreparedDetails = scope === "operator.admin";
+  it.each(preparationRequests)(
+    "projects worker metadata for $scope with details requested=$requested",
+    async ({ scope, requested, includeDetails }) => {
       const project = {
         label: "example/prepared",
         baseCommit: "a".repeat(40),
@@ -76,7 +92,7 @@ describe("prepared worker pool projection", () => {
       });
       const [ok, payload] = await callEnvironmentMethod(
         "environments.list",
-        {},
+        requested === undefined ? {} : { includePreparedDetails: requested },
         {
           service,
           scopes: [scope],
@@ -119,7 +135,7 @@ describe("prepared worker pool projection", () => {
       expect(worker?.preparation).toEqual({
         purpose: "reserve",
         key: preparation.key,
-        ...(includePreparedDetails
+        ...(includeDetails
           ? {
               details: {
                 demandAtMs: 1_000,
@@ -130,7 +146,7 @@ describe("prepared worker pool projection", () => {
             }
           : {}),
       });
-      if (includePreparedDetails) {
+      if (includeDetails) {
         expect(worker?.worker).toHaveProperty("destroyRequestedAtMs", 9_000);
         expect(payload.preparedPool).toEqual({ maxTotal: 4, reservedEnvironmentIds: ["worker-1"] });
         expect(payload.profiles).toEqual([
@@ -156,9 +172,9 @@ describe("prepared worker pool projection", () => {
     },
   );
 
-  it.each(["operator.read", "operator.write", "operator.admin"])(
-    "returns worker status within %s authority",
-    async (scope) => {
+  it.each(preparationRequests)(
+    "returns worker status for $scope with details requested=$requested",
+    async ({ scope, requested, includeDetails }) => {
       const get = vi.fn(() =>
         workerRecord({
           state: "attached",
@@ -174,7 +190,10 @@ describe("prepared worker pool projection", () => {
       const service = workerService({ get });
       const [ok, payload] = await callEnvironmentMethod(
         "environments.status",
-        { environmentId: "worker-1" },
+        {
+          environmentId: "worker-1",
+          ...(requested === undefined ? {} : { includePreparedDetails: requested }),
+        },
         { service, scopes: [scope] },
       );
 
@@ -189,13 +208,84 @@ describe("prepared worker pool projection", () => {
       expect(payload.preparation).toEqual({
         purpose: "build",
         key: "build-key",
-        ...(scope === "operator.admin"
+        ...(includeDetails
           ? {
               details: { demandAtMs: 1_000, expiresAtMs: 60_000, consumedAtMs: null },
             }
           : {}),
       });
       expect(payload.worker).not.toHaveProperty("destroyRequestedAtMs");
+    },
+  );
+
+  it.each(["environments.list", "environments.status"] as const)(
+    "withholds %s after administrator scopes change during discovery",
+    async (method) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const worker = workerRecord({
+        preparation: {
+          purpose: "reserve",
+          key: "prepared-project-key",
+          demandAtMs: 1_000,
+          expiresAtMs: 60_000,
+          consumedAtMs: null,
+          project: { label: "private-project", baseCommit: "a".repeat(40) },
+        },
+      });
+      const service = workerService({ list: vi.fn(() => [worker]), get: vi.fn(() => worker) });
+      const waitForDiscovery = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      if (method === "environments.list") {
+        vi.mocked(service.listMachineOptions).mockImplementation(async () => {
+          await waitForDiscovery();
+          return undefined;
+        });
+      } else {
+        vi.mocked(listDevicePairing).mockImplementation(async () => {
+          await waitForDiscovery();
+          return { pending: [], paired: [] };
+        });
+      }
+      const client = createOperatorClient({
+        profileId: GATEWAY_OWNER_PROFILE_ID,
+        scopes: ["operator.admin"],
+      });
+      const respond = vi.fn();
+      const pending = handleGatewayRequest({
+        req: {
+          type: "req",
+          id: `prepared-details-${method}`,
+          method,
+          params: {
+            includePreparedDetails: true,
+            ...(method === "environments.status" ? { environmentId: worker.environmentId } : {}),
+          },
+        },
+        client,
+        context: Object.assign(createContext(), mockContext(service)),
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: environmentsHandlers,
+      });
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(respond).not.toHaveBeenCalled();
+        client.connect.scopes = ["operator.read"];
+      } finally {
+        release.resolve();
+      }
+      await pending;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "FORBIDDEN",
+          message: "Gateway requester authority changed",
+        }),
+      );
     },
   );
 });

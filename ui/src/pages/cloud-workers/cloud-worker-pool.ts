@@ -102,7 +102,7 @@ class CloudWorkerPool extends OpenClawLightDomElement {
     try {
       const result = await scope.client.request<EnvironmentsListResult>(
         "environments.list",
-        {},
+        { includePreparedDetails: true },
         { signal: request.signal },
       );
       if (this.gateway.isCurrent(scope)) {

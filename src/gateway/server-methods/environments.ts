@@ -206,10 +206,7 @@ export function listWorkerProfiles(context: GatewayRequestContext) {
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
-async function listWorkerProfilesWithMachines(
-  context: GatewayRequestContext,
-  includePreparedDetails: boolean,
-) {
+async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
   const summaries = listWorkerProfiles(context);
   return await Promise.all(
     summaries.map(async (summary) => {
@@ -223,9 +220,6 @@ async function listWorkerProfilesWithMachines(
         summary,
         executionMode ? { executionMode, executionModes } : {},
         providerDisplayId ? { providerDisplayId } : {},
-        includePreparedDetails
-          ? { readyWorkers: context.workerEnvironmentService?.readReadyWorkerTarget(summary.id) }
-          : {},
       );
       try {
         const [options, operatingSystems] = await Promise.all([
@@ -270,15 +264,16 @@ async function respondWorkerMutation(
 export const environmentsHandlers: GatewayRequestHandlers = {
   ...environmentsSessionHandlers,
   ...environmentsSessionExecHandlers,
-  "environments.list": async ({ params, respond, client, context }) => {
+  "environments.list": async (options) => {
+    const { params, respond, client, context } = options;
     if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
       return;
     }
     const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-    const includePreparedDetails = authorizeOperatorScopesForRequiredScope(
-      ADMIN_SCOPE,
-      scopes,
-    ).allowed;
+    const includePreparedDetails =
+      params.includePreparedDetails === true &&
+      authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
+    const authority = readGatewayRequestMutationAuthority(options);
     if (params.runtimeId) {
       const access = authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes);
       if (!access.allowed) {
@@ -292,10 +287,11 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       let environments: EnvironmentSummary[] = [];
+      let workers: WorkerEnvironmentServiceRecord[] = [];
       let preparedPool: EnvironmentsListResult["preparedPool"];
       if (params.projection !== "profiles") {
         const inventory = readWorkerInventory(context, includePreparedDetails);
-        const { workers } = inventory;
+        workers = inventory.workers;
         preparedPool = inventory.preparedPool;
         environments = await listGatewayEnvironments(
           context,
@@ -303,35 +299,58 @@ export const environmentsHandlers: GatewayRequestHandlers = {
           params.runtimeId,
           params.includeDesktopSetup,
         );
-        const summarizedAtMs = Date.now();
-        environments.push(
-          ...workers.map((record) =>
-            summarizeWorkerEnvironment(record, summarizedAtMs, { includePreparedDetails }),
-          ),
-        );
       }
-      const profiles = await listWorkerProfilesWithMachines(context, includePreparedDetails);
+      const profiles = await listWorkerProfilesWithMachines(context);
+      authority.assertCurrent();
+      const includeCurrentPreparedDetails =
+        includePreparedDetails &&
+        authorizeOperatorScopesForRequiredScope(
+          ADMIN_SCOPE,
+          Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
+        ).allowed;
+      const summarizedAtMs = Date.now();
+      environments.push(
+        ...workers.map((record) =>
+          summarizeWorkerEnvironment(record, summarizedAtMs, {
+            includePreparedDetails: includeCurrentPreparedDetails,
+          }),
+        ),
+      );
       respond(
         true,
         {
           environments,
-          ...(profiles.length > 0 ? { profiles } : {}),
-          ...(preparedPool ? { preparedPool } : {}),
+          ...(profiles.length > 0
+            ? {
+                profiles: includeCurrentPreparedDetails
+                  ? profiles.map((profile) => ({
+                      ...profile,
+                      readyWorkers: context.workerEnvironmentService?.readReadyWorkerTarget(
+                        profile.id,
+                      ),
+                    }))
+                  : profiles,
+              }
+            : {}),
+          ...(includeCurrentPreparedDetails && preparedPool ? { preparedPool } : {}),
         },
         undefined,
       );
     });
   },
-  "environments.status": async ({ params, respond, client, context }) => {
+  "environments.status": async (options) => {
+    const { params, respond, client, context } = options;
     if (
       !assertValidParams(params, validateEnvironmentsStatusParams, "environments.status", respond)
     ) {
       return;
     }
+    const authority = readGatewayRequestMutationAuthority(options);
     await respondUnavailableOnThrow(respond, async () => {
       const environment = (await listGatewayEnvironments(context)).find(
         (entry) => entry.id === params.environmentId,
       );
+      authority.assertCurrent();
       if (environment) {
         respond(true, environment, undefined);
         return;
@@ -351,10 +370,12 @@ export const environmentsHandlers: GatewayRequestHandlers = {
         Boolean(worker),
         worker
           ? summarizeWorkerEnvironment(worker, Date.now(), {
-              includePreparedDetails: authorizeOperatorScopesForRequiredScope(
-                ADMIN_SCOPE,
-                Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
-              ).allowed,
+              includePreparedDetails:
+                params.includePreparedDetails === true &&
+                authorizeOperatorScopesForRequiredScope(
+                  ADMIN_SCOPE,
+                  Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
+                ).allowed,
             })
           : undefined,
         worker ? undefined : errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"),

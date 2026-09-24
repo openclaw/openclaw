@@ -447,7 +447,7 @@ describe("environment gateway methods", () => {
       vi.mocked(listDevicePairing).mockClear();
       const projected = await callEnvironmentMethod(
         "environments.list",
-        { projection: "profiles" },
+        { projection: "profiles", includePreparedDetails: true },
         { service, scopes: ["operator.admin"] },
       );
       expect(projected).toEqual([
@@ -487,7 +487,7 @@ describe("environment gateway methods", () => {
       }
       const full = await callEnvironmentMethod(
         "environments.list",
-        {},
+        { includePreparedDetails: true },
         {
           service,
           scopes: ["operator.admin"],
@@ -511,7 +511,7 @@ describe("environment gateway methods", () => {
 
       const projected = await callEnvironmentMethod(
         "environments.list",
-        { projection: "profiles" },
+        { projection: "profiles", includePreparedDetails: true },
         { service, scopes: ["operator.admin"] },
       );
       expect(projected).toEqual([

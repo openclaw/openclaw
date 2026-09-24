@@ -11,6 +11,7 @@ import {
   validateEnvironmentsListParams,
   validateEnvironmentsPrepareParams,
   validateEnvironmentsPrepareResult,
+  validateEnvironmentsStatusParams,
   validateWorkerDesktopLaunchParams,
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
@@ -51,6 +52,20 @@ function workerSummary(
 }
 
 describe("worker environment protocol schemas", () => {
+  it("accepts only boolean opt-in for prepared details in list and status requests", () => {
+    for (const includePreparedDetails of [undefined, false, true]) {
+      const option = includePreparedDetails === undefined ? {} : { includePreparedDetails };
+      expect(validateEnvironmentsListParams(option)).toBe(true);
+      expect(validateEnvironmentsStatusParams({ environmentId: "worker-1", ...option })).toBe(true);
+    }
+    for (const includePreparedDetails of [null, "true", 1]) {
+      expect(validateEnvironmentsListParams({ includePreparedDetails })).toBe(false);
+      expect(
+        validateEnvironmentsStatusParams({ environmentId: "worker-1", includePreparedDetails }),
+      ).toBe(false);
+    }
+  });
+
   it("accepts opt-in desktop setup discovery with a closed credential-free result", () => {
     expect(validateEnvironmentsListParams({ includeDesktopSetup: true })).toBe(true);
     expect(validateEnvironmentsListParams({ includeDesktopSetup: false })).toBe(true);

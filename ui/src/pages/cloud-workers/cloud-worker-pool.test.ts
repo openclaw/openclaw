@@ -75,7 +75,7 @@ function mountPool(
   return mountPage(["environments.list"], {
     scopes,
     response: (method, params) =>
-      method === "environments.list" && params?.projection !== "profiles"
+      method === "environments.list" && params?.includePreparedDetails === true
         ? readInventory()
         : undefined,
   });
@@ -333,7 +333,7 @@ describe("Cloud worker pool", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(fixture.request).toHaveBeenCalledWith(
         "environments.list",
-        {},
+        { includePreparedDetails: true },
         {
           signal: expect.objectContaining({ aborted: true }),
         },
