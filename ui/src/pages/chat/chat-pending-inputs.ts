@@ -20,6 +20,7 @@ import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reconcileChatInputCustody,
+  selectChatInputDisplay,
 } from "./history-merge.ts";
 
 type PendingInputRequest = {
@@ -34,6 +35,11 @@ type PendingInputView = {
   sessionId: string | null;
   agentId: string | undefined;
   page: ChatPendingInputsPage;
+  /** Recovery pagination must never replace the current execution queue. */
+  latestPage: ChatPendingInputsPage;
+  threadItems?: ChatPendingInputsPage["items"];
+  client: ChatState["client"];
+  connectionEpoch: number;
   before?: number;
   readonly loading: boolean;
   error?: string;
@@ -41,6 +47,58 @@ type PendingInputView = {
   request?: PendingInputRequest;
 };
 const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
+
+type PendingInput = ChatPendingInputsPage["items"][number];
+const EMPTY_INPUTS: ChatPendingInputsPage["items"] = [];
+
+function chatInputNeedsRecovery(
+  input: PendingInput,
+  browserInputs: readonly ChatQueueItem[] = [],
+): boolean {
+  return (
+    input.state === "cancelled" ||
+    (input.state === "interrupted" &&
+      !browserInputs.some(
+        (item) =>
+          input.runId &&
+          item.sendRunId === input.runId &&
+          item.sendState !== "failed" &&
+          item.sendState !== "held",
+      ))
+  );
+}
+
+/** Only active custody can participate in transcript position and unread/scroll intent. */
+export function getChatThreadPendingInputs(state: ChatState): ChatPendingInputsPage["items"] {
+  const view = getChatPendingInputs(state);
+  if (!view) {
+    return EMPTY_INPUTS;
+  }
+  const inputs = selectChatInputDisplay(
+    state.chatMessages,
+    state.chatQueue,
+    view.latestPage.items,
+  ).pendingInputs.filter((input) => !chatInputNeedsRecovery(input, state.chatQueue));
+  if (
+    view.threadItems?.length === inputs.length &&
+    view.threadItems.every((input, index) => input === inputs[index])
+  ) {
+    return view.threadItems;
+  }
+  return (view.threadItems = inputs.length ? inputs : EMPTY_INPUTS);
+}
+
+export function getChatRecoveryInputs(state: ChatState): ChatPendingInputsPage["items"] {
+  const view = getChatPendingInputs(state);
+  if (!view) {
+    return EMPTY_INPUTS;
+  }
+  return selectChatInputDisplay(
+    state.chatMessages,
+    state.chatQueue,
+    view.page.items,
+  ).pendingInputs.filter((input) => chatInputNeedsRecovery(input, state.chatQueue));
+}
 
 export function buildPendingInputItems(
   inputs: ChatPendingInputsPage["items"],
@@ -56,6 +114,9 @@ export function buildPendingInputItems(
     return items;
   }
   for (const input of inputs) {
+    if (chatInputNeedsRecovery(input, browserInputs)) {
+      continue;
+    }
     if (
       searchQuery?.trim() &&
       !messageMatchesSearchQuery(input.message, searchQuery, messageRecovery)
@@ -88,20 +149,7 @@ export function buildPendingInputItems(
       kind: "notice",
       key: `pending-input:${input.id}:state`,
       timestamp: input.acceptedAt,
-      text: t(
-        input.state === "interrupted" &&
-          input.runId &&
-          browserInputs.some(
-            (item) =>
-              item.sendRunId === input.runId &&
-              item.sendState !== "failed" &&
-              item.sendState !== "held",
-          )
-          ? "chat.pendingInputs.resuming"
-          : input.state === "cancelled"
-            ? "chat.pendingInputs.cancelled"
-            : "chat.pendingInputs.interrupted",
-      ),
+      text: t("chat.pendingInputs.resuming"),
     });
   }
   return items;
@@ -203,6 +251,9 @@ export function applyChatPendingInputs(
       sessionId: state.currentSessionId ?? null,
       agentId: resolveUiSelectedSessionAgentId(state),
       page: displayPage,
+      latestPage: displayPage,
+      client: state.client,
+      connectionEpoch: state.connectionEpoch,
       revision: 0,
       get loading() {
         return this.request?.kind === "navigation";
@@ -211,6 +262,9 @@ export function applyChatPendingInputs(
     pendingInputViews.set(state, view);
   } else {
     view.revision += 1;
+    view.latestPage = displayPage;
+    view.client = state.client;
+    view.connectionEpoch = state.connectionEpoch;
     if (view.request && !ownsPendingInputRequest(state, view, view.request)) {
       view.request = undefined;
     }
@@ -270,6 +324,9 @@ async function requestPendingInputPage(
         continue;
       }
       view.page = reconcilePendingInputPage(state, result.pendingInputs);
+      if (request.before === undefined) {
+        view.latestPage = view.page;
+      }
       view.before = request.before;
       return;
     }

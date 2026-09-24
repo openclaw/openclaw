@@ -14,10 +14,16 @@ import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/h
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import {
+  renderChatQueueRecoveryRows,
+  renderChatQueueRecoveryFooter,
+} from "./chat-composer-queue-recovery.ts";
+import type { ChatQueueRecovery } from "./chat-queue-recovery.types.ts";
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
   displayQueue?: ChatQueueItem[];
+  recovery?: ChatQueueRecovery;
   offline?: boolean;
   canAbort?: boolean;
   onQueueRetry?: (id: string) => void;
@@ -179,9 +185,13 @@ export function renderChatQueue(props: ChatQueueProps) {
   ) {
     visibleQueue.push(props.editingSource);
   }
-  if (!visibleQueue.length) {
+  const recovery = props.recovery;
+  const recoveryItems = recovery?.items ?? [];
+  const hasRecoveryPaging = Boolean(recovery?.paging?.onEarlier || recovery?.paging?.onLatest);
+  if (!visibleQueue.length && !recoveryItems.length && !hasRecoveryPaging && !recovery?.error) {
     return nothing;
   }
+  const visibleCount = visibleQueue.length + recoveryItems.length;
   // Hidden and edited rows retain their delivery positions and split the
   // offered segments even though they may not appear in this tray.
   const visibleIds = new Set(visibleQueue.map((item) => item.id));
@@ -222,9 +232,9 @@ export function renderChatQueue(props: ChatQueueProps) {
       }
       <div
         class="chat-queue__scroll"
-        data-scrollable=${visibleQueue.length > 3 ? "true" : "false"}
+        data-scrollable=${visibleCount > 3 ? "true" : "false"}
         data-at-start="true"
-        data-at-end=${visibleQueue.length > 3 ? "false" : "true"}
+        data-at-end=${visibleCount > 3 ? "false" : "true"}
         @dragover=${(event: DragEvent) => {
           if (!event.dataTransfer?.types.includes(DRAG_MIME)) {
             return;
@@ -261,7 +271,9 @@ export function renderChatQueue(props: ChatQueueProps) {
           (item) => item.id,
           (item) => renderChatQueueItem(item, props, reorder),
         )}
+        ${renderChatQueueRecoveryRows(recovery, queueWaitingIcon)}
       </div>
+      ${renderChatQueueRecoveryFooter(recovery)}
     </div>
   `;
 }

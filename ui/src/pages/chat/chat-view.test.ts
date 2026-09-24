@@ -47,7 +47,7 @@ import {
 } from "./chat-attachment-picker.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
-import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
@@ -1363,26 +1363,21 @@ describe("chat history pagination", () => {
 });
 
 describe("retained input navigation", () => {
-  it("keeps an empty filtered page navigable without blocking an independent send", async () => {
+  it("keeps recovery records and their navigation out of the composer without blocking a new send", () => {
     const sessionKey = "agent:main:hidden-page";
-    const sessionId = "hidden-page-session";
-    const olderPage = {
+    const historyState = makeChatHost({ sessionKey, currentSessionId: "hidden-page-session" });
+    applyChatPendingInputs(historyState, {
       total: 21,
+      nextBefore: 2,
       items: [
         {
           id: "older-visible",
           acceptedAt: 1,
-          state: "interrupted" as const,
-          message: { role: "user", content: "Older visible input" },
+          state: "interrupted",
+          message: { role: "user", content: "Older recovery request" },
         },
       ],
-    };
-    const historyState = makeChatHost({
-      sessionKey,
-      currentSessionId: sessionId,
-      requestHandlers: { "chat.history": () => ({ sessionId, pendingInputs: olderPage }) },
     });
-    applyChatPendingInputs(historyState, { total: 21, items: [], nextBefore: 2 });
     const onSend = vi.fn();
     const container = renderChatView({
       historyState,
@@ -1391,13 +1386,8 @@ describe("retained input navigation", () => {
       getDraft: () => "Independent work",
       onSend,
     });
-    const earlier = expectDefined(
-      [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
-        button.textContent?.includes(t("chat.pendingInputs.earlier")),
-      ),
-      "earlier pending-input navigation",
-    );
-    expect(earlier.disabled).toBe(false);
+    expect(container.textContent).not.toContain("Older recovery request");
+    expect(container.querySelector(".chat-pending-inputs")).toBeNull();
     const send = expectDefined(
       container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
       "send button",
@@ -1405,13 +1395,6 @@ describe("retained input navigation", () => {
     expect(send.disabled).toBe(false);
     send.click();
     expect(onSend).toHaveBeenCalledOnce();
-    earlier.click();
-    await vi.waitFor(() => expect(getChatPendingInputs(historyState)?.page).toEqual(olderPage));
-    expect(historyState.request).toHaveBeenCalledWith(
-      "chat.history",
-      expect.objectContaining({ pendingBefore: 2 }),
-    );
-    expect(historyState.chatMessages).toEqual([]);
   });
 
   it.each(["pending custody", "transcript"] as const)(

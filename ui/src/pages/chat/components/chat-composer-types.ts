@@ -42,6 +42,7 @@ import type {
 import type { SkillMenuState } from "./chat-composer-skill-menu.ts";
 import type { SlashMenuState } from "./chat-composer-slash-menu.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
+import type { ChatQueueRecovery } from "./chat-queue-recovery.types.ts";
 
 /** One shape for queued-row edit state and actions. */
 type ChatQueuedEditProps = {
@@ -182,6 +183,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
   displayQueue?: ChatQueueItem[];
+  recoveryQueue?: ChatQueueRecovery;
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
   goalRecovery?: ChatGoalRecovery;

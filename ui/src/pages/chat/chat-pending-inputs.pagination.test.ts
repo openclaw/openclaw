@@ -19,6 +19,8 @@ import {
   applyChatPendingInputs,
   clearChatPendingInputs,
   getChatPendingInputs,
+  getChatRecoveryInputs,
+  getChatThreadPendingInputs,
   loadChatPendingInputs,
 } from "./chat-pending-inputs.ts";
 import { admitQueuedMessageForSession } from "./chat-queue.ts";
@@ -38,6 +40,27 @@ afterEach(() => {
 });
 
 describe("server-owned pending input pagination", () => {
+  it("browses old recovery records without replacing active queued inputs or unread identity", async () => {
+    const older = { ...input, id: "older", runId: "older-run" };
+    const queued = { ...input, id: "queued", state: "queued" as const };
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      requestHandlers: {
+        "chat.history": () => ({ sessionId, pendingInputs: { items: [older], total: 2 } }),
+      },
+    });
+    applyChatPendingInputs(host, { items: [queued], total: 2, nextBefore: 2 });
+    const active = getChatThreadPendingInputs(host);
+    await loadChatPendingInputs(host, 2);
+    expect(getChatRecoveryInputs(host)).toEqual([older]);
+    expect(getChatThreadPendingInputs(host)).toBe(active);
+    const next = { ...queued, id: "next", runId: "next-run" };
+    applyChatPendingInputs(host, { items: [queued, next], total: 3, nextBefore: 2 });
+    expect(getChatThreadPendingInputs(host)).toEqual([queued, next]);
+    expect(getChatPendingInputs(host)?.page.items).toEqual([older]);
+  });
+
   it("pages custody without replacing transcript or applying a stale physical-session response", async () => {
     let resolve!: (value: unknown) => void;
     const response = new Promise((done) => {

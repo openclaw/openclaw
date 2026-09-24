@@ -29,6 +29,7 @@ import {
   applyChatPendingInputs,
   buildPendingInputItems,
   getChatPendingInputs,
+  getChatRecoveryInputs,
 } from "./chat-pending-inputs.ts";
 import { admitQueuedMessageForSession, readChatQueueForScope } from "./chat-queue.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
@@ -92,11 +93,14 @@ describe("server-owned pending input display", () => {
           sendState,
         },
       ]);
-      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
+      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
         sendState === "waiting-reconnect"
-          ? "Interrupted by a Gateway restart. This saved message will resume when the session is ready."
-          : "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
-      ]);
+          ? [
+              "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
+            ]
+          : [],
+      );
+      expect(items.some((item) => item.kind === "message")).toBe(sendState === "waiting-reconnect");
     },
   );
 
@@ -115,29 +119,18 @@ describe("server-owned pending input display", () => {
     );
   });
 
-  it.each([
-    { state: "queued", runId: undefined, notice: undefined },
-    {
-      state: "interrupted",
-      runId: "run-queued",
-      notice:
-        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
-    },
-    {
-      state: "cancelled",
-      runId: "run-queued",
-      notice:
-        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
-    },
-  ] as const)(
-    "keeps $state custody out of the worker-setup notice without eligible execution",
-    ({ state, runId, notice }) => {
-      const items = buildPendingInputItems([{ ...input, state, runId }], undefined, [], [], true);
-
-      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
-        notice ? [notice] : [],
+  it.each(["queued", "interrupted", "cancelled"] as const)(
+    "keeps %s custody without execution out of the worker-setup notice",
+    (state) => {
+      const items = buildPendingInputItems(
+        [{ ...input, state, runId: undefined }],
+        undefined,
+        [],
+        [],
+        true,
       );
-      expect(items.some((item) => item.kind === "message")).toBe(true);
+      expect(items.filter((item) => item.kind === "notice")).toEqual([]);
+      expect(items.some((item) => item.kind === "message")).toBe(state === "queued");
     },
   );
 
@@ -920,7 +913,10 @@ describe("server-owned pending input display", () => {
         item.kind === "group" ? item.messages.map((entry) => entry.message) : [],
       );
       expect(displayed).toContain(canonical);
-      expect(displayed.filter((message) => message === input.message)).toHaveLength(1);
+      expect(displayed).not.toContain(input.message);
+      expect(
+        getChatRecoveryInputs(host).filter((entry) => entry.message === input.message),
+      ).toHaveLength(1);
     },
   );
 });

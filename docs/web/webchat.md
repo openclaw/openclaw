@@ -55,8 +55,16 @@ waits in durable pending-input custody, including during workspace preparation.
 An optional `messageSeq` comes only from a committed transcript receipt. Clients
 must not predict it from history length or treat `status: "started"` as persistence.
 The Control UI replaces its provisional source with accepted custody, then with
-the canonical row. Accepted inputs stay below saved conversation history until
-they are committed to the transcript. Its renderer keeps a loaded local preview in the same image
+the canonical row. Inputs that are queued or actively resuming stay below saved
+conversation history until they are committed to the transcript. Interrupted and
+cancelled requests that will not run automatically appear as inactive rows in the
+existing composer queue, with **Not started** or **Cancelled** badges. They do not
+join the runnable outbox, block queued work, change its order, or send automatically.
+**Send** is an explicit submission through the normal send owner; **Discard** only
+hides that saved attempt for the current viewer in this browser. It does not cancel
+accepted work or delete shared history. An unavailable or incomplete payload is
+reported instead of sending a partial prompt. Browsing older saved attempts does
+not replace the active queue or change the conversation’s unread position. Its renderer keeps a loaded local preview in the same image
 element during this handoff while canonical media metadata and image bytes load.
 Authoritative text, media replacements, and removals still win. Unavailable or
 access-denied media shows a visible reason.

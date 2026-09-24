@@ -15,6 +15,7 @@ export const en: TranslationMap & {
     detailPanel: TranslationMap;
     welcome: TranslationMap & { suggestions: TranslationMap & { whatCanYouDo: string } };
     backgroundTasks: TranslationMap;
+    inputRecovery: TranslationMap;
     goals: TranslationMap;
     messages: TranslationMap &
       Record<
@@ -4056,17 +4057,12 @@ export const en: TranslationMap & {
       positionMarkerHint:
         "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
+    inputRecovery: {},
     pendingInputs: {
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
       resuming:
         "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
-      cancelled:
-        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
-      interrupted:
-        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
-      earlier: "Show earlier messages",
-      latest: "Show latest messages",
     },
     pairingQrExpired: {
       title: "Pairing QR expired",

@@ -11,6 +11,7 @@ import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import "../../plugins/control-ui-contributions.ts";
+import { createChatInputRecoveryQueueProps } from "./chat-input-recovery-view.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -141,6 +142,14 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         isSidebarSlotVisible(sidebarLayout, "conversation"),
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
+      recoveryQueue: catalog
+        ? undefined
+        : createChatInputRecoveryQueueProps(
+            state,
+            chatProps.canSend &&
+              !chatProps.suggestionComposer &&
+              !chatProps.selectedSession?.providerReview,
+          ),
       header: nothing,
     });
     const primary = html`<div class="chat-pane-primary-column">${chat}</div>`;

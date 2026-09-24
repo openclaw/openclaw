@@ -516,3 +516,41 @@
     -webkit-line-clamp: 1;
   }
 }
+
+/* Saved attempts share the tray, but never acquire runnable-row controls. */
+.chat-queue__item--recovery .chat-queue__badge {
+  color: var(--muted);
+}
+
+.chat-queue__item--recovery[data-recovery-state="interrupted"] .chat-queue__badge {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.chat-queue__recovery-meta {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-queue__recovery-send {
+  color: var(--text);
+}
+
+.chat-queue__recovery-error {
+  padding: 6px 12px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.chat-queue__recovery-paging {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--chat-queue-divider);
+}
