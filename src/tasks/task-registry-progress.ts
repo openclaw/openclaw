@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
-  getLatestSubagentRunByChildSessionKey,
+  getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunLive,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
@@ -326,7 +326,7 @@ export function reconcileTaskProgressBatches(event?: TaskRegistryObserverEvent):
   if (event?.kind === "upserted") {
     const task = tasks.get(event.task.taskId);
     if (task?.runtime === "subagent" && task.childSessionKey) {
-      const entry = getLatestSubagentRunByChildSessionKey(task.childSessionKey);
+      const entry = getLatestLiveSubagentRunByChildSessionKey(task.childSessionKey);
       if (entry) {
         enqueueYieldedTaskProgress(task, entry.runId);
       }

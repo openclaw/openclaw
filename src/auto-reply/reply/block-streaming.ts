@@ -35,12 +35,6 @@ type ProviderBlockStreamingConfig = {
   accounts?: Record<string, { streaming?: unknown }>;
 };
 
-function resolveScopedBlockStreamingCoalesce(
-  config: ProviderBlockStreamingConfig | undefined,
-): BlockStreamingCoalesceConfig | undefined {
-  return config ? resolveChannelStreamingBlockCoalesce(config) : undefined;
-}
-
 function resolveProviderBlockStreamingCoalesce(params: {
   cfg: OpenClawConfig | undefined;
   providerKey?: TextChunkProvider;
@@ -58,8 +52,8 @@ function resolveProviderBlockStreamingCoalesce(params: {
   const normalizedAccountId = normalizeAccountId(accountId);
   const typed = providerCfg as ProviderBlockStreamingConfig;
   const accountCfg = resolveChannelAccountEntry(typed.accounts, normalizedAccountId, providerKey);
-  const channelCoalesce = resolveScopedBlockStreamingCoalesce(typed);
-  const accountCoalesce = resolveScopedBlockStreamingCoalesce(accountCfg);
+  const channelCoalesce = resolveChannelStreamingBlockCoalesce(typed);
+  const accountCoalesce = accountCfg ? resolveChannelStreamingBlockCoalesce(accountCfg) : undefined;
   if (channelCoalesce || accountCoalesce) {
     return { ...channelCoalesce, ...accountCoalesce };
   }
@@ -91,13 +85,7 @@ function clampPositiveInteger(
     return fallback;
   }
   const rounded = Math.round(value);
-  if (rounded < bounds.min) {
-    return bounds.min;
-  }
-  if (rounded > bounds.max) {
-    return bounds.max;
-  }
-  return rounded;
+  return rounded < bounds.min ? bounds.min : Math.min(rounded, bounds.max);
 }
 
 export function resolveEffectiveBlockStreamingConfig(params: {
@@ -131,28 +119,17 @@ export function resolveEffectiveBlockStreamingConfig(params: {
     params.accountId,
     chunking,
   );
-  const coalescingMax = Math.max(
-    1,
-    Math.min(coalescingDefaults?.maxChars ?? chunking.maxChars, chunking.maxChars),
-  );
-  const coalescingMin = Math.min(coalescingDefaults?.minChars ?? chunking.minChars, coalescingMax);
-  const coalescingIdleMs = clampPositiveInteger(
-    params.coalesceIdleMs,
-    coalescingDefaults?.idleMs ?? DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS,
-    { min: 0, max: 5_000 },
-  );
+  const coalescingMax = Math.max(1, Math.min(coalescingDefaults.maxChars, chunking.maxChars));
+  const coalescingMin = Math.min(coalescingDefaults.minChars, coalescingMax);
+  const coalescingIdleMs = clampPositiveInteger(params.coalesceIdleMs, coalescingDefaults.idleMs, {
+    min: 0,
+    max: 5_000,
+  });
   const coalescing: BlockStreamingCoalescing = {
     minChars: coalescingMin,
     maxChars: coalescingMax,
     idleMs: coalescingIdleMs,
-    joiner:
-      coalescingDefaults?.joiner ??
-      (chunking.breakPreference === "sentence"
-        ? " "
-        : chunking.breakPreference === "newline"
-          ? "\n"
-          : "\n\n"),
-    ...(coalescingDefaults?.flushOnEnqueue === true ? { flushOnEnqueue: true } : {}),
+    joiner: coalescingDefaults.joiner,
   };
 
   return { chunking, coalescing };
@@ -173,8 +150,7 @@ export function resolveBlockStreamingChunking(
 
   const maxRequested = Math.max(1, Math.floor(chunkCfg?.maxChars ?? DEFAULT_BLOCK_STREAM_MAX));
   const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
-  const minFallback = DEFAULT_BLOCK_STREAM_MIN;
-  const minRequested = Math.max(1, Math.floor(chunkCfg?.minChars ?? minFallback));
+  const minRequested = Math.max(1, Math.floor(chunkCfg?.minChars ?? DEFAULT_BLOCK_STREAM_MIN));
   const minChars = Math.min(minRequested, maxChars);
   const breakPreference =
     chunkCfg?.breakPreference === "newline" || chunkCfg?.breakPreference === "sentence"
@@ -192,12 +168,8 @@ function resolveBlockStreamingCoalescing(
   cfg: OpenClawConfig | undefined,
   provider?: string,
   accountId?: string | null,
-  chunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-  },
-): BlockStreamingCoalescing | undefined {
+  chunking?: BlockStreamingChunking,
+): BlockStreamingCoalescing {
   const { providerKey, providerId, textLimit } = resolveProviderChunkContext(
     cfg,
     provider,

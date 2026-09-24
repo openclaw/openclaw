@@ -17,6 +17,7 @@ import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSlackListenerWriteClient } from "./client.js";
+import { buildSlackMessageIdentityPayload } from "./post-message-identity.js";
 import type { SlackSendIdentity } from "./send.js";
 
 // ---------------------------------------------------------------------------
@@ -175,17 +176,6 @@ export async function startSlackStream(
 ): Promise<SlackStreamSession> {
   const { client, channel, threadTs, text, chunks, taskDisplayMode, teamId, userId, identity } =
     params;
-  const identityPayload = identity?.iconUrl
-    ? { ...(identity.username ? { username: identity.username } : {}), icon_url: identity.iconUrl }
-    : identity?.iconEmoji
-      ? {
-          ...(identity.username ? { username: identity.username } : {}),
-          icon_emoji: identity.iconEmoji,
-        }
-      : identity?.username
-        ? { username: identity.username }
-        : {};
-
   logVerbose(
     `slack-stream: starting stream in ${channel} thread=${threadTs}${teamId ? ` team=${teamId}` : ""}${userId ? ` user=${userId}` : ""}`,
   );
@@ -206,7 +196,7 @@ export async function startSlackStream(
     ...(taskDisplayMode ? { task_display_mode: taskDisplayMode } : {}),
     ...(teamId ? { recipient_team_id: teamId } : {}),
     ...(userId ? { recipient_user_id: userId } : {}),
-    ...identityPayload,
+    ...buildSlackMessageIdentityPayload(identity),
   });
 
   const session: SlackStreamSession = {
@@ -222,38 +212,7 @@ export async function startSlackStream(
   state.sessions.add(session);
   stateBySession.set(session, state);
 
-  if (text || chunks?.length) {
-    if (text) {
-      session.pendingText += text;
-    }
-    // Slack SDK ChatStreamer keeps short markdown_text chunks in a local buffer
-    // and returns null until buffer_size is reached. Structured chunks force a
-    // flush. Only a non-null response means Slack acknowledged
-    // startStream/appendStream.
-    try {
-      const result = await streamer.append({
-        ...(text ? { markdown_text: text } : {}),
-        ...(chunks ? { chunks } : {}),
-      });
-      if (result) {
-        session.delivered = true;
-        session.pendingText = "";
-      }
-      applySlackStreamStop(session);
-      logVerbose(
-        `slack-stream: appended initial payload (${text?.length ?? 0} chars, ${
-          chunks?.length ?? 0
-        } chunks, ${result ? "flushed" : "buffered"})`,
-      );
-    } catch (err) {
-      if (applySlackStreamStop(session)) {
-        return session;
-      }
-      releaseSlackStream(session);
-      throwSlackStreamFailure(session, err);
-    }
-  }
-
+  await appendSlackStream({ session, text, chunks });
   return session;
 }
 
@@ -276,8 +235,8 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
     session.pendingText += text;
   }
   try {
-    // Same SDK contract as startSlackStream: null means local-only buffer,
-    // non-null means Slack accepted the pending buffer/chunks and it is visible.
+    // Short markdown chunks stay buffered in the SDK until buffer_size is reached;
+    // structured chunks force a flush. Only a non-null response acknowledges delivery.
     const result = await session.streamer.append({
       ...(text ? { markdown_text: text } : {}),
       ...(chunks ? { chunks } : {}),

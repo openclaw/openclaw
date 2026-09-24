@@ -2116,6 +2116,9 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session-pagination__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -4799,6 +4802,7 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
 }
 
 .page-title {
+  margin: 0;
   font-size: 22px;
   font-weight: 650;
   letter-spacing: -0.03em;

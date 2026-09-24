@@ -160,14 +160,9 @@ export function resolveSourceReplyPolicy(params: {
   });
 }
 
-export function resolveReplyRunDeliveryContext(params: {
-  cfg: OpenClawConfig;
-  sessionCtx: TemplateContext;
-  sessionEntry?: SessionEntry;
-  sessionKey: string;
-  runtimePolicySessionKey?: string;
-  opts?: GetReplyOptions;
-}): DeliveryContext | undefined {
+export function resolveReplyRunDeliveryContext(
+  params: Parameters<typeof resolveSourceReplyPolicy>[0],
+): DeliveryContext | undefined {
   const sourceReplyPolicy = resolveSourceReplyPolicy(params);
   if (
     params.sessionCtx.InboundEventKind === "room_event" ||
@@ -400,16 +395,11 @@ export async function handleReplyAgentRunError(
       }),
     );
   }
-  if (error instanceof GatewayDrainingError) {
-    replyOperation.fail("gateway_draining", error);
-    return returnWithQueuedFollowupDrain(
-      markReplyPayloadForSourceSuppressionDelivery({
-        text: RESTART_LIFECYCLE_REPLY_TEXT,
-      }),
+  if (error instanceof GatewayDrainingError || error instanceof CommandLaneClearedError) {
+    replyOperation.fail(
+      error instanceof GatewayDrainingError ? "gateway_draining" : "command_lane_cleared",
+      error,
     );
-  }
-  if (error instanceof CommandLaneClearedError) {
-    replyOperation.fail("command_lane_cleared", error);
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
         text: RESTART_LIFECYCLE_REPLY_TEXT,
@@ -477,10 +467,8 @@ export async function cleanupReplyAgentRun(context: {
       queueKey,
       runFollowup: runFollowupTurn,
     });
-    if (!providedReplyOperation) {
-      replyOperation.complete();
-    }
-  } else if (!providedReplyOperation) {
+  }
+  if (!providedReplyOperation) {
     replyOperation.complete();
   }
   blockReplyPipeline?.stop();

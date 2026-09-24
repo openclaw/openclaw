@@ -2763,20 +2763,18 @@ describe("handleFeishuMessage command authorization", () => {
   it.each([
     {
       name: "routes group sessions by sender when groupSessionScope=group_sender",
-      scope: "group_sender" as const,
+      groupConfig: { groupSessionScope: "group_sender" as const },
       messageId: "msg-scope-group-sender",
       senderOpenId: "ou-scope-user",
-      text: "group sender scope",
       message: {},
       expectedPeer: { kind: "group" as const, id: "oc-group:sender:ou-scope-user" },
       expectedParentPeer: null,
     },
     {
       name: "routes topic sessions and parentPeer when groupSessionScope=group_topic_sender",
-      scope: "group_topic_sender" as const,
+      groupConfig: { groupSessionScope: "group_topic_sender" as const },
       messageId: "msg-scope-topic-sender",
       senderOpenId: "ou-topic-user",
-      text: "topic sender scope",
       message: { root_id: "om_root_topic" },
       expectedPeer: {
         kind: "group" as const,
@@ -2786,10 +2784,9 @@ describe("handleFeishuMessage command authorization", () => {
     },
     {
       name: "keeps root_id as topic key when root_id and thread_id both exist",
-      scope: "group_topic_sender" as const,
+      groupConfig: { groupSessionScope: "group_topic_sender" as const },
       messageId: "msg-scope-topic-thread-id",
       senderOpenId: "ou-topic-user",
-      text: "topic sender scope",
       message: { root_id: "om_root_topic", thread_id: "omt_topic_1" },
       expectedPeer: {
         kind: "group" as const,
@@ -2797,20 +2794,101 @@ describe("handleFeishuMessage command authorization", () => {
       },
       expectedParentPeer: { kind: "group" as const, id: "oc-group" },
     },
+    {
+      name: "uses thread_id as topic key when root_id is missing",
+      groupConfig: { groupSessionScope: "group_topic_sender" as const },
+      messageId: "msg-scope-topic-thread-only",
+      senderOpenId: "ou-topic-user",
+      message: { thread_id: "omt_topic_1" },
+      expectedPeer: {
+        kind: "group" as const,
+        id: "oc-group:topic:omt_topic_1:sender:ou-topic-user",
+      },
+      expectedParentPeer: { kind: "group" as const, id: "oc-group" },
+    },
+    {
+      name: "maps legacy topicSessionMode=enabled to group_topic routing",
+      accountConfig: { topicSessionMode: "enabled" as const },
+      messageId: "msg-legacy-topic-mode",
+      senderOpenId: "ou-legacy",
+      message: { root_id: "om_root_legacy" },
+      expectedPeer: { kind: "group" as const, id: "oc-group:topic:om_root_legacy" },
+      expectedParentPeer: { kind: "group" as const, id: "oc-group" },
+    },
+    {
+      name: "maps legacy topicSessionMode=enabled to root_id when both root_id and thread_id exist",
+      accountConfig: { topicSessionMode: "enabled" as const },
+      messageId: "msg-legacy-topic-thread-id",
+      senderOpenId: "ou-legacy-thread-id",
+      message: { root_id: "om_root_legacy", thread_id: "omt_topic_legacy" },
+      expectedPeer: { kind: "group" as const, id: "oc-group:topic:om_root_legacy" },
+      expectedParentPeer: { kind: "group" as const, id: "oc-group" },
+    },
+    {
+      name: "uses message_id as topic root when group_topic + replyInThread and no root_id",
+      groupConfig: {
+        groupSessionScope: "group_topic" as const,
+        replyInThread: "enabled" as const,
+      },
+      messageId: "msg-new-topic-root",
+      senderOpenId: "ou-topic-init",
+      message: {},
+      expectedPeer: { kind: "group" as const, id: "oc-group:topic:msg-new-topic-root" },
+      expectedParentPeer: { kind: "group" as const, id: "oc-group" },
+    },
+    {
+      name: "prefers explicit group scope over explicit account scope",
+      accountConfig: { groupSessionScope: "group_topic_sender" as const },
+      groupConfig: { groupSessionScope: "group_sender" as const },
+      messageId: "msg-group-scope-precedence",
+      senderOpenId: "ou-scope-user",
+      message: { root_id: "om_root_scope" },
+      expectedPeer: { kind: "group" as const, id: "oc-group:sender:ou-scope-user" },
+      expectedParentPeer: null,
+    },
+    {
+      name: "prefers explicit account scope over legacy group topic mode",
+      accountConfig: { groupSessionScope: "group_sender" as const },
+      groupConfig: { topicSessionMode: "enabled" as const },
+      messageId: "msg-account-scope-precedence",
+      senderOpenId: "ou-scope-user",
+      message: { root_id: "om_root_scope" },
+      expectedPeer: { kind: "group" as const, id: "oc-group:sender:ou-scope-user" },
+      expectedParentPeer: null,
+    },
+    {
+      name: "prefers disabled legacy group topic mode over enabled account topic mode",
+      accountConfig: { topicSessionMode: "enabled" as const },
+      groupConfig: { topicSessionMode: "disabled" as const },
+      messageId: "msg-legacy-scope-precedence",
+      senderOpenId: "ou-scope-user",
+      message: { root_id: "om_root_scope" },
+      expectedPeer: { kind: "group" as const, id: "oc-group" },
+      expectedParentPeer: null,
+    },
   ])(
     "$name",
-    async ({ scope, messageId, senderOpenId, text, message, expectedPeer, expectedParentPeer }) => {
+    async ({
+      accountConfig,
+      groupConfig,
+      messageId,
+      senderOpenId,
+      message,
+      expectedPeer,
+      expectedParentPeer,
+    }) => {
       mockShouldComputeCommandAuthorized.mockReturnValue(false);
       await dispatchMessage({
         cfg: createFeishuTestConfig({
-          groups: { "oc-group": { requireMention: false, groupSessionScope: scope } },
+          ...accountConfig,
+          groups: { "oc-group": { requireMention: false, ...groupConfig } },
         }),
         event: createFeishuTestEvent({
           messageId,
           senderOpenId,
           chatId: "oc-group",
           chatType: "group",
-          text,
+          text: "session scope",
           message,
         }),
       });
@@ -2847,93 +2925,10 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event: topicStarter });
     await dispatchMessage({ cfg, event: topicReply });
 
-    const starterRouteRequest = mockCallArg<{
-      parentPeer?: { id?: string; kind?: string };
-      peer?: { id?: string; kind?: string };
-    }>(mockResolveAgentRoute, 0, 0);
-    expect(starterRouteRequest.peer).toEqual({ kind: "group", id: "oc-group:topic:omt_topic_1" });
-    expect(starterRouteRequest.parentPeer).toEqual({ kind: "group", id: "oc-group" });
-    const replyRouteRequest = mockCallArg<{
-      parentPeer?: { id?: string; kind?: string };
-      peer?: { id?: string; kind?: string };
-    }>(mockResolveAgentRoute, 1, 0);
-    expect(replyRouteRequest.peer).toEqual({ kind: "group", id: "oc-group:topic:omt_topic_1" });
-    expect(replyRouteRequest.parentPeer).toEqual({ kind: "group", id: "oc-group" });
-  });
-
-  it.each([
-    {
-      name: "uses thread_id as topic key when root_id is missing",
-      cfg: createFeishuTestConfig({
-        groups: {
-          "oc-group": { requireMention: false, groupSessionScope: "group_topic_sender" },
-        },
-      }),
-      messageId: "msg-scope-topic-thread-only",
-      senderOpenId: "ou-topic-user",
-      text: "topic sender scope",
-      message: { thread_id: "omt_topic_1" },
-      expectedPeer: {
-        kind: "group" as const,
-        id: "oc-group:topic:omt_topic_1:sender:ou-topic-user",
-      },
-    },
-    {
-      name: "maps legacy topicSessionMode=enabled to group_topic routing",
-      cfg: createFeishuTestConfig({
-        topicSessionMode: "enabled",
-        groups: { "oc-group": { requireMention: false } },
-      }),
-      messageId: "msg-legacy-topic-mode",
-      senderOpenId: "ou-legacy",
-      text: "legacy topic mode",
-      message: { root_id: "om_root_legacy" },
-      expectedPeer: { kind: "group" as const, id: "oc-group:topic:om_root_legacy" },
-    },
-    {
-      name: "maps legacy topicSessionMode=enabled to root_id when both root_id and thread_id exist",
-      cfg: createFeishuTestConfig({
-        topicSessionMode: "enabled",
-        groups: { "oc-group": { requireMention: false } },
-      }),
-      messageId: "msg-legacy-topic-thread-id",
-      senderOpenId: "ou-legacy-thread-id",
-      text: "legacy topic mode",
-      message: { root_id: "om_root_legacy", thread_id: "omt_topic_legacy" },
-      expectedPeer: { kind: "group" as const, id: "oc-group:topic:om_root_legacy" },
-    },
-    {
-      name: "uses message_id as topic root when group_topic + replyInThread and no root_id",
-      cfg: createFeishuTestConfig({
-        groups: {
-          "oc-group": {
-            requireMention: false,
-            groupSessionScope: "group_topic",
-            replyInThread: "enabled",
-          },
-        },
-      }),
-      messageId: "msg-new-topic-root",
-      senderOpenId: "ou-topic-init",
-      text: "create topic",
-      message: {},
-      expectedPeer: { kind: "group" as const, id: "oc-group:topic:msg-new-topic-root" },
-    },
-  ])("$name", async ({ cfg, messageId, senderOpenId, text, message, expectedPeer }) => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    await dispatchMessage({
-      cfg,
-      event: createFeishuTestEvent({
-        messageId,
-        senderOpenId,
-        chatId: "oc-group",
-        chatType: "group",
-        text,
-        message,
-      }),
-    });
-
-    expectResolvedRouteCall(0, expectedPeer, { kind: "group", id: "oc-group" });
+    const expectedPeer = { kind: "group" as const, id: "oc-group:topic:omt_topic_1" };
+    const expectedParentPeer = { kind: "group" as const, id: "oc-group" };
+    expectResolvedRouteCall(0, expectedPeer, expectedParentPeer);
+    expectResolvedRouteCall(1, expectedPeer, expectedParentPeer);
   });
 
   it("keeps topic session key stable after first turn creates a thread", async () => {

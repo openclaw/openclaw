@@ -342,38 +342,30 @@ function runInDiagnosticsTimelineSpan<T>(span: StartedDiagnosticsTimelineSpan, r
   );
 }
 
-function emitFinishedDiagnosticsTimelineSpan(span: StartedDiagnosticsTimelineSpan): void {
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.end",
-      name: span.name,
-      phase: span.phase,
-      spanId: span.spanId,
-      parentSpanId: span.parentSpanId,
-      durationMs: performance.now() - span.startedAt,
-      attributes: span.attributes,
-    },
-    { config: span.config, env: span.env },
-  );
-}
-
-function emitFailedDiagnosticsTimelineSpan(
+function emitFinishedDiagnosticsTimelineSpan(
   span: StartedDiagnosticsTimelineSpan,
-  error: unknown,
+  failure?: { error: unknown },
 ): void {
   emitDiagnosticsTimelineEvent(
     {
-      type: "span.error",
+      type: failure ? "span.error" : "span.end",
       name: span.name,
       phase: span.phase,
       spanId: span.spanId,
       parentSpanId: span.parentSpanId,
       durationMs: performance.now() - span.startedAt,
       attributes: span.attributes,
-      errorName: error instanceof Error ? error.name : typeof error,
-      ...(span.omitErrorMessage
-        ? {}
-        : { errorMessage: error instanceof Error ? error.message : String(error) }),
+      ...(failure
+        ? {
+            errorName: failure.error instanceof Error ? failure.error.name : typeof failure.error,
+            ...(span.omitErrorMessage
+              ? {}
+              : {
+                  errorMessage:
+                    failure.error instanceof Error ? failure.error.message : String(failure.error),
+                }),
+          }
+        : {}),
     },
     { config: span.config, env: span.env },
   );
@@ -394,7 +386,7 @@ export async function measureDiagnosticsTimelineSpan<T>(
     emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {
-    emitFailedDiagnosticsTimelineSpan(span, error);
+    emitFinishedDiagnosticsTimelineSpan(span, { error });
     throw error;
   }
 }
@@ -414,7 +406,7 @@ export function measureDiagnosticsTimelineSpanSync<T>(
     emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {
-    emitFailedDiagnosticsTimelineSpan(span, error);
+    emitFinishedDiagnosticsTimelineSpan(span, { error });
     throw error;
   }
 }

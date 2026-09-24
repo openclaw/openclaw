@@ -27,7 +27,7 @@ import {
   prepareQaTransportAdapterFactories,
   type QaTransportDriver,
 } from "./qa-transport-registry.js";
-import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
+import { renderQaMarkdownReport } from "./report.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./run-config.js";
 import {
   readQaBootstrapScenarioCatalog,
@@ -978,25 +978,6 @@ function testFileScenarioResultToSuiteScenario(
   };
 }
 
-function renderUnifiedQaSuiteReport(params: {
-  finishedAt: Date;
-  scenarios: readonly QaSuiteScenarioResult[];
-  startedAt: Date;
-}) {
-  return renderQaMarkdownReport({
-    title: "OpenClaw QA Scenario Suite",
-    startedAt: params.startedAt,
-    finishedAt: params.finishedAt,
-    checks: [],
-    scenarios: params.scenarios.map((scenario) => ({
-      name: scenario.name,
-      status: scenario.status,
-      details: scenario.details,
-      steps: scenario.steps,
-    })) satisfies QaReportScenario[],
-  });
-}
-
 async function writeUnifiedQaSuiteArtifacts(params: {
   alternateModel: string;
   channel?: string;
@@ -1016,9 +997,10 @@ async function writeUnifiedQaSuiteArtifacts(params: {
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
-  const report = renderUnifiedQaSuiteReport({
+  const report = renderQaMarkdownReport({
+    title: "OpenClaw QA Scenario Suite",
     finishedAt: params.finishedAt,
-    scenarios: params.scenarios,
+    scenarios: [...params.scenarios],
     startedAt: params.startedAt,
   });
   const summary = buildQaSuiteSummaryJson({

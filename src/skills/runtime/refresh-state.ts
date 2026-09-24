@@ -202,7 +202,12 @@ export function bumpSkillsSnapshotVersion(params?: {
     reason: params?.reason ?? "manual",
     changedPath: params?.changedPath,
   };
-  const semanticChange = event.reason === "config-change" || event.reason === "remote-node";
+  // Availability is an owner fact even when the last content fingerprint is
+  // unchanged; remote subscribers need it to reconcile later preparations.
+  const semanticChange =
+    event.reason === "config-change" ||
+    event.reason === "remote-node" ||
+    event.reason === "watch-unavailable";
   sourceClock = bumpVersion(sourceClock);
   if (!params?.workspaceDir) {
     globalSourceVersion = sourceClock;

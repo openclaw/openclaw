@@ -388,9 +388,15 @@ describe("doctor session transcript repair", () => {
     );
   });
 
-  it.each(["entry_invalid", "historical_transcript_deferred", "historical_duplicate_settled"])(
-    "keeps session SQLite dry-run read-only with %s warnings",
-    async (code) => {
+  it.each([
+    ["entry_invalid", 1],
+    ["historical_duplicate_settled", 1],
+    ["historical_transcript_deferred", 5],
+    ["historical_transcript_deferred", 6],
+    ["historical_transcript_deferred", 20_353],
+  ] as const)(
+    "keeps session SQLite dry-run read-only with %s (%i warnings)",
+    async (code, count) => {
       const sessionsDir = path.join(root, "agents", "main", "sessions");
       await fs.mkdir(sessionsDir, { recursive: true });
       const storePath = path.join(sessionsDir, "sessions.json");
@@ -402,22 +408,22 @@ describe("doctor session transcript repair", () => {
                 "Retired 1307 byte-identical duplicate archive(s); rollback references now use the verified surviving originals.",
               ]
             : Array.from(
-                { length: 4 },
+                { length: count },
                 (_, index) =>
                   `history-${index}: multiple primary files claim this identity; originals retained without importing`,
               );
+      const issues = [
+        ...warnings.map((message) => ({ code, message })),
+        { code: "transcript_missing", message: "Active session transcript is missing." },
+      ];
+      const originalIssues = structuredClone(issues);
       runDoctorSessionSqlite.mockResolvedValueOnce({
-        targets: [
-          {
-            storePath,
-            issues: warnings.map((message) => ({ code, message })),
-          },
-        ],
+        targets: [{ storePath, issues }],
         totals: {
           archivedTranscriptFiles: 0,
           archivedUnreferencedJsonlFiles: 0,
           importedTranscriptEvents: 0,
-          issues: warnings.length,
+          issues: issues.length,
           legacyEntries: 1,
           sqliteEntries: 0,
           unreferencedJsonlFiles: 0,
@@ -448,7 +454,9 @@ describe("doctor session transcript repair", () => {
       };
       await runSessionTranscriptsHealth(ctx);
       expect(ctx.updateWarnings).toEqual(
-        expect.arrayContaining(warnings.map((warning) => `${storePath}: [${code}] ${warning}`)),
+        expect.arrayContaining(
+          warnings.slice(0, 5).map((warning) => `${storePath}: [${code}] ${warning}`),
+        ),
       );
 
       expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
@@ -476,25 +484,30 @@ describe("doctor session transcript repair", () => {
         ),
         "Session SQLite",
       );
-      for (const warning of warnings) {
+      for (const warning of warnings.slice(0, 5)) {
         expect(note).toHaveBeenCalledWith(
           expect.stringContaining(`${storePath}: [${code}] ${warning}`),
           "Session SQLite",
         );
       }
-      if (code === "historical_transcript_deferred") {
-        expect(note).toHaveBeenCalledWith(
-          expect.stringContaining(
-            "Deferred 4 historical transcript claim(s); originals remain protected",
-          ),
-          "Session SQLite",
+      expect(issues).toEqual(originalIssues);
+      expect(ctx.updateWarnings).toContain(
+        `${storePath}: [transcript_missing] Active session transcript is missing.`,
+      );
+      const output = note.mock.calls.find(([, title]) => title === "Session SQLite")![0];
+      expect(output).toContain("Active session transcript is missing.");
+      if (count > 5) {
+        expect(ctx.updateWarnings).toHaveLength(7);
+        expect(output).toContain(`${count} historical transcript claim(s)`);
+        expect(output).toContain(`${count - 5} omitted`);
+        expect(output).toContain("originals and migration manifests remain protected");
+        expect(output).toContain(
+          "openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json",
         );
-        expect(note).toHaveBeenCalledWith(
-          expect.stringContaining(
-            'Preserve the named files and migration manifests, resolve the reported conflicts, then rerun "openclaw doctor --fix"',
-          ),
-          "Session SQLite",
-        );
+        expect(output).not.toContain("history-5:");
+        expect(output.split("\n").length).toBeLessThan(20);
+      } else {
+        expect(ctx.updateWarnings).toHaveLength(warnings.length + 1);
       }
     },
   );

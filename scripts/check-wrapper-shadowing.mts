@@ -8,6 +8,7 @@ import {
   type ModuleExports,
   type SourceModule,
 } from "./check-export-name-collisions.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
@@ -105,12 +106,20 @@ function resolveWrappedDefinition(
 
 /** Finds exported wrappers that shadow the same imported source symbol. */
 export function findWrapperShadowingViolations(modules: SourceModule[]) {
+  using parser = createNativeTypeScriptParser();
   const modulesByPath = new Map<string, ModuleExports>();
   for (const sourceModule of modules.toSorted((left, right) =>
     left.path.localeCompare(right.path),
   )) {
     const modulePath = normalizeRelativePath(sourceModule.path);
-    modulesByPath.set(modulePath, collectModuleExportNames(sourceModule.content, modulePath));
+    modulesByPath.set(
+      modulePath,
+      collectModuleExportNames(
+        sourceModule.content,
+        modulePath,
+        parser.parseSourceFile(modulePath, sourceModule.content),
+      ),
+    );
   }
 
   const violations = new Map<string, WrapperShadowingViolation>();

@@ -125,7 +125,7 @@ export type ModelAuthAvailabilityRef = {
 export type ModelAuthAvailabilityEvaluation = {
   requestedRuntimeId?: string;
   availability: ModelAuthAvailability;
-  /** A runtime-owned result must not fall back to provider-only registry auth. */
+  /** A route/account or runtime-owned result must not fall back to provider-only registry auth. */
   availabilityAuthoritative?: true;
   unavailableReason?: "missing-auth" | "auth-failed" | "cooldown";
   /** Earliest known retry time, in milliseconds since the Unix epoch. */
@@ -1369,6 +1369,9 @@ export function createModelAuthAvailabilityResolver(
           ? { unavailableReason: policy.evaluation.unavailableReason }
           : {}),
         routeResolution,
+        ...(routeAuthDecision.kind === "rejected" && routeAuthDecision.authModeIncompatible
+          ? { availabilityAuthoritative: true as const }
+          : {}),
         ...(projectRejectedSource
           ? {
               selectedProfileId: projectRejectedSource.profileId,
@@ -1403,10 +1406,7 @@ export function createModelAuthAvailabilityResolver(
     }
     return {
       ...evaluation,
-      availability:
-        evaluation.availability === undefined && !evaluation.evidence
-          ? false
-          : evaluation.availability,
+      availability: evaluation.availability ?? (evaluation.evidence ? undefined : false),
       routeResolution,
       selectedRoute,
     };

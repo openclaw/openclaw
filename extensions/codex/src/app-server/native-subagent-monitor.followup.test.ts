@@ -1,5 +1,8 @@
 import { invokeNativeHookRelay, onAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import {
+  captureAgentHarnessTaskAssignment,
+  type AgentHarnessTaskRecord,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createCodexNativeHookRelay } from "./native-hook-relay.js";
@@ -642,6 +645,7 @@ describe("CodexNativeSubagentMonitor", () => {
           },
         },
       ]);
+      const expectedTask = captureAgentHarnessTaskAssignment(runtime.listTaskRecords()[0]!);
       const releaseClaim = vi.fn();
       const claimDirectChild = vi.fn(() => releaseClaim);
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
@@ -690,10 +694,17 @@ describe("CodexNativeSubagentMonitor", () => {
       client.setThreadRead("child-thread", history);
       releaseRead(history);
       await vi.waitFor(() =>
-        expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledWith(
-          expect.objectContaining({ detail: expect.objectContaining({ nativeTurnId: "turn-1" }) }),
+        expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runId: expectedTask.runId,
+            expectedTask,
+            detail: expect.objectContaining({ nativeTurnId: "turn-1" }),
+          }),
         ),
       );
+      expect(
+        runtime.listTaskRecords().find((task) => task.runId === expectedTask.runId)?.detail,
+      ).toMatchObject({ nativeTurnId: "turn-1" });
       expect(claimDirectChild).toHaveBeenCalledTimes(released ? 0 : 1);
       await (unregisterPromise ?? owner.unregister());
       expect(releaseClaim).not.toHaveBeenCalled();

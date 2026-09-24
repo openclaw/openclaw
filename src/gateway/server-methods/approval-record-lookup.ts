@@ -1,5 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeNullableString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
@@ -11,6 +15,7 @@ import type {
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "../session-sharing.js";
+import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 const APPROVAL_NOT_FOUND_DETAILS = {
@@ -25,23 +30,6 @@ type PendingApprovalLookupError =
 export type ApprovalRecordLookupResult<TPayload> =
   | { ok: true; approvalId: string; snapshot: ExecApprovalRecord<TPayload> }
   | { ok: false; response: PendingApprovalLookupError };
-
-function normalizeApprovalIdentity(value: string | null | undefined): string | null {
-  return normalizeOptionalString(value) ?? null;
-}
-
-export function normalizeApprovalIdentities(
-  values: readonly string[] | null | undefined,
-): string[] {
-  const normalized = new Set<string>();
-  for (const value of values ?? []) {
-    const identity = normalizeApprovalIdentity(value);
-    if (identity) {
-      normalized.add(identity);
-    }
-  }
-  return [...normalized];
-}
 
 export function canAccessApprovalSession(params: {
   cfg: OpenClawConfig;
@@ -91,16 +79,16 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
       return false;
     }
   }
-  const requestedByDeviceId = normalizeApprovalIdentity(params.record.requestedByDeviceId);
-  const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
+  const requestedByDeviceId = normalizeNullableString(params.record.requestedByDeviceId);
+  const requestedByClientId = normalizeNullableString(params.record.requestedByClientId);
   const hasApprovalsScope = scopes.includes(APPROVALS_SCOPE);
   if (hasApprovalsScope && params.client?.internal?.approvalRuntime === true) {
     return true;
   }
-  const approvalReviewerDeviceIds = normalizeApprovalIdentities(
+  const approvalReviewerDeviceIds = normalizeUniqueTrimmedStringList(
     params.record.approvalReviewerDeviceIds,
   );
-  const clientDeviceId = normalizeApprovalIdentity(params.client?.connect?.device?.id);
+  const clientDeviceId = normalizeNullableString(params.client?.connect?.device?.id);
   if (hasApprovalsScope && clientDeviceId && approvalReviewerDeviceIds.includes(clientDeviceId)) {
     return true;
   }
@@ -108,9 +96,9 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   if (requestedByDeviceId) {
     return requestedByDeviceId === clientDeviceId;
   }
-  const requestedByConnId = normalizeApprovalIdentity(params.record.requestedByConnId);
+  const requestedByConnId = normalizeNullableString(params.record.requestedByConnId);
   if (requestedByConnId) {
-    return requestedByConnId === normalizeApprovalIdentity(params.client?.connId);
+    return requestedByConnId === normalizeNullableString(params.client?.connId);
   }
   if (requestedByClientId || approvalReviewerDeviceIds.length > 0) {
     return false;
@@ -121,6 +109,7 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
 
 export async function listVisiblePendingApprovalRequests<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
+  authority?: ApprovalRequestAuthority;
   client?: GatewayClient | null;
   cfg?: OpenClawConfig;
   approvalKind?: ChannelApprovalKind;
@@ -134,7 +123,8 @@ export async function listVisiblePendingApprovalRequests<TPayload>(params: {
     expiresAtMs: number;
   }>
 > {
-  const records = await params.manager.listPendingRecords();
+  const records = await params.manager.listPendingRecords(params.authority);
+  params.authority?.assertCurrent();
   const cfg = params.getCfg?.() ?? params.cfg;
   return records
     .filter(
@@ -173,6 +163,7 @@ function resolveLookupError(params: {
 async function resolveApprovalRecordForState<TPayload>(
   params: {
     manager: ExecApprovalManager<TPayload>;
+    authority?: ApprovalRequestAuthority;
     inputId: string;
     client?: GatewayClient | null;
     cfg?: OpenClawConfig;
@@ -197,26 +188,23 @@ async function resolveApprovalRecordForState<TPayload>(
   const resolvedId = await params.manager.lookupApprovalId(params.inputId, {
     includeResolved: expectedState === "resolved",
     filter: visible,
+    authority: params.authority,
   });
+  params.authority?.assertCurrent();
   if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
     return { ok: false, response: resolveLookupError({ ...params, resolvedId }) };
   }
-  const snapshot = await params.manager.getSnapshot(resolvedId.id);
+  const snapshot = await params.manager.getSnapshot(resolvedId.id, params.authority);
+  params.authority?.assertCurrent();
   const isResolved = snapshot?.resolvedAtMs !== undefined;
   return !snapshot || isResolved !== (expectedState === "resolved") || !visible(snapshot)
     ? { ok: false, response: "missing" }
     : { ok: true, approvalId: resolvedId.id, snapshot };
 }
 
-export function resolvePendingApprovalRecord<TPayload>(params: {
-  manager: ExecApprovalManager<TPayload>;
-  inputId: string;
-  client?: GatewayClient | null;
-  cfg?: OpenClawConfig;
-  getCfg?: () => OpenClawConfig;
-  exposeAmbiguousPrefixError?: boolean;
-  recordFilter?: (record: ExecApprovalRecord<TPayload>) => boolean;
-}): Promise<ApprovalRecordLookupResult<TPayload>> {
+export function resolvePendingApprovalRecord<TPayload>(
+  params: Parameters<typeof resolveApprovalRecordForState<TPayload>>[0],
+): Promise<ApprovalRecordLookupResult<TPayload>> {
   return resolveApprovalRecordForState(params, "pending");
 }
 

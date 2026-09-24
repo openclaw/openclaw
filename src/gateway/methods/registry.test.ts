@@ -16,6 +16,42 @@ import {
 const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });
 
 describe("gateway method registry", () => {
+  it("requires a profile for session-scoped plugin and core methods", () => {
+    const sessionAccess = {
+      mode: "write" as const,
+      allowOwnSessionScope: true,
+      requiredTool: "example",
+    };
+    const plugin = createPluginGatewayMethodDescriptor({
+      pluginId: "example",
+      name: "example.session",
+      handler,
+      scope: WRITE_SCOPE,
+      sessionAccess,
+    });
+    const registry = createGatewayMethodRegistry([
+      plugin,
+      {
+        name: "core.session",
+        handler,
+        scope: WRITE_SCOPE,
+        owner: { kind: "core", area: "test" },
+        sessionAccess,
+      },
+    ]);
+    expect(registry.requiresAuthenticatedProfile("example.session")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("core.session")).toBe(true);
+    expect(registry.getSessionAccess?.("example.session")).toEqual(sessionAccess);
+    expect(() =>
+      createGatewayMethodRegistry([{ ...plugin, profileAccess: "independent" }]),
+    ).toThrow("authenticated profile");
+    expect(() => createGatewayMethodRegistry([{ ...plugin, scope: READ_SCOPE }])).toThrow(
+      "operator.write",
+    );
+    expect(() =>
+      createGatewayMethodRegistry([{ ...plugin, scope: "operator.sessions.write" }]),
+    ).toThrow("operator.write");
+  });
   it("indexes handlers, scopes, startup state, and control-plane metadata", () => {
     const registry = createGatewayMethodRegistry([
       {

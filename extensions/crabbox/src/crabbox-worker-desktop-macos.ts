@@ -110,8 +110,8 @@ plist="$app/Contents/Info.plist"
 [ -x "$app/Contents/MacOS/OpenClaw" ] && [ -x "$app/Contents/Resources/cua-driver" ] || { echo 'Install the signed OpenClaw Cloud Worker app with its bundled CUA driver in the worker image' >&2; exit 1; }
 /usr/bin/codesign --verify --deep --strict "$app" || { echo 'The macOS worker app signature is invalid; replace the image app' >&2; exit 1; }
 signature=$(/usr/bin/codesign -dv --verbose=4 "$app" 2>&1)
-printf '%s\\n' "$signature" | grep -q '^Authority=Developer ID Application:' || { echo 'The macOS worker app needs a Developer ID Application signature' >&2; exit 1; }
-printf '%s\\n' "$signature" | grep -Eq '^TeamIdentifier=[A-Z0-9]{10}$' || { echo 'The macOS worker app signing team is missing' >&2; exit 1; }
+grep -q '^Authority=Developer ID Application:' <<<"$signature" || { echo 'The macOS worker app needs a Developer ID Application signature' >&2; exit 1; }
+grep -Eq '^TeamIdentifier=[A-Z0-9]{10}$' <<<"$signature" || { echo 'The macOS worker app signing team is missing' >&2; exit 1; }
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")" = OpenClaw ] || { echo 'The worker app executable identity is invalid' >&2; exit 1; }
 bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")
 [ "$bundle_id" = ai.openclaw.cloud-worker ] || { echo 'The desktop requires the separate OpenClaw Cloud Worker app identity' >&2; exit 1; }

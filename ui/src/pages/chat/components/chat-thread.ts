@@ -39,7 +39,7 @@ export function renderChatThread(
   props: ChatThreadProps,
   transcript: ChatTranscriptController,
 ): TemplateResult {
-  return transcript.renderSession(props.paneId, props.sessionKey, (session) =>
+  return transcript.renderSession(props.sessionKey, (session) =>
     renderTranscriptShell(props, session),
   );
 }

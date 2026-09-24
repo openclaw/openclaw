@@ -73,33 +73,15 @@ export async function readLegacyAuditSourceSnapshot(
   root: AuditMigrationRoot,
   relativePath: string,
 ): Promise<LegacyAuditSourceSnapshot> {
-  const opened = await root.open(relativePath);
-  try {
-    const before = await opened.handle.stat();
-    if (!before.isFile()) {
-      throw new Error("legacy audit source is not a regular file");
-    }
-    const rawBytes = await opened.handle.readFile();
-    const after = await opened.handle.stat();
-    const beforeCheckpoint = {
-      dev: before.dev,
-      ino: before.ino,
-      mtimeMs: before.mtimeMs,
-      size: before.size,
-    };
-    const afterCheckpoint = {
-      dev: after.dev,
-      ino: after.ino,
-      mtimeMs: after.mtimeMs,
-      size: after.size,
-    };
-    if (!legacyAuditRawCheckpointsMatch(beforeCheckpoint, afterCheckpoint)) {
-      throw new Error("legacy audit source changed while Doctor was reading it");
-    }
-    return { ...afterCheckpoint, raw: rawBytes.toString("utf8"), rawBytes };
-  } finally {
-    await opened.handle.close();
-  }
+  const { buffer: rawBytes, stat } = await root.read(relativePath, { maxBytes: Infinity });
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    mtimeMs: stat.mtimeMs,
+    size: rawBytes.length,
+    raw: rawBytes.toString("utf8"),
+    rawBytes,
+  };
 }
 
 export async function readLegacyAuditSourcePrefixSnapshotForBackup(
@@ -331,16 +313,10 @@ async function stageAuditRecoveryRestore(params: {
       size: params.snapshot.size,
     },
   });
-  await params.root.create(stagingRelativePath, journalRaw, { mode: 0o600 });
-  const staged = await params.root.openWritable(stagingRelativePath, {
-    writeMode: "update",
+  await params.root.create(stagingRelativePath, journalRaw, {
+    mode: 0o600,
+    durable: "file",
   });
-  try {
-    await staged.handle.chmod(0o600);
-    await staged.handle.sync();
-  } finally {
-    await staged.handle.close();
-  }
   await params.root.move(stagingRelativePath, restoreRelativePath);
   await syncAuditRecoveryDirectory(params.root, params.relativePath);
   const journal = parseAuditRecoveryRestoreJournal(journalRaw);

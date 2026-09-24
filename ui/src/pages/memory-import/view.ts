@@ -588,7 +588,7 @@ function renderBackfillSection(props: MemoryImportViewProps) {
                       ? html`<div
                           class="settings-row settings-row--stacked memory-import__backfill-preview"
                         >
-                          <strong>
+                          <strong role="status">
                             ${t("memoryImport.backfill.previewSummary", {
                               candidates: String(result.candidates),
                               days: String(result.days),

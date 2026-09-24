@@ -420,14 +420,43 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   return text.replace(placeholder, (_, index) => saved[Number(index)], false);
 }
 
-// mint@4.2.808/common@1.0.1096 published these suffixes before counting.
-// Keep apostrophes as separators so slugify 2.2.1 cannot join them early
-// and change existing heading or component links.
+// Published Mintlify anchors retain these transliterations across slugify upgrades.
+const mintSlugReplacements = [
+  ["'", "-"],
+  ["إ", "i"],
+  ["Ə", "-"],
+  ["ə", "-"],
+  ["Œ", "-"],
+  ["œ", "-"],
+  ["ẞ", "SS"],
+  ["ու", "vo-"],
+  ["ՈՒ", "Vo-"],
+  ["Ու", "Vo-"],
+  ["𝓀", "h"],
+  ["𝕆", "N"],
+  ["ⓒ", "(b)"],
+  ["ⓓ", "(c)"],
+];
+
 function mintBaseSlug(title, options) {
-  return slugify(title, { ...options, customReplacements: [["'", "-"]] }).replace(
-    /([a-zA-Z\d]+)-([ts])(-|$)/g,
-    "$1$2$3",
-  );
+  let value = slugify(title, {
+    ...options,
+    lowercase: false,
+    decamelize: false,
+    customReplacements: mintSlugReplacements,
+  });
+  if (options.decamelize) {
+    // The published acronym rule keeps APIUsage joined but splits APISection.
+    value = value
+      .replace(/([A-Z]{2})(\d)/g, "$1-$2")
+      .replace(/([a-z\d])([A-Z])/g, "$1-$2")
+      .replace(/([A-Z])([A-Z][a-rt-z\d]+)/g, "$1-$2");
+  }
+  if (options.lowercase !== false) {
+    value = value.toLowerCase();
+  }
+  // mint@4.2.808/common@1.0.1096 joined these suffixes before counting.
+  return value.replace(/([a-zA-Z\d]+)-([ts])(-|$)/g, "$1$2$3");
 }
 function mintSlug(title, counter = slugifyWithCounter()) {
   const encoded = anchor.defaults.slugify(title);

@@ -13,6 +13,7 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { Snapshot } from "quickjs-wasi";
 import { onTestFinished, vi } from "vitest";
 import { codeModeExecutor } from "./executor.js";
+import { quickJsWorkerTestEntrypoint } from "./worker-entrypoint.test-support.js";
 
 export function createQuickJsTestConfig(overrides: Partial<CodeModeConfig> = {}): CodeModeConfig {
   return {
@@ -34,13 +35,11 @@ type Input =
 export async function runQuickJsExecutor(
   input: Input,
   timeoutMs: number,
-  workerUrl?: URL,
+  workerUrl = processRuntime.resolveRuntimeWorkerUrl(quickJsWorkerTestEntrypoint),
   signal?: AbortSignal,
   inlineHost?: CodeModeExecutorInlineHost,
 ) {
-  const resolver = workerUrl
-    ? vi.spyOn(processRuntime, "resolveRuntimeWorkerUrl").mockReturnValue(workerUrl)
-    : undefined;
+  const resolver = vi.spyOn(processRuntime, "resolveRuntimeWorkerUrl").mockReturnValue(workerUrl);
   try {
     const options = { timeoutMs, signal, inlineHost };
     let result: CodeModeWorkerResult;
@@ -58,7 +57,7 @@ export async function runQuickJsExecutor(
     }
     return result;
   } finally {
-    resolver?.mockRestore();
+    resolver.mockRestore();
   }
 }
 
@@ -74,7 +73,7 @@ const modules = Promise.all([
 /** Exercises real persisted VM bytes without exposing them through the executor contract. */
 export async function runQuickJsWire(input: CodeModeWorkerPayload<Snapshot>, timeoutMs: number) {
   const pool = new processRuntime.WorkerTaskPool<unknown, CodeModeWorkerThreadResult<Snapshot>>({
-    workerUrl: new URL("./code-mode.worker.ts", import.meta.url),
+    workerUrl: processRuntime.resolveRuntimeWorkerUrl(quickJsWorkerTestEntrypoint),
     maxWorkers: 1,
   });
   try {

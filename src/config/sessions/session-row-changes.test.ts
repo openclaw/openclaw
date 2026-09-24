@@ -7,6 +7,7 @@ import {
 } from "../../state/openclaw-agent-db-registry.js";
 import {
   openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -18,6 +19,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
+import type { InternalSessionEntry } from "./types.js";
 
 it("publishes row changes after the complete entry transaction and discards rollback", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -158,6 +160,57 @@ it("publishes committed registry changes while discarding a rolled-back agent re
       expect(changes).toEqual(Array.from({ length: 3 }, () => ({ all: true, scope: "stores" })));
     } finally {
       unsubscribe();
+    }
+  });
+});
+
+it("keeps Incognito publications committed and free of connection capabilities", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-row-change",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    };
+    const entry = {
+      sessionId: "private-row-change",
+      createdAt: 1,
+      updatedAt: 1,
+      label: "Private label must not enter lifetime facts",
+      incognito: true,
+    } satisfies InternalSessionEntry;
+    replaceSessionEntrySync(scope, entry);
+    const projections: SessionRowChange[] = [];
+    const notifications: SessionRowChange[] = [];
+    const stopProjection = sessionChanges.subscribeProjection((change) => projections.push(change));
+    const stopNotification = sessionChanges.subscribe((change) => notifications.push(change));
+    const write = () => {
+      replaceSessionEntrySync(scope, { ...entry, updatedAt: 2 });
+      expect(projections).toEqual([]);
+      expect(notifications).toEqual([]);
+    };
+    try {
+      expect(() =>
+        runOpenClawAgentWriteTransaction(
+          () => {
+            write();
+            throw new Error("rollback");
+          },
+          { agentId: scope.agentId, path: scope.storePath },
+        ),
+      ).toThrow("rollback");
+      expect(projections).toEqual([]);
+      expect(notifications).toEqual([]);
+      runOpenClawAgentWriteTransaction(write, { agentId: scope.agentId, path: scope.storePath });
+      expect(projections).toEqual([
+        {
+          ...scope,
+          facts: expect.objectContaining({ kind: "entry", sessionId: entry.sessionId }),
+        },
+      ]);
+      expect(notifications).toEqual([scope]);
+    } finally {
+      stopProjection();
+      stopNotification();
     }
   });
 });

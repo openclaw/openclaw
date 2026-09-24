@@ -54,6 +54,7 @@ import {
 } from "./thread-lifecycle.js";
 import {
   createLeasedCodexLifecycleHarness,
+  createThreadRequestAppServerOptions as createAppServerOptions,
   disabledMcpServerStatus,
   writeNativeCatalogFixture,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -889,14 +890,6 @@ function createAttemptParams(params: {
         : {}),
     },
   } as EmbeddedRunAttemptParams;
-}
-
-function createAppServerOptions() {
-  return {
-    approvalPolicy: "on-request",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
-  };
 }
 
 function createNetworkProxyAppServerOptions() {

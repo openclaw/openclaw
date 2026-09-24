@@ -511,21 +511,16 @@ export function isRedirectStatus(status: number): boolean {
  * - Auto-following redirects to non-allowlisted hosts
  * - DNS rebinding attacks when a lookup function is provided
  */
-async function safeFetch(params: {
+export async function safeFetchWithPolicy(params: {
   url: string;
-  allowHosts: string[];
-  /**
-   * Optional allowlist for forwarding Authorization across redirects.
-   * When set, Authorization is stripped before following redirects to hosts
-   * outside this list.
-   */
-  authorizationAllowHosts?: string[];
+  policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
   fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
   timeoutMs?: number;
 }): Promise<Response> {
+  const { allowHosts, authAllowHosts } = params.policy;
   const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
     params.requestInit &&
@@ -535,17 +530,13 @@ async function safeFetch(params: {
   const currentHeaders = new Headers(params.requestInit?.headers);
   const currentUrl = params.url;
 
-  if (!isUrlAllowed(currentUrl, params.allowHosts)) {
+  if (!isUrlAllowed(currentUrl, allowHosts)) {
     throw new Error(`Initial download URL blocked: ${currentUrl}`);
   }
 
   // Authorization is only allowed on explicitly auth-allowlisted hosts, including
   // the first hop. Redirect hops apply the same rule below or in fetchWithSsrFGuard.
-  if (
-    currentHeaders.has("authorization") &&
-    params.authorizationAllowHosts &&
-    !isUrlAllowed(currentUrl, params.authorizationAllowHosts)
-  ) {
+  if (currentHeaders.has("authorization") && !isUrlAllowed(currentUrl, authAllowHosts)) {
     currentHeaders.delete("authorization");
   }
 
@@ -566,10 +557,10 @@ async function safeFetch(params: {
       },
       maxRedirects: MAX_SAFE_REDIRECTS,
       requireHttps: true,
-      policy: resolveMediaSsrfPolicy(params.allowHosts),
+      policy: resolveMediaSsrfPolicy(allowHosts),
       lookupFn,
       retainAuthorizationRedirectHostnameAllowlist:
-        resolveRetainedAuthorizationRedirectHostnameAllowlist(params.authorizationAllowHosts),
+        resolveRetainedAuthorizationRedirectHostnameAllowlist(authAllowHosts),
       auditContext: "msteams.attachment",
       timeoutMs: params.timeoutMs ?? MSTEAMS_REQUEST_TIMEOUT_MS,
     });
@@ -606,42 +597,17 @@ async function safeFetch(params: {
   }
 
   // Validate redirect target against hostname allowlist
-  if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
+  if (!isUrlAllowed(redirectUrl, allowHosts)) {
     throw new Error(`Media redirect target blocked by allowlist: ${redirectUrl}`);
   }
 
   // Prevent credential bleed: only keep Authorization on redirect hops that
   // are explicitly auth-allowlisted.
-  if (
-    currentHeaders.has("authorization") &&
-    params.authorizationAllowHosts &&
-    !isUrlAllowed(redirectUrl, params.authorizationAllowHosts)
-  ) {
+  if (currentHeaders.has("authorization") && !isUrlAllowed(redirectUrl, authAllowHosts)) {
     currentHeaders.delete("authorization");
   }
 
   // A pinned dispatcher is already injected by an upstream guard; let it own
   // redirect handling after this allowlist validation step.
   return res;
-}
-
-export async function safeFetchWithPolicy(params: {
-  url: string;
-  policy: MSTeamsAttachmentFetchPolicy;
-  fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
-  requestInit?: RequestInit;
-  resolveFn?: MSTeamsAttachmentResolveFn;
-  timeoutMs?: number;
-}): Promise<Response> {
-  return await safeFetch({
-    url: params.url,
-    allowHosts: params.policy.allowHosts,
-    authorizationAllowHosts: params.policy.authAllowHosts,
-    fetchFn: params.fetchFn,
-    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
-    requestInit: params.requestInit,
-    resolveFn: params.resolveFn,
-    timeoutMs: params.timeoutMs,
-  });
 }

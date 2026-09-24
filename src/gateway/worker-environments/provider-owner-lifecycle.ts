@@ -44,6 +44,7 @@ export function createWorkerProviderOwnerLifecycle(
   > & {
     providerFor: (providerId: string) => WorkerProvider;
     requireWorkerProfile: (value: unknown) => WorkerProfile;
+    onOwnerStopped?: (environmentId: string) => void;
   },
 ) {
   const {
@@ -102,6 +103,7 @@ export function createWorkerProviderOwnerLifecycle(
     reason?: WorkerTunnelStopReason,
   ): Promise<WorkerEnvironmentRecord> => {
     requireCurrentOwner(record);
+    options.onOwnerStopped?.(record.environmentId);
     const sessionId = record.attachedSessionIds.length === 1 ? record.attachedSessionIds[0] : null;
     if (sessionId) {
       // Transfer an exact pending-result owner before credential revocation makes its
@@ -425,7 +427,6 @@ export function createWorkerProviderOwnerLifecycle(
     identityResolverFor,
     requireCurrentOwner,
     stopOwner,
-    destroyLease,
     beginDrain,
     finishProvenDestroy,
     lifecycleLease,

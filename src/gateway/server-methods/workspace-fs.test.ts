@@ -32,11 +32,15 @@ describe("readWorkspaceFilePrefix", () => {
 
     const fileHandlePrototype = await getFileHandleRead(filePath);
     const originalRead = fileHandlePrototype.read;
-    vi.spyOn(fileHandlePrototype, "read").mockImplementation(
-      async function (this: unknown, target, offset, length, position) {
-        return await originalRead.call(this, target, offset, Math.min(length, 1), position);
-      },
-    );
+    vi.spyOn(fileHandlePrototype, "read").mockImplementation(async function (
+      this: unknown,
+      target,
+      offset,
+      length,
+      position,
+    ) {
+      return await originalRead.call(this, target, offset, Math.min(length, 1), position);
+    });
 
     const result = await readWorkspaceFilePrefix(tempDir, "notes.txt", 100);
 
@@ -53,15 +57,19 @@ describe("readWorkspaceFilePrefix", () => {
     const fileHandlePrototype = await getFileHandleRead(filePath);
     const originalRead = fileHandlePrototype.read;
     let readCount = 0;
-    vi.spyOn(fileHandlePrototype, "read").mockImplementation(
-      async function (this: unknown, target, offset, length, position) {
-        readCount += 1;
-        if (readCount === 2) {
-          return { bytesRead: 0, buffer: target };
-        }
-        return await originalRead.call(this, target, offset, Math.min(length, 3), position);
-      },
-    );
+    vi.spyOn(fileHandlePrototype, "read").mockImplementation(async function (
+      this: unknown,
+      target,
+      offset,
+      length,
+      position,
+    ) {
+      readCount += 1;
+      if (readCount === 2) {
+        return { bytesRead: 0, buffer: target };
+      }
+      return await originalRead.call(this, target, offset, Math.min(length, 3), position);
+    });
 
     const result = await readWorkspaceFilePrefix(tempDir, "notes.txt", 100);
 

@@ -1,5 +1,4 @@
 /** Sanitizes and prepares one explicitly reviewed update-failure report. */
-import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import path from "node:path";
 import { valid as validSemver } from "semver";
@@ -10,11 +9,16 @@ import {
   redactSupportDiagnosticLine,
   redactSupportString,
 } from "../logging/diagnostic-support-redaction.js";
-import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import {
+  classifyUpdateOutcome,
+  UPDATE_FOREIGN_DESTINATION_REASON,
+} from "../shared/update-outcome.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { VERSION } from "../version.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { prepareGithubIssue, type PreparedGithubIssue } from "./github-issue.js";
 import { normalizeUpdateChannel } from "./update-channels.js";
+import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
 import { normalizeUpdateDoctorLintFindings } from "./update-doctor-lint.js";
 import {
   formatUpdateFailureFact,
@@ -254,6 +258,9 @@ async function renderBoundedDiagnostics(
   if (input.result.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
     diagnostics.push(`Advisory: ${LEGACY_UPDATE_RUN_ADVISORY}`);
   }
+  if (input.result.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
+    diagnostics.push(`Next step: ${UPDATE_DESTINATION_RECOVERY}`);
+  }
   for (const finding of normalizeUpdateDoctorLintFindings(
     input.result.steps.flatMap((step) => step.doctorLintFindings ?? []),
     context.env,
@@ -310,6 +317,7 @@ async function renderBoundedDiagnostics(
             formatUpdateFailureFact({
               ...(await projectPublicUpdateFailureIdentifiers(fact)),
               ...(fact.location ? { location: fact.location } : {}),
+              ...(fact.destination ? { destination: fact.destination } : {}),
               ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
               ...(fact.message
                 ? {
@@ -440,9 +448,7 @@ export async function prepareUpdateFailureReport(
     ...(await renderBoundedDiagnostics(input, context, steps)).map((line) => `- ${line}`),
     "",
   ].join("\n");
-  const reconciliationMarker = `openclaw-update-report:${createHash("sha256")
-    .update(`${input.attemptId}\0${bodyWithoutMarker}`)
-    .digest("hex")}`;
+  const reconciliationMarker = `openclaw-update-report:${sha256Hex(`${input.attemptId}\0${bodyWithoutMarker}`)}`;
   const body = truncateUtf8Prefix(
     bodyWithoutMarker.replace(
       "This report was explicitly reviewed and confirmed in OpenClaw.\n",
@@ -458,12 +464,8 @@ export async function prepareUpdateFailureReport(
   return {
     ...issue,
     attemptId: input.attemptId,
-    previewDigest: createHash("sha256").update(issue.body).digest("hex"),
-    savedReportPath: path.join(
-      stateDir,
-      "update-reports",
-      `${createHash("sha256").update(input.attemptId).digest("hex")}.md`,
-    ),
+    previewDigest: sha256Hex(issue.body),
+    savedReportPath: path.join(stateDir, "update-reports", `${sha256Hex(input.attemptId)}.md`),
     ...(issue.browserFallback.status === "available" ? { url: issue.browserFallback.url } : {}),
   };
 }

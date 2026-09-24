@@ -4,6 +4,7 @@
  * Shared by the browser control client, CLI, and Browser agent tool.
  */
 import type { lookup as dnsLookupCb } from "node:dns";
+import type { BrowserEngineDescriptor, BrowserEngineId } from "./engines/types.js";
 
 type BrowserCdpLookup = typeof dnsLookupCb;
 
@@ -86,6 +87,10 @@ export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
   driver?: "openclaw" | "existing-session" | "extension";
+  engine?: BrowserEngineId;
+  sessionScope?: BrowserEngineDescriptor["sessionScope"];
+  screenshotFidelity?: BrowserEngineDescriptor["screenshotFidelity"];
+  availableEngines?: BrowserEngineDescriptor[];
   transport?: BrowserTransport;
   running: boolean;
   cdpReady?: boolean;

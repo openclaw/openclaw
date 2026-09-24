@@ -155,23 +155,19 @@ function authorizePortalRequest(
 ): PortalAuthorization {
   const url = parsePortalUrl(req);
   const queryToken = url?.searchParams.get(PORTAL_AUTH_NAME) ?? undefined;
-  if (tokensEqual(queryToken, target.token)) {
-    url?.searchParams.delete(PORTAL_AUTH_NAME);
-    return {
-      kind: "authorized",
-      requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
-      setCookie: true,
-    };
+  const setCookie = tokensEqual(queryToken, target.token);
+  if (
+    !setCookie &&
+    !tokensEqual(readPortalCookie(req.headers.cookie, target.listenPort), target.token)
+  ) {
+    return { kind: "unauthorized" };
   }
-  if (tokensEqual(readPortalCookie(req.headers.cookie, target.listenPort), target.token)) {
-    url?.searchParams.delete(PORTAL_AUTH_NAME);
-    return {
-      kind: "authorized",
-      requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
-      setCookie: false,
-    };
-  }
-  return { kind: "unauthorized" };
+  url?.searchParams.delete(PORTAL_AUTH_NAME);
+  return {
+    kind: "authorized",
+    requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
+    setCookie,
+  };
 }
 
 function portalCookie(target: PortalProxyTarget, tls: boolean): string {

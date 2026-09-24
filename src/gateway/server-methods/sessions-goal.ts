@@ -22,7 +22,7 @@ import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import { fingerprintSessionGoalRequest } from "./session-goal-request.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 async function handleSessionGoalMutation(
   options: GatewayRequestHandlerOptions,
@@ -178,20 +178,14 @@ async function handleSessionGoalMutation(
 }
 
 export const sessionGoalHandlers: GatewayRequestHandlers = {
-  "sessions.goal.update": async (options) => {
-    const { params, respond } = options;
-    if (
-      assertValidParams(params, validateSessionsGoalUpdateParams, "sessions.goal.update", respond)
-    ) {
-      await handleSessionGoalMutation(options, params);
-    }
-  },
-  "sessions.goal.clear": async (options) => {
-    const { params, respond } = options;
-    if (
-      assertValidParams(params, validateSessionsGoalClearParams, "sessions.goal.clear", respond)
-    ) {
-      await handleSessionGoalMutation(options, { ...params, action: "clear" });
-    }
-  },
+  "sessions.goal.update": defineValidatedGatewayHandler(
+    "sessions.goal.update",
+    validateSessionsGoalUpdateParams,
+    (options) => handleSessionGoalMutation(options, options.params),
+  ),
+  "sessions.goal.clear": defineValidatedGatewayHandler(
+    "sessions.goal.clear",
+    validateSessionsGoalClearParams,
+    (options) => handleSessionGoalMutation(options, { ...options.params, action: "clear" }),
+  ),
 };
