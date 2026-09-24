@@ -128,10 +128,6 @@ export async function assertDirectoryIdentityStable(
   }
 }
 
-export async function ownedServiceParentIsStable(parent: OwnedServiceParent): Promise<boolean> {
-  return await directoryIdentityIsStable(parent);
-}
-
 export async function directoryIdentityIsStable(expected: OwnedServiceParent): Promise<boolean> {
   try {
     const current = await fs.lstat(expected.logicalPath);

@@ -254,7 +254,10 @@ describe("captured delivery queue state", () => {
       stage,
       context,
     );
-    const release = retireUnsentDelivery({ id, producerClaimId: claim.producerClaimId }, context);
+    const release = await retireUnsentDelivery(
+      { id, producerClaimId: claim.producerClaimId },
+      context,
+    );
     expect(release).toBeTypeOf("function");
     expect(await fs.readFile(artifact, "utf8")).toBe("synthetic audio");
     await withEnvAsync(

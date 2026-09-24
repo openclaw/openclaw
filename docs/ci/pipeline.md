@@ -105,7 +105,7 @@ the job's uploaded artifacts.
 | `check-additional-*`             | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture; the pure-reporting plugin SDK API diff runs on manual and release dispatches only | Node-relevant changes                                 |
 | `checks-node-compat-node24`      | Node 24 minimum compatibility build and smoke lane                                                                                                                                                                                                                                                       | Full Release Validation and manual dispatches only    |
 | `check-docs`                     | Docs formatting, lint, and broken-link checks                                                                                                                                                                                                                                                            | Docs changed (PRs and manual dispatch)                |
-| `native-i18n`                    | Verify native source extraction and localization safety on source PRs and release gates; enforce generated parity on generated PRs, generated-scope release gates, and ordinary manual CI                                                                                                                | Native i18n-relevant changes                          |
+| `native-i18n`                    | Verify native source extraction and localization safety on source PRs and release gates; enforce generated parity on generated PRs, generated-scope release gates, and ordinary manual CI, with warnings for proven obsolete native IDs and Android rows                                                 | Native i18n-relevant changes                          |
 | `skills-python`                  | Ruff + pytest for Python-backed skills                                                                                                                                                                                                                                                                   | Python-skill-relevant changes                         |
 | `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions                                                                                                                                                                                                                     | Windows-relevant changes                              |
 | `macos-node`                     | Focused macOS TypeScript tests: launchd, Homebrew, runtime paths, packaging scripts, process-group wrapper                                                                                                                                                                                               | macOS-relevant changes                                |
@@ -323,12 +323,12 @@ the published driver must update and replace the running managed Gateway.
 Schema refusal or rollback fails the gate. Operator state, plugin convergence,
 cron ownership, agent turns, no-op updates, and backup rollback assertions remain.
 
-Main prepares its smoke tarball with `pnpm build:ci-artifacts` followed by
+Main, including hourly `validation_tier=main` dispatches, prepares its smoke tarball with `pnpm build:ci-artifacts` followed by
 `scripts/package-openclaw-for-docker.mjs --skip-build`. This retains all runtime
 JavaScript, plugin assets, Control UI, metadata, and public SDK declarations;
 the canonical packer still runs its complete tarball integrity check. The
 scheduler consumes that tarball through `OPENCLAW_CURRENT_PACKAGE_TGZ` without
-rebuilding it. Manual and release CI retain the declaration-complete full
+rebuilding it. Full-tier manual and release CI retain the declaration-complete full
 package build.
 
 Ordinary canonical manual CI retains the survivor and adds

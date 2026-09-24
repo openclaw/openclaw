@@ -44,6 +44,7 @@ import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
+import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
@@ -76,6 +77,7 @@ import {
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
@@ -181,6 +183,20 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "deliveryQueue.outbound") {
+                  // Custody reads retain queue ownership admission even on a read-only connection.
+                  assertOpenClawStateWriteAllowed({
+                    database: db,
+                    databasePath: input.databasePath,
+                    env: input.context.environment,
+                  });
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    entries: readOutboundDeliveriesInDatabase({ db }, command),
+                  };
+                }
                 if (command.type === "acpSessions.metadata") {
                   return {
                     ok: true,

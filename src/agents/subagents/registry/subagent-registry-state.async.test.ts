@@ -1,4 +1,5 @@
 // Real-storage proof that committed and best-effort publications survive read-owner retirement.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readSqliteUserVersion } from "../../../infra/sqlite-user-version.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
@@ -10,6 +11,7 @@ import {
 } from "../../../state/openclaw-state-db-cache.js";
 import * as databaseCache from "../../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateSchema } from "../../../state/openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -62,6 +64,49 @@ function runs(model: string, runId = "one") {
   });
   return new Map([[run.runId, run]]);
 }
+
+it("reads resident session-list facts without enumerating the process environment", () => {
+  persistSubagentRunsToDiskOrThrow(runs("retained"));
+  const originalEnv = process.env;
+  let enumerations = 0;
+  let identity: object | undefined;
+  let model: string | undefined;
+  process.env = new Proxy(originalEnv, {
+    ownKeys(target) {
+      enumerations++;
+      return Reflect.ownKeys(target);
+    },
+  });
+  try {
+    identity = getSubagentSessionListReadSnapshotIdentity();
+    model = getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model;
+  } finally {
+    process.env = originalEnv;
+  }
+  expect(identity).toBeDefined();
+  expect(model).toBe("retained");
+  expect(enumerations).toBe(0);
+});
+
+it.each(["maintenance", "schema"] as const)(
+  "rejects resident session-list reads from an ended %s scope",
+  async (kind) => {
+    persistSubagentRunsToDiskOrThrow(runs("retained"));
+    const identity = getSubagentSessionListReadSnapshotIdentity();
+    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    const bind = () => AsyncLocalStorage.bind(getSubagentSessionListReadSnapshotIdentity);
+    const read =
+      kind === "maintenance"
+        ? maintenance.run(bind)
+        : withExistingOpenClawStateSchema(
+            { path: captureOpenClawStateWorkerContext().admission.databasePath },
+            bind,
+          );
+    await maintenance.close();
+    expect(read).toThrow(kind === "maintenance" ? "scope is closed" : "admission has ended");
+    expect(getSubagentSessionListReadSnapshotIdentity()).toBe(identity);
+  },
+);
 
 function holdFirstCompactRead(
   command = "subagents.sessionList",

@@ -47,6 +47,15 @@ it("refreshes prepared operator model policy without reading the profile store",
     expect(() =>
       assertOperatorModelAllowed(authority, { provider: "fixture", model: "a" }),
     ).not.toThrow();
+    config = {
+      ...config,
+      agents: { defaults: { model: { primary: "fixture/b", fallbacks: ["fixture/a"] } } },
+    };
+    publishOperatorRoleConfigChange(context);
+    expect(authority.modelPolicy?.models).toEqual([
+      { provider: "fixture", model: "b" },
+      { provider: "fixture", model: "a" },
+    ]);
     config = structuredClone(config);
     config.gateway!.roles!.definitions.writer!.modelPolicy = { deny: ["fixture/a"] };
     publishOperatorRoleConfigChange(context);

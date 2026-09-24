@@ -410,5 +410,22 @@ export async function prepareCodexAttemptTurnRequest(
       (params.images?.length ?? 0),
     tools,
   });
-  return { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent };
+  const buildLlmOutputEvent = () => ({
+    runId: params.runId,
+    sessionId: params.sessionId,
+    provider: usesSupervisionConnection
+      ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
+      : params.provider,
+    model: usesSupervisionConnection
+      ? (resourceState.thread.model ?? effectiveRuntimeModelId)
+      : params.modelId,
+    ...hookContextWindowFields,
+    resolvedRef: usesSupervisionConnection
+      ? `${resourceState.thread.modelProvider ?? effectiveRuntimeProviderId}/${resourceState.thread.model ?? effectiveRuntimeModelId}`
+      : (params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`),
+    ...(!usesSupervisionConnection && params.runtimePlan?.observability.harnessId
+      ? { harnessId: params.runtimePlan.observability.harnessId }
+      : {}),
+  });
+  return { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent, buildLlmOutputEvent };
 }

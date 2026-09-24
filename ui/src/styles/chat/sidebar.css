@@ -315,6 +315,10 @@
   opacity: 1;
 }
 
+.chat-workspace-rail__row-action {
+  padding: 0;
+}
+
 .chat-workspace-rail__row-action,
 .chat-workspace-rail__row-actions :where(.chat-copy-btn) {
   display: inline-grid;
@@ -576,6 +580,7 @@
   flex: 0 0 auto;
   width: 24px;
   height: 24px;
+  padding: 0;
   place-items: center;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);

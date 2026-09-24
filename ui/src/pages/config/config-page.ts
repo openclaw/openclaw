@@ -33,12 +33,6 @@ import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
 import {
-  confirmAndStartUpdate,
-  createUpdateProgressWatcher,
-} from "../../app/update-confirmation.ts";
-import { canReportUpdateFailure } from "../../app/update-failure-report-controller.ts";
-import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
-import {
   loadStoredHiddenSessionCatalogIds,
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
   setStoredSessionCatalogHidden,
@@ -90,7 +84,7 @@ import {
 } from "./session-observer-settings.ts";
 import { renderSessionStorage } from "./session-storage.ts";
 import { renderTalkPage } from "./talk-page.ts";
-import { renderUpdates } from "./updates.ts";
+import { renderUpdatesPage } from "./updates-page.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -918,49 +912,11 @@ export class ConfigPage extends OpenClawLightDomElement {
     const runtimeConfig = this.context.runtimeConfig;
     const configState = runtimeConfig.state;
     if (this.pageId === "updates") {
-      const gatewaySnapshot = this.context.gateway.snapshot;
-      const overlaySnapshot = this.context.overlays.snapshot;
-      const canAdmin = hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null);
-      return renderUpdates({
-        update: overlaySnapshot,
-        nativeDeviceSettings: this.context.nativeDeviceSettings,
+      return renderUpdatesPage({
+        context: this.context,
         configObject,
-        gatewayVersion:
-          this.context.config.current.serverVersion ??
-          gatewaySnapshot.hello?.server?.version ??
-          null,
-        controlUiCommit: CONTROL_UI_BUILD_INFO.commit,
-        controlUiCommitAt: CONTROL_UI_BUILD_INFO.commitAt,
-        controlUiBuiltAt: CONTROL_UI_BUILD_INFO.builtAt,
-        connected: gatewaySnapshot.phase === "connected",
         configBusy: this.isCuratedConfigMutationDisabled(),
-        canAdmin,
-        canUpdate: canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin"),
-        canCheckStatus: canCallGatewayMethod(gatewaySnapshot, "update.status", "operator.admin"),
-        canHoldUpdate: canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin"),
-        canReport: canReportUpdateFailure(gatewaySnapshot),
         updateBusy: this.isUpdateBusy(),
-        onChannelChange: (channel) => runtimeConfig.patchForm(["update", "channel"], channel),
-        onUpdateChecksChange: (enabled) =>
-          runtimeConfig.patchForm(["update", "checkOnStart"], enabled),
-        onAutomaticUpdatesChange: (enabled) =>
-          runtimeConfig.patchForm(["update", "auto", "enabled"], enabled),
-        onUpdateNow: () =>
-          void confirmAndStartUpdate({
-            startGatewayUpdate: () => void this.context.overlays.runUpdate(),
-            // The dialog outlives this page, so read live snapshots after each change.
-            watchUpdateProgress: createUpdateProgressWatcher(this.context),
-            onCheckStatus: () => this.context.overlays.refreshUpdateStatus(),
-            onAcknowledge: () => this.context.overlays.acknowledgeUpdateRun(),
-            updateAvailable: overlaySnapshot.updateAvailable,
-            updateSchedule: overlaySnapshot.updateSchedule,
-            // This row has no native-decline listener, so a handoff the Mac app
-            // refuses would end in silence. Keep it on the Gateway route.
-            viaNativeApp: false,
-          }),
-        onHoldUpdate: () => this.context.overlays.holdUpdate(),
-        onCheckStatus: () => this.context.overlays.refreshUpdateStatus(),
-        onReportFailure: (attemptId) => this.context.overlays.reportUpdateFailure(attemptId),
       });
     }
     const includeSections = configSectionKeysForPage(this.pageId);
