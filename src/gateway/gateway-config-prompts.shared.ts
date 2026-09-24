@@ -87,6 +87,9 @@ export async function maybeAddTailnetOriginToControlUiAllowedOrigins(params: {
 
   const existing = resolveControlUiAllowedOrigins(params.config);
   const updatedOrigins = appendAllowedOrigin(existing, tsOrigin);
+  if (updatedOrigins === existing) {
+    return params.config;
+  }
   // Preserve all unrelated gateway/controlUi config while adding the derived
   // tailnet origin, because setup writes partial gateway config objects.
   return {

@@ -356,25 +356,37 @@ describe("configureGatewayForSetup", () => {
     ]);
   });
 
-  it.each([{ allowedOrigins: undefined }, { allowedOrigins: [] }])(
+  it.each([
+    {
+      publicOrigin: "https://team.example.com",
+      allowedOrigins: undefined,
+      expected: ["https://team.example.com", "https://test-tailnet.ts.net"],
+    },
+    {
+      publicOrigin: "https://team.example.com",
+      allowedOrigins: [],
+      expected: ["https://test-tailnet.ts.net"],
+    },
+    {
+      publicOrigin: "https://test-tailnet.ts.net",
+      allowedOrigins: undefined,
+      expected: undefined,
+    },
+  ])(
     "preserves effective origins when adding Tailscale (%j)",
-    async ({ allowedOrigins }) => {
+    async ({ publicOrigin, allowedOrigins, expected }) => {
       mocks.getTailnetHostname.mockResolvedValue("test-tailnet.ts.net");
       const result = await runGatewayConfig({
         tailscaleChoice: "serve",
         nextConfig: {
           gateway: {
-            publicOrigin: "https://team.example.com",
+            publicOrigin,
             controlUi: { allowedOrigins },
           },
         },
       });
 
-      expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toEqual(
-        allowedOrigins === undefined
-          ? ["https://team.example.com", "https://test-tailnet.ts.net"]
-          : ["https://test-tailnet.ts.net"],
-      );
+      expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toEqual(expected);
     },
   );
 
