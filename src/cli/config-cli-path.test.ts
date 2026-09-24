@@ -106,15 +106,11 @@ describe("replacement guard advice", () => {
     throw new Error("expected the replacement guard to refuse");
   }
 
-  function requireReplacePathArgument(message: string): string {
-    const argument = /--replace-path (\S+) to replace/.exec(message)?.[1];
-    if (!argument) {
-      throw new Error(`refusal names no --replace-path argument: ${message}`);
-    }
-    return argument;
+  function replacePathArguments(message: string): string[] {
+    return [...message.matchAll(/--replace-path (\S+)/g)].map((match) => match[1] ?? "");
   }
 
-  /** Delivers one argument the way a shell does: quoted spans are literal, `'\''` splices a quote. */
+  /** Delivers one argument the way a POSIX shell does: quoted spans are literal, `'\''` splices a quote. */
   function readShellArgument(token: string): string {
     let value = "";
     for (let index = 0; index < token.length; index += 1) {
@@ -131,6 +127,24 @@ describe("replacement guard advice", () => {
         index += 1;
       } else {
         value += character;
+      }
+    }
+    return value;
+  }
+
+  /** Delivers one argument the way PowerShell does: quoted spans are literal, `''` splices a quote. */
+  function readPowerShellArgument(token: string): string {
+    let value = "";
+    let quoted = false;
+    for (let index = 0; index < token.length; index += 1) {
+      const character = token[index];
+      if (character !== "'") {
+        value += character;
+      } else if (quoted && token[index + 1] === "'") {
+        value += "'";
+        index += 1;
+      } else {
+        quoted = !quoted;
       }
     }
     return value;
@@ -193,14 +207,9 @@ describe("replacement guard advice", () => {
       argument: 'models.providers["local]service"].models',
       token: `'models.providers["local]service"].models'`,
     },
-    {
-      key: "it's",
-      argument: `models.providers["it's"].models`,
-      token: `'models.providers["it'\\''s"].models'`,
-    },
-  ])("suggests a $key retry that survives the shell", ({ key, argument, token }) => {
+  ])("suggests one $key retry that both shells deliver intact", ({ key, argument, token }) => {
     const path = ["models", "providers", key, "models"];
-    const guardArgument = requireReplacePathArgument(
+    const argumentsFromGuard = replacePathArguments(
       refusal(() =>
         assertNonDestructiveReplacement({
           root,
@@ -210,16 +219,39 @@ describe("replacement guard advice", () => {
         }),
       ),
     );
-    expect(guardArgument).toBe(token);
-    expect(readShellArgument(guardArgument)).toBe(argument);
-    expect(parseConfigSetPath(readShellArgument(guardArgument))).toEqual(path);
+    expect(argumentsFromGuard).toEqual([token]);
+    // A quoted span with no apostrophe in it is literal in both conventions, so one token serves both.
+    expect(readShellArgument(token)).toBe(argument);
+    expect(readPowerShellArgument(token)).toBe(argument);
+    expect(parseConfigSetPath(readShellArgument(token))).toEqual(path);
     expect(
-      readShellArgument(
-        requireReplacePathArgument(
-          refusal(() => mergeAtPath(root, path, {}, { command: "patch" })),
-        ),
-      ),
-    ).toBe(argument);
+      replacePathArguments(refusal(() => mergeAtPath(root, path, {}, { command: "patch" }))),
+    ).toEqual(argumentsFromGuard);
+  });
+
+  it("names each shell's own spelling when the key holds an apostrophe", () => {
+    const path = ["models", "providers", "it's", "models"];
+    const argument = `models.providers["it's"].models`;
+    const advice = refusal(() =>
+      assertNonDestructiveReplacement({
+        root,
+        path,
+        value: [{ id: "qwen3:8b" }],
+        command: "patch",
+      }),
+    );
+    const [posix, powershell] = replacePathArguments(advice);
+    expect(advice).toContain("in bash and zsh, or --replace-path");
+    expect(advice).toContain("in PowerShell to replace intentionally.");
+    expect(posix).toBe(`'models.providers["it'\\''s"].models'`);
+    expect(powershell).toBe(`'models.providers["it''s"].models'`);
+    expect(readShellArgument(posix ?? "")).toBe(argument);
+    expect(readPowerShellArgument(powershell ?? "")).toBe(argument);
+    expect(parseConfigSetPath(readShellArgument(posix ?? ""))).toEqual(path);
+    expect(parseConfigSetPath(readPowerShellArgument(powershell ?? ""))).toEqual(path);
+    // Copying either form into the other shell is what the two spellings exist to prevent.
+    expect(readPowerShellArgument(posix ?? "")).not.toBe(argument);
+    expect(readShellArgument(powershell ?? "")).not.toBe(argument);
   });
 
   it("strands a bare retry whose key contains a closing bracket", () => {

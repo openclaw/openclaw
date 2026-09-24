@@ -43,13 +43,21 @@ function refusalPathLabel(command: ConfigMutationCommand, path: PathSegment[]): 
 
 const COPYABLE_ARGUMENT_RE = /^[A-Za-z0-9_.:/@+-]+$/;
 
-/** A copied retry crosses a shell, which strips the quotes a bracketed path needs to re-parse. */
-function shellArgument(raw: string): string {
-  return COPYABLE_ARGUMENT_RE.test(raw) ? raw : `'${raw.replaceAll("'", `'\\''`)}'`;
-}
-
+/**
+ * A copied retry crosses a shell, which strips the quotes a bracketed path needs to re-parse.
+ * Single quotes hold everything else literally in both POSIX shells and PowerShell; a key holding
+ * an apostrophe has no spelling that survives both conventions, so the advice names each one.
+ */
 function replacePathArgument(pathLabel: string): string {
-  return `--replace-path ${shellArgument(pathLabel)}`;
+  if (COPYABLE_ARGUMENT_RE.test(pathLabel)) {
+    return `--replace-path ${pathLabel}`;
+  }
+  if (!pathLabel.includes("'")) {
+    return `--replace-path '${pathLabel}'`;
+  }
+  const posix = `'${pathLabel.replaceAll("'", `'\\''`)}'`;
+  const powershell = `'${pathLabel.replaceAll("'", "''")}'`;
+  return `--replace-path ${posix} in bash and zsh, or --replace-path ${powershell} in PowerShell`;
 }
 
 type SetAtPathOptions = {
