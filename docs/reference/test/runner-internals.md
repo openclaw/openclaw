@@ -245,7 +245,8 @@ and blob files, then publish the requested JSON from Vitest's native report merg
 They print a companion `<output>.reports-<unique>` directory. Keep that directory:
 it contains original reports, per-attempt coverage files when coverage is enabled,
 and an `index.json` with child exit codes, signals, timeouts and unstarted work.
-Only the accepted retry attempt contributes to the aggregate.
+Each invocation runs once. A no-output timeout fails the command and leaves the
+report set incomplete; it never starts a replacement attempt.
 Blob reports are exact-version artifacts. Rerun child reports with the current
 Vitest version before merging artifacts produced by another version.
 

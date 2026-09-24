@@ -20,7 +20,6 @@ function expandedPlan(
     allowFrozenTargetScenarioOmissions: true,
     includeOpenWebUI: false,
     liveMode: "all",
-    liveRetries: 1,
     orderLanes: (entries) => entries,
     planReleaseAll: false,
     profile: "all",

@@ -110,7 +110,6 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     "batch",
     "batch-parallel",
     "retry",
-    "watchdog",
     "dotted",
     "metadata",
     "ignored-unhandled",
@@ -162,16 +161,6 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         );
         expect(index.merge).toMatchObject({ code: 0, signal: null });
       }
-      if (mode === "watchdog") {
-        expect(
-          fs.readFileSync(
-            path.join(path.dirname(path.dirname(result.output)), "cold-started"),
-            "utf8",
-          ),
-        ).toBe("started");
-        expect(index.entries[0].attempts).toHaveLength(2);
-        expect(index.entries[0].attempts[0].outcome.noOutputTimedOut).toBe(true);
-      }
       if (mode === "metadata") {
         expect(parts.map((part: { json: string }) => json(part.json).snapshot.matched)).toEqual([
           1, 1,
@@ -185,6 +174,31 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
           ).toBe(true);
         }
       }
+    },
+  );
+
+  reportTest(
+    "preserves the first watchdog failure without publishing an aggregate",
+    { timeout: 60000 },
+    async ({ expect, reports }) => {
+      const result = await reports.run("watchdog");
+      expect(result.code, result.stderr).toBe(143);
+      expect(
+        fs.readFileSync(
+          path.join(path.dirname(path.dirname(result.output)), "cold-started"),
+          "utf8",
+        ),
+      ).toBe("started");
+      const index = json(path.join(result.reportSet!, "index.json"));
+      expect(index.complete).toBe(false);
+      expect(index.entries[0].attempts).toHaveLength(1);
+      expect(index.entries[0].attempts[0].outcome).toMatchObject({
+        code: 143,
+        noOutputTimedOut: true,
+      });
+      expect(index.entries[1].attempts).toHaveLength(0);
+      expect(fs.existsSync(result.output)).toBe(false);
+      expect(result.stderr).not.toContain("[test] retrying");
     },
   );
 
