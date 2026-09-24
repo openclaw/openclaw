@@ -1,6 +1,7 @@
 import type { ReactiveControllerHost } from "lit";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { isTarget as isCatalogTarget } from "./catalog-target.ts";
 import { DraftGatewayState, type DraftPreferenceOptions } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
@@ -170,7 +171,11 @@ export class NewSessionDraftController {
       this.place.setAgentsHydrated(true);
       this.place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
     } else if (this.place.agentsHydrated && modelDefaultsPolicy !== this.modelDefaultsPolicy) {
-      this.place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
+      const { context, data } = this.read();
+      this.place.modelControl.load(context, this.place.agentId, !isCatalogTarget(data), {
+        agent: this.place.selectedAgent(),
+        preference: this.gateway.readPreference(this.place.agentId),
+      });
     }
     if (
       modelDefaultsPolicy === "configured" &&

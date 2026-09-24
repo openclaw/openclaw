@@ -121,14 +121,167 @@ suite.define(() => {
                 animations: "disabled",
               });
             }
-            expect(
-              await page.evaluate(
-                (key) =>
-                  JSON.parse(localStorage.getItem(key) ?? "null")?.agents?.main?.thinkingLevel,
-                storageKey,
-              ),
-            ).toBe("low");
+            // Configured model metadata can render before the independent identity
+            // preference request mirrors its result into browser storage.
+            await expect
+              .poll(() =>
+                page.evaluate(
+                  (key) =>
+                    JSON.parse(localStorage.getItem(key) ?? "null")?.agents?.main?.thinkingLevel,
+                  storageKey,
+                ),
+              )
+              .toBe("low");
             if (policy === "configured") {
+              if (source === "browser") {
+                // A draft with no explicit model choice has exactly the pre-change row
+                // format: content and blobs, without the optional modelSelection field.
+                await page.locator(".new-session-page__message").fill("Unsent before upgrade");
+                await page.locator(".agent-chat__file-input").setInputFiles({
+                  name: "upgrade-notes.txt",
+                  mimeType: "text/plain",
+                  buffer: Buffer.from("Keep these attachment bytes"),
+                });
+                await expect
+                  .poll(() =>
+                    page.evaluate(async () => {
+                      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+                        const request = indexedDB.open("openclaw-control-ui");
+                        request.addEventListener("success", () => resolve(request.result), {
+                          once: true,
+                        });
+                        request.addEventListener(
+                          "error",
+                          () => reject(request.error ?? new Error("IndexedDB request failed")),
+                          { once: true },
+                        );
+                      });
+                      try {
+                        const rows = await new Promise<
+                          {
+                            text: string;
+                            modelSelection?: unknown;
+                            attachments: { blob: Blob }[];
+                          }[]
+                        >((resolve, reject) => {
+                          const request = db
+                            .transaction("composerDrafts")
+                            .objectStore("composerDrafts")
+                            .getAll();
+                          request.addEventListener("success", () => resolve(request.result), {
+                            once: true,
+                          });
+                          request.addEventListener(
+                            "error",
+                            () => reject(request.error ?? new Error("IndexedDB request failed")),
+                            { once: true },
+                          );
+                        });
+                        const row = rows.find((value) => value.text === "Unsent before upgrade");
+                        return {
+                          text: row?.text,
+                          hasModelSelection: row ? Object.hasOwn(row, "modelSelection") : null,
+                          attachmentText: await row?.attachments[0]?.blob.text(),
+                        };
+                      } finally {
+                        db.close();
+                      }
+                    }),
+                  )
+                  .toEqual({
+                    text: "Unsent before upgrade",
+                    hasModelSelection: false,
+                    attachmentText: "Keep these attachment bytes",
+                  });
+                // Remove the running app before seeding the old serializer shape. Only
+                // its already-scoped identity/fence fields are reused; no new row fields.
+                await page.route("**/legacy-draft-seed", (route) =>
+                  route.fulfill({
+                    contentType: "text/html",
+                    body: "<!doctype html><title>Legacy draft fixture</title>",
+                  }),
+                );
+                await page.goto(suite.server.baseUrl + "legacy-draft-seed");
+                await page.evaluate(async () => {
+                  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+                    const request = indexedDB.open("openclaw-control-ui");
+                    request.addEventListener("success", () => resolve(request.result), {
+                      once: true,
+                    });
+                    request.addEventListener(
+                      "error",
+                      () => reject(request.error ?? new Error("IndexedDB request failed")),
+                      { once: true },
+                    );
+                  });
+                  try {
+                    await new Promise<void>((resolve, reject) => {
+                      const transaction = db.transaction("composerDrafts", "readwrite");
+                      const store = transaction.objectStore("composerDrafts");
+                      const request = store.getAll();
+                      request.addEventListener(
+                        "success",
+                        () => {
+                          const old = request.result.find(
+                            (row) => row.text === "Unsent before upgrade",
+                          );
+                          if (!old) {
+                            transaction.abort();
+                            return;
+                          }
+                          // Matches writeDurableComposerDraft at the pre-change base:
+                          // 60d9d1042375f014944b94006f4b1c2b2f5af9c0.
+                          store.put({
+                            key: old.key,
+                            ownerKey: old.ownerKey,
+                            gatewayOwner: old.gatewayOwner,
+                            recoveryScope: old.recoveryScope,
+                            scopeKey: old.scopeKey,
+                            revision: old.revision,
+                            writeId: old.writeId,
+                            updatedAt: old.updatedAt,
+                            text: "Unsent before upgrade",
+                            attachments: [
+                              {
+                                blob: new Blob(["Keep these attachment bytes"], {
+                                  type: "text/plain",
+                                }),
+                                mimeType: "text/plain",
+                                origin: "file",
+                                fileName: "upgrade-notes.txt",
+                                sizeBytes: 27,
+                              },
+                            ],
+                          });
+                        },
+                        { once: true },
+                      );
+                      transaction.addEventListener("complete", () => resolve(), { once: true });
+                      transaction.addEventListener(
+                        "abort",
+                        () => reject(transaction.error ?? new Error("Legacy fixture missing")),
+                        { once: true },
+                      );
+                      transaction.addEventListener(
+                        "error",
+                        () => reject(transaction.error ?? new Error("Legacy fixture failed")),
+                        { once: true },
+                      );
+                    });
+                  } finally {
+                    db.close();
+                  }
+                });
+                await page.goto(suite.server.baseUrl + "new");
+                await expect
+                  .poll(() => page.locator(".new-session-page__message").inputValue())
+                  .toBe("Unsent before upgrade");
+                await expect
+                  .poll(() => page.locator(".chat-attachment-file__name").textContent())
+                  .toContain("upgrade-notes.txt");
+                await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("");
+                await expect.poll(() => effort.textContent()).toContain("High");
+              }
               await page.locator('[data-chat-model-select="true"]').click();
               await page.locator('[data-chat-model-search="true"]').fill("mini");
               await page.locator('[data-chat-model-option="openai/gpt-4.1-mini"]').click();
@@ -190,6 +343,17 @@ suite.define(() => {
             const request = await gateway.waitForRequest("sessions.create");
             expect(request.params).toMatchObject({ model: preference.model, thinkingLevel: "low" });
             expect(request.params).toHaveProperty("fastMode", true);
+            if (policy === "configured" && source === "browser") {
+              expect(request.params).toMatchObject({
+                attachments: [
+                  {
+                    fileName: "upgrade-notes.txt",
+                    mimeType: "text/plain",
+                    content: Buffer.from("Keep these attachment bytes").toString("base64"),
+                  },
+                ],
+              });
+            }
             if (policy === "configured") {
               await waitForCommittedChatRoute(page);
               await page.goto(suite.server.baseUrl + "new");
