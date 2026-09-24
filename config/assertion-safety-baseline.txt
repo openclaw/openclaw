@@ -1969,7 +1969,6 @@ src/auto-reply/reply/commands-plugins.ts	1
 src/auto-reply/reply/commands-private-route.ts	1
 src/auto-reply/reply/commands-reset-hooks.ts	3
 src/auto-reply/reply/commands-reset.ts	1
-src/auto-reply/reply/commands-setunset-standard.ts	3
 src/auto-reply/reply/commands-subagents/action-log.ts	1
 src/auto-reply/reply/commands-system-prompt.ts	2
 src/auto-reply/reply/config-mutations.ts	1
@@ -3003,7 +3002,6 @@ src/node-host/worker-support.ts	4
 src/plugin-sdk/acp-runtime.ts	1
 src/plugin-sdk/agent-harness-exec-review-runtime.ts	1
 src/plugin-sdk/allowlist-config-edit.ts	6
-src/plugin-sdk/api-baseline-declaration-print.ts	1
 src/plugin-sdk/api-baseline.ts	1
 src/plugin-sdk/approval-auth-helpers.ts	1
 src/plugin-sdk/approval-handler-runtime.ts	1

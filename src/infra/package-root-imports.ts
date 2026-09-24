@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { isAbsolute, win32 } from "node:path";
-import type ts from "typescript";
+import type { Binding, NodePath } from "@babel/traverse";
+import type * as t from "@babel/types";
 
 const require = createRequire(import.meta.url);
 type Origin =
@@ -98,152 +99,158 @@ function union(...values: Origin[][]): Origin[] {
   return result.length ? result : ["unknown"];
 }
 
+type Declaration = {
+  node: t.Node;
+  name: t.Identifier;
+  constant: boolean;
+  inputScope?: t.Function;
+};
+
 /** Read dependency ownership without resolving or executing the inspected package. */
 export function collectPackageRootImports(
   source: string,
   onImport?: (specifier: string, start: number, kind: "static" | "runtime") => void,
 ): string[] {
-  // SAFETY: The pinned TypeScript runtime implements the compiler API in its declarations.
-  const ts = require("typescript") as typeof import("typescript");
-  const file = ts.createSourceFile(
-    "dist.js",
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.JS,
-  );
+  const { parse }: typeof import("@babel/parser") = require("@babel/parser");
+  // SAFETY: Babel 7 exposes its typed traversal API as the default CommonJS export.
+  const { default: traverse } = require("@babel/traverse") as typeof import("@babel/traverse");
+  const file = parse(source, {
+    sourceType: "unambiguous",
+    allowUndeclaredExports: true,
+    allowReturnOutsideFunction: true,
+    createImportExpressions: true,
+  });
   const imports: string[] = [];
   const recordImport = (
     specifier: string,
-    node: ts.Node,
+    node: t.Node,
     kind: "static" | "runtime" = "runtime",
   ) => {
     imports.push(specifier);
-    onImport?.(specifier, node.getStart(file), kind);
+    if (onImport) {
+      if (node.start == null) {
+        throw new Error("Parsed package import is missing its source position");
+      }
+      onImport(specifier, node.start, kind);
+    }
   };
-  const calls: ts.CallExpression[] = [];
-  const scopes: Array<ts.SourceFile | ts.FunctionLikeDeclaration> = [file];
-  const assignments: Array<[ts.Identifier, ts.Expression | undefined]> = [];
-  const cwdReferences: Array<ts.Expression | ts.ImportSpecifier | ts.BindingElement> = [];
+  const paths = new Map<t.Node, NodePath>();
+  const calls: Array<t.CallExpression | t.OptionalCallExpression> = [];
+  const scopes: Array<t.Program | t.Function> = [file.program];
+  const declarations = new Map<Binding, Declaration[]>();
+  const assignments: Array<[t.Identifier, t.Node | undefined]> = [];
+  const cwdReferences: t.Node[] = [];
   // Only const primitive paths and bound Node loaders survive the entry prefix; raw inputs do not.
-  const snapshots = new Map<ts.Symbol, Origin[]>();
+  const snapshots = new Map<Binding, Origin[]>();
   let changedCwd = false;
-  let checker: ts.TypeChecker | undefined;
-  function symbolAt(node: ts.Node): ts.Symbol | undefined {
-    checker ??= ts
-      .createProgram(
-        [file.fileName],
-        { allowJs: true, noLib: true, noResolve: true },
-        {
-          getSourceFile: (name) => (name === file.fileName ? file : undefined),
-          getDefaultLibFileName: () => "",
-          writeFile: () => {},
-          getCurrentDirectory: () => "",
-          getCanonicalFileName: (name) => name,
-          useCaseSensitiveFileNames: () => true,
-          getNewLine: () => "\n",
-          fileExists: (name) => name === file.fileName,
-          readFile: (name) => (name === file.fileName ? source : undefined),
-        },
-      )
-      .getTypeChecker();
-    return ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
-      ? checker.getShorthandAssignmentValueSymbol(node.parent)
-      : checker.getSymbolAtLocation(node);
+
+  function symbolAt(node: t.Identifier): Binding | undefined {
+    return paths.get(node)?.scope.getBinding(node.name);
   }
-  function literal(node: ts.Expression | undefined): string | undefined {
-    let value = node;
-    while (value && ts.isParenthesizedExpression(value)) {
-      value = value.expression;
-    }
-    return value && ts.isStringLiteral(value) ? value.text : undefined;
+  function literal(node: t.Node | null | undefined): string | undefined {
+    return node?.type === "StringLiteral" ? node.value : undefined;
   }
-  function property(node: ts.Node): string | undefined {
-    return ts.isIdentifier(node) || ts.isStringLiteral(node)
-      ? node.text
-      : ts.isComputedPropertyName(node)
-        ? literal(node.expression)
-        : undefined;
+  function property(node: t.Node): string | undefined {
+    return node.type === "Identifier" ? node.name : literal(node);
   }
-  const logical = new Set([
-    ts.SyntaxKind.BarBarToken,
-    ts.SyntaxKind.AmpersandAmpersandToken,
-    ts.SyntaxKind.QuestionQuestionToken,
-    ts.SyntaxKind.BarBarEqualsToken,
-    ts.SyntaxKind.AmpersandAmpersandEqualsToken,
-    ts.SyntaxKind.QuestionQuestionEqualsToken,
-  ]);
-  function recordWrite(node: ts.Node, value?: ts.Expression) {
-    if (ts.isIdentifier(node)) {
-      assignments.push([node, value]);
-    } else if (ts.isParenthesizedExpression(node)) {
-      recordWrite(node.expression, value);
-    } else if (ts.isPropertyAssignment(node)) {
-      recordWrite(node.initializer);
-    } else if (ts.isShorthandPropertyAssignment(node) || ts.isBindingElement(node)) {
-      recordWrite(node.name);
-    } else if (ts.isBinaryExpression(node)) {
-      recordWrite(node.left);
-    } else if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) {
-      ts.forEachChild(node, (child) => recordWrite(child));
+  function memberName(node: t.MemberExpression | t.OptionalMemberExpression) {
+    return node.computed ? literal(node.property) : property(node.property);
+  }
+  function register(path: NodePath, constant: boolean, inputScope?: t.Function) {
+    for (const name of Object.values(path.getBindingIdentifiers())) {
+      const symbol = path.scope.getBinding(name.name);
+      if (symbol) {
+        const entries = declarations.get(symbol) ?? [];
+        entries.push({ node: path.node, name, constant, inputScope });
+        declarations.set(symbol, entries);
+      }
     }
   }
-  const pending: ts.Node[] = [file];
-  let hasLoader = false;
-  while (pending.length) {
-    const node = pending.pop()!;
-    if (
-      (ts.isIdentifier(node) || ts.isStringLiteral(node)) &&
-      ["require", "createRequire", "getBuiltinModule"].includes(node.text)
-    ) {
-      hasLoader = true;
+  function recordWrite(node: t.Node, value?: t.Node) {
+    switch (node.type) {
+      case "Identifier":
+        assignments.push([node, value]);
+        break;
+      case "AssignmentPattern":
+        recordWrite(node.left);
+        break;
+      case "ObjectPattern":
+        for (const entry of node.properties) {
+          recordWrite(entry.type === "ObjectProperty" ? entry.value : entry.argument);
+        }
+        break;
+      case "ArrayPattern":
+        for (const entry of node.elements) {
+          if (entry) {
+            recordWrite(entry);
+          }
+        }
+        break;
+      case "RestElement":
+        recordWrite(node.argument);
+        break;
+      default:
+        // Member writes do not rebind their containing lexical variable.
+        break;
     }
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-      const specifier = literal(node.moduleSpecifier);
+  }
+  traverse(file, {
+    enter(path) {
+      paths.set(path.node, path);
+    },
+    ImportDeclaration(path) {
+      recordImport(path.node.source.value, path.node, "static");
+      for (const specifier of path.get("specifiers")) {
+        register(specifier, true);
+      }
+    },
+    ExportNamedDeclaration(path) {
+      if (path.node.source) {
+        recordImport(path.node.source.value, path.node, "static");
+      }
+    },
+    ExportAllDeclaration(path) {
+      recordImport(path.node.source.value, path.node, "static");
+    },
+    ImportExpression(path) {
+      const specifier = literal(path.node.source);
       if (specifier !== undefined) {
-        recordImport(specifier, node, "static");
+        recordImport(specifier, path.node);
       }
-    }
-    if (ts.isCallExpression(node)) {
-      const specifier = literal(node.arguments[0]);
-      if (node.expression.kind === ts.SyntaxKind.ImportKeyword && specifier !== undefined) {
-        recordImport(specifier, node);
-      } else {
-        calls.push(node);
+    },
+    "CallExpression|OptionalCallExpression"(path) {
+      if (path.isCallExpression() || path.isOptionalCallExpression()) {
+        calls.push(path.node);
       }
-    }
-    if (ts.isFunctionLike(node) && "body" in node && node.body) {
-      scopes.push(node);
-    }
-    if (
-      ts.isBinaryExpression(node) &&
-      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
-    ) {
-      recordWrite(node.left, node.right);
-    }
-    if (
-      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
-      !ts.isVariableDeclarationList(node.initializer)
-    ) {
-      recordWrite(node.initializer);
-    }
-    if (
-      (ts.isPropertyAccessExpression(node) && node.name.text === "chdir") ||
-      (ts.isElementAccessExpression(node) && literal(node.argumentExpression) === "chdir") ||
-      ((ts.isImportSpecifier(node) || ts.isBindingElement(node)) &&
-        property(node.propertyName ?? node.name) === "chdir")
-    ) {
-      cwdReferences.push(node);
-    }
-    ts.forEachChild(node, (child) => {
-      pending.push(child);
-    });
-  }
-  if (!hasLoader) {
-    return imports;
-  }
-  const writes = new Map<ts.Symbol, Array<ts.Expression | undefined>>();
+    },
+    Function(path) {
+      scopes.push(path.node);
+      for (const parameter of path.get("params")) {
+        register(parameter, false, path.node);
+      }
+    },
+    VariableDeclarator(path) {
+      register(path, path.parentPath.isVariableDeclaration({ kind: "const" }));
+    },
+    AssignmentExpression(path) {
+      recordWrite(path.node.left, path.node.right);
+    },
+    "ForOfStatement|ForInStatement"(path) {
+      if (path.isForOfStatement() || path.isForInStatement()) {
+        if (path.node.left.type !== "VariableDeclaration") {
+          recordWrite(path.node.left);
+        }
+      }
+    },
+    "MemberExpression|OptionalMemberExpression"(path) {
+      if (path.isMemberExpression() || path.isOptionalMemberExpression()) {
+        if (memberName(path.node) === "chdir") {
+          cwdReferences.push(path.node);
+        }
+      }
+    },
+  });
+  const writes = new Map<Binding, Array<t.Node | undefined>>();
   for (const [name, value] of assignments) {
     const symbol = symbolAt(name);
     if (symbol) {
@@ -262,54 +269,58 @@ export function collectPackageRootImports(
     );
   }
   function origins(
-    expression: ts.Expression,
-    seen = new Set<ts.Symbol>(),
-    inputScope?: ts.Node,
+    expression: t.Node,
+    seen = new Set<Binding>(),
+    inputScope?: t.Node,
     awaited = false,
   ): Origin[] {
-    if (ts.isParenthesizedExpression(expression)) {
-      return origins(expression.expression, seen, inputScope, awaited);
+    if (expression.type === "AwaitExpression") {
+      return origins(expression.argument, seen, inputScope, true);
     }
-    if (ts.isAwaitExpression(expression)) {
-      return origins(expression.expression, seen, inputScope, true);
-    }
-    if (ts.isStringLiteralLike(expression)) {
+    if (
+      expression.type === "StringLiteral" ||
+      (expression.type === "TemplateLiteral" && expression.expressions.length === 0)
+    ) {
+      const value =
+        expression.type === "StringLiteral"
+          ? expression.value
+          : (expression.quasis[0]?.value.cooked ?? "");
       return [
-        isAbsolute(expression.text) ||
-        win32.isAbsolute(expression.text) ||
-        URL.canParse(expression.text)
+        isAbsolute(value) || win32.isAbsolute(value) || URL.canParse(value)
           ? "literal"
           : "relative",
       ];
     }
-    if (
-      ts.isNumericLiteral(expression) ||
-      [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(
-        expression.kind,
-      )
-    ) {
+    if (["NumericLiteral", "BooleanLiteral", "NullLiteral"].includes(expression.type)) {
       return ["literal"];
     }
-    if (ts.isConditionalExpression(expression)) {
+    if (expression.type === "ConditionalExpression") {
       return union(
-        origins(expression.whenTrue, new Set(seen), inputScope),
-        origins(expression.whenFalse, new Set(seen), inputScope),
+        origins(expression.consequent, new Set(seen), inputScope),
+        origins(expression.alternate, new Set(seen), inputScope),
       );
     }
-    if (ts.isBinaryExpression(expression)) {
-      const op = expression.operatorToken.kind;
-      if (op === ts.SyntaxKind.EqualsToken || op === ts.SyntaxKind.CommaToken) {
+    if (expression.type === "SequenceExpression") {
+      const result = expression.expressions.at(-1);
+      return result ? origins(result, seen, inputScope) : ["unknown"];
+    }
+    if (
+      expression.type === "BinaryExpression" ||
+      expression.type === "LogicalExpression" ||
+      expression.type === "AssignmentExpression"
+    ) {
+      if (expression.operator === "=") {
         return origins(expression.right, seen, inputScope);
       }
       const values = union(
         origins(expression.left, new Set(seen), inputScope),
         origins(expression.right, new Set(seen), inputScope),
       );
-      if (logical.has(op)) {
+      if (["||", "&&", "??", "||=", "&&=", "??="].includes(expression.operator)) {
         return values;
       }
       if (
-        op === ts.SyntaxKind.PlusToken &&
+        expression.operator === "+" &&
         values.some((value) => callerValues.has(value)) &&
         values.every((value) => pathValues.has(value))
       ) {
@@ -317,10 +328,10 @@ export function collectPackageRootImports(
       }
       return ["scalar"];
     }
-    if (ts.isIdentifier(expression)) {
+    if (expression.type === "Identifier") {
       const symbol = symbolAt(expression);
-      if (!symbol?.declarations?.length) {
-        return [ambient.get(expression.text) ?? "unknown"];
+      if (!symbol) {
+        return [ambient.get(expression.name) ?? "unknown"];
       }
       const snapshot = snapshots.get(symbol);
       if (snapshot) {
@@ -330,44 +341,38 @@ export function collectPackageRootImports(
         return ["unknown"];
       }
       seen.add(symbol);
-      const entryParameter = symbol.declarations.some(
-        (declaration) =>
-          ts.isParameter(declaration) &&
-          ts.findAncestor(declaration.parent, ts.isFunctionLike) === inputScope,
-      );
+      const entries = declarations.get(symbol) ?? [];
+      const entryParameter = inputScope && entries.some((entry) => entry.inputScope === inputScope);
       return union(
-        ...symbol.declarations.map((declaration) =>
-          declarationOrigins(declaration, new Set(seen), inputScope),
-        ),
+        ...entries.map((entry) => declarationOrigins(entry, new Set(seen), inputScope)),
         ...(entryParameter ? [] : (writes.get(symbol) ?? [])).map((value): Origin[] =>
           value ? origins(value, new Set(seen), inputScope) : ["unknown"],
         ),
       );
     }
-    if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
-      const name = ts.isPropertyAccessExpression(expression)
-        ? expression.name.text
-        : literal(expression.argumentExpression);
+    if (expression.type === "MemberExpression" || expression.type === "OptionalMemberExpression") {
+      const name = memberName(expression);
       if (
         name === "url" &&
-        ts.isMetaProperty(expression.expression) &&
-        expression.expression.keywordToken === ts.SyntaxKind.ImportKeyword
+        expression.object.type === "MetaProperty" &&
+        expression.object.meta.name === "import" &&
+        expression.object.property.name === "meta"
       ) {
         return ["location"];
       }
-      return memberOrigins(origins(expression.expression, seen, inputScope), name);
+      return memberOrigins(origins(expression.object, seen, inputScope), name);
     }
-    if (ts.isCallExpression(expression)) {
+    if (expression.type === "ImportExpression") {
+      return [namespaces.get(literal(expression.source) ?? "") ?? "unknown"];
+    }
+    if (expression.type === "CallExpression" || expression.type === "OptionalCallExpression") {
       const specifier = literal(expression.arguments[0]);
       const namespace = specifier === undefined ? undefined : namespaces.get(specifier);
-      if (expression.expression.kind === ts.SyntaxKind.ImportKeyword) {
-        return [namespace ?? "unknown"];
-      }
       const locations = expression.arguments.map((value) =>
         origins(value, new Set(seen), inputScope),
       );
       return union(
-        ...origins(expression.expression, new Set(seen), inputScope).map((loader): Origin[] => {
+        ...origins(expression.callee, new Set(seen), inputScope).map((loader): Origin[] => {
           if (loader === "factory") {
             return (locations[0] ?? ["unknown"]).map((location) =>
               location === "location"
@@ -425,155 +430,132 @@ export function collectPackageRootImports(
     return ["unknown"];
   }
   function declarationOrigins(
-    declaration: ts.Declaration,
-    seen: Set<ts.Symbol>,
-    inputScope?: ts.Node,
+    declaration: Declaration,
+    seen: Set<Binding>,
+    inputScope?: t.Node,
   ): Origin[] {
-    if (ts.isParameter(declaration)) {
-      // A nested function cannot recapture a mutable input belonging to an outer invocation.
-      const input: Origin =
-        inputScope && ts.findAncestor(declaration.parent, ts.isFunctionLike) === inputScope
-          ? "input"
-          : "unknown";
-      const initial = declaration.initializer
-        ? origins(declaration.initializer, seen, inputScope)
-        : [];
-      return union(
-        [input],
-        declaration.initializer && !ts.isIdentifier(declaration.name) ? ["unknown"] : initial,
-      );
-    }
-    if (ts.isBindingElement(declaration)) {
-      let owner: ts.Node = declaration;
-      const defaults: Origin[][] = [];
-      while (
-        ts.isBindingElement(owner) ||
-        ts.isObjectBindingPattern(owner) ||
-        ts.isArrayBindingPattern(owner)
-      ) {
-        if (ts.isBindingElement(owner) && owner.initializer) {
-          defaults.push(
-            owner === declaration
-              ? origins(owner.initializer, new Set(seen), inputScope)
-              : ["unknown"],
-          );
-        }
-        owner = owner.parent;
-      }
-      const incoming: Origin[] = ts.isParameter(owner)
-        ? declarationOrigins(owner, new Set(seen), inputScope)
-        : ts.isVariableDeclaration(owner) && owner.initializer
-          ? origins(owner.initializer, new Set(seen), inputScope)
-          : ["unknown"];
-      const name = property(declaration.propertyName ?? declaration.name);
-      const projected: Origin[] = ts.isParameter(owner)
-        ? incoming
-        : ts.isObjectBindingPattern(declaration.parent) &&
-            declaration.parent.parent === owner &&
-            name !== undefined
-          ? memberOrigins(incoming, name)
-          : ["unknown"];
-      return union(
-        projected,
-        ...defaults,
-        !ts.isParameter(owner) && !(ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const)
-          ? ["unknown"]
-          : [],
-      );
-    }
-    if (ts.isVariableDeclaration(declaration) && declaration.initializer) {
-      return union(
-        origins(declaration.initializer, seen, inputScope),
-        ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const ? [] : ["unknown"],
-      );
-    }
+    const { node, name } = declaration;
     if (
-      ts.isImportSpecifier(declaration) ||
-      ts.isNamespaceImport(declaration) ||
-      ts.isImportClause(declaration)
+      node.type === "ImportSpecifier" ||
+      node.type === "ImportNamespaceSpecifier" ||
+      node.type === "ImportDefaultSpecifier"
     ) {
-      const owner = ts.findAncestor(declaration, ts.isImportDeclaration);
+      const owner = paths.get(node)?.parent;
       const namespace =
-        owner && ts.isStringLiteral(owner.moduleSpecifier)
-          ? namespaces.get(owner.moduleSpecifier.text)
-          : undefined;
-      if (namespace) {
-        return ts.isImportSpecifier(declaration)
-          ? memberOrigins([namespace], (declaration.propertyName ?? declaration.name).text)
-          : [namespace];
-      }
+        owner?.type === "ImportDeclaration" ? namespaces.get(owner.source.value) : undefined;
+      return namespace
+        ? node.type === "ImportSpecifier"
+          ? memberOrigins([namespace], property(node.imported))
+          : [namespace]
+        : ["unknown"];
     }
-    return ["unknown"];
+    if (node.type !== "VariableDeclarator" && !declaration.inputScope) {
+      return ["unknown"];
+    }
+    const pattern = node.type === "VariableDeclarator" ? node.id : node;
+    const initial =
+      node.type === "VariableDeclarator"
+        ? node.init
+        : node.type === "AssignmentPattern"
+          ? node.right
+          : undefined;
+    const incoming: Origin[] = declaration.inputScope
+      ? // A nested function cannot recapture a mutable input belonging to an outer invocation.
+        union(
+          [inputScope === declaration.inputScope ? "input" : "unknown"],
+          initial
+            ? pattern.type === "AssignmentPattern" && pattern.left.type !== "Identifier"
+              ? ["unknown"]
+              : origins(initial, new Set(seen), inputScope)
+            : [],
+        )
+      : initial
+        ? origins(initial, new Set(seen), inputScope)
+        : ["unknown"];
+    if (pattern === name || (pattern.type === "AssignmentPattern" && pattern.left === name)) {
+      return union(incoming, !declaration.inputScope && !declaration.constant ? ["unknown"] : []);
+    }
+    const defaults: Origin[][] = [];
+    let child: t.Node = name;
+    let parent = paths.get(child)?.parent;
+    let directMember: string | undefined;
+    while (parent && child !== pattern) {
+      if (parent.type === "AssignmentPattern") {
+        defaults.push(
+          parent.left === name ? origins(parent.right, new Set(seen), inputScope) : ["unknown"],
+        );
+      }
+      if (
+        parent.type === "ObjectProperty" &&
+        paths.get(parent)?.parent === pattern &&
+        (parent.value === name ||
+          (parent.value.type === "AssignmentPattern" && parent.value.left === name))
+      ) {
+        directMember = parent.computed ? literal(parent.key) : property(parent.key);
+      }
+      child = parent;
+      parent = paths.get(child)?.parent;
+    }
+    return union(
+      declaration.inputScope
+        ? incoming
+        : directMember === undefined
+          ? ["unknown"]
+          : memberOrigins(incoming, directMember),
+      ...defaults,
+      !declaration.inputScope && !declaration.constant ? ["unknown"] : [],
+    );
   }
-  function pure(node: ts.Expression, scope: ts.Node): boolean {
+  function pure(node: t.Node, scope: t.Node): boolean {
     // Admission is closed: coercion, iteration, defaults and unknown syntax may execute caller code.
-    if (ts.isIdentifier(node)) {
-      return Boolean(symbolAt(node)) || ambient.has(node.text) || node.text === "undefined";
+    if (node.type === "Identifier") {
+      return Boolean(symbolAt(node)) || ambient.has(node.name) || node.name === "undefined";
     }
     if (
-      ts.isStringLiteralLike(node) ||
-      ts.isNumericLiteral(node) ||
-      [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(
-        node.kind,
-      )
+      ["StringLiteral", "NumericLiteral", "BooleanLiteral", "NullLiteral"].includes(node.type) ||
+      (node.type === "TemplateLiteral" && node.expressions.length === 0)
     ) {
       return true;
     }
-    if (ts.isParenthesizedExpression(node)) {
-      return pure(node.expression, scope);
+    if (node.type === "LogicalExpression") {
+      return pure(node.left, scope) && pure(node.right, scope);
     }
-    if (ts.isBinaryExpression(node)) {
-      return (
-        logical.has(node.operatorToken.kind) &&
-        node.operatorToken.kind < ts.SyntaxKind.FirstAssignment &&
-        pure(node.left, scope) &&
-        pure(node.right, scope)
-      );
+    if (node.type === "ConditionalExpression") {
+      return pure(node.test, scope) && pure(node.consequent, scope) && pure(node.alternate, scope);
     }
-    if (ts.isConditionalExpression(node)) {
-      return (
-        pure(node.condition, scope) && pure(node.whenTrue, scope) && pure(node.whenFalse, scope)
-      );
-    }
-    if (ts.isAwaitExpression(node)) {
-      let value: ts.Expression = node.expression;
-      while (ts.isParenthesizedExpression(value)) {
-        value = value.expression;
+    if (node.type === "AwaitExpression") {
+      const value = node.argument;
+      if (value.type === "ImportExpression") {
+        return namespaces.has(literal(value.source) ?? "") && pure(value, scope);
       }
-      if (!ts.isCallExpression(value)) {
+      if (value.type !== "CallExpression" && value.type !== "OptionalCallExpression") {
         return false;
       }
-      const specifier = literal(value.arguments[0]);
-      const native = origins(value.expression, new Set(), scope).every(
-        (origin) => origin === "realpath-async",
+      return (
+        origins(value.callee, new Set(), scope).every((origin) => origin === "realpath-async") &&
+        pure(value, scope)
       );
-      const builtin =
-        value.expression.kind === ts.SyntaxKind.ImportKeyword &&
-        specifier !== undefined &&
-        namespaces.has(specifier);
-      return (native || builtin) && pure(value, scope);
     }
-    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+    if (node.type === "MemberExpression" || node.type === "OptionalMemberExpression") {
       if (origins(node, new Set(), scope).includes("location")) {
         return true;
       }
       return (
-        origins(node.expression, new Set(), scope).every((value) => readableValues.has(value)) &&
-        pure(node.expression, scope) &&
-        (!ts.isElementAccessExpression(node) || literal(node.argumentExpression) !== undefined)
+        origins(node.object, new Set(), scope).every((value) => readableValues.has(value)) &&
+        pure(node.object, scope) &&
+        (!node.computed || literal(node.property) !== undefined)
       );
     }
-    if (!ts.isCallExpression(node)) {
+    if (node.type === "ImportExpression") {
+      return !node.options && namespaces.has(literal(node.source) ?? "");
+    }
+    if (node.type !== "CallExpression" && node.type !== "OptionalCallExpression") {
       return false;
     }
-    const builtin = literal(node.arguments[0]);
     const builtinCall =
-      builtin !== undefined && namespaces.has(builtin) && node.arguments.length === 1;
-    if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-      return builtinCall;
-    }
+      namespaces.has(literal(node.arguments[0]) ?? "") && node.arguments.length === 1;
     return (
-      origins(node.expression, new Set(), scope).every(
+      origins(node.callee, new Set(), scope).every(
         (value) =>
           (pureCalls.has(value) &&
             (value === "join" ||
@@ -581,58 +563,54 @@ export function collectPackageRootImports(
               node.arguments.length === (value === "cwd" ? 0 : 1))) ||
           (loaders.has(value) && builtinCall),
       ) &&
-      pure(node.expression, scope) &&
+      pure(node.callee, scope) &&
       node.arguments.every((argument) => pure(argument, scope))
     );
   }
-  changedCwd = cwdReferences.some((reference) =>
-    (ts.isImportSpecifier(reference) || ts.isBindingElement(reference)
-      ? declarationOrigins(reference, new Set())
-      : origins(reference)
-    ).includes("chdir"),
-  );
+  changedCwd =
+    cwdReferences.some((reference) => origins(reference).includes("chdir")) ||
+    [...declarations.values()].some((entries) =>
+      entries.some((entry) => declarationOrigins(entry, new Set()).includes("chdir")),
+    );
   // Effects or control flow end admission; later loaders may still use captured immutable paths.
-  for (const scope of scopes.toSorted((a, b) => a.pos - b.pos)) {
-    const body = ts.isSourceFile(scope) ? scope : scope.body;
-    if (!body || (!ts.isSourceFile(body) && !ts.isBlock(body))) {
+  for (const scope of scopes.toSorted((a, b) => (a.start ?? 0) - (b.start ?? 0))) {
+    const body = scope.type === "Program" ? scope : scope.body;
+    if (body.type !== "Program" && body.type !== "BlockStatement") {
       continue;
     }
     if (
-      !ts.isSourceFile(scope) &&
-      scope.parameters.some(
-        (parameter) =>
-          !ts.isIdentifier(parameter.name) ||
-          Boolean(parameter.initializer) ||
-          Boolean(parameter.dotDotDotToken),
-      )
+      scope.type !== "Program" &&
+      scope.params.some((parameter) => parameter.type !== "Identifier")
     ) {
       continue;
     }
-    prefix: for (const statement of body.statements) {
+    prefix: for (const entry of body.body) {
+      const statement =
+        entry.type === "ExportNamedDeclaration" || entry.type === "ExportDefaultDeclaration"
+          ? entry.declaration
+          : entry;
       if (
-        ts.isImportDeclaration(statement) ||
-        ts.isExportDeclaration(statement) ||
-        ts.isFunctionDeclaration(statement) ||
-        ts.isEmptyStatement(statement) ||
-        (ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression))
+        !statement ||
+        statement.type === "ImportDeclaration" ||
+        statement.type === "ExportAllDeclaration" ||
+        statement.type === "FunctionDeclaration" ||
+        statement.type === "EmptyStatement" ||
+        (statement.type === "ExpressionStatement" && statement.expression.type === "StringLiteral")
       ) {
         continue;
       }
-      if (
-        !ts.isVariableStatement(statement) ||
-        !(statement.declarationList.flags & ts.NodeFlags.Const)
-      ) {
+      if (statement.type !== "VariableDeclaration" || statement.kind !== "const") {
         break;
       }
-      for (const declaration of statement.declarationList.declarations) {
+      for (const declaration of statement.declarations) {
         if (
-          !ts.isIdentifier(declaration.name) ||
-          !declaration.initializer ||
-          !pure(declaration.initializer, scope)
+          declaration.id.type !== "Identifier" ||
+          !declaration.init ||
+          !pure(declaration.init, scope)
         ) {
           break prefix;
         }
-        const values = origins(declaration.initializer, new Set(), scope);
+        const values = origins(declaration.init, new Set(), scope);
         if (
           !values.every(
             (value) =>
@@ -642,7 +620,7 @@ export function collectPackageRootImports(
         ) {
           break prefix;
         }
-        const symbol = symbolAt(declaration.name);
+        const symbol = symbolAt(declaration.id);
         if (symbol && values.every((value) => snapshotsKinds.has(value))) {
           snapshots.set(symbol, values);
         }
@@ -654,16 +632,12 @@ export function collectPackageRootImports(
     if (node.arguments.length !== 1 || specifier === undefined) {
       continue;
     }
-    const values = origins(node.expression);
-    let callee: ts.Expression = node.expression;
-    while (ts.isParenthesizedExpression(callee)) {
-      callee = callee.expression;
-    }
+    const values = origins(node.callee);
     // Unproven literal require calls retain the original conservative manifest check.
     if (
       values.includes("root") ||
-      (ts.isIdentifier(callee) &&
-        callee.text === "require" &&
+      (node.callee.type === "Identifier" &&
+        node.callee.name === "require" &&
         !values.every((value) => value === "caller"))
     ) {
       recordImport(specifier, node);

@@ -5,8 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import type { AssistantMessage } from "@openclaw/ai";
-import * as ts from "typescript";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertControlUiGeneratedArtifactsIsolated,
   resolveAllowedGeneratedMixBranch,
@@ -30,6 +29,7 @@ import {
 import { loadControlUiSourceCatalog } from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../src/agents/test-helpers/usage-fixtures.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
@@ -45,6 +45,8 @@ import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
 const testNodeExecPath = resolveTestNodeExecPath();
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const llm = vi.hoisted(() => ({ completeSimple: vi.fn() }));
 vi.mock("@openclaw/ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/ai")>();
@@ -588,17 +590,11 @@ describe("control-ui-i18n process runner", () => {
   it("finds raw text and attributes split by template interpolation", () => {
     const source =
       'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`; const image = html`<img alt="Preview" />`; menu.setAttribute("aria-label", "Selection actions"); reply.setAttribute("aria-label", `Reply to ${name}`); file.setAttribute("title", "Open " + fileName);';
-    const sourceFile = ts.createSourceFile(
-      "ui/src/pages/example.ts",
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      ts.ScriptKind.TSX,
-    );
+    const sourceFile = parser.parseSourceFile("ui/src/pages/example.tsx", source);
 
     expect(
       collectControlUiRawCopyFromSource({
-        filePath: path.resolve("ui/src/pages/example.ts"),
+        filePath: path.resolve("ui/src/pages/example.tsx"),
         source,
         sourceFile,
       }).map(({ kind, text }) => ({ kind, text })),

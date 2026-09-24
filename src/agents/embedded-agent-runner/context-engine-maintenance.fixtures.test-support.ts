@@ -35,12 +35,6 @@ export function createBackgroundMaintenanceEngine(
   };
 }
 
-export async function flushAsyncWork(times = 4): Promise<void> {
-  for (let index = 0; index < times; index += 1) {
-    await Promise.resolve();
-  }
-}
-
 export const requireRecord = createRequireRecord("record", "expected-label");
 
 export function firstMaintainParams(maintain: {

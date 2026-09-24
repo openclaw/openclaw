@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Checks pairing config logic for account-scoped allowlist handling.
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { createPairingGuardContext } from "./lib/pairing-guard-context.mts";
 import {
   collectFileViolations,
@@ -24,7 +24,11 @@ function hasRequiredAccountIdProperty(node: ts.Node) {
     return false;
   }
   for (const property of node.properties) {
-    if (ts.isShorthandPropertyAssignment(property) && property.name.text === "accountId") {
+    if (
+      ts.isShorthandPropertyAssignment(property) &&
+      ts.isIdentifier(property.name) &&
+      property.name.text === "accountId"
+    ) {
       return true;
     }
     if (!ts.isPropertyAssignment(property)) {
@@ -41,8 +45,7 @@ function hasRequiredAccountIdProperty(node: ts.Node) {
   return false;
 }
 
-function findViolations(content: string, filePath: string) {
-  const sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true);
+function findViolations(_content: string, _filePath: string, sourceFile: ts.SourceFile) {
   const violations: { line: number; reason: string }[] = [];
 
   const visit = (node: ts.Node): void => {
@@ -66,7 +69,7 @@ function findViolations(content: string, filePath: string) {
         }
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);

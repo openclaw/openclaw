@@ -2,15 +2,18 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   collectLintDisableDirectives,
   isMaxLinesRule,
 } from "../../scripts/check-max-lines-ratchet.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const parser = createNativeTypeScriptParser({ cwd: repoRoot });
+afterAll(() => parser.close());
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 const IGNORED_DIRS = new Set([".cache", ".git", "build", "coverage", "dist", "node_modules"]);
 const ROOTS = ["src", "extensions", "scripts", "ui"] as const;
@@ -24,8 +27,8 @@ let productionLintSuppressionsCache: SuppressionEntry[] | null = null;
 let productionCodeFilesCache: string[] | null = null;
 
 function collectFileSuppressions(file: string, source: string): SuppressionEntry[] {
-  return collectLintDisableDirectives(source, file).flatMap((rules) =>
-    rules.filter((rule) => !isMaxLinesRule(rule)).map((rule) => ({ file, rule })),
+  return collectLintDisableDirectives(source, file, parser.parseSourceFile(file, source)).flatMap(
+    (rules) => rules.filter((rule) => !isMaxLinesRule(rule)).map((rule) => ({ file, rule })),
   );
 }
 

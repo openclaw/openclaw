@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { loadReleaseChangelog } from "./lib/release-changelog.mjs";
 import {
+  findAppcastWithdrawal,
   requiresThinMacArtifacts,
   requiresLinuxUpdaterObservation,
   verifyReleaseEvidenceChecksum,
@@ -114,13 +115,27 @@ function main() {
           : {}),
       }
     : {};
+  const repository = process.env.GITHUB_REPOSITORY ?? "openclaw/openclaw";
+  const mainSha = gitSha(mainDir);
   const linuxUpdaterObservation = requiresLinuxUpdaterObservation({ release, existingManifest })
-    ? inspectLinuxUpdaterManifest({
-        repository: process.env.GITHUB_REPOSITORY ?? "openclaw/openclaw",
-        carrierTag: args.tag,
-      })
+    ? inspectLinuxUpdaterManifest({ repository, carrierTag: args.tag })
     : undefined;
   const result = verifyStableMainCloseout({
+    // Replay reads the current main feed, so its withdrawal marker lives on main too.
+    findAppcastWithdrawal: (withdrawnVersion) =>
+      findAppcastWithdrawal(
+        JSON.parse(
+          execFileSync(
+            "gh",
+            [
+              "api",
+              `repos/${repository}/commits?sha=${existingManifest ? "main" : mainSha}&path=appcast.xml&per_page=100`,
+            ],
+            { encoding: "utf8" },
+          ),
+        ),
+        withdrawnVersion,
+      ),
     tag: args.tag,
     mainPackageJson: readJson(resolve(mainDir, "package.json")),
     tagPackageJson,
@@ -134,7 +149,7 @@ function main() {
     release,
     linuxUpdaterObservation,
     releaseTagSha: gitSha(tagDir),
-    mainSha: gitSha(mainDir),
+    mainSha,
     fullReleaseValidationRunId: args["full-release-validation-run-id"],
     fullReleaseValidationRunAttempt: args["full-release-validation-run-attempt"],
     releasePublishRunId: args["release-publish-run-id"],

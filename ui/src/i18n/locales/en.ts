@@ -4074,8 +4074,6 @@ export const en: TranslationMap & {
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
       placeholderWithAttachments: "Add a message or paste more images...",
-      offlineHint:
-        "You can keep writing. Send when you’re ready to add a message to this conversation’s outbox.",
       offlineQueuedHint: "{count} in this conversation’s outbox.",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",

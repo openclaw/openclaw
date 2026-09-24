@@ -164,6 +164,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-lifecycle-run-failure.test.ts",
   "src/gateway/session-lifecycle-state.persistence.test.ts",
   "src/gateway/session-message-events.exec-completion.test.ts",
+  "src/gateway/session-message-events.history-worker.test.ts",
   "src/gateway/session-message-events.test.ts",
   "src/gateway/session-repository-materialization.test.ts",
   "src/gateway/session-repository-publication-handoff.test.ts",
