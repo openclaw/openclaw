@@ -8,6 +8,7 @@ import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BrowserAnnotationAttachment, ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { showToast } from "../../../lib/toast.ts";
 import {
   generateAttachmentId,
   getChatAttachmentPreviewUrl,
@@ -235,7 +236,16 @@ export function appendChatAttachmentFiles(
   if (!props.onAttachmentsChange || candidates.length === 0 || props.readSignal?.aborted) {
     return 0;
   }
-  const files = admitAttachmentFiles(candidates, props.attachmentLimits);
+  const unsupported = props.imagesOnly
+    ? candidates.filter((file) => !file.type.startsWith("image/"))
+    : [];
+  if (unsupported.length) {
+    showToast({ message: t("chat.attachments.imagesOnly") });
+  }
+  const files = admitAttachmentFiles(
+    candidates.filter((file) => !unsupported.includes(file)),
+    props.attachmentLimits,
+  );
   if (files.length === 0) {
     return 0;
   }
@@ -326,8 +336,18 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
     }
   };
   return {
-    onDragenter: (event: DragEvent) => setActive(event, true),
-    onDragleave: (event: DragEvent) => setActive(event, false),
+    onDragenter: (event: DragEvent) => {
+      if (isFileDrag(event.dataTransfer)) {
+        event.stopPropagation();
+      }
+      setActive(event, true);
+    },
+    onDragleave: (event: DragEvent) => {
+      if (isFileDrag(event.dataTransfer)) {
+        event.stopPropagation();
+      }
+      setActive(event, false);
+    },
     onDragover: (event: DragEvent) => {
       if (!isFileDrag(event.dataTransfer)) {
         if (!isEditableDropTarget(event)) {
@@ -339,6 +359,7 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
         return;
       }
       event.preventDefault();
+      event.stopPropagation();
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = props.canCompose ? "copy" : "none";
       }
@@ -351,6 +372,7 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
         return;
       }
       event.preventDefault();
+      event.stopPropagation();
       clearActive(event);
       if (props.canCompose) {
         handleChatAttachmentDrop(event, props);

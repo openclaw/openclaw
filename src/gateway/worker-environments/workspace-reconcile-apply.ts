@@ -51,6 +51,7 @@ export async function applyStagedWorkerWorkspace(params: {
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
+  assertCurrent?: () => void;
   acceptance:
     | {
         kind: "reconcile";
@@ -81,6 +82,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
     verify: () => Promise<void>,
   ): Promise<WorkerWorkspaceApplyResult> => {
     await verify();
+    params.assertCurrent?.();
     params.journal.commit(params.currentManifestRef);
     return {
       manifest: params.current,
@@ -168,7 +170,9 @@ async function applyStagedWorkerWorkspaceWithMemo(
       includePaths,
     });
     const conflictPaths = retainedConflictPaths(preflight, preflight.applyPaths);
+    params.assertCurrent?.();
     await acceptance.publish?.({ ...actual, conflictPaths });
+    params.assertCurrent?.();
     params.journal.commit(actual.manifestRef);
     return createApplyResult(actual, conflictPaths);
   }
@@ -245,15 +249,17 @@ async function applyStagedWorkerWorkspaceWithMemo(
     basePackSha256: createHash("sha256").update(snapshot.basePack).digest("hex"),
     basePack: snapshot.basePack,
   };
+  params.assertCurrent?.();
   params.journal.begin(journal);
   try {
-    await prepareNonDirectoryTargets(root, appliedEntries);
-    await applyWorkspacePatch({ root, patch: snapshot.patch });
+    await prepareNonDirectoryTargets(root, appliedEntries, undefined, params.assertCurrent);
+    await applyWorkspacePatch({ root, patch: snapshot.patch, assertCurrent: params.assertCurrent });
     await applyWorkspaceDirectoryChanges({
       root,
       base: params.base,
       current: params.current,
       applyPaths: preflight.applyPaths,
+      assertCurrent: params.assertCurrent,
     });
     if (acceptance.kind === "exact-target") {
       await inspectPaths();
@@ -273,7 +279,9 @@ async function applyStagedWorkerWorkspaceWithMemo(
         includePaths,
       });
       const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
+      params.assertCurrent?.();
       await acceptance.publish?.({ ...actual, conflictPaths });
+      params.assertCurrent?.();
       params.journal.commit(actual.manifestRef);
       return createApplyResult(actual, conflictPaths);
     }
@@ -283,8 +291,15 @@ async function applyStagedWorkerWorkspaceWithMemo(
     if (isAcceptedWorkspacePublicationIndeterminateError(error)) {
       throw error;
     }
+    // A revoked owner cannot authorize an inverse mutation or consume the journal.
+    params.assertCurrent?.();
     try {
-      await recoverWorkerWorkspaceReconciliation({ root, journal });
+      await recoverWorkerWorkspaceReconciliation({
+        root,
+        journal,
+        assertCurrent: params.assertCurrent,
+      });
+      params.assertCurrent?.();
       params.journal.abort();
     } catch (rollbackError) {
       const recoveryError = new Error("Cloud reconciliation failed and rollback needs recovery", {

@@ -38,6 +38,7 @@ import {
   markReplyRunDiagnosticProgress,
   notifyReplyRunEnded,
   operationsByUpstreamAbortSignal,
+  producerCompletionByOperation,
   prepareReplyRunKeyUpdate,
   registerFollowupAdmissionBarrier,
   registerWaitSessionId,
@@ -106,6 +107,7 @@ export function createReplyOperation(params: {
   let toolAuthoritySnapshot: ReplyToolAuthoritySnapshot | undefined;
   let toolAuthorityRoute: { provider: string; model: string } | undefined;
   const ownerSettlement = createDeferredCore();
+  const producerCompletion = createDeferredCore();
   let ownerCompletionBarrier: Promise<void> | undefined;
   const settleOwner = (): void => {
     const pending = ownerCompletionBarrier;
@@ -491,6 +493,7 @@ export function createReplyOperation(params: {
     },
     ownerSettlement: ownerSettlement.promise,
     complete() {
+      producerCompletion.resolve();
       if (!result) {
         setResult({ kind: "completed" });
         phase = "completed";
@@ -503,6 +506,8 @@ export function createReplyOperation(params: {
       operation.complete();
     },
     completeWithAfterClearBarrier(barrier, timeoutMs) {
+      // Producer work is done; delivery may still need a successor operation.
+      producerCompletion.resolve();
       // Admission may time out to free a slot; the old writer settles only when
       // its actual delivery/persistence barrier finishes, including repeated complete().
       const completed = Promise.resolve(barrier).then(
@@ -568,6 +573,7 @@ export function createReplyOperation(params: {
   };
 
   clearReplyOperationByOperation.set(operation, clearState);
+  producerCompletionByOperation.set(operation, producerCompletion.promise);
   expireReplyOperationByOperation.set(operation, (reason, options) => {
     if (
       replyRunState.activeRunsByKey.get(currentSessionKey) !== operation ||

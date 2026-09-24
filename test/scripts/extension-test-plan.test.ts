@@ -59,7 +59,8 @@ describe("extension executable test plans", () => {
   it.each(["root", "files"] as const)(
     "keeps raw untracked %s discovery while excluding non-default tests before chunking",
     (selection) => {
-      const root = tempDirs.make("test-plan-eligibility-", path.join(process.cwd(), "extensions"));
+      const cwd = tempDirs.make("test-plan-eligibility-");
+      const root = path.join(cwd, "extensions/fixture");
       const names = [
         "newly-authored.test.ts",
         "api.live.test.ts",
@@ -71,19 +72,19 @@ describe("extension executable test plans", () => {
         const file = path.join(root, name);
         mkdirSync(path.dirname(file), { recursive: true });
         writeFileSync(file, "export {};\n");
-        return path.relative(process.cwd(), file).replaceAll("\\", "/");
+        return path.relative(cwd, file).replaceAll("\\", "/");
       });
-      const roots = selection === "root" ? [path.relative(process.cwd(), root)] : files;
-      expect(extensionTestPlan.listExtensionTestFilesForRoots(roots).toSorted()).toEqual(
+      const roots = selection === "root" ? [path.relative(cwd, root)] : files;
+      expect(extensionTestPlan.listExtensionTestFilesForRoots(roots, cwd).toSorted()).toEqual(
         files.toSorted(),
       );
       for (const config of [telegramConfig, workerConfig]) {
-        expect(extensionTestPlan.createExtensionTestProcessTargetChunks(config, roots)).toEqual([
-          [files[0]],
-        ]);
+        expect(
+          extensionTestPlan.createExtensionTestProcessTargetChunks(config, roots, [], cwd),
+        ).toEqual([[files[0]]]);
         expect(extensionTestPlan.splitExtensionTestJobTargets(config, files)).toEqual([[files[0]]]);
         expect(
-          extensionTestPlan.createExtensionTestProcessTargetChunks(config, files.slice(1)),
+          extensionTestPlan.createExtensionTestProcessTargetChunks(config, files.slice(1), [], cwd),
         ).toEqual([]);
       }
     },
@@ -106,14 +107,12 @@ describe("extension executable test plans", () => {
   );
 
   it("retains an explicitly requested excluded worker file for the native no-test diagnostic", () => {
-    const root = tempDirs.make(
-      "test-plan-explicit-",
-      path.join(process.cwd(), "extensions/memory-core"),
-    );
-    const file = path.join(root, "excluded.live.test.ts");
+    const cwd = tempDirs.make("test-plan-explicit-");
+    const target = "extensions/memory-core/excluded.live.test.ts";
+    const file = path.join(cwd, target);
+    mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, "throw new Error('Excluded fixture must never execute');\n");
-    const target = path.relative(process.cwd(), file).replaceAll("\\", "/");
-    expect(buildVitestRunPlans([target])).toEqual([
+    expect(buildVitestRunPlans([target], cwd)).toEqual([
       { config: workerConfig, forwardedArgs: [], includePatterns: [target], watchMode: false },
     ]);
   });

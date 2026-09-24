@@ -150,6 +150,7 @@ import {
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
+import { resolveCliSessionId } from "./cli-run-recovery.js";
 import {
   createCliRunCurrentAssertion,
   resolveCliExecutionTarget,
@@ -238,12 +239,6 @@ const defaultPrepareDeps = {
 };
 const prepareDeps = { ...defaultPrepareDeps };
 
-function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): string | undefined {
-  return reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
-    ? reusableCliSession.sessionId
-    : undefined;
-}
-
 function resolveCliSessionInvalidatedReason(
   reusableCliSession: CliReusableSession,
 ): Extract<CliReusableSession, { mode: "invalidate" }>["invalidatedReason"] | undefined {
@@ -301,30 +296,6 @@ async function resolveCliSkillsPrompt(params: {
     workspaceDir: params.workspaceDir,
   });
   params.assertCurrent();
-  if (!sandboxWorkspace) {
-    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
-      await resolveEmbeddedRunSkillEntries({
-        assertCurrent: params.assertCurrent,
-        workspaceDir: params.workspaceDir,
-        executionWorkspaceDir: params.executionWorkspaceDir,
-        config: params.config,
-        agentId: params.agentId,
-        skillsSnapshot,
-      });
-    return {
-      prompt: await resolveSkillsPrompt({
-        assertCurrent: params.assertCurrent,
-        skillsSnapshot,
-        entries: shouldLoadSkillEntries ? skillEntries : undefined,
-        loadEntries: loadSkillEntries,
-        workspaceDir: params.workspaceDir,
-        config: params.config,
-        agentId: params.agentId,
-        preserveEntryOrder,
-      }),
-    };
-  }
-
   const {
     skillsEligibility,
     skillUsagePaths,
@@ -333,31 +304,15 @@ async function resolveCliSkillsPrompt(params: {
     skillsWorkspaceDir,
     workspaceOnly,
   } = resolveSandboxSkillRuntimeInputs({
-    sandbox: {
-      enabled: true,
-      ...(sandboxWorkspace.containerWorkdir
-        ? { containerWorkdir: sandboxWorkspace.containerWorkdir }
-        : {}),
-      ...(sandboxWorkspace.skillsEligibility
-        ? { skillsEligibility: sandboxWorkspace.skillsEligibility }
-        : {}),
-      ...(sandboxWorkspace.skillUsagePaths
-        ? { skillUsagePaths: sandboxWorkspace.skillUsagePaths }
-        : {}),
-      ...(sandboxWorkspace.skillsWorkspaceDir
-        ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
-        : {}),
-      ...(sandboxWorkspace.workspaceAccess
-        ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
-        : {}),
-    },
-    skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
+    sandbox: sandboxWorkspace ? { ...sandboxWorkspace, enabled: true } : undefined,
+    skillsAnchorWorkspace: sandboxWorkspace?.workspaceDir ?? params.workspaceDir,
     skillsSnapshot,
   });
-  const { shouldLoadSkillEntries, skillEntries, preserveEntryOrder } =
+  const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
     await resolveEmbeddedRunSkillEntries({
       assertCurrent: params.assertCurrent,
       workspaceDir: skillsWorkspaceDir,
+      ...(sandboxWorkspace ? {} : { executionWorkspaceDir: params.executionWorkspaceDir }),
       config: params.config,
       agentId: params.agentId,
       eligibility: skillsEligibility,
@@ -370,11 +325,12 @@ async function resolveCliSkillsPrompt(params: {
     skillsPromptWorkspaceDir,
   });
   return {
-    usagePaths: skillUsagePaths,
+    ...(sandboxWorkspace ? { usagePaths: skillUsagePaths } : {}),
     prompt: await resolveSkillsPrompt({
       assertCurrent: params.assertCurrent,
       skillsSnapshot: skillsSnapshotForRun,
       entries: promptSkillEntries,
+      ...(sandboxWorkspace ? {} : { loadEntries: loadSkillEntries }),
       workspaceDir: skillsPromptWorkspaceDir,
       config: params.config,
       agentId: params.agentId,
@@ -1850,7 +1806,7 @@ async function prepareCliRunContextWithinReadFence(
         ? { mode: "invalidate", invalidatedReason: "system-prompt" }
         : reusableCliSessionCandidate;
     const candidateClaudeCliSessionId =
-      resolveReusableCliSessionId(backendReusableCliSession)?.trim() || undefined;
+      resolveCliSessionId(backendReusableCliSession)?.trim() || undefined;
     // Control operations must keep the exact native session they were asked to mutate.
     // Ordinary-turn transcript recovery must not turn `/compact` into a fresh session.
     const hasClaudeCliCandidate =
@@ -1896,7 +1852,7 @@ async function prepareCliRunContextWithinReadFence(
     const reusableCliSession: CliReusableSession = claudeCliInvalidatedReason
       ? { mode: "invalidate", invalidatedReason: claudeCliInvalidatedReason }
       : backendReusableCliSession;
-    const reusableCliSessionId = resolveReusableCliSessionId(reusableCliSession);
+    const reusableCliSessionId = resolveCliSessionId(reusableCliSession);
     const invalidatedReason = resolveCliSessionInvalidatedReason(reusableCliSession);
     if (invalidatedReason) {
       cliBackendLog.info(

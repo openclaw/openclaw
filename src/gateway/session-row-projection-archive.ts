@@ -116,8 +116,12 @@ export function createSessionRowProjectionArchive(params: {
       for (const row of candidates) {
         row.pendingDatabaseFacts = undefined;
         if (row.entry?.archivedAt !== undefined) {
-          if (row.materialized) {
-            demote(row);
+          const current = row.materialized ? demote(row) : row;
+          if (change.scope !== "catalog") {
+            records.invalidateDatabaseFacts(current);
+          }
+          if (current.preparedAcpMeta === undefined || current.hasBoard === undefined) {
+            params.dirty.add(records.identity(current));
           }
           continue;
         }

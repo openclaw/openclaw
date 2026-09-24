@@ -95,7 +95,7 @@ describe("Playwright created-page ownership", () => {
         engine: "lightpanda",
         url: "about:blank",
       }),
-    ).rejects.toThrow("Lightpanda supports one page per connection");
+    ).rejects.toThrow("Lightpanda supports 1 page per connection");
     expect(fixture.newContext).not.toHaveBeenCalled();
     expect(fixture.newPage).not.toHaveBeenCalled();
     expect(fixture.browserClose).not.toHaveBeenCalled();

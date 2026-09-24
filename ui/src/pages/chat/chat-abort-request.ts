@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import {
   scopedAgentParamsForSession,
@@ -53,7 +53,7 @@ type ChatAbortRequestTarget = { sessionKey: string; agentId?: string } & (
 
 export type ChatAbortRequestResult =
   | { ok: true; noActiveRun: boolean; warning?: string }
-  | { ok: false; error: unknown };
+  | { ok: false; error: unknown; errorKind?: "state_contention" };
 
 export async function requestChatAbort(
   client: GatewayBrowserClient,
@@ -80,7 +80,14 @@ export async function requestChatAbort(
       warning: normalizeOptionalString(response?.warning),
     };
   } catch (err) {
-    return { ok: false, error: err };
+    return {
+      ok: false,
+      error: err,
+      ...(err instanceof GatewayRequestError &&
+      asOptionalRecord(err.details)?.errorKind === "state_contention"
+        ? { errorKind: "state_contention" as const }
+        : {}),
+    };
   }
 }
 

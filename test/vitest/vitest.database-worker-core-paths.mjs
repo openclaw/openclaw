@@ -1,5 +1,8 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-tool-search-prompt.test.ts",
+  "src/config/sessions/session-entry-readonly.worker.test.ts",
   "src/cli/daemon-cli/restart-health-client.test.ts",
   "src/acp/control-plane/manager.test.ts",
   "src/config/sessions/disk-budget.physical-usage.test.ts",
@@ -173,6 +176,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/flows/doctor-health.legacy-update.test.ts",
   "src/hooks/hooks-install.test.ts",
   "src/infra/state-migrations.audit-logs.windows.test.ts",
+  "src/infra/state-migrations.workspace-setup.windows.test.ts",
   "src/infra/state-migrations.media-persistence.lifecycle-recovery.test.ts",
   "src/skills/library/resource-read.test.ts",
   "src/skills/library/service.test.ts",
@@ -195,6 +199,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sessions/sdk.metadata-cwd.test.ts",
   "src/agents/sessions/sdk.metadata-admission.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.retention.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-prompt-submit.steering.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-execution-settle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
@@ -586,6 +591,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/tasks/task-registry.test.ts",
   "src/tasks/task-registry.test-support.test.ts",
   "src/tasks/task-registry.notifications.test.ts",
+  "test/cli-message-authority.integration.test.ts",
   "test/cron-message-read.integration.test.ts",
   "test/imessage-reply-alias.integration.test.ts",
   "test/matrix-channel-read-authority.integration.test.ts",

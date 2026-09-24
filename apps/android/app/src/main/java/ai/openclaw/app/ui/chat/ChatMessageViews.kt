@@ -14,6 +14,7 @@ import ai.openclaw.app.ui.image.RemoteImageResult
 import ai.openclaw.app.ui.image.safeRemoteImageStore
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,18 +27,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -61,6 +59,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -566,7 +565,6 @@ private fun ChatImagePreview(
   val anchor = rememberChatReaderAnchor(stateKey)
   var previewVisible by rememberSaveable(stateKey) { mutableStateOf(false) }
   Surface(
-    onClick = { previewVisible = true },
     shape = RoundedCornerShape(10.dp),
     border = BorderStroke(1.dp, ClawTheme.colors.border),
     color = ClawTheme.colors.surfaceRaised,
@@ -582,7 +580,7 @@ private fun ChatImagePreview(
           val height = (image.height * scale).roundToInt().coerceIn(constraints.minHeight, constraints.maxHeight)
           val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width, minHeight = height, maxHeight = height))
           layout(width, height) { placeable.placeRelative(0, 0) }
-        },
+        }.clickable(role = Role.Button, onClickLabel = nativeString("Open image preview")) { previewVisible = true },
   ) {
     Box {
       Image(
@@ -591,20 +589,6 @@ private fun ChatImagePreview(
         contentScale = ContentScale.Fit,
         modifier = Modifier.matchParentSize().then(anchor?.modifier ?: Modifier),
       )
-      Surface(
-        modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).size(32.dp),
-        shape = CircleShape,
-        color = Color.Black.copy(alpha = 0.62f),
-        contentColor = Color.White,
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.OpenInFull,
-            contentDescription = nativeString("Open image preview"),
-            modifier = Modifier.size(17.dp),
-          )
-        }
-      }
     }
   }
   if (previewVisible) {

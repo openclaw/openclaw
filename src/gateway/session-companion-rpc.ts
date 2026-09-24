@@ -83,7 +83,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, agentId, question } = params as SessionsCompanionAskParams;
+    const { sessionKey, agentId, question, attachments } = params as SessionsCompanionAskParams;
     if (!question.trim()) {
       respond(
         false,
@@ -130,6 +130,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         sessionKey: target.sessionKey,
         agentId: target.agentId,
         question,
+        ...(attachments?.length ? { attachments } : {}),
         connId: client.connId,
         assertSourceCurrent,
         ...(capturedOperator ? { operatorAuthority: capturedOperator.authority } : {}),

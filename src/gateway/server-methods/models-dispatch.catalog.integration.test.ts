@@ -290,7 +290,7 @@ it("dispatches a newly discovered model and preserves an admitted turn when disc
         { timeoutMs: 35_000 },
       );
       expect(unavailable).toMatchObject({ status: "error" });
-      expect(unavailable.error).toContain("The configured model is unavailable from the provider");
+      expect(unavailable.error).toContain("The selected model is unavailable from the provider");
       expect(requests).toHaveLength(2);
     } finally {
       releaseInference.resolve();

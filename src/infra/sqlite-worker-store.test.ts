@@ -644,14 +644,14 @@ describe("SQLite worker store", () => {
     }
     const retiring = createDeferredCore();
     const release = createDeferredCore();
-    const spy = vi
-      .spyOn(Worker.prototype, "terminate")
-      .mockImplementationOnce(async function (this: Worker) {
-        retiring.resolve();
-        await release.promise;
-        spy.mockRestore();
-        return this.terminate();
-      });
+    const spy = vi.spyOn(Worker.prototype, "terminate").mockImplementationOnce(async function (
+      this: Worker,
+    ) {
+      retiring.resolve();
+      await release.promise;
+      spy.mockRestore();
+      return this.terminate();
+    });
     const closed = first.close();
     let replacement: SqliteWorkerStore<FixtureOperations> | undefined;
     try {

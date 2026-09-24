@@ -63,8 +63,10 @@ function buildConfig(): TestConfig {
   };
 }
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
     getRuntimeConfigSnapshot: () => null,
@@ -103,7 +105,7 @@ vi.mock("./pw-ai-module.js", () => ({
   getPwAiModule: async () => null,
 }));
 
-const { getRuntimeConfig } = await import("../config/config.js");
+const { getRuntimeConfig } = await import("openclaw/plugin-sdk/runtime-config-snapshot");
 const { resolveBrowserConfig, resolveProfile } = await import("./config.js");
 const { refreshResolvedBrowserConfigFromDisk } = await import("./resolved-config-refresh.js");
 
