@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import { channelRegistersEnvBackedSetupOption } from "../channels/plugins/cli-add-options.js";
+import { channelOmitsEnvBackedSetupOption } from "../channels/plugins/cli-add-options.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
@@ -460,7 +460,7 @@ describe("registerChannelsCli", () => {
     expect(getChannelAddOptionFlags(program)).toContain("--no-auto-discover");
   });
 
-  it("offers the env-backed add hint only where --use-env is registered", async () => {
+  it("switches the env-backed add hint only for a selected channel without --use-env", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValue([
       channelWithSetupField("telegram", {
         key: "useEnv",
@@ -491,10 +491,14 @@ describe("registerChannelsCli", () => {
     expect(await registeredFlags("telegram")).toContain("--use-env");
     expect(await registeredFlags("signal")).not.toContain("--use-env");
     expect(await registeredFlags("irc")).toContain("--use-env");
-    expect(channelRegistersEnvBackedSetupOption("telegram")).toBe(true);
-    expect(channelRegistersEnvBackedSetupOption("signal")).toBe(false);
-    expect(channelRegistersEnvBackedSetupOption("irc")).toBe(true);
-    expect(channelRegistersEnvBackedSetupOption("unlisted")).toBe(false);
+    // Only a *selected* channel that leaves the flag out switches the advice: an
+    // unselected or unknown selector has no flag set to describe, so it keeps the
+    // generic hint.
+    expect(channelOmitsEnvBackedSetupOption("signal")).toBe(true);
+    expect(channelOmitsEnvBackedSetupOption("telegram")).toBe(false);
+    expect(channelOmitsEnvBackedSetupOption("irc")).toBe(false);
+    expect(channelOmitsEnvBackedSetupOption("unlisted")).toBe(false);
+    expect(channelOmitsEnvBackedSetupOption(" \t ")).toBe(false);
 
     listBundledPackageChannelMetadataMock.mockReturnValue([]);
   });

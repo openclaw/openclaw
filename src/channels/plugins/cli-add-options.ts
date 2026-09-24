@@ -90,19 +90,17 @@ export function resolveChannelSetupCliOptionMetadata(
 }
 
 /**
- * True only when `channels add --channel <id>` registers the `--use-env` flag for
- * this channel: core adds it to the legacy option list, while a channel that
- * publishes its own `setup` contract has to declare the matching field.
+ * True only when a selected channel resolved and its registered option set leaves
+ * `--use-env` out: core adds that flag to the legacy option list, while a channel
+ * publishing its own `setup` contract has to declare the matching field. Unselected
+ * and unknown ids stay false so the generic advice is untouched for them.
  */
-export function channelRegistersEnvBackedSetupOption(channelId?: string): boolean {
+export function channelOmitsEnvBackedSetupOption(channelId?: string): boolean {
   const { selectedChannel } = resolveChannelSetupCliOptionMetadata(channelId);
-  if (!selectedChannel) {
+  if (!selectedChannel?.setup) {
     return false;
   }
-  if (!selectedChannel.setup) {
-    return true;
-  }
-  return selectedChannel.setup.fields.some(
+  return !selectedChannel.setup.fields.some(
     (field) => channelCliOptionSwitchKey(field.cli.flags) === "--use-env",
   );
 }
