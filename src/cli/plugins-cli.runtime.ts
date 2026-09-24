@@ -57,7 +57,7 @@ function reportMissingPlugin(id: string) {
 
 function isConfigSelectedShadowDiagnostic(entry: { level?: string; message?: string }): boolean {
   return (
-    entry.level === "warn" &&
+    (entry.level === "info" || entry.level === "warn") &&
     typeof entry.message === "string" &&
     entry.message.includes("duplicate plugin id resolved by explicit config-selected plugin")
   );

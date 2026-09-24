@@ -380,6 +380,8 @@ const rootEntries = [
   "src/tasks/task-registry-control.runtime.ts!",
   // Reply dispatch and Gateway startup consume this namespace through loadGetReplyFromConfigRuntime.
   "src/auto-reply/reply/get-reply-from-config.runtime.ts!",
+  // Command attempts consume this namespace through runtime-loaders.ts's Promise.all preload.
+  "src/agents/command/attempt-execution.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",

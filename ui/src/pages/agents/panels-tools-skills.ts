@@ -29,6 +29,11 @@ import {
 } from "../../lib/agents/tool-catalog.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import {
+  resolveToolAvailability,
+  renderToolPolicyDetails,
+  resolveToolAccessView,
+} from "./tool-access-diagnostics.ts";
 import { isAllowedByPolicy, matchesList } from "./tool-policy.ts";
 
 registerSettingsEnglish();
@@ -65,7 +70,7 @@ function buildRowStatusBadges(params: {
   activeEntry: ToolsEffectiveEntry | null;
 }) {
   const badges = buildCatalogBadgeLabels(params.section, params.tool);
-  if (params.activeEntry) {
+  if (params.activeEntry && !params.activeEntry.deniedBySession) {
     badges.unshift(t("agentTools.inPreview"));
   }
   return badges;
@@ -268,19 +273,15 @@ export function renderAgentTools(params: {
     };
   };
   const enabledCount = toolIds.filter((toolId) => resolveAllowed(toolId).allowed).length;
-  const previewStatus = !params.runtimeSessionMatchesSelectedAgent
-    ? t("agentTools.otherAgent")
-    : params.toolsEffectiveLoading
-      ? t("agentTools.previewLoading")
-      : params.toolsEffectiveError
-        ? t("agentTools.previewUnavailable")
-        : !params.toolsEffectiveResult
-          ? t("agentTools.previewNotLoaded")
-          : null;
-  const previewResult = previewStatus ? null : params.toolsEffectiveResult;
+  const { previewStatus, previewResult, unverifiedReason, toolAccess, diagnosticMap } =
+    resolveToolAccessView(params);
   const effectiveTools = flattenEffectiveTools(previewResult?.groups);
   const uniqueEffectiveTools = Array.from(
-    new Map(effectiveTools.map((tool) => [normalizeToolPolicyName(tool.id), tool])).values(),
+    new Map(
+      effectiveTools
+        .filter((tool) => !tool.deniedBySession)
+        .map((tool) => [normalizeToolPolicyName(tool.id), tool]),
+    ).values(),
   );
   const visibleEffectiveTools = uniqueEffectiveTools.slice(0, MAX_RUNTIME_TOOL_CHIPS);
   const hiddenEffectiveToolCount = Math.max(
@@ -290,7 +291,9 @@ export function renderAgentTools(params: {
   const activeToolMap = new Map(
     effectiveTools.map((tool) => [normalizeToolPolicyName(tool.id), tool] as const),
   );
-  const activeToolIds = new Set(activeToolMap.keys());
+  const activeToolIds = new Set(
+    uniqueEffectiveTools.map((tool) => normalizeToolPolicyName(tool.id)),
+  );
 
   const sortSectionTools = (tools: AgentToolEntry[]) =>
     tools.toSorted((left, right) => {
@@ -598,9 +601,14 @@ export function renderAgentTools(params: {
                       activeEntry,
                     });
                     const accessSummary = formatToolAccessSummary(resolved);
-                    const runtimeSummary =
-                      previewStatus ??
-                      (activeEntry ? t("agentTools.inPreview") : t("agentTools.notListed"));
+                    const diagnostic = diagnosticMap.get(normalizeToolPolicyName(tool.id)) ?? null;
+                    const { summary: runtimeSummary, reason: availabilityReason } =
+                      resolveToolAvailability(
+                        diagnostic,
+                        activeEntry,
+                        unverifiedReason,
+                        previewStatus,
+                      );
                     return html`
                       <details class="agent-tool-card" id=${anchorId}>
                         <summary class="agent-tool-summary">
@@ -619,7 +627,10 @@ export function renderAgentTools(params: {
                             </div>
                             <div class="agent-tool-summary__fact">
                               <dt class="label">${t("agentTools.previewTitle")}</dt>
-                              <dd>${runtimeSummary}</dd>
+                              <dd>
+                                ${runtimeSummary}
+                                ${availabilityReason ? html`<div class="muted">${availabilityReason}</div>` : nothing}
+                              </dd>
                             </div>
                           </dl>
                           <div class="agent-tool-summary__badges">
@@ -674,11 +685,14 @@ export function renderAgentTools(params: {
                               <div class="label">${t("agentTools.previewTitle")}</div>
                               <div>
                                 ${
-                                  activeEntry
-                                    ? t("agentTools.previewVia", {
-                                        source: renderEffectiveToolBadge(activeEntry),
-                                      })
-                                    : runtimeSummary
+                                  unverifiedReason ??
+                                  (activeEntry?.deniedBySession
+                                    ? t("agentTools.sessionRestricted")
+                                    : activeEntry
+                                      ? t("agentTools.previewVia", {
+                                          source: renderEffectiveToolBadge(activeEntry),
+                                        })
+                                      : availabilityReason || runtimeSummary)
                                 }
                               </div>
                             </div>
@@ -686,6 +700,7 @@ export function renderAgentTools(params: {
                               ${t("agentTools.linkTool")}
                             </a>
                           </div>
+                          ${renderToolPolicyDetails(diagnostic, toolAccess)}
                         </div>
                       </details>
                     `;
