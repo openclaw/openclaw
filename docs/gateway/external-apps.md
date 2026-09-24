@@ -173,6 +173,8 @@ Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
 together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
 Each status call refreshes the active-work snapshot. Once every blocker has
 finished, the same lease transitions to `{"status":"ready","expiresAtMs":...}`.
+Owned status includes `ownerId`, the original `requestId`; draining status also
+includes `phase: "draining"`.
 Status returns `{"status":"running"}` when no suspension is held; querying a
 different active lease returns a conflict without exposing its identifiers.
 Resume returns `{"ok":true,"status":"running","resumed":true}`; repeating it
@@ -223,6 +225,22 @@ An accepted handoff uses the existing restart recovery and abort cleanup,
 then exits for the external controller. An ordinary stop without an arm keeps
 waiting for active work. Controllers must defer on unsupported methods or
 refused handoffs; a draining lease alone never authorizes interruption.
+
+Once shutdown commits, including an installation-replaced restart during a
+held suspension, the same owner can still poll `status: "draining"` with
+`phase: "interrupting"`. The owner and foreign-token conflict remain stable
+across authenticated operator reconnects; node and worker connections remain fenced.
+The shutdown record remains available
+past the old lease expiry; this is shutdown progress, not a renewable lease or
+permission to freeze the process. Resume is refused after shutdown commits.
+The owner records `phase: "exiting"` before server teardown; RPC access ends
+when that teardown closes request admission and transports. These facts remain
+in memory until process exit or the next in-process lifecycle resets them.
+
+The installed updater and running Gateway execute first. A candidate containing
+this fix cannot change an older resident's shutdown; after installation, it
+changes the status that the next update driver polls. Drivers must still verify
+their exact predecessor and handle transport closure through their lifecycle owner.
 
 A competing request ID or transient scheduler-resume failure returns retryable
 `UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,

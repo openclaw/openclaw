@@ -160,6 +160,8 @@ describe("gateway suspend coordinator", () => {
     terminalSessions = 0;
     expect(getGatewaySuspendStatus("suspension-preserve-drain")).toEqual({
       status: "draining",
+      ownerId: "request-preserve-drain",
+      phase: "draining",
       expiresAtMs: 1_000 + SUSPEND_TTL_MS,
       retryAfterMs: SUSPEND_RETRY_AFTER_MS,
       activeCount: 1,
@@ -171,6 +173,7 @@ describe("gateway suspend coordinator", () => {
     pendingReplies = 0;
     expect(getGatewaySuspendStatus("suspension-preserve-drain")).toEqual({
       status: "ready",
+      ownerId: "request-preserve-drain",
       expiresAtMs: 1_000 + SUSPEND_TTL_MS,
       writeCustody: [],
     });
@@ -585,7 +588,7 @@ describe("gateway suspend coordinator", () => {
   });
 
   it.each([false, true])(
-    "lets restart supersede a suspension without reopening its scheduler (drain: %s)",
+    "joins restart to a suspension without reopening its scheduler (drain: %s)",
     (drain) => {
       const resumeScheduling = vi.fn();
       const result = prepareGatewaySuspend({
@@ -600,7 +603,12 @@ describe("gateway suspend coordinator", () => {
 
       markGatewayRestartDraining();
 
-      expect(getGatewaySuspendStatus("suspension-restart")).toEqual({ status: "running" });
+      expect(getGatewaySuspendStatus("suspension-restart")).toMatchObject({
+        status: "draining",
+        ownerId: "request-restart",
+        phase: "interrupting",
+        activeCount: Number(drain),
+      });
       expect(resumeScheduling).not.toHaveBeenCalled();
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
     },

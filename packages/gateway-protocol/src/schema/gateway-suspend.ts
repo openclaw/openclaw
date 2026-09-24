@@ -111,6 +111,10 @@ export const GatewaySuspendStatusRunningResultSchema = closedObject({
 
 export const GatewaySuspendStatusDrainingResultSchema = closedObject({
   status: Type.Literal("draining"),
+  ownerId: Type.Optional(SuspensionTokenSchema),
+  phase: Type.Optional(
+    Type.Union([Type.Literal("draining"), Type.Literal("interrupting"), Type.Literal("exiting")]),
+  ),
   expiresAtMs: CountSchema,
   retryAfterMs: CountSchema,
   activeCount: CountSchema,
@@ -120,6 +124,7 @@ export const GatewaySuspendStatusDrainingResultSchema = closedObject({
 
 export const GatewaySuspendStatusReadyResultSchema = closedObject({
   status: Type.Literal("ready"),
+  ownerId: Type.Optional(SuspensionTokenSchema),
   expiresAtMs: CountSchema,
   writeCustody: Type.Optional(GatewayWriteCustodySchema),
 });
