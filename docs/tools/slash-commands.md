@@ -298,7 +298,7 @@ plugins, and installed skills.
     | `/commands` | Show the generated command catalog |
     | `/tools [compact\|verbose]` | Show what the current agent can use right now |
     | `/status` | Show execution/runtime status, Gateway and system uptime, plugin health, plus provider usage/quota |
-    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices. Requires `commands.plugins: true` |
+    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices, and informational diagnostics in a separate bounded section. Requires `commands.plugins: true` |
     | `/goal [status\|start\|edit\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/dashboard [request]` | Create or update the current session's dashboard using the Control UI dashboard workflow |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |

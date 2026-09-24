@@ -79,6 +79,7 @@ export const ChatPendingInputsPageSchema = closedObject({
     { maxItems: 20 },
   ),
   total: Type.Integer({ minimum: 0 }),
+  queuedCount: Type.Optional(Type.Integer({ minimum: 0 })),
   nextBefore: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 export type ChatPendingInputsPage = Static<typeof ChatPendingInputsPageSchema>;

@@ -47,6 +47,15 @@ export function readChatPendingInputs(
     before: options.before,
     limit: Math.min(options.limit, 20),
   });
+  let queuedCount = 0;
+  for (const runId of options.queuedTurns?.keys() ?? []) {
+    if (
+      runId.length <= PENDING_INPUT_CORRELATION_MAX_CHARS &&
+      isQueuedChatTurnForSession(options.queuedTurns, runId, scope)
+    ) {
+      queuedCount += 1;
+    }
+  }
   const projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
   const visible = page.items.flatMap((input) => {
     const message = projectPendingInputMessage(input, options.maxChars, projectProfile);
@@ -60,6 +69,7 @@ export function readChatPendingInputs(
   }).messages;
   return {
     ...page,
+    ...(options.queuedTurns ? { queuedCount } : {}),
     items: visible.map(({ input: item }, index) => {
       const display: ChatPendingInputsPage["items"][number] = {
         id: item.id,

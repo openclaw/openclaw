@@ -32,28 +32,16 @@ type DiagnosticTraceScopeState = {
   storage: AsyncLocalStorage<DiagnosticTraceContext | undefined>;
 };
 
-function randomHex(bytes: number): string {
-  return randomBytes(bytes).toString("hex");
-}
-
 function isNonZeroHex(value: string): boolean {
   return !/^0+$/.test(value);
 }
 
-function randomTraceId(): string {
-  let traceId = randomHex(16);
-  while (!isNonZeroHex(traceId)) {
-    traceId = randomHex(16);
+function randomNonZeroHex(bytes: number): string {
+  let value = randomBytes(bytes).toString("hex");
+  while (!isNonZeroHex(value)) {
+    value = randomBytes(bytes).toString("hex");
   }
-  return traceId;
-}
-
-function randomSpanId(): string {
-  let spanId = randomHex(8);
-  while (!isNonZeroHex(spanId)) {
-    spanId = randomHex(8);
-  }
-  return spanId;
+  return value;
 }
 
 function createDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
@@ -105,28 +93,15 @@ export function isValidDiagnosticTraceFlags(value: unknown): value is string {
   return typeof value === "string" && TRACE_FLAGS_RE.test(value);
 }
 
-function normalizeTraceId(value: unknown): string | undefined {
+function normalizeTraceField(
+  value: unknown,
+  isValid: (value: unknown) => boolean,
+): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const normalized = value.toLowerCase();
-  return isValidDiagnosticTraceId(normalized) ? normalized : undefined;
-}
-
-function normalizeSpanId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.toLowerCase();
-  return isValidDiagnosticSpanId(normalized) ? normalized : undefined;
-}
-
-function normalizeTraceFlags(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.toLowerCase();
-  return isValidDiagnosticTraceFlags(normalized) ? normalized : undefined;
+  return isValid(normalized) ? normalized : undefined;
 }
 
 /** Parses a W3C `traceparent` header into a normalized diagnostic trace context. */
@@ -137,7 +112,7 @@ export function parseDiagnosticTraceparent(
     return undefined;
   }
   const parts = traceparent.trim().toLowerCase().split("-");
-  if (!parts || parts.length < 4) {
+  if (parts.length < 4) {
     return undefined;
   }
   const [version, traceId, spanId, traceFlags] = parts;
@@ -148,9 +123,9 @@ export function parseDiagnosticTraceparent(
   ) {
     return undefined;
   }
-  const normalizedTraceId = normalizeTraceId(traceId);
-  const normalizedSpanId = normalizeSpanId(spanId);
-  const normalizedTraceFlags = normalizeTraceFlags(traceFlags);
+  const normalizedTraceId = normalizeTraceField(traceId, isValidDiagnosticTraceId);
+  const normalizedSpanId = normalizeTraceField(spanId, isValidDiagnosticSpanId);
+  const normalizedTraceFlags = normalizeTraceField(traceFlags, isValidDiagnosticTraceFlags);
   if (!normalizedTraceId || !normalizedSpanId || !normalizedTraceFlags) {
     return undefined;
   }
@@ -168,9 +143,10 @@ export function formatDiagnosticTraceparent(
   if (!context?.spanId) {
     return undefined;
   }
-  const traceId = normalizeTraceId(context.traceId);
-  const spanId = normalizeSpanId(context.spanId);
-  const traceFlags = normalizeTraceFlags(context.traceFlags) ?? DEFAULT_TRACE_FLAGS;
+  const traceId = normalizeTraceField(context.traceId, isValidDiagnosticTraceId);
+  const spanId = normalizeTraceField(context.spanId, isValidDiagnosticSpanId);
+  const traceFlags =
+    normalizeTraceField(context.traceFlags, isValidDiagnosticTraceFlags) ?? DEFAULT_TRACE_FLAGS;
   if (!traceId || !spanId) {
     return undefined;
   }
@@ -182,14 +158,23 @@ export function createDiagnosticTraceContext(
   input: DiagnosticTraceContextInput = {},
 ): DiagnosticTraceContext {
   const parsed = parseDiagnosticTraceparent(input.traceparent);
-  const traceId = normalizeTraceId(input.traceId) ?? parsed?.traceId ?? randomTraceId();
-  const spanId = normalizeSpanId(input.spanId) ?? parsed?.spanId ?? randomSpanId();
-  const parentSpanId = normalizeSpanId(input.parentSpanId);
+  const traceId =
+    normalizeTraceField(input.traceId, isValidDiagnosticTraceId) ??
+    parsed?.traceId ??
+    randomNonZeroHex(16);
+  const spanId =
+    normalizeTraceField(input.spanId, isValidDiagnosticSpanId) ??
+    parsed?.spanId ??
+    randomNonZeroHex(8);
+  const parentSpanId = normalizeTraceField(input.parentSpanId, isValidDiagnosticSpanId);
   return {
     traceId,
     spanId,
     ...(parentSpanId && parentSpanId !== spanId ? { parentSpanId } : {}),
-    traceFlags: normalizeTraceFlags(input.traceFlags) ?? parsed?.traceFlags ?? DEFAULT_TRACE_FLAGS,
+    traceFlags:
+      normalizeTraceField(input.traceFlags, isValidDiagnosticTraceFlags) ??
+      parsed?.traceFlags ??
+      DEFAULT_TRACE_FLAGS,
   };
 }
 
@@ -198,7 +183,9 @@ export function createChildDiagnosticTraceContext(
   parent: DiagnosticTraceContext,
   input: Omit<DiagnosticTraceContextInput, "traceId" | "traceparent"> = {},
 ): DiagnosticTraceContext {
-  const parentSpanId = normalizeSpanId(input.parentSpanId) ?? normalizeSpanId(parent.spanId);
+  const parentSpanId =
+    normalizeTraceField(input.parentSpanId, isValidDiagnosticSpanId) ??
+    normalizeTraceField(parent.spanId, isValidDiagnosticSpanId);
   return createDiagnosticTraceContext({
     traceId: parent.traceId,
     spanId: input.spanId,

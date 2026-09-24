@@ -201,6 +201,7 @@ describe("production lint suppressions", () => {
         "extensions/discord/src/outbound-adapter.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/memory-core/src/memory/manager-embedding-ops.ts|unicorn/no-array-fill-with-reference-type|1",
         "extensions/nostr/src/nostr-profile-url-safety.ts|no-warning-comments|1",
         "extensions/qa-lab/src/gateway-child-setup.ts|preserve-caught-error|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
@@ -232,6 +233,8 @@ describe("production lint suppressions", () => {
         // Cleanup is retained in AggregateError.errors; extraction remains the primary cause.
         "src/commands/backup-restore.ts|preserve-caught-error|1",
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
+        "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
+        "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Intl.Collator.compare is a getter returning a bound function.
         "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
         // Both list callers sort their own freshly filtered arrays.

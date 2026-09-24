@@ -11,10 +11,10 @@ import {
   formatMcpCodexApprovalRemedy,
   materializeStaticMcpToolsForHarnessRun,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { formatStageTimings } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCodexPluginsPolicy, shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
   buildDynamicTools,
-  formatCodexDynamicToolBuildStageSummary,
   resolveCodexMessageToolProvider,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
@@ -26,6 +26,7 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { buildCodexHookRequester } from "./hook-requester.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import {
@@ -83,7 +84,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const preDynamicSummary = preDynamicStartupStages.snapshot();
   if (shouldWarnCodexDynamicToolBuildStageSummary(preDynamicSummary, profilerEnabled)) {
     embeddedAgentLog.warn(
-      `codex app-server pre-dynamic startup timings runId=${params.runId} sessionId=${params.sessionId} totalMs=${preDynamicSummary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(preDynamicSummary)}`,
+      `codex app-server pre-dynamic startup timings runId=${params.runId} sessionId=${params.sessionId} totalMs=${preDynamicSummary.totalMs} stages=${formatStageTimings(preDynamicSummary.stages)}`,
       {
         runId: params.runId,
         sessionId: params.sessionId,
@@ -196,20 +197,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const requiresScheduledCodexAppAuthority = appCreatorCapture.required;
   const canResolveAnyScheduledCreatorAuthority =
     canResolveScheduledConfiguredMcpCreatorAuthority || requiresScheduledCodexAppAuthority;
-  let creatorAuthorityPromise:
-    | Promise<{
-        tools: readonly (string | { name: string; pluginId?: string })[];
-        provenance: { version: 1; source: "final-executable-surface" };
-        runtimeAuthority?: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
-      }>
-    | undefined;
-  let resolveCreatorAuthorityImpl:
-    | ((options?: { signal?: AbortSignal }) => Promise<{
-        tools: readonly (string | { name: string; pluginId?: string })[];
-        provenance: { version: 1; source: "final-executable-surface" };
-        runtimeAuthority?: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
-      }>)
-    | undefined;
+  type CreatorAuthorityResolver = NonNullable<
+    Parameters<typeof buildDynamicTools>[0]["resolveCronCreatorToolAuthority"]
+  >;
+  let creatorAuthorityPromise: ReturnType<CreatorAuthorityResolver> | undefined;
+  let resolveCreatorAuthorityImpl: CreatorAuthorityResolver | undefined;
   const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
   const commonToolParams = {
     // Both catalogs describe one attempt; a later attempt discovers fresh connections.
@@ -408,54 +400,22 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     ];
     const turnSourceChannel = params.messageChannel ?? params.messageProvider;
     const turnSourceTo = params.currentMessagingTarget ?? params.currentChannelId;
-    const requester = {
-      ...(turnSourceChannel ? { channel: turnSourceChannel } : {}),
-      ...(params.agentAccountId ? { accountId: params.agentAccountId } : {}),
-      ...(params.senderId ? { senderId: params.senderId } : {}),
-      ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
-      ...(params.memberRoleIds?.length ? { roleIds: [...params.memberRoleIds] } : {}),
-    };
-    const hasRequester = Object.keys(requester).length > 0;
+    const requester = buildCodexHookRequester(params);
     type HarnessMcpInteractiveApproval = NonNullable<
       Parameters<
         typeof materializeRequesterScopedMcpToolsForHarnessRun
       >[0]["requestInteractiveCodexApproval"]
     >;
-    // Shared per-call MCP approval callback for dynamic (bridge) tools. Requester-scoped
-    // tools must enter the same approval boundary as the configured path before any
-    // executor dispatch.
-    const requestInteractiveMcpApproval: HarnessMcpInteractiveApproval = async (approval) => {
-      const allowedDecisions: ExecApprovalDecision[] =
-        approval.mode === "prompt"
-          ? ["allow-once", "deny"]
-          : ["allow-once", "allow-always", "deny"];
+    const requestInteractiveMcpApproval = async (
+      approval: Parameters<HarnessMcpInteractiveApproval>[0],
+      allowedDecisions: ExecApprovalDecision[],
+    ) => {
       const outcome = await requestPluginApprovalOutcome({
         hostCapabilities: params.hostCapabilities,
         signal: approval.signal,
         title: `Run MCP tool ${approval.serverName}/${approval.toolName}`,
         description: `Codex approval mode "${approval.mode}" requires an operator decision before this MCP tool runs. ${formatMcpCodexApprovalRemedy(approval.serverName)}`,
         allowedDecisions,
-        toolName: approval.safeToolName,
-        toolCallId: approval.toolCallId,
-        mcpTool: { server: approval.serverName, tool: approval.toolName },
-        isMcpToolApprovalActive: approval.isActive,
-      });
-      if (outcome !== "approved-once" && outcome !== "approved-session") {
-        throw new Error(
-          `${approval.serverName}/${approval.toolName}: interactive Codex approval (${approval.mode}) was not granted: ${outcome}`,
-        );
-      }
-    };
-    // Requester-scoped tools never consume stored approval grants (requester servers are
-    // excluded from the native grant projection), so offer only effective decisions:
-    // allow-once or deny. Allow Always would re-prompt on every subsequent call.
-    const requestRequesterMcpApproval: HarnessMcpInteractiveApproval = async (approval) => {
-      const outcome = await requestPluginApprovalOutcome({
-        hostCapabilities: params.hostCapabilities,
-        signal: approval.signal,
-        title: `Run MCP tool ${approval.serverName}/${approval.toolName}`,
-        description: `Codex approval mode "${approval.mode}" requires an operator decision before this MCP tool runs. ${formatMcpCodexApprovalRemedy(approval.serverName)}`,
-        allowedDecisions: ["allow-once", "deny"],
         toolName: approval.safeToolName,
         toolCallId: approval.toolCallId,
         mcpTool: { server: approval.serverName, tool: approval.toolName },
@@ -484,7 +444,15 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           ),
           projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
           ...(configuredMcpSurface === "transient"
-            ? { requestInteractiveCodexApproval: requestInteractiveMcpApproval }
+            ? {
+                requestInteractiveCodexApproval: (approval) =>
+                  requestInteractiveMcpApproval(
+                    approval,
+                    approval.mode === "prompt"
+                      ? ["allow-once", "deny"]
+                      : ["allow-once", "allow-always", "deny"],
+                  ),
+              }
             : {}),
           policyContext,
           warn: (message) => embeddedAgentLog.warn(message),
@@ -505,7 +473,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
             connection.appServer,
           ),
-          requestInteractiveCodexApproval: requestRequesterMcpApproval,
+          // Requester servers cannot consume stored grants; Allow Always would re-prompt.
+          requestInteractiveCodexApproval: (approval) =>
+            requestInteractiveMcpApproval(approval, ["allow-once", "deny"]),
           requesterSenderId: params.senderId,
           agentAccountId: params.agentAccountId,
           messageChannel: params.messageChannel ?? params.messageProvider,
@@ -555,7 +525,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
       trigger: params.trigger,
       approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-      ...(hasRequester ? { requester } : {}),
+      ...(requester ? { requester } : {}),
       ...(turnSourceChannel ? { turnSourceChannel } : {}),
       ...(turnSourceTo ? { turnSourceTo } : {}),
       ...(params.agentAccountId ? { turnSourceAccountId: params.agentAccountId } : {}),

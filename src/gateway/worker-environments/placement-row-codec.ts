@@ -23,7 +23,12 @@ import {
   type WorkerSessionPlacementRecord,
   type WorkerSessionPlacementTransitionPatch,
 } from "./placement-record.js";
-import { parseWorkerSessionPlacementState } from "./placement-state.js";
+import {
+  parseWorkerSessionPlacementState,
+  type WorkerSessionPlacementState,
+} from "./placement-state.js";
+import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
+import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 
 type PlacementRow = Selectable<WorkerSessionPlacements>;
 type PlacementDatabase = Pick<
@@ -233,7 +238,9 @@ function insertLocal(
       state_changed_at_ms: nowMs,
     }),
   );
-  return getRequired(db, identity.sessionId);
+  const record = getRequired(db, identity.sessionId);
+  publishPlacementTurnClaimState(db, record);
+  return record;
 }
 
 export function ensureLocal(
@@ -358,4 +365,61 @@ export function transitionValues(
     turnClaim: null,
   });
   return values;
+}
+
+export function updateTransition(
+  db: DatabaseSync,
+  current: WorkerSessionPlacementRecord,
+  to: WorkerSessionPlacementState,
+  patch: WorkerSessionPlacementTransitionPatch,
+  nowMs: number,
+): WorkerSessionPlacementRecord {
+  const values = transitionValues(current, to, patch, nowMs);
+  const result = executeSqliteQuerySync(
+    db,
+    query(db)
+      .updateTable("worker_session_placements")
+      .set(values)
+      .where("session_id", "=", current.sessionId)
+      .where("state", "=", current.state)
+      .where("transition_generation", "=", current.generation)
+      .where("turn_claim_owner", "is", null),
+  );
+  if (result.numAffectedRows !== 1n) {
+    throw new Error(`Worker session placement ${current.sessionId} changed during transition`);
+  }
+  const updated = getRequired(db, current.sessionId);
+  if (updated.state === "active") {
+    // Activation and demand are one commit. Teardown may run before refill observes
+    // the placement, so cleanup timestamps cannot stand in for successful demand.
+    const activated = executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<Pick<StateDatabase, "worker_environments">>(db)
+        .updateTable("worker_environments")
+        .set((eb) => ({
+          last_activated_at_ms: eb
+            .case()
+            .when("last_activated_at_ms", ">", nowMs)
+            .then(eb.ref("last_activated_at_ms"))
+            .else(nowMs)
+            .end(),
+        }))
+        .where("environment_id", "=", updated.environmentId)
+        .where("state", "=", "attached")
+        .where("destroy_requested_at_ms", "is", null)
+        .where("owner_epoch", "=", updated.activeOwnerEpoch)
+        .where("attached_session_ids_json", "=", JSON.stringify([updated.sessionId]))
+        .returning("last_activated_at_ms"),
+    );
+    if (activated.rows.length !== 1) {
+      throw new Error(
+        `Worker session placement ${current.sessionId} lost its attached environment`,
+      );
+    }
+    publishWorkerEnvironmentNativeMutation(db, updated.environmentId!, {
+      lastActivatedAtMs: activated.rows[0]!.last_activated_at_ms,
+    });
+  }
+  publishPlacementTurnClaimState(db, updated);
+  return updated;
 }

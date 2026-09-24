@@ -132,10 +132,6 @@ function formatBatchSourceCounts(counts: Record<string, number>): string {
   );
 }
 
-function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: number): T[][] {
-  return chunkItems(chunks, Math.max(1, Math.floor(maxRequests)));
-}
-
 function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
   providerId?: string;
@@ -1167,22 +1163,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const candidates = current.flatMap((item) =>
         item.chunks.map((chunk) => ({ chunk, entry: item.entry, source: item.source })),
       );
-      const chunks = candidates.map((candidate) => candidate.chunk);
+      const chunkCount = candidates.length;
       const sourceCounts = countBatchSources(current);
       const source = formatBatchSourceLabel(sourceCounts);
       sourceWideBatchGroup += 1;
-      const chunkBatches = splitSourceWideEmbeddingChunks(
-        candidates,
-        SOURCE_WIDE_BATCH_MAX_REQUESTS,
-      );
+      const chunkBatches = chunkItems(candidates, SOURCE_WIDE_BATCH_MAX_REQUESTS);
       log.debug(
-        `memory embeddings: source-wide batch submit group=${sourceWideBatchGroup} source=${source} files=${current.length} chunks=${chunks.length} requests=${chunkBatches.length} sources=${formatBatchSourceCounts(
+        `memory embeddings: source-wide batch submit group=${sourceWideBatchGroup} source=${source} files=${current.length} chunks=${chunkCount} requests=${chunkBatches.length} sources=${formatBatchSourceCounts(
           sourceCounts,
         )} reason=${reason}`,
         {
           source,
           files: current.length,
-          chunks: chunks.length,
+          chunks: chunkCount,
           requests: chunkBatches.length,
           sources: sourceCounts,
           group: sourceWideBatchGroup,
@@ -1204,13 +1197,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           })),
         );
       }
+      candidates.length = 0;
+      chunkBatches.length = 0;
       const sample = embeddings.find((embedding) => embedding.length > 0);
       const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
       let offset = 0;
       for (const item of current) {
         const fileEmbeddings = embeddings.slice(offset, offset + item.chunks.length);
-        offset += item.chunks.length;
         await this.writeChunks(item, generation, fileEmbeddings, vectorReady);
+        // Publication has settled; later files must not retain completed vectors.
+        // oxlint-disable-next-line unicorn/no-array-fill-with-reference-type -- Completed slots are never read or mutated.
+        embeddings.fill([], offset, offset + item.chunks.length);
+        offset += item.chunks.length;
       }
       prepared = [];
       preparedRequestCount = 0;

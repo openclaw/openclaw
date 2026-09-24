@@ -166,7 +166,6 @@ const buildChatItemsMock = vi.fn(
           key: "divider:compaction:test",
           icon: "foldVertical",
           label: "Compacted history",
-          description: "Earlier messages were summarized to make room in the context window.",
           timestamp: 1,
         },
       ] as ReturnType<typeof chatThread.buildCachedChatItems>;
@@ -1016,15 +1015,13 @@ describe("chat run error", () => {
 });
 
 describe("chat compaction divider", () => {
-  it("renders compaction copy without a checkpoint action", () => {
+  it("renders a compact divider without a subtitle or checkpoint action", () => {
     const container = renderChatView({
       messages: [{ testDividerMarker: "compaction" }],
     });
 
     expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Compacted history");
-    expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "Earlier messages were summarized to make room in the context window.",
-    );
+    expect(container.querySelector(".chat-divider__description")).toBeNull();
     expect(container.querySelector(".chat-divider__icon svg")).not.toBeNull();
     expect(container.querySelector(".chat-divider__action")).toBeNull();
   });

@@ -209,10 +209,11 @@ export async function buildCodexPluginThreadConfig(
       appCacheKey: params.appCacheKey,
     });
   };
-  const appInventoryRefreshDeferredForActivation =
-    inventory.records.some((record) => record.activationRequired) &&
-    shouldRefreshMissingAppInventory(params, policy, inventory);
-  if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
+  const activationRequired = inventory.records.some((record) => record.activationRequired);
+  const appInventoryMissing = shouldRefreshMissingAppInventory(params, policy, inventory);
+  const appInventoryRefreshDeferredForActivation = activationRequired && appInventoryMissing;
+  // Install/enable first so the initial app snapshot observes newly activated plugin apps.
+  if (!activationRequired && appInventoryMissing) {
     await refreshInventory({
       // OpenClaw is missing its process-local snapshot, but Codex may already
       // have a current inventory. Avoid rebuilding the entire remote catalog
@@ -630,18 +631,6 @@ export function buildPluginAppPolicyContext(
     apps,
     pluginAppIds,
   };
-}
-
-function shouldWaitForInitialAppInventory(
-  params: BuildCodexPluginThreadConfigParams,
-  policy: ResolvedCodexPluginsPolicy,
-  inventory: CodexPluginInventory,
-): boolean {
-  // Install/enable first so the initial app snapshot observes newly activated plugin apps.
-  if (inventory.records.some((record) => record.activationRequired)) {
-    return false;
-  }
-  return shouldRefreshMissingAppInventory(params, policy, inventory);
 }
 
 function shouldRefreshMissingAppInventory(

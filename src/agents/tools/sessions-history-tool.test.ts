@@ -150,13 +150,14 @@ describe("sessions_history redaction", () => {
         },
       ],
       total: 1,
+      queuedCount: 1,
     };
     expect(Value.Check(ChatPendingInputsPageSchema, pendingInputs)).toBe(true);
     expect(Value.Check(tool.outputSchema!, { ...readHistoryDetails(result), pendingInputs })).toBe(
       true,
     );
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; queued?: true; runId?: string }>; total: number; nextBefore?: number }; sessionLinkRule?: string; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
+      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; queued?: true; runId?: string }>; total: number; nextBefore?: number; queuedCount?: number }; sessionLinkRule?: string; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
     );
   });
 

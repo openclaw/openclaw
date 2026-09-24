@@ -1,4 +1,4 @@
-import { ErrorCodes } from "@openclaw/gateway-client/browser";
+import { ErrorCodes, isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as failure, ok, type Result } from "@openclaw/normalization-core/result";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
@@ -9,6 +9,7 @@ import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import { showToast } from "../toast.ts";
 import {
   adoptConfigWriteAck,
+  isConfigWriteAck,
   comparableSnapshotRaw,
   configFormForSubmit,
   assertConfigDraftCurrent,
@@ -664,6 +665,23 @@ export async function patchConfig(
     return true;
   } catch (err) {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
+      if (
+        err instanceof GatewayRequestError &&
+        isGatewayProtocolResponseError(err) &&
+        err.gatewayCode === ErrorCodes.UNAVAILABLE &&
+        isRecord(err.details) &&
+        err.details.publication !== "partial" &&
+        err.details.publication !== "complete" &&
+        isConfigWriteAck(err.details.persistedConfig)
+      ) {
+        // This negative response confirms persistence, not runtime application.
+        onSubmitted?.({ ...submitted, ack: err.details.persistedConfig });
+        const adoptedStatus = adoptConfigWriteAck(state, submitted, err.details.persistedConfig);
+        state.configNeedsApply = true;
+        if (adoptedStatus === "conflict") {
+          return false;
+        }
+      }
       const outcome = configMutationFailure(state, err);
       state.lastError = outcome.message;
       state.configAutoSaveStatus = outcome.status;

@@ -29,6 +29,7 @@ describe("queued turn steering", () => {
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.read", "operator.write"],
+      gatewayAccessGrant: null,
       source: {},
       signal: new AbortController().signal,
       assertCurrent: () => {},

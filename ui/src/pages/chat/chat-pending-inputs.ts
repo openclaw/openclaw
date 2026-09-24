@@ -23,10 +23,11 @@ import {
   readChatSessionProjectionScope,
   reconcileChatInputCustody,
 } from "./history-merge.ts";
+import type { PendingInputStatus } from "./system-notice-kinds.ts";
 
 type PendingInputRequest = {
   before?: number;
-  kind: "navigation" | "refresh";
+  kind: "navigation" | "refresh" | "discovery";
   client: NonNullable<ChatState["client"]>;
   connectionEpoch: number;
 };
@@ -38,6 +39,9 @@ type PendingInputView = {
   page: ChatPendingInputsPage;
   /** Live custody receipts keep the queue independent of retained-input pagination. */
   queuedInputs: ChatPendingInputsPage["items"];
+  receiptRunIds: string[];
+  queuedCount: number;
+  queueBefore?: number;
   before?: number;
   readonly loading: boolean;
   error?: string;
@@ -67,39 +71,41 @@ function reconcileQueuedInputs(
       current.delete(input.id);
     }
   }
-  return [...current.values()].toSorted((left, right) => left.acceptedAt - right.acceptedAt);
+  return [...current.values()];
 }
 
 export function buildPendingInputQueueItems(
   inputs: ChatPendingInputsPage["items"],
 ): ChatQueueDisplayItem[] {
-  return inputs.flatMap<ChatQueueDisplayItem>((input) => {
-    if (!input.queued || input.state !== "queued" || !input.runId) {
-      return [];
-    }
-    const message = normalizeMessage(input.message);
-    const attachmentLabels = message.content.flatMap((part) =>
-      part.type === "attachment" || part.type === "attachment_error"
-        ? [part.attachment.label]
-        : part.type === "image"
-          ? part.sources.flatMap((source) => (source.fileName ? [source.fileName] : []))
-          : [],
-    );
-    const imageCount = message.content.filter((part) => part.type === "image").length;
-    return [
-      {
-        id: `pending-input:${input.id}`,
-        text:
-          extractText(input.message) ||
-          attachmentLabels.join(", ") ||
-          (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : ""),
-        createdAt: input.acceptedAt,
-        pendingRunId: input.runId,
-        serverQueued: true,
-        sender: message.sender ?? undefined,
-      },
-    ];
-  });
+  return inputs
+    .toSorted((left, right) => left.acceptedAt - right.acceptedAt)
+    .flatMap<ChatQueueDisplayItem>((input) => {
+      if (!input.queued || input.state !== "queued" || !input.runId) {
+        return [];
+      }
+      const message = normalizeMessage(input.message);
+      const attachmentLabels = message.content.flatMap((part) =>
+        part.type === "attachment" || part.type === "attachment_error"
+          ? [part.attachment.label]
+          : part.type === "image"
+            ? part.sources.flatMap((source) => (source.fileName ? [source.fileName] : []))
+            : [],
+      );
+      const imageCount = message.content.filter((part) => part.type === "image").length;
+      return [
+        {
+          id: `pending-input:${input.id}`,
+          text:
+            extractText(input.message) ||
+            attachmentLabels.join(", ") ||
+            (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : ""),
+          createdAt: input.acceptedAt,
+          pendingRunId: input.runId,
+          serverQueued: true,
+          sender: message.sender ?? undefined,
+        },
+      ];
+    });
 }
 
 export function buildPendingInputItems(
@@ -112,9 +118,6 @@ export function buildPendingInputItems(
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
-  if (!inputs.length) {
-    return items;
-  }
   for (const input of inputs) {
     if (
       searchQuery?.trim() &&
@@ -122,47 +125,45 @@ export function buildPendingInputItems(
     ) {
       continue;
     }
+    let pendingStatus: PendingInputStatus | undefined;
+    if (input.state === "queued") {
+      if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
+        pendingStatus = workerSetupPending ? "waitingForWorkerSetup" : "waitingForWorkspaceSync";
+      }
+    } else {
+      pendingStatus =
+        input.state === "interrupted" &&
+        input.runId &&
+        browserInputs.some(
+          (item) =>
+            item.sendRunId === input.runId &&
+            item.sendState !== "failed" &&
+            item.sendState !== "held",
+        )
+          ? "resuming"
+          : input.state === "cancelled"
+            ? "cancelled"
+            : "interrupted";
+    }
     // Custody keeps submission correlation outside the message; use it for
     // presentation without inventing transcript or execution identity.
     items.push(
       ...buildMessageItems([input.message], () =>
         input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
-      ).flatMap((item) => projectChatSystemNotice({ ...item, startsTurn: true }) ?? []),
-    );
-    if (input.state === "queued") {
-      if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
-        items.push({
-          kind: "notice",
-          key: `pending-input:${input.id}:state`,
-          timestamp: input.acceptedAt,
-          text: t(
-            workerSetupPending
-              ? "chat.pendingInputs.waitingForWorkerSetup"
-              : "chat.pendingInputs.waitingForWorkspaceSync",
-          ),
-        });
-      }
-      continue;
-    }
-    items.push({
-      kind: "notice",
-      key: `pending-input:${input.id}:state`,
-      timestamp: input.acceptedAt,
-      text: t(
-        input.state === "interrupted" &&
-          input.runId &&
-          browserInputs.some(
-            (item) =>
-              item.sendRunId === input.runId &&
-              item.sendState !== "failed" &&
-              item.sendState !== "held",
-          )
-          ? "chat.pendingInputs.resuming"
-          : input.state === "cancelled"
-            ? "chat.pendingInputs.cancelled"
-            : "chat.pendingInputs.interrupted",
+      ).flatMap((item) =>
+        projectChatSystemNotice(
+          { ...item, startsTurn: true },
+          undefined,
+          pendingStatus
+            ? {
+                status: pendingStatus,
+                key: `pending-input:${input.id}:state`,
+                timestamp: input.acceptedAt,
+              }
+            : undefined,
+        ),
       ),
-    });
+    );
   }
   return items;
 }
@@ -180,7 +181,7 @@ export function clearChatPendingInputs(state: ChatState): void {
   pendingInputViews.delete(state);
 }
 
-export function readChatInputRunIds(state: ChatState): string[] {
+function collectChatInputRunIds(state: ChatState): string[] {
   const projection = getChatSessionProjection(
     state,
     readChatSessionProjectionScope(state, { agentId: resolveUiSelectedSessionAgentId(state) }),
@@ -194,13 +195,31 @@ export function readChatInputRunIds(state: ChatState): string[] {
       .filter((item) => (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed")
       .map((item) => item.sendRunId),
   ];
+  const current = new Set(
+    runIds.filter((id): id is string => Boolean(id && id.length <= CHAT_INPUT_RUN_ID_MAX_CHARS)),
+  );
   return [
-    ...new Set(
-      runIds.filter((id): id is string => Boolean(id && id.length <= CHAT_INPUT_RUN_ID_MAX_CHARS)),
-    ),
-  ]
-    .slice(0, CHAT_INPUT_RECEIPT_MAX_RUN_IDS)
-    .toSorted();
+    ...new Set([
+      ...(getChatPendingInputs(state)?.receiptRunIds.filter((id) => current.has(id)) ?? []),
+      ...current,
+    ]),
+  ];
+}
+
+export function readChatInputRunIds(state: ChatState): string[] {
+  return collectChatInputRunIds(state).slice(0, CHAT_INPUT_RECEIPT_MAX_RUN_IDS).toSorted();
+}
+
+function rotateInputReceipts(
+  state: ChatState,
+  view: PendingInputView,
+  queriedRunIds: readonly string[] = [],
+): void {
+  const observed = new Set(queriedRunIds);
+  // Rotate across server, transcript, and browser custody without starving any source.
+  view.receiptRunIds = collectChatInputRunIds(state).toSorted(
+    (left, right) => Number(observed.has(left)) - Number(observed.has(right)),
+  );
 }
 
 function reconcilePendingInputPage(
@@ -254,7 +273,7 @@ function ownsPendingInputRequest(
 export function applyChatPendingInputs(
   state: ChatState,
   page: ChatPendingInputsPage | undefined,
-  options: { receipts?: ChatInputReceipts } = {},
+  options: { receipts?: ChatInputReceipts; queriedRunIds?: readonly string[] } = {},
 ): void {
   const displayPage = reconcilePendingInputPage(state, page, options.receipts);
   let view = getChatPendingInputs(state);
@@ -270,6 +289,9 @@ export function applyChatPendingInputs(
       agentId: resolveUiSelectedSessionAgentId(state),
       page: displayPage,
       queuedInputs,
+      receiptRunIds: [],
+      queuedCount: displayPage.queuedCount ?? 0,
+      queueBefore: displayPage.nextBefore,
       revision: 0,
       get loading() {
         return this.request?.kind === "navigation";
@@ -278,6 +300,8 @@ export function applyChatPendingInputs(
     pendingInputViews.set(state, view);
   } else {
     view.queuedInputs = queuedInputs;
+    view.queuedCount = displayPage.queuedCount ?? 0;
+    view.queueBefore = displayPage.nextBefore;
     view.revision += 1;
     if (view.request && !ownsPendingInputRequest(state, view, view.request)) {
       view.request = undefined;
@@ -290,6 +314,14 @@ export function applyChatPendingInputs(
     if (view.before !== undefined && !view.request) {
       void requestPendingInputPage(state, view.before, "refresh");
     }
+  }
+  rotateInputReceipts(state, view, options.queriedRunIds);
+  if (
+    !view.request &&
+    view.queuedInputs.length < view.queuedCount &&
+    view.queueBefore !== undefined
+  ) {
+    void requestPendingInputPage(state, view.queueBefore, "discovery");
   }
   state.requestUpdate?.();
 }
@@ -307,7 +339,7 @@ async function requestPendingInputPage(
   if (
     view.request &&
     ownsPendingInputRequest(state, view, view.request) &&
-    (kind === "refresh" || view.request.kind === "navigation")
+    (kind !== "navigation" || view.request.kind === "navigation")
   ) {
     return;
   }
@@ -321,6 +353,7 @@ async function requestPendingInputPage(
   try {
     while (current()) {
       const revision = view.revision;
+      const inputRunIds = readChatInputRunIds(state);
       const result = await client.request<{
         sessionId?: string;
         pendingInputs?: ChatPendingInputsPage;
@@ -329,7 +362,7 @@ async function requestPendingInputPage(
         sessionKey: view.sessionKey,
         agentId: view.agentId,
         limit: 20,
-        ...(view.queuedInputs.length ? { inputRunIds: readChatInputRunIds(state) } : {}),
+        ...(inputRunIds.length ? { inputRunIds } : {}),
         ...(request.before === undefined ? {} : { pendingBefore: request.before }),
       });
       if (!current() || result.sessionId !== view.sessionId) {
@@ -339,9 +372,22 @@ async function requestPendingInputPage(
       if (view.revision !== revision) {
         continue;
       }
-      view.page = reconcilePendingInputPage(state, result.pendingInputs, result.inputReceipts);
-      view.queuedInputs = reconcileQueuedInputs(view.queuedInputs, view.page, result.inputReceipts);
-      view.before = request.before;
+      const page = reconcilePendingInputPage(state, result.pendingInputs, result.inputReceipts);
+      view.queuedInputs = reconcileQueuedInputs(view.queuedInputs, page, result.inputReceipts);
+      view.queuedCount = page.queuedCount ?? view.queuedCount;
+      rotateInputReceipts(state, view, inputRunIds);
+      if (request.kind !== "discovery") {
+        view.page = page;
+        view.before = request.before;
+      }
+      if (request.kind === "discovery" || request.before === undefined) {
+        view.queueBefore = page.nextBefore;
+      }
+      if (view.queuedInputs.length < view.queuedCount && view.queueBefore !== undefined) {
+        request.kind = "discovery";
+        request.before = view.queueBefore;
+        continue;
+      }
       return;
     }
   } catch (error) {

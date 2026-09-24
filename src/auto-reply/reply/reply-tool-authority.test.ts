@@ -8,6 +8,7 @@ import { captureGatewayDeviceRevocation } from "../../gateway/device-revocation.
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import type { GatewayAccessGrantRef } from "../../plugins/gateway-access-policy.types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -305,9 +306,19 @@ describe("reply tool authority", () => {
     ).resolves.toEqual({ status: "accepted" });
   });
 
-  it.each([false, true])(
-    "steers after reconnect while retaining runtime destinations and checking current authority (model policy: %s)",
-    async (withModelPolicy) => {
+  it.each(
+    [false, true].flatMap((withModelPolicy) => [
+      {
+        withModelPolicy,
+        grantKind: "bound",
+        grant: { pluginId: "access-policy", grantId: "original-grant" },
+      },
+      { withModelPolicy, grantKind: "independent", grant: null },
+      { withModelPolicy, grantKind: "unclassified", grant: undefined },
+    ]),
+  )(
+    "preserves reconnect steering authority (model policy: $withModelPolicy, grant: $grantKind)",
+    async ({ withModelPolicy, grant }) => {
       const profileId = "steering-operator";
       const scopes: GatewayOperatorRoleDefinition["scopes"] = [
         "operator.admin",
@@ -342,7 +353,12 @@ describe("reply tool authority", () => {
       const originalRevocation = new AbortController();
       const reconnectedRevocation = new AbortController();
       const cleanups: Array<() => void> = [];
-      const capture = (client: typeof originalClient, signal: AbortSignal) => {
+      const capture = (
+        client: typeof originalClient,
+        signal: AbortSignal,
+        gatewayAccessGrant: GatewayAccessGrantRef | null | undefined,
+        grantSignal = new AbortController().signal,
+      ) => {
         const caller = captureGatewayDeviceRevocation(
           context,
           { deviceId: "same-device", role: "operator" },
@@ -364,7 +380,14 @@ describe("reply tool authority", () => {
             role: withModelPolicy ? "writer" : null,
             isCurrent: () => true,
           },
-          sourceAuthority: null,
+          sourceAuthority:
+            gatewayAccessGrant === null
+              ? null
+              : {
+                  gatewayAccessGrant,
+                  signal: grantSignal,
+                  assertCurrent: () => grantSignal.throwIfAborted(),
+                },
         });
         if (!owner) {
           throw new Error("Expected an authenticated operator authority");
@@ -374,14 +397,18 @@ describe("reply tool authority", () => {
       };
       try {
         const run = createQueueTestRun({ prompt: "keep playing" });
-        run.operatorAuthority = capture(originalClient, originalRevocation.signal);
+        run.operatorAuthority = capture(originalClient, originalRevocation.signal, grant);
         run.run.gatewayUiCommandTarget = { connId: originalClient.connId!, profileId };
         run.run.approvalReviewerDeviceId = "original-reviewer";
         run.run.clientCaps = ["ui-commands"];
         run.run.toolBindings = { browser: { kind: "tab", targetId: "original-tab" } };
         run.run.senderIsOwner = true;
         run.run.permissionMode = "full";
-        const reconnectedAuthority = capture(reconnectedClient, reconnectedRevocation.signal);
+        const reconnectedAuthority = capture(
+          reconnectedClient,
+          reconnectedRevocation.signal,
+          grant,
+        );
         const operation = createTestReplyOperation({ sessionId: "reconnected-steering" });
         operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
         const fingerprint = operation.bindToolAuthorityRoute(run.run);
@@ -403,13 +430,21 @@ describe("reply tool authority", () => {
           });
         await expect(
           inject({
-            operatorAuthority: capture(originalClient, originalRevocation.signal),
+            operatorAuthority:
+              grant === undefined
+                ? run.operatorAuthority
+                : capture(originalClient, originalRevocation.signal, grant),
             gatewayUiCommandTarget: run.run.gatewayUiCommandTarget,
           }),
         ).resolves.toEqual({ status: "accepted" });
         // An unrelated config publication must not change the effective model ceiling.
         config = { ...config };
-        await expect(inject()).resolves.toEqual({ status: "accepted" });
+        await expect(inject()).resolves.toEqual(
+          grant === undefined
+            ? { status: "rejected", reason: "tool_authority_mismatch" }
+            : { status: "accepted" },
+        );
+        const acceptedMessages = grant === undefined ? 1 : 2;
         expect(queueMessage).toHaveBeenLastCalledWith(
           "change strategy",
           expect.objectContaining({
@@ -421,6 +456,38 @@ describe("reply tool authority", () => {
         expect(forwarded).not.toHaveProperty("gatewayUiCommandTarget");
         expect(forwarded).not.toHaveProperty("approvalReviewerDeviceId");
         expect(forwarded).not.toHaveProperty("toolBindings");
+        for (const changedGrant of [
+          { pluginId: "access-policy", grantId: "replacement-grant" },
+          { pluginId: "other-policy", grantId: "original-grant" },
+          ...(grant === null ? [] : [null]),
+          ...(grant === undefined ? [] : [undefined]),
+        ]) {
+          await expect(
+            inject({
+              operatorAuthority: capture(
+                reconnectedClient,
+                reconnectedRevocation.signal,
+                changedGrant,
+              ),
+            }),
+          ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+          expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
+        }
+        if (grant !== null) {
+          const revokedGrant = new AbortController();
+          const revokedAuthority = capture(
+            reconnectedClient,
+            reconnectedRevocation.signal,
+            grant,
+            revokedGrant.signal,
+          );
+          revokedGrant.abort();
+          await expect(inject({ operatorAuthority: revokedAuthority })).resolves.toMatchObject({
+            status: "rejected",
+            reason: "tool_authority_mismatch",
+          });
+          expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
+        }
         for (const changed of [
           {
             operatorAuthority: createAdmittedRunOperatorAuthority({
@@ -465,13 +532,13 @@ describe("reply tool authority", () => {
           status: "rejected",
           reason: "tool_authority_mismatch",
         });
-        const liveReplacement = capture(reconnectedClient, new AbortController().signal);
+        const liveReplacement = capture(reconnectedClient, new AbortController().signal, grant);
         originalRevocation.abort();
         await expect(inject({ operatorAuthority: liveReplacement })).resolves.toMatchObject({
           status: "rejected",
           reason: "tool_authority_mismatch",
         });
-        expect(queueMessage).toHaveBeenCalledTimes(2);
+        expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
       } finally {
         for (const release of cleanups.toReversed()) {
           release();

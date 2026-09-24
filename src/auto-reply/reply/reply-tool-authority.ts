@@ -357,6 +357,10 @@ function resolveReplyToolAuthorityInputFingerprint(
           ? {
               profileId: authority.profileId,
               scopes: [...new Set(authority.scopes)].toSorted(),
+              gatewayAccessGrant:
+                authority.gatewayAccessGrant === undefined
+                  ? resolveReplyOperatorAuthorityKey(authority)
+                  : authority.gatewayAccessGrant,
               modelPolicy:
                 readOperatorModelPolicyMembership(authority.modelPolicy) ??
                 resolveReplyOperatorAuthorityKey(authority),

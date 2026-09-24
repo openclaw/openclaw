@@ -342,6 +342,15 @@ export type ConfigSubmittedDraft = {
 
 export type ConfigWriteAck = { config: Record<string, unknown>; hash: string };
 
+export function isConfigWriteAck(value: unknown): value is ConfigWriteAck {
+  return (
+    isRecord(value) &&
+    isRecord(value.config) &&
+    typeof value.hash === "string" &&
+    value.hash.length > 0
+  );
+}
+
 export function assertConfigDraftCurrent(state: RuntimeConfigState): void {
   const canonical = resolveEditableSnapshotConfig(state.configSnapshot);
   if (!canonical || state.configDraftBaseHash !== state.configSnapshot?.hash) {

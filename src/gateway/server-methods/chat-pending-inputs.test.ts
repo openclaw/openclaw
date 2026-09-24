@@ -64,9 +64,11 @@ describe("pending input read boundary", () => {
           { sessionId: "another-session" },
           { agentId: "another-agent" },
           {},
+          {},
+          {},
         ].entries()) {
           const controller = new AbortController();
-          const runId = `pending-display-run-${index}`;
+          const runId = index === 5 ? "external-run-".repeat(30) : `pending-display-run-${index}`;
           expect(
             registerQueuedChatTurn({
               chatQueuedTurns: context.chatQueuedTurns,
@@ -78,6 +80,8 @@ describe("pending input read boundary", () => {
           ).toBe(true);
           if (index === 3) {
             retireQueuedChatTurnCancellation(context.chatQueuedTurns, runId, controller);
+          } else if (index === 4) {
+            controller.abort();
           }
         }
         const readPage = async () => {
@@ -101,6 +105,7 @@ describe("pending input read boundary", () => {
           const page = expectDefined(asOptionalRecord(result), "history response");
           const pending = expectDefined(asOptionalRecord(page.pendingInputs), "pending inputs");
           expect(pending.total).toBe(20);
+          expect(pending.queuedCount).toBe(1);
           expect(readDisplay.mock.calls.filter(([id]) => id === profile.id)).toHaveLength(1);
           return pending.items as Array<Record<string, unknown>>;
         };
@@ -356,7 +361,7 @@ describe("pending input consumption receipts", () => {
           expect(page.inputConsumptions).toEqual([
             { runId: "source-a", consumedByEventId: aggregate.inputId },
           ]);
-          expect(page.pendingInputs).toEqual({ items: [], total: 0 });
+          expect(page.pendingInputs).toEqual({ items: [], total: 0, queuedCount: 0 });
           expect(JSON.stringify(page.messages)).not.toContain("Collected inputs");
           const delta = await call({ inputRunIds, cursor: page.deltaCursor });
           expect(delta).toMatchObject({ kind: "delta", messages: [], inputReceipts: expected });
@@ -393,6 +398,7 @@ describe("pending input consumption receipts", () => {
           expect(retainedPage.inputConsumptions).toEqual([]);
           expect(retainedPage.pendingInputs).toMatchObject({
             total: 21,
+            queuedCount: 1,
             items: [{ runId: "retained-20" }],
           });
           expect(
@@ -401,9 +407,9 @@ describe("pending input consumption receipts", () => {
               sessionKey: scope.sessionKey,
             }).aborted,
           ).toBe(true);
-          expect((await call({ inputRunIds: ["retained-0"], limit: 1 })).inputReceipts).toEqual([
-            { runId: "retained-0", state: "pending" },
-          ]);
+          const cancelledPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
+          expect(cancelledPage.pendingInputs).toMatchObject({ queuedCount: 0 });
+          expect(cancelledPage.inputReceipts).toEqual([{ runId: "retained-0", state: "pending" }]);
           const anchor = await call({
             inputRunIds,
             messageId: aggregate.inputId,
