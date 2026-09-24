@@ -25,6 +25,7 @@ const targets = [
   "cli-root-options.mjs",
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
+  "node-compile-cache.mjs",
   "node-host-launcher.mjs",
   "node-runtime-update.mjs",
   "node-runtime-recovery.mjs",

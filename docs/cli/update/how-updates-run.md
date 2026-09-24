@@ -426,6 +426,14 @@ count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
 
+On Windows, Scheduled Task autostart stays suspended until the candidate finalizer
+activates the updated Gateway. After migration, the retained updater checks its
+live executor lease without reopening the newer state database. Plugin version
+drift remains a warning while the candidate completes activation. This handoff
+repair applies when the updated driver runs the next upgrade; it cannot change
+an already-running 2026.9.5 updater. If that older driver stops with recovery
+pending, use the installed version's `openclaw update repair`.
+
 When Doctor cannot acquire maintenance before repair writes begin, finalization
 restores any service it stopped and exits successfully with a recorded warning.
 This includes lock contention from unknown or non-serving processes. Doctor and

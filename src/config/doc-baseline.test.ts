@@ -12,7 +12,22 @@ vi.mock("./doc-baseline.runtime.js", async (importOriginal) => {
     buildConfigSchema: () => ({
       schema: {
         type: "object",
+        required: ["mapValues", "mixedValues", "singleValues"],
+        additionalProperties: { type: "string" },
         properties: {
+          mapValues: {
+            type: "object",
+            additionalProperties: { type: "boolean" },
+          },
+          mixedValues: {
+            type: "array",
+            additionalProperties: { type: "string", enum: ["extra"] },
+            items: [null, true, [], { type: "number", enum: [42] }],
+          },
+          singleValues: {
+            type: "array",
+            items: { type: "string" },
+          },
           tupleValues: {
             type: "array",
             items: [
@@ -30,10 +45,81 @@ vi.mock("./doc-baseline.runtime.js", async (importOriginal) => {
 });
 
 describe("config doc baseline", () => {
-  it("merges tuple item metadata through the public renderer", async () => {
+  it("renders optional wildcards and merges tuple metadata through the public renderer", async () => {
     const { baseline } = await renderConfigDocBaselineArtifacts();
 
     expect(baseline.coreEntries).toEqual([
+      {
+        path: "*",
+        kind: "core",
+        type: "string",
+        required: false,
+        deprecated: false,
+        sensitive: false,
+        tags: [],
+        hasChildren: false,
+      },
+      {
+        path: "mapValues",
+        kind: "core",
+        type: "object",
+        required: true,
+        deprecated: false,
+        sensitive: false,
+        tags: [],
+        hasChildren: true,
+      },
+      {
+        path: "mapValues.*",
+        kind: "core",
+        type: "boolean",
+        required: false,
+        deprecated: false,
+        sensitive: false,
+        tags: [],
+        hasChildren: false,
+      },
+      {
+        path: "mixedValues",
+        kind: "core",
+        type: "array",
+        required: true,
+        deprecated: false,
+        sensitive: false,
+        tags: [],
+        hasChildren: true,
+      },
+      {
+        path: "mixedValues.*",
+        kind: "core",
+        type: ["number", "string"],
+        required: false,
+        enumValues: ["extra", 42],
+        deprecated: false,
+        sensitive: false,
+        tags: [],
+        hasChildren: false,
+      },
+      {
+        path: "singleValues",
+        kind: "core",
+        type: "array",
+        required: true,
+        deprecated: false,
+        sensitive: false,
+        tags: [],
+        hasChildren: true,
+      },
+      {
+        path: "singleValues.*",
+        kind: "core",
+        type: "string",
+        required: false,
+        deprecated: false,
+        sensitive: false,
+        tags: [],
+        hasChildren: false,
+      },
       {
         path: "tupleValues",
         kind: "core",

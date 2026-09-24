@@ -85,7 +85,10 @@ import {
 } from "./server-methods/sessions-patch-model-selection.js";
 import { existingSessionSelectionWouldChange } from "./session-create-existing-selection.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
-import { resolveSessionCreateInheritance } from "./session-create-inheritance.js";
+import {
+  prepareSessionCreateParent,
+  resolveSessionCreateInheritance,
+} from "./session-create-inheritance.js";
 import {
   createSessionCreateCommitGuard,
   prepareSessionCreateDefaultAccount,
@@ -391,40 +394,18 @@ export async function createGatewaySession(
       return parentRequestedAgent;
     }
     parentSelectedAgentId = parentRequestedAgent.agentId;
-    const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, {
+    const parent = await prepareSessionCreateParent({
+      params,
+      key: parentSessionKey,
       agentId: parentSelectedAgentId,
+      assertCurrent: commitGuard,
     });
-    if (!parent.entry?.sessionId) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `unknown parent session: ${parentSessionKey}`,
-        ),
-      };
-    }
-    const parentOwnershipError = resolvePluginSessionOwnershipError({
-      action: params.fork === true ? "fork" : "link",
-      entry: parent.entry,
-      key: parent.canonicalKey,
-      pluginOwnerId: params.authorizedPluginId,
-    });
-    if (parentOwnershipError) {
-      return { ok: false, error: parentOwnershipError };
-    }
-    if (isModelSelectionLocked(parent.entry)) {
-      return {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE),
-      };
+    if (!parent.ok) {
+      return parent;
     }
     canonicalParentSessionKey = parent.canonicalKey;
     parentSessionEntry = parent.entry;
-    parentSessionTarget = resolveGatewaySessionStoreTarget({
-      cfg: params.cfg,
-      key: parentSessionKey,
-      ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
-    });
+    parentSessionTarget = parent.target;
   }
   if (
     params.activeParentFork &&
@@ -744,6 +725,7 @@ export async function createGatewaySession(
       return targetRead;
     }
     const currentTargetEntry = targetRead.value;
+    // Delegated isolation survives changes to the creator's current role.
     const creationSandbox =
       creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
     const sandboxRequired =
@@ -1099,11 +1081,7 @@ export async function createGatewaySession(
           // must not restamp write-once node facts (this direct store write bypasses
           // the merge-level write-once guard), and legacy rows stay "unknown".
           ...(creation && createdNewEntry
-            ? buildSessionCreationStamp({
-                ...creation,
-                // Delegated isolation survives changes to the creator's current role.
-                sandbox: creation.sandbox ?? resolveCreatorSandbox(params.cfg, creation),
-              })
+            ? buildSessionCreationStamp({ ...creation, sandbox: creationSandbox, incognito })
             : {}),
           ...(createdNewEntry && inheritedSpawnOwner ? { owner: inheritedSpawnOwner } : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),

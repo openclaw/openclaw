@@ -1,56 +1,6 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
   "name": "OpenClaw",
   "description": "Self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI coding agents. Run one Gateway process on your own machine and message your AI assistant from anywhere.",
-  "theme": "mint",
-  "icons": {
-    "library": "lucide"
-  },
-  "logo": {
-    "light": "/assets/pixel-lobster.svg",
-    "dark": "/assets/pixel-lobster.svg"
-  },
-  "fonts": {
-    "body": {
-      "family": "Fragment Mono"
-    },
-    "heading": {
-      "family": "DM Sans"
-    }
-  },
-  "favicon": "/assets/pixel-lobster.svg",
-  "colors": {
-    "primary": "#D84A31",
-    "dark": "#E05540",
-    "light": "#F5654A"
-  },
-  "styling": {
-    "codeblocks": {
-      "theme": {
-        "dark": "min-dark",
-        "light": "min-light"
-      }
-    }
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "GitHub",
-        "href": "https://github.com/openclaw/openclaw",
-        "icon": "github"
-      },
-      {
-        "label": "Releases",
-        "href": "https://github.com/openclaw/openclaw/releases",
-        "icon": "package"
-      },
-      {
-        "label": "Discord",
-        "href": "https://discord.com/invite/clawd",
-        "icon": "discord"
-      }
-    ]
-  },
   "redirects": [
     {
       "source": "/cli/commitments",

@@ -20,11 +20,7 @@ import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { admitSystemdUpdate } from "../../infra/update-managed-service-handoff-service.js";
 import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff.js";
-import {
-  getUpdateRun,
-  recordUpdateRunPhase,
-  recordUpdateRunStep,
-} from "../../infra/update-run-ledger.js";
+import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -447,15 +443,10 @@ async function stopManagedServiceBeforeMutableUpdate(
         timeoutMs: params.timeoutMs,
       }),
       assertCurrent: () => {
-        // Recovery reacquires its native lock, but retains the caller's authority.
+        // Recovery can hand off after Doctor migrates canonical state. Retain live
+        // executor authority without reopening that state through the old runtime.
         params.assertCurrent?.();
         assertExecutor();
-        if (
-          updateRun &&
-          getUpdateRun(updateRun.runId, { env: updateRun.env })?.status !== "running"
-        ) {
-          throw new Error("Update run no longer owns Windows task activation.");
-        }
       },
     });
   };

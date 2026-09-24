@@ -1,5 +1,6 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
 cli-root-options.mjs
+node-compile-cache.mjs
 node-sqlite.mjs
 node-version.mjs
 package.json

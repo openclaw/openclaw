@@ -97,73 +97,6 @@ const hoisted = vi.hoisted(() => {
   const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
   const upsertSessionEntryMock = vi.fn();
-  const createSessionAccessorMock = () => {
-    const resolveMockStorePath = (scope: {
-      agentId?: string;
-      env?: NodeJS.ProcessEnv;
-      storePath?: string;
-    }): string =>
-      scope.storePath ??
-      resolveStorePathMock(undefined, {
-        agentId: scope.agentId,
-        env: scope.env,
-      });
-    const loadMockEntry = (scope: {
-      agentId?: string;
-      env?: NodeJS.ProcessEnv;
-      sessionKey: string;
-      storePath?: string;
-    }): SessionEntry | undefined => {
-      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
-        string,
-        SessionEntry
-      >;
-      return store[scope.sessionKey];
-    };
-    const listMockEntries = (
-      scope: {
-        agentId?: string;
-        env?: NodeJS.ProcessEnv;
-        storePath?: string;
-      } = {},
-    ) => {
-      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
-        string,
-        SessionEntry
-      >;
-      return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
-    };
-    return {
-      listSessionEntriesCore: listMockEntries,
-      listSessionEntriesReadOnly: listMockEntries,
-      loadSessionEntry: loadMockEntry,
-      loadSessionEntryReadOnly: loadMockEntry,
-      upsertSessionEntryCore: async (scope: unknown, patch: SessionEntry) =>
-        await upsertSessionEntryMock(scope, patch),
-      resolveSessionTranscriptRuntimeTarget: async (scope: {
-        agentId: string;
-        sessionId: string;
-        sessionKey: string;
-        storePath?: string;
-        threadId?: string | number;
-      }) => {
-        const store = scope.storePath
-          ? (loadSessionStoreMock(scope.storePath) as Record<string, SessionEntry>)
-          : undefined;
-        const resolved = await resolveSessionTranscriptFileMock({
-          ...scope,
-          ...(store ? { sessionStore: store } : {}),
-          sessionEntry: loadMockEntry(scope),
-        });
-        return {
-          agentId: scope.agentId,
-          sessionFile: resolved.sessionFile,
-          sessionId: scope.sessionId,
-          sessionKey: scope.sessionKey,
-        };
-      },
-    };
-  };
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -190,7 +123,6 @@ const hoisted = vi.hoisted(() => {
     getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
     upsertSessionEntryMock,
-    createSessionAccessorMock,
     state,
   };
 });
@@ -223,7 +155,15 @@ vi.mock("../../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: hoisted.resolveStorePathMock,
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
+vi.mock("../../../config/sessions/session-accessor.js", async () => {
+  const { createAcpSpawnStoreMocks } = await import("./acp-spawn-store.test-support.js");
+  return createAcpSpawnStoreMocks(hoisted).accessor;
+});
+
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", async () => {
+  const { createAcpSpawnStoreMocks } = await import("./acp-spawn-store.test-support.js");
+  return createAcpSpawnStoreMocks(hoisted).readRuntime;
+});
 
 vi.mock("../../../config/sessions.js", async () => {
   const { isConfiguredSessionStoreAgentId, isPerAgentSessionStoreConfig } =

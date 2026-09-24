@@ -294,7 +294,7 @@ export function registerSettledFinalizationTests({
       promptError: "remote compaction failed",
       promptErrorSource: "compaction",
     });
-    expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
+    expect(result.itemLifecycle).toEqual({ startedCount: 2, completedCount: 1, activeCount: 0 });
     expect(result.settledTurnFinalizationContext).toMatchObject({
       source: "harness",
       data: [

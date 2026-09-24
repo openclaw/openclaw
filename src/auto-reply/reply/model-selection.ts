@@ -213,6 +213,10 @@ export async function createModelSelectionState(params: {
   // (discovery threw, static/empty fallback) must not destroy a pinned override.
   let catalogAuthoritative = true;
   let resetModelOverride = false;
+  // Set when this call decides to reset the stored override, independent of whether that write
+  // persisted. A lost compare-and-swap only means another writer touched the row, not that the
+  // refusal should be ignored, so the run's base selection must not stay on the refused ref.
+  let storedOverrideResetForRun = false;
   let resetModelOverrideRef: string | undefined;
   let resetModelOverrideReason: "disallowed" | "stale" | "temporarily-unavailable" | undefined;
   const directStoredModelOverride = storedModelOverrides.resolveDirectStoredModelOverride({
@@ -317,6 +321,7 @@ export async function createModelSelectionState(params: {
       resetModelOverrideRef = key;
       resetModelOverrideReason = "temporarily-unavailable";
     } else if (shouldResetOverride) {
+      storedOverrideResetForRun = true;
       const initialSessionEntry = { ...sessionEntry };
       const nextSessionEntry = { ...sessionEntry };
       const { updated } = applyModelOverrideToSessionEntry({
@@ -360,8 +365,15 @@ export async function createModelSelectionState(params: {
       }
     }
   }
+  // A refused direct override must not stay the run's base selection: `resolveSelection` would clip
+  // it to the first allowed catalog entry instead of the configured primary. `stale` has moved to the
+  // primary unconditionally since before the reset existed, so it keeps its own signal; a
+  // policy-rejected override is moved by the reset decision this owner just took, whether or not that
+  // write persisted, and `temporarily-unavailable` preserves the pin instead of resetting it and is
+  // deliberately excluded. The ref comparison keeps this to callers that seeded provider/model from
+  // the stored override; an inline directive or operator default is resolved afterwards and wins.
   if (
-    staleDirectStoredOverride &&
+    (storedOverrideResetForRun || staleDirectStoredOverride) &&
     params.provider === directOverrideRef?.provider &&
     params.model === directOverrideRef.model
   ) {
