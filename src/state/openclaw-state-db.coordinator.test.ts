@@ -6,6 +6,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -127,12 +128,38 @@ function openStateDatabaseWithPeriodicMaintenance(databasePath: string) {
 function observeStateWalCheckpoints(pathname: string) {
   const databasePath = sqliteReaderDatabasePathKey(pathname);
   const observations: string[] = [];
+  const waiters = new Set<() => void>();
   const stopObserving = onSqliteWalCheckpoint((observation) => {
     if (observation.databasePath === databasePath) {
       observations.push(observation.health.state);
+      for (const waiter of waiters) {
+        waiter();
+      }
     }
   });
-  return { observations, stopObserving };
+  return {
+    observations,
+    stopObserving,
+    async waitForObservation(
+      this: void,
+      predicate: (states: readonly string[]) => boolean,
+      timeoutMs: number,
+    ) {
+      const observed = createDeferred();
+      const check = () => {
+        if (predicate(observations)) {
+          observed.resolve();
+        }
+      };
+      waiters.add(check);
+      try {
+        check();
+        await withTestTimeout(observed.promise, timeoutMs, "WAL checkpoint observation timed out");
+      } finally {
+        waiters.delete(check);
+      }
+    },
+  };
 }
 
 function sqliteBytes(databasePath: string) {
@@ -330,7 +357,9 @@ describe("shared-state transaction lifecycle participation", () => {
       path.join(root, "openclaw.sqlite"),
     );
     const release = await holdStateCoordinator(database.path, 200);
-    const { observations, stopObserving } = observeStateWalCheckpoints(database.path);
+    const { observations, stopObserving, waitForObservation } = observeStateWalCheckpoints(
+      database.path,
+    );
     let released: Promise<void> | undefined;
     try {
       const nextTurn = new Promise<void>((resolve) => {
@@ -345,9 +374,6 @@ describe("shared-state transaction lifecycle participation", () => {
         `Periodic maintenance settled before the next event-loop turn (callback ${callbackMs.toFixed(1)} ms)`,
       ).toEqual([]);
       for (let turn = 0; turn < 3; turn += 1) {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 10);
-        });
         await release.observe();
         expect(
           observations,
@@ -355,7 +381,8 @@ describe("shared-state transaction lifecycle participation", () => {
         ).toEqual([]);
       }
       released = release();
-      await expect.poll(() => observations[0], { timeout: 5_000 }).toBe("complete");
+      await waitForObservation((states) => states.length > 0, 5_000);
+      expect(observations[0]).toBe("complete");
     } finally {
       stopObserving();
       await (released ?? release());
@@ -384,7 +411,9 @@ describe("shared-state transaction lifecycle participation", () => {
       await closeOpenClawStateDatabaseByPathAsync(replacement.path);
       const replacementBytes = sqliteBytes(replacement.path);
       const release = await holdStateCoordinator(database.path);
-      const { observations, stopObserving } = observeStateWalCheckpoints(database.path);
+      const { observations, stopObserving, waitForObservation } = observeStateWalCheckpoints(
+        database.path,
+      );
       let originalMoved = false;
       let replacementInstalled = false;
       let released: Promise<void> | undefined;
@@ -400,9 +429,8 @@ describe("shared-state transaction lifecycle participation", () => {
         fs.renameSync(replacementDirectory, originalDirectory);
         replacementInstalled = true;
         released = release();
-        await expect
-          .poll(() => database.walMaintenance.health?.state, { timeout: 5_000 })
-          .toBe("error");
+        await waitForObservation((states) => states.length > 0, 5_000);
+        expect(database.walMaintenance.health?.state).toBe("error");
         expect(database.walMaintenance.health?.error).toContain(
           "SQLite database file identity changed before existing-only open",
         );
@@ -450,7 +478,9 @@ describe("shared-state transaction lifecycle participation", () => {
       );
       const release = await holdStateCoordinator(database.path);
       const before = sqliteBytes(database.path);
-      const { observations, stopObserving } = observeStateWalCheckpoints(database.path);
+      const { observations, stopObserving, waitForObservation } = observeStateWalCheckpoints(
+        database.path,
+      );
       let released: Promise<void> | undefined;
       try {
         periodic();
@@ -474,7 +504,8 @@ describe("shared-state transaction lifecycle participation", () => {
         await released;
         if (mode === "synchronous") {
           // Refused retirement must not cancel the original pending maintenance.
-          await expect.poll(() => observations[0], { timeout: 5_000 }).toBe("complete");
+          await waitForObservation((states) => states.length > 0, 5_000);
+          expect(observations[0]).toBe("complete");
         } else {
           // A drained admission cannot revive when its old timer callback runs again.
           periodic();
@@ -532,7 +563,9 @@ describe("shared-state transaction lifecycle participation", () => {
     if (!coordinatorDatabase) {
       throw new Error("Warm state coordinator did not expose its native connection");
     }
-    const { observations, stopObserving } = observeStateWalCheckpoints(database.path);
+    const { observations, stopObserving, waitForObservation } = observeStateWalCheckpoints(
+      database.path,
+    );
     const releaseObservations: string[][] = [];
     let originalLease:
       | Awaited<ReturnType<typeof coordinatorAcquisition.acquireStateDatabaseCoordinatorWithWait>>
@@ -557,7 +590,8 @@ describe("shared-state transaction lifecycle participation", () => {
     });
     try {
       periodic();
-      await expect.poll(() => database.walMaintenance.health?.state).toBe("error");
+      await waitForObservation((states) => states.includes("error"), 1_000);
+      expect(database.walMaintenance.health?.state).toBe("error");
       expect(observations).toContain("complete");
       expect(coordinatorDatabase.isOpen).toBe(true);
       expect(coordinatorDatabase.isTransaction).toBe(false);
@@ -569,7 +603,8 @@ describe("shared-state transaction lifecycle participation", () => {
       try {
         const settled = observations.length;
         periodic();
-        await expect.poll(() => observations.length).toBe(settled + 1);
+        await waitForObservation((states) => states.length > settled, 1_000);
+        expect(observations).toHaveLength(settled + 1);
         expect(database.walMaintenance.health?.error).toContain("cleanup is pending");
         expect(coordinatorDatabase.isOpen).toBe(true);
         expect(sqliteBytes(successor.path)).toEqual(successorBytes);
@@ -618,14 +653,16 @@ describe("shared-state transaction lifecycle participation", () => {
       );
       const release = await holdStateCoordinator(database.path);
       const before = sqliteBytes(database.path);
+      const { observations, stopObserving, waitForObservation } = observeStateWalCheckpoints(
+        database.path,
+      );
       try {
         if (mode === "explicit") {
           expect(database.walMaintenance.checkpoint()).toBe(false);
         } else {
           periodic();
-          await expect
-            .poll(() => database.walMaintenance.health?.state, { timeout: 5_000 })
-            .toBe("blocked");
+          await waitForObservation((states) => states.length > 0, 5_000);
+          expect(observations[0]).toBe("blocked");
         }
         if (process.platform === "linux") {
           expect(database.walMaintenance.health).toMatchObject({
@@ -642,6 +679,7 @@ describe("shared-state transaction lifecycle participation", () => {
         }
         expect(sqliteBytes(database.path)).toEqual(before);
       } finally {
+        stopObserving();
         await release();
       }
       expect(database.walMaintenance.checkpoint()).toBe(true);
