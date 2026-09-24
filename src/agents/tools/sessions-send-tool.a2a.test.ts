@@ -421,7 +421,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   });
 
   it.each([false, true])(
-    "does not deliver without an announce target, with captured requester route %s",
+    "uses only the captured source route when the opaque session has no saved route (captured: %s)",
     async (captured) => {
       await runSessionsSendA2AFlow({
         targetAgentId: "main",
@@ -439,7 +439,16 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       });
 
       expect(runAgentStep).not.toHaveBeenCalled();
-      expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+      if (captured) {
+        expect(requireGatewayCall("send").params).toMatchObject({
+          channel: "qa-channel",
+          to: "dm:alice",
+          accountId: "default",
+          message: "Delayed result for a session with no saved route",
+        });
+      } else {
+        expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+      }
     },
   );
 

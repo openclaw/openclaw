@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -223,12 +224,24 @@ export async function runSessionsSendA2AFlow(params: {
       }
     }
 
-    const announceTarget = await resolveAnnounceTarget({
-      sessionKey: params.targetSessionKey,
-      displayKey: params.displayKey,
-      callGateway: gatewayCall,
-      agentId: params.targetAgentId,
-    });
+    const sourceOrigin = sameSessionSourceReply ? params.requesterOrigin : undefined;
+    const sourceTarget =
+      sourceOrigin?.channel && sourceOrigin.to && !isInternalMessageChannel(sourceOrigin.channel)
+        ? {
+            channel: sourceOrigin.channel,
+            to: sourceOrigin.to,
+            accountId: sourceOrigin.accountId,
+            threadId: stringifyRouteThreadId(sourceOrigin.threadId),
+          }
+        : undefined;
+    const announceTarget =
+      sourceTarget ??
+      (await resolveAnnounceTarget({
+        sessionKey: params.targetSessionKey,
+        displayKey: params.displayKey,
+        callGateway: gatewayCall,
+        agentId: params.targetAgentId,
+      }));
     const targetChannel = announceTarget?.channel ?? "unknown";
     if (
       oneWayInternalRequesterSessionKey &&
@@ -238,7 +251,9 @@ export async function runSessionsSendA2AFlow(params: {
     }
     const canDirectDeliverSameSessionReply =
       announceTarget &&
-      (!params.requesterChannel || params.requesterChannel === announceTarget.channel);
+      (sourceTarget ||
+        !params.requesterChannel ||
+        params.requesterChannel === announceTarget.channel);
     if (sameSessionSourceReply && canDirectDeliverSameSessionReply) {
       await deliverAnnounceReply({
         announceTarget,

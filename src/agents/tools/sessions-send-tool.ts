@@ -655,13 +655,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = opts?.idempotencyKey ?? crypto.randomUUID();
       let runId: string = idempotencyKey;
+      const sameSession = requesterSessionKey === resolvedKey && targetAgentId === requesterAgentId;
       // Fire-and-forget self-send remains a channel-delivery path. A synchronous
       // self-send would wait behind its own active session lane until timeout.
-      if (
-        timeoutSeconds !== 0 &&
-        requesterSessionKey === resolvedKey &&
-        targetAgentId === requesterAgentId
-      ) {
+      if (timeoutSeconds !== 0 && sameSession) {
         return jsonResult({
           runId,
           status: "error",
@@ -893,6 +890,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             runId,
             mode,
             sendParams,
+            sourceOrigin: sameSession ? requesterOrigin : undefined,
             sessionKey: mode ? resolvedKey : displayKey,
             sessionStoreTarget: targetSession,
             deliveryTimeoutMs: announceTimeoutMs,
