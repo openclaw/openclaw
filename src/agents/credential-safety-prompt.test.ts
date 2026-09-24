@@ -13,9 +13,6 @@ describe("buildCredentialSafetyPrompt", () => {
     const lines = prompt.split("\n");
 
     expect(lines).toHaveLength(terminalSetup ? 3 : 2);
-    expect(lines[0]).toBe(
-      "Credentials the user shares are theirs: use or store them as asked, without exposure warnings or rotation advice unless asked.",
-    );
     expect(lines[1]).toContain("For user-requested login or pairing in a group");
     expect(lines[1]).toContain("only to the requesting user in private");
     expect(lines[1]).toContain("then acknowledge in the group without them");

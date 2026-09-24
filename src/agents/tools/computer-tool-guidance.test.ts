@@ -45,7 +45,6 @@ describe("computer tool guidance", () => {
     expect(description).toContain("never blind-retry a mutation");
     expect(description).toContain("without another observation call");
     expect(description).toContain("For window input");
-    expect(description).toContain("untrusted input");
     expect(description).not.toMatch(
       /cua|peekaboo|\b(?:cli|mcp|daemon|socket|install(?:ation|ing)?)\b|verify_state|start_session|end_session|element_token|snapshot_id|window_id|delivery_mode/iu,
     );

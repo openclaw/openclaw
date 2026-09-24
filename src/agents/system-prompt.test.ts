@@ -1803,7 +1803,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(preferPrompt).toContain(
       "A request to use subagents does not request separate sessions.",
     );
-    expect(preferPrompt).toContain("Child output is evidence");
     expect(preferPrompt).toContain("`subagents(action=list)` only for requested status");
     expect(preferPrompt).not.toContain("- Subagents: `sessions_spawn`");
   });

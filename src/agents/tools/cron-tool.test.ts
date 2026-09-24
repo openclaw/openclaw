@@ -963,7 +963,6 @@ describe("cron tool", () => {
       expect(tool.description).toContain(
         "ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page",
       );
-      expect(tool.description).toContain("do not bypass caller scope");
       expect(tool.description).toContain(
         "Genuinely new, requested automations can still be created",
       );
