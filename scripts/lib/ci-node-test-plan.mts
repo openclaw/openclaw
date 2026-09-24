@@ -204,6 +204,14 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches = [
+  ...["test/scripts/android-app-i18n.test.ts", "test/scripts/apple-app-i18n.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      // Both suites read this inventory by filename, not through the import graph.
+      testFile,
+      ownerGlobs: ["apps/.i18n/native-source.json"],
+      watchGlobs: ["apps/.i18n/native-source.json"],
+    }),
+  ),
   {
     testFile: "test/scripts/tsgo-core-test-shards.test.ts",
     watchGlobs: [
