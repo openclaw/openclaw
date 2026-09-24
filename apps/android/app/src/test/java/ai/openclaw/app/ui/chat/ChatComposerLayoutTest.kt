@@ -4008,17 +4008,26 @@ class ChatComposerLayoutTest {
       val pivotX = gauge.center.x
       val pivotY = gauge.top + gauge.height * 0.72f
       val innerArcRadius = gauge.width * 0.43f - pixelsPerDp // Half the 2dp stroke sits inside the red arc.
-      val radialY = maxOf(pivotY - bolt.top, bolt.bottom - pivotY)
-      val dx = bolt.right - pivotX
+      val tipX = bolt.left + bolt.width * 0.58f
+      val leftX = bolt.left + bolt.width * 0.2f
+      val leftY = bolt.top + bolt.height * 0.56f
+      val rightX = bolt.left + bolt.width * 0.86f
+      val rightY = bolt.top + bolt.height * 0.38f
       assertTrue("Fast bolt must be legible at 360dp: at least 6.5dp wide", bolt.width + 0.5f >= 6.5f * pixelsPerDp)
       assertTrue("The dial needs room for a readable bolt", gauge.width + 0.5f >= 26f * pixelsPerDp)
       assertTrue("The 48dp touch target must remain intact", touchTarget.width + 0.5f >= 48f * pixelsPerDp)
       assertTrue("Fast bolt must be fully inside the dial", bolt.left > gauge.left && bolt.right < gauge.right && bolt.top > gauge.top && bolt.bottom < gauge.bottom)
-      assertTrue("Fast bolt must clear the needle pivot", bolt.left > pivotX + 1.5f * pixelsPerDp)
+      assertTrue("Fast bolt must clear the needle pivot", leftX > pivotX + 1.5f * pixelsPerDp)
       assertTrue("Fast bolt must occupy the right wedge", bolt.top < pivotY && bolt.center.y < pivotY + 1.5f * pixelsPerDp)
-      assertTrue("Fast bolt must not cover the red arc", dx * dx + radialY * radialY < innerArcRadius * innerArcRadius)
-      val highNeedleRightAtBoltTop = pivotX + (pivotY - bolt.top) * 0.5774f + pixelsPerDp // High: 300 degrees, 2dp stroke.
-      assertTrue("Fast bolt must not cover the High needle", bolt.left > highNeedleRightAtBoltTop)
+      assertTrue("The lower bolt tip must align with the needle pivot", kotlin.math.abs(bolt.bottom - pivotY) <= 0.75f * pixelsPerDp)
+      val tipDx = tipX - pivotX
+      val tipDy = bolt.top - pivotY
+      val rightDx = rightX - pivotX
+      val rightDy = rightY - pivotY
+      assertTrue("Fast bolt must not cover the red arc", maxOf(tipDx * tipDx + tipDy * tipDy, rightDx * rightDx + rightDy * rightDy) < innerArcRadius * innerArcRadius)
+      val highNeedleAtTop = pivotX + (pivotY - bolt.top) * 0.5774f + pixelsPerDp // High: 300 degrees, 2dp stroke.
+      val highNeedleAtLeft = pivotX + (pivotY - leftY) * 0.5774f + pixelsPerDp
+      assertTrue("Fast bolt must not cover the High needle", tipX > highNeedleAtTop && leftX > highNeedleAtLeft)
     }
 
     publishEffort("off")

@@ -3602,7 +3602,7 @@ private fun ChatThinkingLevelPicker(
             modifier =
               Modifier
                 .align(AbsoluteAlignment.TopLeft)
-                .absoluteOffset(x = 16.75.dp, y = 17.5.dp)
+                .absoluteOffset(x = 16.75.dp, y = 13.dp)
                 .size(7.dp)
                 .testTag("chat-fast-mode-badge"),
           ) {
