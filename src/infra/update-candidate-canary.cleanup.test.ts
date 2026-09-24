@@ -12,6 +12,7 @@ import {
   FakeChild,
   stubHealthyGateway,
 } from "./update-candidate-canary.test-support.js";
+import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 
@@ -94,6 +95,140 @@ describe("canary teardown evidence", () => {
     mocks.port.mockResolvedValue(43_123);
     stubHealthyGateway();
   });
+
+  it.each(["timer", "elapsed"] as const)(
+    "does not start removal when custody resolves after the cleanup budget (%s)",
+    async (expiry) => {
+      vi.useFakeTimers();
+      const monotonicClock = vi.spyOn(performance, "now").mockReturnValue(0);
+      const custody = createDeferredCore<boolean>();
+      const removal = vi.spyOn(fs, "rm");
+      const onProgress = vi.fn();
+      const onWarning = vi.fn();
+      try {
+        const pending = cleanupUpdateTemporaryDirectory({
+          root,
+          directory: path.join(root, "unverified-copy"),
+          name: "candidate-state-cleanup",
+          canRemove: () => custody.promise,
+          onProgress,
+          onWarning,
+        });
+        expect(onProgress).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            status: "in_progress",
+            detail: expect.stringContaining("waiting for directory custody verification"),
+          }),
+        );
+        monotonicClock.mockReturnValue(300_000);
+        if (expiry === "timer") {
+          await vi.advanceTimersByTimeAsync(300_000);
+        } else {
+          custody.resolve(true);
+        }
+        await pending;
+        expect(onWarning).toHaveBeenCalledWith(
+          expect.objectContaining({
+            command: "",
+            termination: "timeout",
+            advisory: expect.objectContaining({
+              message: expect.stringContaining("ownership could not be verified"),
+            }),
+          }),
+        );
+        custody.resolve(true);
+        await Promise.resolve();
+        expect(removal).not.toHaveBeenCalled();
+        expect(onProgress).toHaveBeenCalledTimes(1);
+        expect(onProgress.mock.calls[0]?.[0].detail).not.toContain("filesystem removal");
+      } finally {
+        custody.resolve(false);
+        removal.mockRestore();
+        monotonicClock.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["completed", "deadline"] as const)(
+    "records the disposable-copy wait after a passed canary (%s)",
+    async (outcome) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const removalStarted = createDeferredCore<string>();
+      const removal = createDeferredCore<void>();
+      const remove = fs.rm.bind(fs);
+      const heldRemoval = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        if (
+          typeof target === "string" &&
+          path.basename(target).startsWith("openclaw-update-canary-")
+        ) {
+          removalStarted.resolve(target);
+          return removal.promise;
+        }
+        return remove(target, options);
+      });
+      const onProgress = vi.fn();
+      const onStep = vi.fn();
+      const pending = validateUpdateCandidateCanary({
+        ...canaryStateOptions(3_000),
+        onProgress,
+        onStep,
+      });
+      let retained: string | undefined;
+      try {
+        retained = await removalStarted.promise;
+        expect(onStep).toHaveBeenCalledWith(
+          expect.objectContaining({ name: "candidate-gateway-startup", exitCode: 0 }),
+        );
+        expect(onProgress).toHaveBeenCalledWith(
+          expect.objectContaining({
+            step: "candidate-state-cleanup",
+            status: "in_progress",
+            startedAtMs: Date.now(),
+            detail: expect.stringContaining("budget=300000ms"),
+          }),
+        );
+        expect(onProgress.mock.calls.at(-1)?.[0].detail).toContain(retained);
+        if (outcome === "completed") {
+          removal.resolve();
+        } else {
+          await vi.advanceTimersByTimeAsync(300_000);
+        }
+        const result = await pending;
+        expect(result.status).toBe("ok");
+        if (outcome === "completed") {
+          expect(onProgress).toHaveBeenCalledWith(
+            expect.objectContaining({ step: "candidate-state-cleanup", status: "completed" }),
+          );
+          expect(result.steps.some((step) => step.advisory)).toBe(false);
+        } else {
+          const warning = result.steps.find((step) => step.name === "candidate-state-cleanup")!;
+          expect(warning).toMatchObject({
+            termination: "timeout",
+            advisory: {
+              kind: "recoverable-maintenance",
+              message: expect.stringContaining("300000ms"),
+            },
+          });
+          expect(warning.advisory?.message).toContain(retained);
+          expect(warning.advisory?.message).toContain("after the updater exits");
+          expect(onStep).toHaveBeenCalledWith(warning);
+          const beforeLateRemoval = onProgress.mock.calls.length;
+          removal.resolve();
+          await Promise.resolve();
+          expect(onProgress).toHaveBeenCalledTimes(beforeLateRemoval);
+        }
+      } finally {
+        removal.resolve();
+        await pending;
+        heldRemoval.mockRestore();
+        vi.useRealTimers();
+        if (retained) {
+          await remove(retained, { recursive: true, force: true });
+        }
+      }
+    },
+  );
 
   it.each([
     "passed",

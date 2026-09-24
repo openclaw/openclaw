@@ -84,14 +84,17 @@ describe("restart health", () => {
 
     try {
       const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
+      const onObservation = vi.fn();
       await expect(
         waitForGatewayHttpReadiness({
           attempts: 1,
+          onObservation,
           deadlineAt: Date.now() + 1_000,
           delayMs: 0,
           port: address.port,
         }),
       ).resolves.toEqual({ healthz: 200, readyz: 503 });
+      expect(onObservation).toHaveBeenCalledExactlyOnceWith({ healthz: 200, readyz: 503 });
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {

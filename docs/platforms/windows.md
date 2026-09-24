@@ -176,7 +176,7 @@ If inspection fails, Doctor and update refusals include the underlying probe
 detail; an empty response identifies the exit code and reports that PowerShell
 produced no output.
 
-During update preflight, the Scheduled Task runtime probe uses the update's `--timeout` budget for each attempt and retries once on timeout; if it still times out, the refusal reports the probe budget and keeps code unchanged.
+Each Scheduled Task runtime probe allows at most five seconds, or the caller's shorter remaining budget. A long update readiness window does not extend a single PowerShell observation. Update preflight retries a timed-out probe once and reports the enforced probe budget. If ownership remains unverified, it skips service changes with a warning; losing verified ownership after admission blocks the service mutation.
 
 Gateway startup creates private SQLite staging directories through Windows APIs,
 without compiling C# or launching PowerShell for their permissions. The owner,
