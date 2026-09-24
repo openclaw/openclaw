@@ -19,23 +19,6 @@ import type {
   ProjectRegistryWorkerOperations,
 } from "./project-registry.worker-contract.js";
 
-export function isProjectRegistryCommand(command: {
-  type: string;
-  input: unknown;
-}): command is SqliteWorkerCommand<ProjectRegistryWorkerOperations> {
-  switch (command.type) {
-    case "projects.findRoot":
-    case "projects.list":
-    case "projects.resolve":
-    case "projects.insert":
-    case "projects.remove":
-    case "projects.resolveRefreshOwner":
-      return true;
-    default:
-      return false;
-  }
-}
-
 export function executeProjectRegistryCommand(
   command: SqliteWorkerCommand<ProjectRegistryWorkerOperations>,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },

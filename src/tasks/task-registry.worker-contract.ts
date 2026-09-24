@@ -111,7 +111,6 @@ export type TaskRegistryWorkerOperations = TaskInitialWorkerOperations &
 
 export function isTaskRegistryWorkerCommand(command: {
   type: string;
-  input: unknown;
 }): command is SqliteWorkerCommand<TaskRegistryWorkerOperations> {
   switch (command.type) {
     case "tasks.bindRunOwner":

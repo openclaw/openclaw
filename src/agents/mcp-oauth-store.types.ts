@@ -3,7 +3,27 @@ import type {
   OAuthClientInformationMixed,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease-store.js";
+import type { McpOAuthReadOperations } from "./mcp-oauth-store.kernel.js";
+
+/** Select this feature's commands from the typed shared-state wire contract. */
+export function isMcpOAuthWorkerCommand(command: {
+  type: string;
+}): command is SqliteWorkerCommand<McpOAuthReadOperations & McpOAuthWriteOperations> {
+  switch (command.type) {
+    case "mcpOAuth.read":
+    case "mcpOAuth.mutate":
+    case "mcpOAuth.consumePending":
+    case "mcpOAuth.writePending":
+    case "mcpOAuth.deletePending":
+    case "mcpOAuth.clear":
+    case "mcpOAuth.clearPendingPrefix":
+      return true;
+    default:
+      return false;
+  }
+}
 
 type McpOAuthAuthorizationChallenge = {
   resourceMetadataUrl?: string;

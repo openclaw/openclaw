@@ -1,3 +1,4 @@
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.types.js";
 import type {
   ConsumeOperatorApprovalResult,
@@ -79,3 +80,20 @@ export type OperatorApprovalWorkerOperations = {
     output: ConsumeOperatorApprovalResult;
   };
 };
+
+export function isOperatorApprovalCommand(command: {
+  type: string;
+}): command is SqliteWorkerCommand<OperatorApprovalWorkerOperations> {
+  switch (command.type) {
+    case "operatorApprovals.insert":
+    case "operatorApprovals.get":
+    case "operatorApprovals.pending":
+    case "operatorApprovals.resolve":
+    case "operatorApprovals.deny":
+    case "operatorApprovals.expire":
+    case "operatorApprovals.consume":
+      return true;
+    default:
+      return false;
+  }
+}

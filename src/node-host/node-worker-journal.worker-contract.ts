@@ -89,7 +89,6 @@ export type NodeWorkerJournalWorkerOperations = {
 
 export function isNodeWorkerJournalCommand(command: {
   type: string;
-  input: unknown;
 }): command is SqliteWorkerCommand<NodeWorkerJournalWorkerOperations> {
   return Object.hasOwn(nodeWorkerJournalCommands, command.type);
 }

@@ -320,6 +320,7 @@ it.each(["kv", "task"] as const)(
         reopened.execute({ type: "pluginState.lookup", input: key }),
       ),
     ).toEqual({ ok: true, value: { value: 42 } });
+    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("flows.current");
     expect(
       runWithSqliteWorkerStateContext(reopenedContext, () =>
         reopened.execute({ type: "flows.current", input: { flowId: flow.flowId } }),
@@ -347,6 +348,7 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
       ),
     ).toEqual({ state: {}, basis: {} });
     expect(existsSync(context.admission.databasePath)).toBe(false);
+    await first[SQLITE_WORKER_PREPARE_COMMAND]?.(operation);
 
     const scope = "tests/health-native-borrow";
     const write = (backend: typeof first, key: string) =>

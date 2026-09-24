@@ -15,21 +15,11 @@ import {
   writeMeetingTranscriptSummaryInDatabase,
 } from "./store-sqlite-write.js";
 import { appendMeetingTranscriptUtterance } from "./store-sqlite.js";
-import type { TranscriptWriteCommand, TranscriptWriteOperations } from "./store-worker-contract.js";
-
-const operationLabels: Record<TranscriptWriteCommand["type"], string> = {
-  "transcripts.append": "meeting-transcripts.utterance.append",
-  "transcripts.writeSummary": "meeting-transcripts.summary.write",
-  "transcripts.writeSession": "meeting-transcripts.session.write",
-  "transcripts.markPendingExports": "meeting-transcripts.export.pending",
-  "transcripts.recordExportManifest": "meeting-transcripts.export.record",
-};
-
-export function isTranscriptWriteCommand(command: {
-  type: string;
-}): command is TranscriptWriteCommand {
-  return Object.hasOwn(operationLabels, command.type);
-}
+import {
+  transcriptWriteOperationLabels,
+  type TranscriptWriteCommand,
+  type TranscriptWriteOperations,
+} from "./store-worker-contract.js";
 
 export function executeTranscriptWrite(
   command: TranscriptWriteCommand,
@@ -101,7 +91,7 @@ export function executeTranscriptWrite(
         }
       },
       options,
-      { operationLabel: operationLabels[command.type] },
+      { operationLabel: transcriptWriteOperationLabels[command.type] },
     );
     return command.type === "transcripts.writeSummary" ||
       command.type === "transcripts.writeSession"

@@ -59,19 +59,6 @@ export type UserProfileWriteOperations = {
     output: UserProfileWriteResult<ReturnType<typeof ensureGatewayOwnerProfile>>;
   };
 };
-export function isUserProfileWriteCommand(command: {
-  type: string;
-}): command is SqliteWorkerCommand<UserProfileWriteOperations> {
-  return (
-    command.type === "userProfiles.setRole" ||
-    command.type === "userProfiles.linkEmail" ||
-    command.type === "userProfiles.ensureEmail" ||
-    command.type === "userProfiles.ensureTailscale" ||
-    command.type === "userProfiles.syncGitHub" ||
-    command.type === "userProfiles.ensureOwner"
-  );
-}
-
 type PendingPublication = {
   before: Map<string, ProfileDisplayRow | undefined>;
   emailBindings: Map<string, UserProfileEmailBinding>;

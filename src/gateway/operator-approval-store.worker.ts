@@ -11,23 +11,6 @@ import { executeOperatorApprovalOperation } from "./operator-approval-store.oper
 import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
 import type { OperatorApprovalWorkerOperations } from "./operator-approval-store.worker-contract.js";
 
-export function isOperatorApprovalCommand(command: {
-  type: string;
-}): command is SqliteWorkerCommand<OperatorApprovalWorkerOperations> {
-  switch (command.type) {
-    case "operatorApprovals.insert":
-    case "operatorApprovals.get":
-    case "operatorApprovals.pending":
-    case "operatorApprovals.resolve":
-    case "operatorApprovals.deny":
-    case "operatorApprovals.expire":
-    case "operatorApprovals.consume":
-      return true;
-    default:
-      return false;
-  }
-}
-
 export function executeOperatorApprovalCommand(
   command: SqliteWorkerCommand<OperatorApprovalWorkerOperations>,
   databaseOptions: OpenClawStateDatabaseOptions,

@@ -169,7 +169,6 @@ export const pluginStateWorkerOperations = {
 /** Selects the plugin-state branch of the shared actor's typed command union. */
 export function isPluginStateWorkerCommand(command: {
   type: string;
-  input: unknown;
 }): command is SqliteWorkerCommand<PluginStateWorkerOperations> {
   return Object.hasOwn(pluginStateWorkerOperations, command.type);
 }

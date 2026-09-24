@@ -21,25 +21,6 @@ import type { McpOAuthWriteOperations } from "./mcp-oauth-store.types.js";
 type McpOAuthOwnedStore = McpOAuthWriteOperations["mcpOAuth.clear"]["input"];
 type McpOAuthWorkerOperations = McpOAuthReadOperations & McpOAuthWriteOperations;
 
-/** Select this feature's commands from the typed shared-state wire contract. */
-export function isMcpOAuthWorkerCommand(command: {
-  type: string;
-  input: unknown;
-}): command is SqliteWorkerCommand<McpOAuthWorkerOperations> {
-  switch (command.type) {
-    case "mcpOAuth.read":
-    case "mcpOAuth.mutate":
-    case "mcpOAuth.consumePending":
-    case "mcpOAuth.writePending":
-    case "mcpOAuth.deletePending":
-    case "mcpOAuth.clear":
-    case "mcpOAuth.clearPendingPrefix":
-      return true;
-    default:
-      return false;
-  }
-}
-
 function assertStoreLease(
   database: DatabaseSync,
   input: McpOAuthOwnedStore,

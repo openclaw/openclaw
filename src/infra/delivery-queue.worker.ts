@@ -12,22 +12,6 @@ import { executePendingDeliveryFailure } from "./outbound/delivery-queue-pending
 import { executeDeliveryQueuePlatformLeaseCommand } from "./outbound/delivery-queue-platform-lease.worker.js";
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 
-export function isDeliveryQueueCommand(command: {
-  type: string;
-}): command is { type: keyof DeliveryQueueWorkerOperations } {
-  return (
-    command.type === "deliveryQueue.claimPlatformSend" ||
-    command.type === "deliveryQueue.renewPlatformSendLease" ||
-    command.type === "deliveryQueue.ack" ||
-    command.type === "deliveryQueue.enqueue" ||
-    command.type === "deliveryQueue.failPending" ||
-    command.type === "deliveryQueue.countFailed" ||
-    command.type === "deliveryQueue.findIntentOwners" ||
-    command.type === "deliveryQueue.pruneTombstones" ||
-    command.type === "deliveryQueue.mediaRetentionSnapshot"
-  );
-}
-
 export function executeDeliveryQueueCommand(
   command: SqliteWorkerCommand<DeliveryQueueWorkerOperations>,
   options: { database: OpenClawStateDatabase; env: NodeJS.ProcessEnv },

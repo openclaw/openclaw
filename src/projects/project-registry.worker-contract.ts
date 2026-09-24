@@ -1,3 +1,4 @@
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease-store.js";
 import type {
   ProjectRegistryIdentity,
@@ -24,3 +25,19 @@ export type ProjectRegistryWorkerOperations = {
     output: ProjectRegistryRecord | undefined;
   };
 };
+
+export function isProjectRegistryCommand(command: {
+  type: string;
+}): command is SqliteWorkerCommand<ProjectRegistryWorkerOperations> {
+  switch (command.type) {
+    case "projects.findRoot":
+    case "projects.list":
+    case "projects.resolve":
+    case "projects.insert":
+    case "projects.remove":
+    case "projects.resolveRefreshOwner":
+      return true;
+    default:
+      return false;
+  }
+}

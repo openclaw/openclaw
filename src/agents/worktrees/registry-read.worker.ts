@@ -25,23 +25,6 @@ export type WorktreeRegistryReadOperations = {
   };
 };
 
-export function isWorktreeRegistryReadCommand(command: {
-  type: string;
-  input: unknown;
-}): command is SqliteWorkerCommand<WorktreeRegistryReadOperations> {
-  switch (command.type) {
-    case "worktrees.get":
-    case "worktrees.list":
-    case "worktrees.liveIds":
-    case "worktrees.provisionedPaths":
-    case "worktrees.provisionedState":
-    case "worktrees.provisionedChunk":
-      return true;
-    default:
-      return false;
-  }
-}
-
 export function executeWorktreeRegistryReadCommand(
   database: DatabaseSync,
   command: SqliteWorkerCommand<WorktreeRegistryReadOperations>,

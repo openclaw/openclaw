@@ -56,25 +56,6 @@ export type CronStateWorkerOperations = CronStoreWorkerOperations &
     };
   };
 
-export function isCronStateWorkerCommand(command: {
-  type: string;
-  input: unknown;
-}): command is SqliteWorkerCommand<CronStateWorkerOperations> {
-  switch (command.type) {
-    case "cron.loadMutable":
-    case "cron.initializeRunReceipts":
-    case "cron.repairRun":
-    case "cron.scheduleUnowned":
-    case "cron.recordFailureAlertOutcome":
-    case "cron.save":
-    case "cron.saveChanges":
-    case "cron.bindReceiptExecution":
-      return true;
-    default:
-      return false;
-  }
-}
-
 export function executeCronStateCommand(
   command: SqliteWorkerCommand<CronStateWorkerOperations>,
   database: OpenClawStateDatabase,

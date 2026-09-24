@@ -131,7 +131,6 @@ export type OnboardingRecommendationWriteOperations = {
 
 export function isOnboardingRecommendationWriteCommand(command: {
   type: string;
-  input: unknown;
 }): command is SqliteWorkerCommand<OnboardingRecommendationWriteOperations> {
   switch (command.type) {
     case "onboardingRecommendations.writeOffer":

@@ -14,7 +14,6 @@ export type ApnsRegistrationWorkerOperations = {
 
 export function isApnsRegistrationWorkerCommand(command: {
   type: string;
-  input: unknown;
 }): command is SqliteWorkerCommand<ApnsRegistrationWorkerOperations> {
   return (
     command.type === "apns.registration.register" ||

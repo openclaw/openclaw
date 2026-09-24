@@ -41,7 +41,6 @@ export type SessionDeliveryWorkerOperations = {
 
 export function isSessionDeliveryCommand(command: {
   type: string;
-  input: unknown;
 }): command is SqliteWorkerCommand<SessionDeliveryWorkerOperations> {
   return (
     command.type === "sessionDelivery.enqueue" ||

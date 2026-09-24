@@ -13,6 +13,7 @@ import type {
   AckDeliveryOptions,
   FailPendingDeliveryResult,
 } from "./outbound/delivery-queue-settlement.types.js";
+import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 
 export type DeliveryQueueWorkerOperations = {
   "deliveryQueue.findIntentOwners": {
@@ -69,3 +70,19 @@ export type DeliveryQueueWorkerOperations = {
     output: ReturnType<typeof loadDeliveryQueueMediaRetentionSnapshotInDatabase>;
   };
 };
+
+export function isDeliveryQueueCommand(command: {
+  type: string;
+}): command is SqliteWorkerCommand<DeliveryQueueWorkerOperations> {
+  return (
+    command.type === "deliveryQueue.claimPlatformSend" ||
+    command.type === "deliveryQueue.renewPlatformSendLease" ||
+    command.type === "deliveryQueue.ack" ||
+    command.type === "deliveryQueue.enqueue" ||
+    command.type === "deliveryQueue.failPending" ||
+    command.type === "deliveryQueue.countFailed" ||
+    command.type === "deliveryQueue.findIntentOwners" ||
+    command.type === "deliveryQueue.pruneTombstones" ||
+    command.type === "deliveryQueue.mediaRetentionSnapshot"
+  );
+}

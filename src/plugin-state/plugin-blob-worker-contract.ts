@@ -52,7 +52,6 @@ export const pluginBlobWorkerOperations = {
 
 export function isPluginBlobWorkerCommand(command: {
   type: string;
-  input: unknown;
 }): command is SqliteWorkerCommand<PluginBlobWorkerOperations> {
   return Object.hasOwn(pluginBlobWorkerOperations, command.type);
 }

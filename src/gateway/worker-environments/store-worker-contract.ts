@@ -153,7 +153,6 @@ export type WorkerEnvironmentWorkerOperations = {
 
 export function isWorkerEnvironmentCommand(command: {
   type: string;
-  input: unknown;
 }): command is SqliteWorkerCommand<WorkerEnvironmentWorkerOperations> {
   return command.type.startsWith("workerEnvironments.");
 }

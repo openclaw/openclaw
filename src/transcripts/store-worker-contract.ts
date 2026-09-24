@@ -82,6 +82,20 @@ export type TranscriptWriteOperations = {
 };
 
 export type TranscriptWriteCommand = SqliteWorkerCommand<TranscriptWriteOperations>;
+export const transcriptWriteOperationLabels: Record<TranscriptWriteCommand["type"], string> = {
+  "transcripts.append": "meeting-transcripts.utterance.append",
+  "transcripts.writeSummary": "meeting-transcripts.summary.write",
+  "transcripts.writeSession": "meeting-transcripts.session.write",
+  "transcripts.markPendingExports": "meeting-transcripts.export.pending",
+  "transcripts.recordExportManifest": "meeting-transcripts.export.record",
+};
+
+export function isTranscriptWriteCommand(command: {
+  type: string;
+}): command is TranscriptWriteCommand {
+  return Object.hasOwn(transcriptWriteOperationLabels, command.type);
+}
+
 export type TranscriptExportWriteKey =
   | "transcripts.markPendingExports"
   | "transcripts.recordExportManifest";

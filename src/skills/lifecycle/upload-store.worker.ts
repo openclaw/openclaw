@@ -36,23 +36,6 @@ export type SkillUploadWorkerOperations = {
   "skillUploads.release": Operation<typeof releaseSkillUploadInDatabase>;
 };
 
-export function isSkillUploadCommand(command: {
-  type: string;
-  input: unknown;
-}): command is SqliteWorkerCommand<SkillUploadWorkerOperations> {
-  return (
-    command.type === "skillUploads.begin" ||
-    command.type === "skillUploads.chunk" ||
-    command.type === "skillUploads.commit" ||
-    command.type === "skillUploads.expired" ||
-    command.type === "skillUploads.deleteExpired" ||
-    command.type === "skillUploads.claim" ||
-    command.type === "skillUploads.renew" ||
-    command.type === "skillUploads.consume" ||
-    command.type === "skillUploads.release"
-  );
-}
-
 export function executeSkillUploadCommand(
   command: SqliteWorkerCommand<SkillUploadWorkerOperations>,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },

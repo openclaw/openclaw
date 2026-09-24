@@ -98,14 +98,18 @@ it("retains the runtime and its original error when a borrowed worker cannot set
 
 const backend = `
 import { DatabaseSync } from "node:sqlite";
-import { generation } from "../shared-old-hash.mjs";
+let family;
 export function createSqliteWorkerBackend(_input, { databasePath }) {
   const db = new DatabaseSync(databasePath);
   db.exec("CREATE TABLE IF NOT EXISTS entries (value TEXT)");
   return {
+    async [Symbol.for("openclaw.sqliteWorkerPrepareCommand")](type) {
+      if (type === "append") family ??= await import("../shared-old-hash.mjs");
+    },
     execute(command) {
       if (command.type !== "append") throw new Error("Unknown retained fixture command");
-      db.prepare("INSERT INTO entries VALUES (?)").run(generation + ":" + command.input);
+      if (!family) throw new Error("Retained command family was not prepared");
+      db.prepare("INSERT INTO entries VALUES (?)").run(family.generation + ":" + command.input);
       return db.prepare("SELECT value FROM entries ORDER BY rowid").all().map(row => row.value);
     },
     close() { db.close(); }

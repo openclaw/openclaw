@@ -1,5 +1,34 @@
 import type { SqlBool } from "kysely";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
+import type { UserProfileWriteOperations } from "./user-profile-writes.worker.js";
+import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
+
+export function isUserProfileWriteCommand(command: {
+  type: string;
+}): command is SqliteWorkerCommand<UserProfileWriteOperations> {
+  return (
+    command.type === "userProfiles.setRole" ||
+    command.type === "userProfiles.linkEmail" ||
+    command.type === "userProfiles.ensureEmail" ||
+    command.type === "userProfiles.ensureTailscale" ||
+    command.type === "userProfiles.syncGitHub" ||
+    command.type === "userProfiles.ensureOwner"
+  );
+}
+
+export function isUserProfileCommand(command: {
+  type: string;
+}): command is SqliteWorkerCommand<UserProfileWorkerOperations> {
+  return (
+    isUserProfileWriteCommand(command) ||
+    command.type === "userProfiles.list" ||
+    command.type === "userProfiles.directory" ||
+    command.type === "userProfiles.channelIdentity.change" ||
+    command.type === "userProfiles.avatar.inspect" ||
+    command.type === "userProfiles.avatar.adopt"
+  );
+}
 
 export const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
 

@@ -1,4 +1,6 @@
+import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease-store.js";
+import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
 import type {
   RecordSkillExperienceReviewOutcomeInput,
   ReadSkillCollectionBackupDropsInput,
@@ -67,3 +69,37 @@ export type SkillWorkshopExecutionOperations = {
   "workshop.collection.drops": WorkshopOperation<ReadSkillCollectionBackupDropsInput, Set<string>>;
   "workshop.experience.record": WorkshopOperation<RecordSkillExperienceReviewOutcomeInput, void>;
 };
+
+export type SkillWorkshopWorkerOperations = SkillWorkshopExecutionOperations &
+  Pick<
+    OpenClawStateWorkerOperations,
+    "skills.curator.read" | "skills.usage.record" | "workshop.events.list"
+  >;
+
+export function isSkillWorkshopCommand(command: {
+  type: string;
+}): command is SqliteWorkerCommand<SkillWorkshopWorkerOperations> {
+  switch (command.type) {
+    case "skills.curator.read":
+    case "skills.usage.record":
+    case "workshop.events.list":
+    case "workshop.schema.ensure":
+    case "workshop.proposal.read":
+    case "workshop.proposals.list":
+    case "workshop.proposal.create":
+    case "workshop.proposal.update":
+    case "workshop.proposal.import":
+    case "workshop.proposal.evaluate":
+    case "workshop.transition.commit":
+    case "workshop.transition.committed":
+    case "workshop.rollback.read":
+    case "workshop.rollback.write":
+    case "workshop.rollback.clear":
+    case "workshop.collection.list":
+    case "workshop.collection.drops":
+    case "workshop.experience.record":
+      return true;
+    default:
+      return false;
+  }
+}

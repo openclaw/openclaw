@@ -13,7 +13,6 @@ import { listUserProfileGitHubLogins } from "./user-profile-github-identity.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
 import {
   executeUserProfileWrite,
-  isUserProfileWriteCommand,
   type UserProfileWriteOperations,
 } from "./user-profile-writes.worker.js";
 import {
@@ -23,10 +22,11 @@ import {
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
-import type {
-  ProfileDisplayRow,
-  UserProfileAvatarMime,
-  UserChannelIdentityWorkerOperations,
+import {
+  isUserProfileWriteCommand,
+  type ProfileDisplayRow,
+  type UserProfileAvatarMime,
+  type UserChannelIdentityWorkerOperations,
 } from "./user-profiles.types.js";
 
 type UserProfileReadWorkerOperations = {
@@ -135,19 +135,6 @@ export type UserProfileWorkerOperations = UserProfileReadWorkerOperations &
   UserProfileAvatarWorkerOperations &
   UserProfileWriteOperations &
   UserChannelIdentityWorkerOperations;
-
-export function isUserProfileCommand(command: {
-  type: string;
-}): command is SqliteWorkerCommand<UserProfileWorkerOperations> {
-  return (
-    isUserProfileWriteCommand(command) ||
-    command.type === "userProfiles.list" ||
-    command.type === "userProfiles.directory" ||
-    command.type === "userProfiles.channelIdentity.change" ||
-    command.type === "userProfiles.avatar.inspect" ||
-    command.type === "userProfiles.avatar.adopt"
-  );
-}
 
 export function executeUserProfileCommand(
   command: SqliteWorkerCommand<UserProfileWorkerOperations>,

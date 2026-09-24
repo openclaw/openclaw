@@ -5,7 +5,6 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
-import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
 import {
   listSkillCollectionReviewOutcomesInDatabase,
   readSkillCollectionBackupDropsInDatabase,
@@ -32,42 +31,7 @@ import {
   commitPendingSkillProposalTransitionInDatabase,
   readCommittedSkillProposalTransitionInDatabase,
 } from "./store-sqlite-transition.js";
-import type { SkillWorkshopExecutionOperations } from "./store.worker-contract.js";
-
-type Operations = SkillWorkshopExecutionOperations &
-  Pick<
-    OpenClawStateWorkerOperations,
-    "skills.curator.read" | "skills.usage.record" | "workshop.events.list"
-  >;
-
-export function isSkillWorkshopCommand(command: {
-  type: string;
-  input: unknown;
-}): command is SqliteWorkerCommand<Operations> {
-  switch (command.type) {
-    case "skills.curator.read":
-    case "skills.usage.record":
-    case "workshop.events.list":
-    case "workshop.schema.ensure":
-    case "workshop.proposal.read":
-    case "workshop.proposals.list":
-    case "workshop.proposal.create":
-    case "workshop.proposal.update":
-    case "workshop.proposal.import":
-    case "workshop.proposal.evaluate":
-    case "workshop.transition.commit":
-    case "workshop.transition.committed":
-    case "workshop.rollback.read":
-    case "workshop.rollback.write":
-    case "workshop.rollback.clear":
-    case "workshop.collection.list":
-    case "workshop.collection.drops":
-    case "workshop.experience.record":
-      return true;
-    default:
-      return false;
-  }
-}
+import type { SkillWorkshopWorkerOperations as Operations } from "./store.worker-contract.js";
 
 export function executeSkillWorkshopCommand(
   command: SqliteWorkerCommand<Operations>,
