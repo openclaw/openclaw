@@ -2,7 +2,10 @@ import { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QaSuiteCleanupError, QaSuiteInfraError } from "./errors.js";
 import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
+import { isQaSuiteInfraRetryableError } from "./suite-infra-retry.js";
+import { runQaFlowSuiteCleanupPlan, throwQaSuiteCleanupErrors } from "./suite.js";
 
 const teardown = vi.hoisted(() => ({
   stopTree: vi.fn<() => Promise<void>>(),
@@ -133,6 +136,150 @@ describe("QA Gateway owned child drain", () => {
     expect(f.child.listenerCount("close")).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each([false, true])(
+    "marks a retained primary error only when all cleanup succeeds (artifact failure: %s)",
+    async (artifactFailure) => {
+      const f = fixture();
+      const primary = new QaSuiteInfraError("gateway_startup_unhealthy", "child socket reset", {
+        cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+      });
+      f.owned.checkFailure = () => {
+        throw primary;
+      };
+      if (artifactFailure) {
+        teardown.preserve.mockRejectedValueOnce(new Error("artifact copy failed"));
+      }
+      f.close();
+      try {
+        const result = await f.lifetime.stop({ preserveToDir: "/fixture/proof" });
+        expect(result.process).toBe("confirmed-stopped");
+        expect(result.errors).toContain(primary);
+        expect(f.log.writableEnded).toBe(true);
+        expect(teardown.preserve).toHaveBeenCalledOnce();
+        if (artifactFailure) {
+          expect(result.settledRunError).toBeUndefined();
+          expect(result.errors).toHaveLength(2);
+          expect(teardown.remove).not.toHaveBeenCalled();
+        } else {
+          expect(result.settledRunError).toBe(primary);
+          expect(result.errors).toEqual([primary]);
+          expect(teardown.remove).toHaveBeenCalledOnce();
+        }
+      } finally {
+        await f.lifetime.stop();
+        f.log.destroy();
+      }
+    },
+  );
+
+  it.each([
+    { sequence: "concurrent", failurePhase: "none" },
+    { sequence: "concurrent", failurePhase: "capture" },
+    { sequence: "concurrent", failurePhase: "preserve" },
+    { sequence: "concurrent", failurePhase: "remove" },
+    { sequence: "sequential", failurePhase: "none" },
+    { sequence: "sequential", failurePhase: "capture" },
+    { sequence: "sequential", failurePhase: "preserve" },
+    { sequence: "sequential", failurePhase: "remove" },
+  ] as const)(
+    "retains run-error classification across $sequence cleanup (failure: $failurePhase)",
+    async ({ sequence, failurePhase }) => {
+      const f = fixture();
+      const primary = new QaSuiteInfraError("gateway_startup_unhealthy", "child socket reset", {
+        cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+      });
+      const cleanupFailure = new Error(`late ${failurePhase} failed`);
+      const checkFailure = vi.fn(() => {
+        throw primary;
+      });
+      f.owned.checkFailure = checkFailure;
+      teardown.preserve.mockImplementationOnce(async () => {
+        expect(f.log.writableEnded).toBe(true);
+        if (failurePhase === "preserve") {
+          throw cleanupFailure;
+        }
+      });
+      teardown.remove.mockImplementationOnce(async () => {
+        expect(f.log.writableEnded).toBe(true);
+        if (failurePhase === "remove") {
+          throw cleanupFailure;
+        }
+      });
+      const retained = f.lifetime.stop({ keepTemp: true });
+      const beforeTempCleanup = vi.fn(async () => {
+        expect(f.log.writableEnded).toBe(true);
+        if (failurePhase === "capture") {
+          throw cleanupFailure;
+        }
+      });
+      const options = { keepTemp: false, preserveToDir: "/fixture/proof", beforeTempCleanup };
+      // Call before close to exercise the cached stopping promise, not a fresh
+      // finish() after the retained run diagnostic clears that promise.
+      const finalizing = sequence === "concurrent" ? f.lifetime.stop(options) : undefined;
+      f.close();
+      try {
+        const first = await retained;
+        expect(first.process).toBe("confirmed-stopped");
+        expect(first.errors).toEqual([primary]);
+        expect(first.settledRunError).toBe(primary);
+        const result = await (finalizing ?? f.lifetime.stop(options));
+        expect(result.process).toBe("confirmed-stopped");
+        expect(f.log.writableEnded).toBe(true);
+        expect(checkFailure).toHaveBeenCalledTimes(sequence === "concurrent" ? 1 : 2);
+        expect(teardown.stopTree).toHaveBeenCalledOnce();
+        expect(beforeTempCleanup).toHaveBeenCalledOnce();
+        expect(teardown.preserve).toHaveBeenCalledOnce();
+        expect(teardown.remove).toHaveBeenCalledTimes(
+          failurePhase === "capture" || failurePhase === "preserve" ? 0 : 1,
+        );
+        if (failurePhase === "none") {
+          expect(result.errors).toEqual([primary]);
+          expect(result.settledRunError).toBe(primary);
+        } else {
+          expect(result.settledRunError).toBeUndefined();
+          expect(result.errors).toHaveLength(2);
+          const primaryIndex = sequence === "concurrent" ? 0 : 1;
+          expect(result.errors[primaryIndex]).toBe(primary);
+          const cleanupError = result.errors[1 - primaryIndex];
+          if (failurePhase === "capture" || failurePhase === "preserve") {
+            expect(cleanupError).toBeInstanceOf(Error);
+            if (cleanupError instanceof Error) {
+              expect(cleanupError.cause).toBe(cleanupFailure);
+            }
+          } else {
+            expect(cleanupError).toBe(cleanupFailure);
+          }
+        }
+        const cleanupFailures = await runQaFlowSuiteCleanupPlan({
+          cleanupTransportBeforeGatewayStop: async () => {},
+          cleanupTransportAfterGatewayStop: async () => {},
+          stopGateway: async () => result,
+          disposeAgentHarnesses: async () => {},
+          finishLab: async () => {},
+        });
+        let suiteError: unknown;
+        try {
+          throwQaSuiteCleanupErrors({ cleanupFailures, runFailed: false, runError: undefined });
+        } catch (error) {
+          suiteError = error;
+        }
+        if (failurePhase === "none") {
+          expect(suiteError).toBe(primary);
+          expect(isQaSuiteInfraRetryableError(suiteError)).toBe(true);
+        } else {
+          expect(suiteError).toBeInstanceOf(QaSuiteCleanupError);
+          expect(isQaSuiteInfraRetryableError(suiteError)).toBe(false);
+        }
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        await retained;
+        await finalizing;
+        await f.lifetime.stop();
+        f.log.destroy();
+      }
+    },
+  );
 
   it("waits for a failed spawn's close without requiring an exit event", async () => {
     const child = new ChildProcess();

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
+import { toQaSuiteArtifactPublicationError } from "./errors.js";
 import {
   buildQaSuiteEvidenceSummary,
   QA_EVIDENCE_FILENAME,
@@ -29,20 +30,26 @@ export async function publishQaSuiteArtifactFiles(params: {
   outputDir: string;
   files: readonly { content: string | Uint8Array; filePath: string }[];
 }) {
-  await fs.mkdir(params.outputDir, { recursive: true });
-  const dirMode = (await fs.stat(params.outputDir)).mode & 0o7777;
-  for (const file of params.files) {
-    await replaceFileAtomic({
-      filePath: file.filePath,
-      content: file.content,
-      dirMode,
-      mode: 0o600,
-      preserveExistingMode: true,
-      tempPrefix: `${path.basename(file.filePath)}.qa-artifact`,
-      syncTempFile: true,
-      syncParentDir: true,
-      throwOnCleanupError: true,
-    });
+  try {
+    await fs.mkdir(params.outputDir, { recursive: true });
+    const dirMode = (await fs.stat(params.outputDir)).mode & 0o7777;
+    for (const file of params.files) {
+      await replaceFileAtomic({
+        filePath: file.filePath,
+        content: file.content,
+        dirMode,
+        mode: 0o600,
+        preserveExistingMode: true,
+        tempPrefix: `${path.basename(file.filePath)}.qa-artifact`,
+        syncTempFile: true,
+        syncParentDir: true,
+        throwOnCleanupError: true,
+      });
+    }
+  } catch (error) {
+    // Parent schedulers may recover scenario failures, but cannot publish a
+    // completed aggregate after an artifact owner failed to publish its result.
+    throw toQaSuiteArtifactPublicationError(error);
   }
 }
 
@@ -168,87 +175,91 @@ export async function writeQaSuiteArtifacts(params: {
   runtimePair?: [RuntimeId, RuntimeId];
   writeEvidenceFile?: boolean;
 }) {
-  const reportPath = path.join(params.outputDir, "qa-suite-report.md");
-  const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
-  const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
-  const transportEvidenceArtifacts = params.transportArtifacts?.artifacts ?? [];
-  const channelCapabilityMatrixPath = transportEvidenceArtifacts.find(
-    (artifact) => artifact.kind === "channel-capability-matrix",
-  )?.path;
-  const channelDriverSmokePath = transportEvidenceArtifacts.find(
-    (artifact) => artifact.kind === "channel-driver-smoke",
-  )?.path;
-  const report = renderQaMarkdownReport({
-    title: "OpenClaw QA Scenario Suite",
-    inProgress: params.status === "running",
-    startedAt: params.startedAt,
-    finishedAt: params.finishedAt,
-    checks: [],
-    scenarios: params.scenarios.map((scenario) => ({
-      name: scenario.name,
-      status: scenario.status,
-      details: scenario.details,
-      steps: scenario.steps,
-    })) satisfies QaReportScenario[],
-    notes: createQaSuiteReportNotes({
-      ...params,
-      transportArtifactNotes: params.transportArtifacts?.reportNotes,
-    }),
-  });
-  const artifactPaths = [
-    { kind: "summary", path: path.basename(summaryPath) },
-    { kind: "report", path: path.basename(reportPath) },
-    ...transportEvidenceArtifacts,
-  ];
-  const evidence = params.recordedEvidence
-    ? validateQaEvidenceSummaryJson(params.recordedEvidence)
-    : params.scenarioDefinitions && params.scenarioDefinitions.length > 0
-      ? buildQaSuiteEvidenceSummary({
-          artifactPaths,
-          evidenceMode: params.evidenceMode,
-          channelId: params.channel ?? params.transport.id,
-          channelDriver: params.channelDriver ?? undefined,
-          env: process.env,
-          generatedAt: params.finishedAt.toISOString(),
-          primaryModel: params.primaryModel,
-          providerMode: params.providerMode,
-          repoRoot: params.repoRoot,
-          scenarioDefinitions: params.scenarioDefinitions,
-          scenarioResults: params.scenarios,
-        })
-      : undefined;
-  const writeEvidenceFile = params.status !== "running" && (params.writeEvidenceFile ?? true);
-  if (!writeEvidenceFile) {
-    await fs.rm(evidencePath, { force: true });
+  try {
+    const reportPath = path.join(params.outputDir, "qa-suite-report.md");
+    const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
+    const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
+    const transportEvidenceArtifacts = params.transportArtifacts?.artifacts ?? [];
+    const channelCapabilityMatrixPath = transportEvidenceArtifacts.find(
+      (artifact) => artifact.kind === "channel-capability-matrix",
+    )?.path;
+    const channelDriverSmokePath = transportEvidenceArtifacts.find(
+      (artifact) => artifact.kind === "channel-driver-smoke",
+    )?.path;
+    const report = renderQaMarkdownReport({
+      title: "OpenClaw QA Scenario Suite",
+      inProgress: params.status === "running",
+      startedAt: params.startedAt,
+      finishedAt: params.finishedAt,
+      checks: [],
+      scenarios: params.scenarios.map((scenario) => ({
+        name: scenario.name,
+        status: scenario.status,
+        details: scenario.details,
+        steps: scenario.steps,
+      })) satisfies QaReportScenario[],
+      notes: createQaSuiteReportNotes({
+        ...params,
+        transportArtifactNotes: params.transportArtifacts?.reportNotes,
+      }),
+    });
+    const artifactPaths = [
+      { kind: "summary", path: path.basename(summaryPath) },
+      { kind: "report", path: path.basename(reportPath) },
+      ...transportEvidenceArtifacts,
+    ];
+    const evidence = params.recordedEvidence
+      ? validateQaEvidenceSummaryJson(params.recordedEvidence)
+      : params.scenarioDefinitions && params.scenarioDefinitions.length > 0
+        ? buildQaSuiteEvidenceSummary({
+            artifactPaths,
+            evidenceMode: params.evidenceMode,
+            channelId: params.channel ?? params.transport.id,
+            channelDriver: params.channelDriver ?? undefined,
+            env: process.env,
+            generatedAt: params.finishedAt.toISOString(),
+            primaryModel: params.primaryModel,
+            providerMode: params.providerMode,
+            repoRoot: params.repoRoot,
+            scenarioDefinitions: params.scenarioDefinitions,
+            scenarioResults: params.scenarios,
+          })
+        : undefined;
+    const writeEvidenceFile = params.status !== "running" && (params.writeEvidenceFile ?? true);
+    if (!writeEvidenceFile) {
+      await fs.rm(evidencePath, { force: true });
+    }
+    await publishQaSuiteArtifactFiles({
+      outputDir: params.outputDir,
+      files: [
+        { filePath: reportPath, content: report },
+        ...(evidence && writeEvidenceFile
+          ? [{ filePath: evidencePath, content: `${JSON.stringify(evidence, null, 2)}\n` }]
+          : []),
+        {
+          filePath: summaryPath,
+          content: `${JSON.stringify(
+            buildQaSuiteSummaryJson({
+              ...params,
+              // Publication must not rewrite rows already admitted by a parent.
+              // The gallery reads final presentation paths from this summary.
+              ...(params.recordedEvidence ? { evidence } : {}),
+              channelCapabilityMatrixPath: channelCapabilityMatrixPath ?? null,
+              channelDriverSmokePath: channelDriverSmokePath ?? null,
+            }),
+            null,
+            2,
+          )}\n`,
+        },
+      ],
+    });
+    await assertQaSuiteArtifactWritten("report", reportPath);
+    await assertQaSuiteArtifactWritten("summary", summaryPath);
+    if (evidence && writeEvidenceFile) {
+      await assertQaSuiteArtifactWritten("evidence", evidencePath);
+    }
+    return { evidence, evidencePath, report, reportPath, summaryPath };
+  } catch (error) {
+    throw toQaSuiteArtifactPublicationError(error);
   }
-  await publishQaSuiteArtifactFiles({
-    outputDir: params.outputDir,
-    files: [
-      { filePath: reportPath, content: report },
-      ...(evidence && writeEvidenceFile
-        ? [{ filePath: evidencePath, content: `${JSON.stringify(evidence, null, 2)}\n` }]
-        : []),
-      {
-        filePath: summaryPath,
-        content: `${JSON.stringify(
-          buildQaSuiteSummaryJson({
-            ...params,
-            // Publication must not rewrite rows already admitted by a parent.
-            // The gallery reads final presentation paths from this summary.
-            ...(params.recordedEvidence ? { evidence } : {}),
-            channelCapabilityMatrixPath: channelCapabilityMatrixPath ?? null,
-            channelDriverSmokePath: channelDriverSmokePath ?? null,
-          }),
-          null,
-          2,
-        )}\n`,
-      },
-    ],
-  });
-  await assertQaSuiteArtifactWritten("report", reportPath);
-  await assertQaSuiteArtifactWritten("summary", summaryPath);
-  if (evidence && writeEvidenceFile) {
-    await assertQaSuiteArtifactWritten("evidence", evidencePath);
-  }
-  return { evidence, evidencePath, report, reportPath, summaryPath };
 }

@@ -4,6 +4,7 @@ import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtim
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
+import { QaSuiteArtifactError, QaSuiteCleanupError } from "./errors.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef as splitModelRef, type QaProviderMode } from "./model-selection.js";
 import { readQaBootstrapScenarioCatalog, readQaScenarioPack } from "./scenario-catalog.js";
@@ -433,6 +434,7 @@ async function mapQaSuiteWithConcurrency<T, U>(
   },
 ) {
   let stopped = false;
+  const errors: unknown[] = [];
   let nextStartGate = Promise.resolve();
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl =
@@ -481,12 +483,30 @@ async function mapQaSuiteWithConcurrency<T, U>(
     limit: Math.max(1, Math.floor(concurrency)),
     errorMode: "stop",
     // Stop staggered workers too, but drain every started task before teardown.
-    onTaskError: () => {
+    onTaskError: (error) => {
+      errors.push(error);
       stopped = true;
     },
   });
   await nextStartGate;
   if (hasError) {
+    // A later in-flight failure can forbid retry even when the first was recoverable.
+    // Preserve ordinary first-error behavior, but never discard fatal sibling custody.
+    if (errors.length > 1) {
+      const message = "QA suite workers failed";
+      if (errors.some((error) => error instanceof QaSuiteCleanupError)) {
+        throw new QaSuiteCleanupError(errors, message, { cause: firstError });
+      }
+      if (
+        errors.some(
+          (error) => error instanceof QaSuiteArtifactError && error.code === "publication_failed",
+        )
+      ) {
+        throw new QaSuiteArtifactError("publication_failed", message, {
+          cause: new AggregateError(errors, message, { cause: firstError }),
+        });
+      }
+    }
     throw firstError;
   }
   const completed: U[] = [];

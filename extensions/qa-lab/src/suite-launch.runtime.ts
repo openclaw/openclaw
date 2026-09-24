@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import { toRepoRelativePath } from "./cli-paths.js";
-import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
+import { QaSuiteArtifactError, QaSuiteCleanupError } from "./errors.js";
 import { captureQaEvidenceLaunchIdentity } from "./evidence-environment.js";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
 import { resolveQaEvidenceContainment } from "./evidence-summary-schema.js";
@@ -42,6 +42,11 @@ import {
   publishQaSuiteArtifactFiles,
 } from "./suite-artifacts.js";
 import { rebaseQaSuiteEvidence } from "./suite-evidence.js";
+import {
+  QA_SUITE_INFRA_RETRY_LIMIT,
+  isQaSuiteInfraRetryableError,
+  runQaSuiteWithInfraRetry,
+} from "./suite-infra-retry.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -112,14 +117,6 @@ const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
 // Raising it risks cleanup overlap and shared port/listener contention.
 const MAX_PARALLEL_SCRIPT_CONCURRENCY = 3;
 const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
-const QA_SUITE_INFRA_RETRY_LIMIT = 1;
-const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "EPIPE",
-  "ETIMEDOUT",
-  "UND_ERR_SOCKET",
-]);
 const CREDENTIAL_POOL_UNAVAILABLE_CODES = new Set(["NO_CREDENTIAL_AVAILABLE", "POOL_EXHAUSTED"]);
 
 type QaUnifiedPartitionResult = {
@@ -512,50 +509,6 @@ function groupQaScenariosByExecutionCell(
   return groups;
 }
 
-function hasQaSuiteRetryableNetworkCode(error: unknown) {
-  let current: unknown = error;
-  for (let depth = 0; depth < 4 && current; depth += 1) {
-    if (typeof current !== "object") {
-      return false;
-    }
-    const record = current as { cause?: unknown; code?: unknown };
-    if (
-      typeof record.code === "string" &&
-      QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES.has(record.code.toUpperCase())
-    ) {
-      return true;
-    }
-    current = record.cause;
-  }
-  return false;
-}
-
-function isQaSuiteInfraRetryableError(error: unknown) {
-  if (error instanceof QaSuiteArtifactError || error instanceof QaSuiteInfraError) {
-    return true;
-  }
-  return hasQaSuiteRetryableNetworkCode(error);
-}
-
-export async function runQaSuiteWithInfraRetry<Result>(
-  run: (attempt: number) => Promise<Result>,
-  maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
-) {
-  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    try {
-      return await run(attempt);
-    } catch (error) {
-      if (!isQaSuiteInfraRetryableError(error) || attempt >= maxRetries) {
-        throw error;
-      }
-      process.stderr.write(
-        `[qa-suite] infra retry ${attempt + 1}/${maxRetries}: ${formatErrorMessage(error)}\n`,
-      );
-    }
-  }
-  throw new Error("unreachable qa suite retry state");
-}
-
 async function loadQaLabServerRuntime() {
   const { startQaLabServer } = await import("./lab-server.js");
   return startQaLabServer;
@@ -851,21 +804,41 @@ async function runWeightedUnifiedPartitionTasks(
   const activeExclusiveKeys = new Set<string>();
   let activeWeight = 0;
   return await new Promise<QaUnifiedPartitionResult[]>((resolve, reject) => {
-    let firstError: Error | undefined;
+    const errors: Error[] = [];
     let finished = false;
     const finishIfSettled = () => {
       if (finished || activeWeight > 0) {
         return;
       }
       finished = true;
+      const firstError = errors[0];
       if (firstError) {
-        reject(toErrorObject(firstError, "QA suite partition failed"));
+        if (errors.length === 1) {
+          reject(firstError);
+          return;
+        }
+        // Drained siblings retain every failure. The fatal QA type prevents callers
+        // from treating uncertain cleanup or publication as an ordinary result.
+        const message = "QA suite partitions failed";
+        if (errors.some((error) => error instanceof QaSuiteCleanupError)) {
+          reject(new QaSuiteCleanupError(errors, message, { cause: firstError }));
+          return;
+        }
+        const aggregate = new AggregateError(errors, message, { cause: firstError });
+        const artifactErrors = errors.filter((error) => error instanceof QaSuiteArtifactError);
+        const artifactError =
+          artifactErrors.find((error) => error.code === "publication_failed") ?? artifactErrors[0];
+        reject(
+          artifactError
+            ? new QaSuiteArtifactError(artifactError.code, message, { cause: aggregate })
+            : aggregate,
+        );
         return;
       }
       resolve(results);
     };
     const launch = () => {
-      if (firstError) {
+      if (errors.length > 0) {
         finishIfSettled();
         return;
       }
@@ -904,7 +877,7 @@ async function runWeightedUnifiedPartitionTasks(
             launch();
           },
           (error: unknown) => {
-            firstError = error instanceof Error ? error : new Error(String(error));
+            errors.push(error instanceof Error ? error : new Error(String(error)));
             activeWeight -= taskWeight;
             if (task.exclusiveKey) {
               activeExclusiveKeys.delete(task.exclusiveKey);
@@ -1330,6 +1303,11 @@ async function runUnifiedQaSuite(params: {
                 : params.runParams?.workerStartStaggerMs,
               scenarioIds: partition.scenarios.map((scenario) => scenario.id),
             }).catch((error: unknown) => {
+              // A credential cause can survive failed teardown. Do not turn a
+              // fatal lifecycle or publication error into an ordinary blocked result.
+              if (error instanceof QaSuiteCleanupError || error instanceof QaSuiteArtifactError) {
+                throw error;
+              }
               if (!isChannelCredentialPoolUnavailable(error, channelGroup.channelId)) {
                 throw error;
               }
@@ -1565,6 +1543,9 @@ async function runUnifiedQaSuite(params: {
             try {
               return await task.run();
             } catch (error) {
+              if (error instanceof QaSuiteCleanupError || error instanceof QaSuiteArtifactError) {
+                throw error;
+              }
               failure = capturePartitionFailure(
                 task,
                 error,
@@ -1577,7 +1558,11 @@ async function runUnifiedQaSuite(params: {
         } catch (error) {
           // Failed partitions still own durable failure evidence; rejecting here would
           // discard completed siblings and prevent the unified artifacts from existing.
-          if (!failure) {
+          if (
+            !failure ||
+            error instanceof QaSuiteCleanupError ||
+            error instanceof QaSuiteArtifactError
+          ) {
             throw error;
           }
           return failure;
@@ -1610,6 +1595,9 @@ async function runUnifiedQaSuite(params: {
         },
       });
     } catch (error) {
+      if (error instanceof QaSuiteCleanupError || error instanceof QaSuiteArtifactError) {
+        throw error;
+      }
       scriptPreparationFailure = capturePartitionFailure(
         {
           channelId: transportId,

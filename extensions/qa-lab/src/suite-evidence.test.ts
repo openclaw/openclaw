@@ -191,9 +191,41 @@ describe("flow occurrence artifacts", () => {
     const first = summary.entries[0]!.binding.occurrenceId;
     await expect(
       evidence.record(0, first, { name: "overwrite", status: "fail", steps: [] }),
-    ).rejects.toMatchObject({ code: "EEXIST" });
+    ).rejects.toMatchObject({ code: "publication_failed", cause: { code: "EEXIST" } });
     expect(evidence.snapshot()).toMatchObject({ entries: summary.entries });
   });
+
+  it.each(["occurrence", "producer"] as const)(
+    "classifies exclusive %s publication failure without changing completed evidence",
+    async (kind) => {
+      const { outputDir, evidence } = await setup();
+      const first = evidence.invocation.begin(0);
+      await evidence.record(0, first, { name: "completed", status: "pass", steps: [] });
+      const before = evidence.snapshot();
+      const receipt = before.occurrences.find((item) => item.id === first)!.receipts[0]!;
+      const original = await fs.readFile(path.join(outputDir, receipt.artifact.path));
+      const next = evidence.invocation.begin(1);
+      const blocked = path.join(
+        outputDir,
+        "artifacts/occurrences",
+        `${next}${kind === "producer" ? ".producer-evidence" : ""}.json`,
+      );
+      await fs.writeFile(blocked, "reserved bytes");
+      await expect(
+        evidence.record(
+          1,
+          next,
+          { name: "unpublished", status: "pass", steps: [] },
+          kind === "producer" ? { childEvidence: before } : {},
+        ),
+      ).rejects.toMatchObject({ code: "publication_failed", cause: { code: "EEXIST" } });
+      expect(await fs.readFile(blocked, "utf8")).toBe("reserved bytes");
+      const retained = await fs.readFile(path.join(outputDir, receipt.artifact.path));
+      expect(retained).toEqual(original);
+      expect(createHash("sha256").update(retained).digest("hex")).toBe(receipt.artifact.sha256);
+      expect(evidence.snapshot().entries).toEqual(before.entries);
+    },
+  );
 
   it("rebases raw and receipt artifacts together without changing their identity", async () => {
     const { outputDir, evidence } = await setup();

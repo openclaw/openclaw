@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { QaSuiteArtifactError, QaSuiteCleanupError, QaSuiteInfraError } from "./errors.js";
 import {
   projectQaEvidenceScenarioOutcomes,
   type QaEvidenceSummaryJson,
@@ -12,10 +15,12 @@ import {
   type QaTransportAdapterFactory,
 } from "./qa-transport-registry.js";
 import * as scenarioCatalog from "./scenario-catalog.js";
+import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
+import { runQaSuiteWithInfraRetry } from "./suite-infra-retry.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
 import { runQaRuntimeParitySuite } from "./suite-runtime-parity-runner.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
-import type { QaSuiteRunner, QaSuiteScenarioRunner } from "./suite-types.js";
+import type { QaSuiteRunner, QaSuiteRunParams, QaSuiteScenarioRunner } from "./suite-types.js";
 import * as suite from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
@@ -192,13 +197,18 @@ function createCleanupTestFactory(
 }
 
 async function runCleanupTestSuite(params: {
+  repoRoot?: string;
+  onEvidence?: QaSuiteRunParams["onEvidence"];
+  scenarios?: string[];
+  concurrency?: number;
   factory: QaTransportAdapterFactory;
   lab: QaLabServerHandle;
   progressEnabled?: boolean;
   runChild: QaSuiteRunner;
 }) {
-  const repoRoot = await tempDirs.makeTempDir("qa-parity-cleanup-");
+  const repoRoot = params.repoRoot ?? (await tempDirs.makeTempDir("qa-parity-cleanup-"));
   return runQaRuntimeParitySuite({
+    onEvidence: params.onEvidence,
     runQaFlowSuite: params.runChild,
     adapterFactories: [params.factory],
     channelDriver: "live",
@@ -211,8 +221,10 @@ async function runCleanupTestSuite(params: {
     primaryModel: "mock-openai/test-model",
     alternateModel: "mock-openai/test-model-alt",
     fastMode: true,
-    concurrency: 1,
-    selectedScenarios: [makeQaSuiteTestScenario("runtime-cleanup")],
+    concurrency: params.concurrency ?? 1,
+    selectedScenarios: (params.scenarios ?? ["runtime-cleanup"]).map((id) =>
+      makeQaSuiteTestScenario(id),
+    ),
     startLab: async () => params.lab,
     progressEnabled: params.progressEnabled ?? false,
     runtimePair: ["openclaw", "codex"],
@@ -220,6 +232,236 @@ async function runCleanupTestSuite(params: {
 }
 
 describe("runtime parity suite transport cleanup", () => {
+  it.each(["cleanup", "publication", "ordinary"] as const)(
+    "joins an earlier retryable cell and later %s failure before deciding retry",
+    async (kind) => {
+      vi.stubEnv("OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS", "0");
+      const repoRoot = await tempDirs.makeTempDir("qa-parity-overlapping-failure-");
+      const lab = createCleanupTestLab();
+      const factory = createCleanupTestFactory(lab, () => ({}));
+      const firstError = new QaSuiteInfraError("agent_wait_failed", "first cell disconnected");
+      const siblingCause = new Error("sibling finalization failed");
+      const bothStarted = createDeferred<void>();
+      const firstRecorded = createDeferred<void>();
+      const releaseSibling = createDeferred<void>();
+      const started: string[] = [];
+      let siblingError: unknown;
+      let siblingJoined = false;
+      const stop = vi.mocked(lab.stop).mockImplementation(async () => {
+        expect(siblingJoined).toBe(true);
+      });
+      const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => {
+        const id = params!.scenarioIds![0]!;
+        started.push(id);
+        if (id === "first") {
+          await bothStarted.promise;
+          throw firstError;
+        }
+        bothStarted.resolve();
+        await releaseSibling.promise;
+        try {
+          if (kind === "cleanup") {
+            const cleanupFailures = await suite.runQaSuiteCleanupSteps([
+              {
+                phase: "lab stop",
+                run: async () => {
+                  throw siblingCause;
+                },
+              },
+            ]);
+            suite.throwQaSuiteCleanupErrors({
+              cleanupFailures,
+              runFailed: false,
+              runError: undefined,
+            });
+          } else if (kind === "publication") {
+            const child = await createQaSuiteEvidenceInvocation(params, {
+              repoRoot,
+              outputDir: params!.outputDir!,
+              selectedScenarios: [makeQaSuiteTestScenario(id)],
+              providerMode: "mock-openai",
+              primaryModel: "mock-openai/test-model",
+              transportId: "qa-channel",
+            });
+            const artifactDir = path.join(params!.outputDir!, "artifacts");
+            await fs.mkdir(artifactDir, { recursive: true });
+            await fs.writeFile(path.join(artifactDir, "occurrences"), "blocked directory");
+            await child.record(0, child.invocation.begin(0), {
+              name: id,
+              status: "pass",
+              steps: [],
+            });
+          }
+          throw siblingCause;
+        } catch (error) {
+          siblingError = error;
+          throw error;
+        } finally {
+          siblingJoined = true;
+        }
+      });
+      const attempt = vi.fn(async (index: number) => {
+        if (index > 0) {
+          return "retried";
+        }
+        await runCleanupTestSuite({
+          repoRoot,
+          lab,
+          factory,
+          runChild,
+          scenarios: ["first", "sibling", "unstarted"],
+          concurrency: 2,
+          onEvidence: (summary) => {
+            if (
+              summary.entries.some((entry) => entry.result.failure?.reason === firstError.message)
+            ) {
+              firstRecorded.resolve();
+            }
+          },
+        });
+        return "completed";
+      });
+      let settled = false;
+      const pending = runQaSuiteWithInfraRetry(attempt).then(
+        (result) => {
+          settled = true;
+          return result;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      await firstRecorded.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(started).toEqual(["first", "sibling"]);
+      expect(settled).toBe(false);
+      expect(stop).not.toHaveBeenCalled();
+      releaseSibling.resolve();
+      const failure = await pending;
+      if (kind === "ordinary") {
+        expect(failure).toBe("retried");
+        expect(attempt).toHaveBeenCalledTimes(2);
+      } else {
+        expect(attempt).toHaveBeenCalledOnce();
+        expect(siblingError).toBeInstanceOf(
+          kind === "cleanup" ? QaSuiteCleanupError : QaSuiteArtifactError,
+        );
+        expect(failure).toBeInstanceOf(
+          kind === "cleanup" ? QaSuiteCleanupError : QaSuiteArtifactError,
+        );
+        const aggregate = kind === "cleanup" ? failure : (failure as QaSuiteArtifactError).cause;
+        expect(aggregate).toBeInstanceOf(AggregateError);
+        expect((aggregate as AggregateError).cause).toBe(firstError);
+        expect((aggregate as AggregateError).errors).toHaveLength(2);
+        expect((aggregate as AggregateError).errors[0]).toBe(firstError);
+        expect((aggregate as AggregateError).errors[1]).toBe(siblingError);
+      }
+      expect(started).toEqual(["first", "sibling"]);
+      expect(stop).toHaveBeenCalledOnce();
+      expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+      expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: "completed" }),
+      );
+    },
+  );
+
+  it("retains typed publication identity when ordinary parity failure reconciliation cannot write", async () => {
+    const repoRoot = await tempDirs.makeTempDir("qa-parity-publication-composition-");
+    const lab = createCleanupTestLab();
+    const factory = createCleanupTestFactory(lab, () => ({}));
+    const original = new Error("ordinary cell failure");
+    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async () => {
+      const artifactDir = path.join(repoRoot, "output", "artifacts");
+      await fs.mkdir(artifactDir, { recursive: true });
+      await fs.writeFile(path.join(artifactDir, "occurrences"), "blocked evidence directory");
+      throw original;
+    });
+    const failure = await runCleanupTestSuite({ repoRoot, lab, factory, runChild }).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(QaSuiteCleanupError);
+    expect(failure).toMatchObject({
+      errors: [original, expect.objectContaining({ code: "publication_failed" })],
+      cause: expect.objectContaining({ code: "publication_failed" }),
+    });
+    expect(runChild).toHaveBeenCalledOnce();
+    expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+    expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed" }),
+    );
+  });
+
+  it.each(
+    ["cleanup", "publication"].flatMap((kind) =>
+      [false, true].map((reconciliationFails) => ({ kind, reconciliationFails })),
+    ),
+  )(
+    "retains captured parity evidence before terminal $kind failure (reconciliation fails=$reconciliationFails)",
+    async ({ kind, reconciliationFails }) => {
+      const lab = createCleanupTestLab();
+      const cleanup = vi.fn(async () => {});
+      const factory = createCleanupTestFactory(lab, () => ({ cleanup }));
+      const cause = new Error("cell finalization failed");
+      const original =
+        kind === "cleanup"
+          ? new QaSuiteCleanupError([cause], cause.message, { cause })
+          : new QaSuiteArtifactError("publication_failed", cause.message, { cause });
+      const reconciliationError = new Error("parent evidence callback failed");
+      const snapshots: QaEvidenceSummaryV3Json[] = [];
+      const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => {
+        const child = await createQaSuiteEvidenceInvocation(params, {
+          repoRoot: params!.repoRoot!,
+          outputDir: params!.outputDir!,
+          selectedScenarios: [makeQaSuiteTestScenario(params!.scenarioIds![0]!)],
+          providerMode: "mock-openai",
+          primaryModel: "mock-openai/test-model",
+          transportId: "qa-channel",
+        });
+        const id = child.invocation.begin(0);
+        await child.record(0, id, { name: "cell passed", status: "pass", steps: [] });
+        throw original;
+      });
+      const error = await runCleanupTestSuite({
+        factory,
+        lab,
+        runChild,
+        scenarios: ["interrupted", "unstarted"],
+        onEvidence: (summary) => {
+          snapshots.push(summary);
+          if (
+            reconciliationFails &&
+            summary.entries.some((entry) => entry.result.failure?.reason === original.message)
+          ) {
+            throw reconciliationError;
+          }
+        },
+      }).catch((failure: unknown) => failure);
+      if (reconciliationFails) {
+        expect(error).toBeInstanceOf(QaSuiteCleanupError);
+        expect(error).toMatchObject({ cause: original, errors: [original, reconciliationError] });
+      } else {
+        expect(error).toBe(original);
+      }
+      const final = snapshots.at(-1)!;
+      expect(final.entries.map((entry) => entry.result.status)).toEqual(["pass", "fail"]);
+      expect(final.entries[1]!.coverage).toEqual([]);
+      expect(projectQaEvidenceScenarioOutcomes(final).map((outcome) => outcome.status)).toEqual([
+        "fail",
+        null,
+      ]);
+      expect(runChild).toHaveBeenCalledOnce();
+      expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+      expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: "completed" }),
+      );
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(lab.stop).toHaveBeenCalledOnce();
+    },
+  );
+
   it("executes repeated flow instances in request order through the standard producer", async () => {
     const repoRoot = await tempDirs.makeTempDir("qa-repeated-flow-");
     const scenarios = [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")];

@@ -6,6 +6,7 @@ import {
   resolveQaArtifactPath,
   toRepoRelativePath,
 } from "./cli-paths.js";
+import { toQaSuiteArtifactPublicationError } from "./errors.js";
 import { captureQaEvidenceLaunchIdentity } from "./evidence-environment.js";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
 import {
@@ -21,6 +22,16 @@ import type {
   QaSuiteRunParams,
   QaSuiteScenarioResult,
 } from "./suite-types.js";
+
+async function writeImmutableQaEvidenceArtifact(filePath: string, content: string) {
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    // Retries and child bundles never replace an earlier occurrence's bytes.
+    await fs.writeFile(filePath, content, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    throw toQaSuiteArtifactPublicationError(error);
+  }
+}
 
 /** Rebase both raw entries and bound receipts through the same artifact owner. */
 export function rebaseQaSuiteEvidence(summary: QaEvidenceSummaryJson, from: string, to: string) {
@@ -109,9 +120,7 @@ export async function createQaSuiteEvidenceInvocation(
     const artifactPath = path.join(context.outputDir, relativePath);
     const recordedResult = { ...result, evidenceOccurrenceId: id };
     const content = `${JSON.stringify({ result: recordedResult, launch, runtime: runtimeIdentity }, null, 2)}\n`;
-    await fs.mkdir(path.dirname(artifactPath), { recursive: true });
-    // Attempt artifacts are never overwritten by retries or same-label instances.
-    await fs.writeFile(artifactPath, content, { flag: "wx", mode: 0o600 });
+    await writeImmutableQaEvidenceArtifact(artifactPath, content);
     const artifact = {
       kind: "scenario-observation",
       path: relativePath.split(path.sep).join("/"),
@@ -131,10 +140,7 @@ export async function createQaSuiteEvidenceInvocation(
     if (childContent !== undefined) {
       // The enclosing attempt owns this immutable bundle. Retrying it changes
       // containment activity, never the child's local rows, flags or receipts.
-      await fs.writeFile(path.join(context.outputDir, childPath), childContent, {
-        flag: "wx",
-        mode: 0o600,
-      });
+      await writeImmutableQaEvidenceArtifact(path.join(context.outputDir, childPath), childContent);
     }
     const receipts = [
       { id: preparedId, phase: "prepared" as const, identity: launch, artifact },

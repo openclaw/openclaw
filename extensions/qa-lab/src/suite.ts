@@ -5,6 +5,12 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  QaSuiteArtifactError,
+  QaSuiteCleanupError,
+  QaSuiteInfraError,
+  QaSuiteRunError,
+} from "./errors.js";
 import type { QaGatewayChild, QaGatewayStopResult } from "./gateway-child.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
@@ -72,7 +78,10 @@ export async function createQaSuiteTransportAdapter(params: {
     );
     return { ...result, driver };
   } catch (error) {
-    await params.cleanupOnFailure?.().catch(() => undefined);
+    const cleanupFailures = await runQaSuiteCleanupSteps(
+      params.cleanupOnFailure ? [{ phase: "lab stop", run: params.cleanupOnFailure }] : [],
+    );
+    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed: true, runError: error });
     throw error;
   }
 }
@@ -190,15 +199,16 @@ export async function waitForQaLabReadyOrStopOwned(params: {
   try {
     await waitForQaLabReady(params.lab.listenUrl, params.timeoutMs);
   } catch (error) {
-    if (params.ownsLab) {
-      await params.lab.stop();
-    }
+    const cleanupFailures = await runQaSuiteCleanupSteps(
+      params.ownsLab ? [{ phase: "lab stop", run: () => params.lab.stop() }] : [],
+    );
+    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed: true, runError: error });
     throw error;
   }
 }
 
 type QaSuiteCleanupStep = { phase: string; run: () => Promise<void> };
-type QaSuiteCleanupFailure = { phase: string; error: unknown };
+type QaSuiteCleanupFailure = { phase: string; error: unknown; kind?: "run" };
 
 export async function runQaSuiteCleanupSteps(steps: readonly QaSuiteCleanupStep[]) {
   const failures: QaSuiteCleanupFailure[] = [];
@@ -222,9 +232,14 @@ export async function runQaFlowSuiteCleanupPlan(params: {
   finishLab: () => Promise<void>;
 }) {
   let gatewayStopped = false;
+  let settledRunError: Error | undefined;
   const stopGatewayAndMark = async () => {
     const result = await params.stopGateway();
     gatewayStopped = result.process !== "unconfirmed";
+    if (result.settledRunError) {
+      settledRunError = result.settledRunError;
+      return;
+    }
     if (result.errors.length) {
       throw new AggregateError(
         result.errors,
@@ -237,7 +252,7 @@ export async function runQaFlowSuiteCleanupPlan(params: {
       await params.cleanupTransportAfterGatewayStop();
     }
   };
-  return runQaSuiteCleanupSteps([
+  const failures = await runQaSuiteCleanupSteps([
     ...(params.closeWebSessions ? [{ phase: "web sessions", run: params.closeWebSessions }] : []),
     // Drain transport HTTP work before stopping the gateway; otherwise a completed suite can
     // emit an unhandled response-close rejection during delivery.
@@ -250,6 +265,10 @@ export async function runQaFlowSuiteCleanupPlan(params: {
     ...(params.stopProvider ? [{ phase: "provider stop", run: params.stopProvider }] : []),
     { phase: "lab finish", run: params.finishLab },
   ]);
+  if (settledRunError) {
+    failures.unshift({ phase: "gateway run", error: settledRunError, kind: "run" });
+  }
+  return failures;
 }
 
 export function throwQaSuiteCleanupErrors(params: {
@@ -260,7 +279,41 @@ export function throwQaSuiteCleanupErrors(params: {
   scenarios?: readonly QaSuiteScenarioResult[];
   evidenceWritten?: boolean;
 }) {
-  if (params.cleanupFailures.length === 0) {
+  // A retained child diagnostic is still a run failure after successful cleanup.
+  // Only actual cleanup failures may turn it into a terminal cleanup aggregate.
+  const settledRunFailures = params.cleanupFailures.filter((failure) => failure.kind === "run");
+  const cleanupFailures = params.cleanupFailures.filter((failure) => failure.kind !== "run");
+  const runErrors = params.runFailed ? [params.runError] : [];
+  for (const failure of settledRunFailures) {
+    if (!runErrors.includes(failure.error)) {
+      runErrors.push(failure.error);
+    }
+  }
+  const runFailed = runErrors.length > 0;
+  const runError = runErrors[0];
+  if (cleanupFailures.length === 0) {
+    if (runErrors.length > 1) {
+      const diagnostic = new QaSuiteRunError(
+        runErrors,
+        "QA suite failed with additional Gateway diagnostics",
+        { cause: runError },
+      );
+      // Root types own retry and terminal policy. Keep the original errors in
+      // the diagnostic graph without mutating them or changing that policy.
+      if (runError instanceof QaSuiteCleanupError) {
+        throw new QaSuiteCleanupError(runErrors, diagnostic.message, { cause: runError });
+      }
+      if (runError instanceof QaSuiteArtifactError) {
+        throw new QaSuiteArtifactError(runError.code, diagnostic.message, { cause: diagnostic });
+      }
+      if (runError instanceof QaSuiteInfraError) {
+        throw new QaSuiteInfraError(runError.code, diagnostic.message, { cause: diagnostic });
+      }
+      throw diagnostic;
+    }
+    if (settledRunFailures.length > 0) {
+      throw runError;
+    }
     return;
   }
   const result = params.result;
@@ -275,15 +328,15 @@ export function throwQaSuiteCleanupErrors(params: {
       ? "QA scenarios passed, but cleanup failed"
       : "QA scenarios completed, but cleanup failed";
   const message = [
-    params.runFailed ? "QA suite and cleanup failed" : cleanupHeadline,
+    runFailed ? "QA suite and cleanup failed" : cleanupHeadline,
     ...(scenariosCompleted
       ? [
           `scenario counts: passed=${passed} failed=${failed} skipped=${skipped} total=${scenarios.length}`,
         ]
-      : params.runFailed
+      : runFailed
         ? ["scenarios did not complete"]
         : []),
-    `failed cleanup phases: ${params.cleanupFailures
+    `failed cleanup phases: ${cleanupFailures
       .map(
         ({ phase, error }) =>
           `${sanitizeQaSuiteProgressValue(phase)}: ${sanitizeQaSuiteProgressValue(formatErrorMessage(error))}`,
@@ -295,14 +348,16 @@ export function throwQaSuiteCleanupErrors(params: {
         ]
       : []),
   ].join("\n");
-  const errors = params.cleanupFailures.map((failure) => failure.error);
-  if (params.runFailed) {
-    throw new AggregateError([params.runError, ...errors], message, { cause: params.runError });
+  const errors = cleanupFailures.map((failure) => failure.error);
+  if (runFailed) {
+    throw new QaSuiteCleanupError([...runErrors, ...errors], message, {
+      cause: runError,
+    });
   }
   if (errors.length === 1) {
-    throw new AggregateError(errors, message, { cause: errors[0] });
+    throw new QaSuiteCleanupError(errors, message, { cause: errors[0] });
   }
-  throw new AggregateError(errors, message);
+  throw new QaSuiteCleanupError(errors, message);
 }
 
 export function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {

@@ -5,7 +5,13 @@ export function toQaError(value: unknown): Error {
   return value instanceof Error ? value : new Error(formatErrorMessage(value));
 }
 
+export class QaSuiteCleanupError extends AggregateError {}
+
+/** Run-only diagnostics retain the primary's retry policy, not a cleanup failure. */
+export class QaSuiteRunError extends AggregateError {}
+
 type QaSuiteArtifactErrorCode =
+  | "publication_failed"
   | "evidence_missing"
   | "report_missing"
   | "summary_missing"
@@ -24,6 +30,12 @@ export class QaSuiteArtifactError extends Error {
     this.name = "QaSuiteArtifactError";
     this.code = code;
   }
+}
+
+export function toQaSuiteArtifactPublicationError(error: unknown) {
+  return error instanceof QaSuiteArtifactError && error.code === "publication_failed"
+    ? error
+    : new QaSuiteArtifactError("publication_failed", formatErrorMessage(error), { cause: error });
 }
 
 type QaSuiteInfraErrorCode =

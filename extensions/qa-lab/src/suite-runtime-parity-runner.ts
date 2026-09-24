@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { QaSuiteArtifactError, QaSuiteCleanupError } from "./errors.js";
 import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import type { QaLabLatestReport, QaLabServerHandle } from "./lab-server.types.js";
@@ -241,10 +242,13 @@ export async function runQaRuntimeParitySuite(params: {
                 try {
                   importChild();
                 } catch (reconciliationError) {
-                  throw new AggregateError(
+                  const terminal =
+                    error instanceof QaSuiteCleanupError || error instanceof QaSuiteArtifactError;
+                  const ReconciliationError = terminal ? QaSuiteCleanupError : AggregateError;
+                  throw new ReconciliationError(
                     [error, reconciliationError],
                     "runtime parity child and evidence reconciliation failed",
-                    { cause: reconciliationError },
+                    { cause: terminal ? error : reconciliationError },
                   );
                 }
                 throw error;
@@ -326,12 +330,14 @@ export async function runQaRuntimeParitySuite(params: {
           );
           return parityScenarioResult;
         } catch (error) {
+          const terminal =
+            error instanceof QaSuiteCleanupError || error instanceof QaSuiteArtifactError;
           // A comparison failure owns a separate zero-claim diagnostic; already
           // captured child observations survive without inventing a child result.
           if (!recordingComparison) {
             const details = formatErrorMessage(error);
             try {
-              await recording.record(
+              const failure = await recording.record(
                 index,
                 comparisonId,
                 {
@@ -342,11 +348,20 @@ export async function runQaRuntimeParitySuite(params: {
                 },
                 { diagnostic: true, childEvidence: capturedCells() },
               );
+              if (terminal) {
+                progress.recordScenarioResult(index, failure);
+              }
             } catch (recordError) {
-              throw new AggregateError(
+              const ReconciliationError =
+                terminal ||
+                recordError instanceof QaSuiteCleanupError ||
+                recordError instanceof QaSuiteArtifactError
+                  ? QaSuiteCleanupError
+                  : AggregateError;
+              throw new ReconciliationError(
                 [error, recordError],
                 "runtime parity and evidence publication failed",
-                { cause: recordError },
+                { cause: terminal ? error : recordError },
               );
             }
           }

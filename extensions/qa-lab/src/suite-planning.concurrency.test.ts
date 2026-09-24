@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { QaSuiteArtifactError, QaSuiteCleanupError } from "./errors.js";
 import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
 import {
   mapQaSuiteWithConcurrency,
@@ -139,6 +140,57 @@ describe("qa suite concurrency", () => {
       expect(settled).toBe(false);
       sibling.resolve();
       expect(await run).toEqual({ rejected: true, error: failure });
+      expect(started).toEqual([1, 2]);
+    },
+  );
+
+  it.each(
+    ["cleanup", "publication"].flatMap((kind) =>
+      [new Error("first worker failed"), undefined].map((firstError) => ({ kind, firstError })),
+    ),
+  )(
+    "retains a later $kind failure after draining workers ($firstError)",
+    async ({ kind, firstError }) => {
+      const cause = new Error("sibling finalization failed");
+      const fatalError =
+        kind === "cleanup"
+          ? new QaSuiteCleanupError([cause], cause.message, { cause })
+          : new QaSuiteArtifactError("publication_failed", cause.message, { cause });
+      const rejectFirst = vi.fn<() => Promise<never>>().mockRejectedValue(firstError);
+      const bothStarted = createDeferred<void>();
+      const sibling = createDeferred<void>();
+      const started: number[] = [];
+      let settled = false;
+      const pending = mapQaSuiteWithConcurrency([1, 2, 3], 2, async (item) => {
+        started.push(item);
+        if (item === 1) {
+          await bothStarted.promise;
+          return await rejectFirst();
+        }
+        bothStarted.resolve();
+        await sibling.promise;
+        throw fatalError;
+      }).catch((error: unknown) => {
+        settled = true;
+        return error;
+      });
+      await bothStarted.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(started).toEqual([1, 2]);
+      expect(settled).toBe(false);
+      sibling.resolve();
+      const failure = await pending;
+      expect(failure).toBeInstanceOf(
+        kind === "cleanup" ? QaSuiteCleanupError : QaSuiteArtifactError,
+      );
+      const aggregate = kind === "cleanup" ? failure : (failure as QaSuiteArtifactError).cause;
+      expect(aggregate).toBeInstanceOf(AggregateError);
+      expect((aggregate as AggregateError).cause).toBe(firstError);
+      expect((aggregate as AggregateError).errors).toHaveLength(2);
+      expect((aggregate as AggregateError).errors[0]).toBe(firstError);
+      expect((aggregate as AggregateError).errors[1]).toBe(fatalError);
       expect(started).toEqual([1, 2]);
     },
   );

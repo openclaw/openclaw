@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { QaSuiteInfraError } from "./errors.js";
+import { QaSuiteInfraError, toQaError } from "./errors.js";
 import {
   cleanupQaGatewayTempRoots,
   preserveQaGatewayDebugArtifacts,
@@ -23,6 +23,9 @@ const QA_GATEWAY_CHILD_DRAIN_TIMEOUT_MS = 1_000;
 export type QaGatewayStopResult = {
   process: "never-spawned" | "confirmed-stopped" | "unconfirmed";
   errors: unknown[];
+  // Present only when every cleanup succeeded and errors contains solely the
+  // retained run diagnostic. Direct stop callers must still see that diagnostic.
+  settledRunError?: Error;
 };
 export type QaGatewayStopOptions = {
   keepTemp?: boolean;
@@ -237,7 +240,11 @@ export class QaGatewayChildLifecycle {
     return stopping.then(async (stopped) => {
       const errors = [...stopped.errors];
       await this.finalizeRetainedArtifacts(stopped, opts, errors);
-      return { process: stopped.process, errors };
+      // Late cleanup preserves a run-only result only when no cleanup fails.
+      // Otherwise the suite must treat the new artifact cleanup failure as fatal.
+      return errors.length === stopped.errors.length
+        ? stopped
+        : { process: stopped.process, errors };
     });
   }
 
@@ -290,9 +297,20 @@ export class QaGatewayChildLifecycle {
         await attempt(() => closeQaGatewayLogStream(stream, label));
       }
     }
-    await attempt(async () => this.current?.checkFailure());
+    let runError: Error | undefined;
+    try {
+      this.current?.checkFailure();
+    } catch (error) {
+      runError = toQaError(error);
+    }
     await this.finalizeRetainedArtifacts(stopped, opts, errors);
-    return { process: stopped.process, errors };
+    return {
+      process: stopped.process,
+      errors: runError ? [...errors, runError] : errors,
+      ...(runError && errors.length === 0 && stopped.process !== "unconfirmed"
+        ? { settledRunError: runError }
+        : {}),
+    };
   }
 
   private async finalizeRetainedArtifacts(

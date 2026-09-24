@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QaSuiteArtifactError, toQaSuiteArtifactPublicationError } from "./errors.js";
 import {
   buildQaEvidenceGalleryModel,
   resolveQaEvidenceArtifactFile,
@@ -16,6 +17,8 @@ import {
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-evidence.js";
+import { runQaSuiteWithInfraRetry } from "./suite-infra-retry.js";
+import { readCompletedQaSuiteSummaryFile } from "./suite-summary.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
@@ -33,6 +36,47 @@ afterEach(async () => {
 });
 
 describe("suite artifacts", () => {
+  it("retains verification causes and an existing publication error's identity", () => {
+    const cause = Object.assign(new Error("artifact disappeared"), { code: "ENOENT" });
+    const missing = new QaSuiteArtifactError("report_missing", "report unavailable", { cause });
+    const failure = toQaSuiteArtifactPublicationError(missing);
+
+    expect(failure.code).toBe("publication_failed");
+    expect(failure.cause).toBe(missing);
+    expect(missing.cause).toBe(cause);
+    expect(toQaSuiteArtifactPublicationError(failure)).toBe(failure);
+  });
+
+  it("keeps a missing summary read retryable without publication classification", async () => {
+    const outputDir = await tempDirs.makeTempDir("qa-suite-summary-read-retry-");
+    const summaryPath = path.join(outputDir, "qa-suite-summary.json");
+    const summary = { run: { status: "completed" } };
+    let readFailure: unknown;
+    const read = vi.fn(async (attempt: number) => {
+      if (attempt === 1) {
+        await fs.writeFile(summaryPath, JSON.stringify(summary));
+      }
+      try {
+        return await readCompletedQaSuiteSummaryFile(summaryPath);
+      } catch (error) {
+        readFailure = error;
+        throw error;
+      }
+    });
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      await expect(runQaSuiteWithInfraRetry(read, 1)).resolves.toEqual(summary);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(readFailure).toBeInstanceOf(QaSuiteArtifactError);
+      expect(readFailure).toMatchObject({
+        code: "summary_read_failed",
+        cause: { code: "ENOENT" },
+      });
+    } finally {
+      stderrWrite.mockRestore();
+    }
+  });
+
   it("writes standalone evidence while keeping suite summary evidence-free", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-");
     try {

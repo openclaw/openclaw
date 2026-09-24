@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { QaSuiteArtifactError, QaSuiteCleanupError } from "./errors.js";
 import {
   projectQaEvidenceScenarioOutcomes,
   type QaEvidenceSummaryV3Json,
@@ -25,6 +26,122 @@ import type { QaSuiteRunner, QaSuiteScenarioRunner, QaSuiteScenarioResult } from
 import * as suite from "./suite.js";
 
 describe("isolated QA suite transport cleanup", () => {
+  it("retains the ordinary child error when required failure evidence cannot be published", async () => {
+    const lab = createCleanupTestLab();
+    const context = createCleanupTestContext();
+    const original = new Error("ordinary child failure");
+    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async () => {
+      const artifactDir = path.join(context.outputDir, "artifacts");
+      await fs.mkdir(artifactDir, { recursive: true });
+      await fs.writeFile(path.join(artifactDir, "occurrences"), "blocked evidence directory");
+      throw original;
+    });
+    const failure = await runQaFlowSuiteIsolated(
+      { lab, startLab: async () => lab },
+      context,
+      runChild,
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(QaSuiteCleanupError);
+    expect(failure).toMatchObject({
+      errors: [original, expect.objectContaining({ code: "publication_failed" })],
+      cause: expect.objectContaining({ code: "publication_failed" }),
+    });
+    if (!(failure instanceof QaSuiteCleanupError)) {
+      throw new Error("expected terminal evidence reconciliation failure", { cause: failure });
+    }
+    expect(failure.errors[0]).toBe(original);
+    expect(failure.cause).toBe(failure.errors[1]);
+    expect(runChild).toHaveBeenCalledOnce();
+    expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+    expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed" }),
+    );
+  });
+
+  it("withholds terminal artifacts when a child reports canonical cleanup failure", async () => {
+    const lab = createCleanupTestLab();
+    const context = createCleanupTestContext();
+    const run = runQaFlowSuiteIsolated({ lab, startLab: async () => lab }, context, async () => {
+      suite.throwQaSuiteCleanupErrors({
+        cleanupFailures: [{ phase: "gateway stop", error: new Error("still running") }],
+        runFailed: false,
+        runError: undefined,
+      });
+      throw new Error("expected cleanup failure");
+    });
+    await expect(run).rejects.toThrow("still running");
+    expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+    expect(lab.setLatestReport).not.toHaveBeenCalled();
+    expect(mocks.disposeRegisteredAgentHarnesses).toHaveBeenCalledOnce();
+  });
+
+  it.each(
+    ["cleanup", "publication"].flatMap((kind) =>
+      [false, true].map((reconciliationFails) => ({ kind, reconciliationFails })),
+    ),
+  )(
+    "retains captured child evidence before terminal $kind failure (reconciliation fails=$reconciliationFails)",
+    async ({ kind, reconciliationFails }) => {
+      const lab = createCleanupTestLab();
+      const context = createCleanupTestContext();
+      context.selectedScenarios[0]!.assertions = [
+        { id: "child-result", meaning: "the child owns its result", coverage: [] },
+      ];
+      const cause = new Error("child finalization failed");
+      const original =
+        kind === "cleanup"
+          ? new QaSuiteCleanupError([cause], cause.message, { cause })
+          : new QaSuiteArtifactError("publication_failed", cause.message, { cause });
+      const reconciliationError = new Error("parent evidence callback failed");
+      const snapshots: QaEvidenceSummaryV3Json[] = [];
+      const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => {
+        const child = await createQaSuiteEvidenceInvocation(params, {
+          ...context,
+          outputDir: params!.outputDir!,
+        });
+        const id = child.invocation.begin(0);
+        await child.record(0, id, { name: "child passed", status: "pass", steps: [] });
+        throw original;
+      });
+      const error = await runQaFlowSuiteIsolated(
+        {
+          lab,
+          startLab: async () => lab,
+          onEvidence: (summary) => {
+            snapshots.push(summary);
+            if (
+              reconciliationFails &&
+              summary.entries.some((entry) => entry.result.failure?.reason === original.message)
+            ) {
+              throw reconciliationError;
+            }
+          },
+        },
+        context,
+        runChild,
+      ).catch((failure: unknown) => failure);
+      if (reconciliationFails) {
+        expect(error).toBeInstanceOf(QaSuiteCleanupError);
+        expect(error).toMatchObject({ cause: original, errors: [original, reconciliationError] });
+      } else {
+        expect(error).toBe(original);
+      }
+      const final = snapshots.at(-1)!;
+      expect(final.entries.map((entry) => entry.result.status)).toEqual(["pass", "fail"]);
+      expect(final.entries[1]!.coverage).toEqual([]);
+      const childId = final.entries[0]!.binding.occurrenceId;
+      expect(final.occurrences.find((item) => item.id === childId)?.assertions).toEqual(
+        context.selectedScenarios[0]!.assertions,
+      );
+      expect(runChild).toHaveBeenCalledOnce();
+      expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+      expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: "completed" }),
+      );
+      expect(mocks.disposeRegisteredAgentHarnesses).toHaveBeenCalledOnce();
+    },
+  );
+
   it("retains the original pre-result error after the child's initial snapshot", async () => {
     const lab = createCleanupTestLab();
     const context = createCleanupTestContext();

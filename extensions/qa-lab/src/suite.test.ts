@@ -1,8 +1,10 @@
 // Qa Lab tests cover suite plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QaSuiteCleanupError, QaSuiteInfraError } from "./errors.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import { isQaSuiteInfraRetryableError, runQaSuiteWithInfraRetry } from "./suite-infra-retry.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   buildQaIsolatedScenarioWorkerParams,
@@ -306,6 +308,48 @@ describe("qa suite", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      kind: "network",
+      cleanupError: Object.assign(new Error("lab stop failed"), { code: "ECONNRESET" }),
+    },
+    {
+      kind: "typed infrastructure",
+      cleanupError: new QaSuiteInfraError("gateway_ready_timeout", "lab stop failed"),
+    },
+  ])("does not retry readiness after a $kind lab cleanup failure", async ({ cleanupError }) => {
+    const stop = vi.fn().mockRejectedValue(cleanupError);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: false },
+      release: vi.fn(async () => {}),
+    });
+    const run = vi.fn(() =>
+      waitForQaLabReadyOrStopOwned({
+        lab: { listenUrl: "http://127.0.0.1:43123", stop },
+        ownsLab: true,
+        timeoutMs: 1,
+      }),
+    );
+
+    const failure: unknown = await runQaSuiteWithInfraRetry(run).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(QaSuiteCleanupError);
+    if (!(failure instanceof QaSuiteCleanupError)) {
+      throw failure;
+    }
+    expect(failure.cause).toBeInstanceOf(Error);
+    expect(failure.cause).toMatchObject({
+      message: "timed out after 1ms waiting for qa-lab ready",
+    });
+    expect(failure.errors).toHaveLength(2);
+    expect(failure.errors[0]).toBe(failure.cause);
+    expect(failure.errors[1]).toBe(cleanupError);
+    expect(isQaSuiteInfraRetryableError(cleanupError)).toBe(true);
+    expect(isQaSuiteInfraRetryableError(failure)).toBe(false);
+    expect(run).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("cancels a successful lab readiness body before releasing its guard", async () => {
     const events: string[] = [];
     const stop = vi.fn(async () => {});
@@ -329,7 +373,7 @@ describe("qa suite", () => {
           listenUrl: "http://127.0.0.1:43123",
           stop,
         },
-        ownsLab: false,
+        ownsLab: true,
       }),
     ).resolves.toBeUndefined();
 

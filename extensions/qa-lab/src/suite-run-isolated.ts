@@ -2,6 +2,7 @@ import path from "node:path";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { QaSuiteArtifactError, QaSuiteCleanupError } from "./errors.js";
 import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
 import type { QaLabLatestReport } from "./lab-server.types.js";
 import {
@@ -258,41 +259,63 @@ export async function runQaFlowSuiteIsolated(
           writePartialArtifacts();
           return scenarioResult;
         } catch (error) {
+          const terminal =
+            error instanceof QaSuiteCleanupError || error instanceof QaSuiteArtifactError;
           // A failed evidence write is not a child failure and must not retry
           // the same exclusive artifact name or mask its original error.
           if (recordingStarted && !dispatchCompleted) {
             throw error;
           }
-          importChild();
-          const details = formatErrorMessage(error);
-          const failure = {
-            name: scenario.title,
-            status: "fail",
-            details,
-            steps: [
-              {
-                name: "isolated scenario worker",
-                status: "fail",
-                details,
-              },
-            ],
-          } satisfies QaSuiteScenarioResult;
-          const scenarioResult = await recording.record(
-            index,
-            dispatchCompleted
-              ? recording.invocation.begin(index, null, { diagnostic: true })
-              : dispatchId,
-            failure,
-            { diagnostic: true },
-          );
-          progress.recordScenarioResult(index, scenarioResult);
-          writeQaSuiteProgress(
-            progressEnabled,
-            `scenario fail (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
-          );
-          completedScenarioResults[index] = scenarioResult;
-          writePartialArtifacts();
-          return scenarioResult;
+          try {
+            // Fatal finalization still transfers captured child history. Its
+            // separate diagnostic must not invent claims or a completed suite.
+            importChild();
+            const details = formatErrorMessage(error);
+            const failure = {
+              name: scenario.title,
+              status: "fail",
+              details,
+              steps: [
+                {
+                  name: "isolated scenario worker",
+                  status: "fail",
+                  details,
+                },
+              ],
+            } satisfies QaSuiteScenarioResult;
+            const scenarioResult = await recording.record(
+              index,
+              dispatchCompleted
+                ? recording.invocation.begin(index, null, { diagnostic: true })
+                : dispatchId,
+              failure,
+              { diagnostic: true },
+            );
+            progress.recordScenarioResult(index, scenarioResult);
+            writeQaSuiteProgress(
+              progressEnabled,
+              `scenario fail (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
+            );
+            if (!terminal) {
+              completedScenarioResults[index] = scenarioResult;
+              writePartialArtifacts();
+              return scenarioResult;
+            }
+          } catch (reconciliationError) {
+            if (
+              terminal ||
+              reconciliationError instanceof QaSuiteCleanupError ||
+              reconciliationError instanceof QaSuiteArtifactError
+            ) {
+              throw new QaSuiteCleanupError(
+                [error, reconciliationError],
+                "isolated child and evidence reconciliation failed",
+                { cause: terminal ? error : reconciliationError },
+              );
+            }
+            throw reconciliationError;
+          }
+          throw error;
         }
       },
       {
