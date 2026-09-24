@@ -146,21 +146,6 @@ export function resolveConfigAuditStoreEnv(
   };
 }
 
-export function readConfigSnapshotAuditRecord(
-  params: ConfigAuditStoreContext & { configPath: string },
-): ConfigSnapshotAuditRecord | null {
-  try {
-    const context = resolveConfigAuditStoreContext(params);
-    const entry = openConfigSnapshotStore(resolveConfigAuditStoreEnv(context))
-      .entries()
-      .find((candidate) => candidate.key === CONFIG_SNAPSHOT_KEY);
-    const snapshot = entry?.value;
-    return snapshot?.configPath === path.resolve(params.configPath) ? snapshot : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Single owner of the slot's path-identity convention (resolve-normalized). */
 export function configSnapshotAuditRecordMatchesPath(
   snapshot: ConfigSnapshotAuditRecord | null,

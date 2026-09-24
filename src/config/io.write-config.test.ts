@@ -27,7 +27,7 @@ import {
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
-import { readConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
+import { readLatestConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
 import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
 import { hashConfigIncludeRaw } from "./includes.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
@@ -4021,10 +4021,9 @@ describe("config io write", () => {
           { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_TEST_FAST: "1" },
           async () => {
             await writeConfigFile(initialConfig, { skipRuntimeSnapshotRefresh: true });
-            const priorSlot = readConfigSnapshotAuditRecord({
+            const priorSlot = readLatestConfigSnapshotAuditRecord({
               env: process.env,
               homedir: () => home,
-              configPath,
             });
             setRuntimeConfigSnapshotRefreshHandler({
               refresh: () => {
@@ -4037,10 +4036,9 @@ describe("config io write", () => {
             ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
 
             expect(
-              readConfigSnapshotAuditRecord({
+              readLatestConfigSnapshotAuditRecord({
                 env: process.env,
                 homedir: () => home,
-                configPath,
               }),
             ).toEqual(priorSlot);
           },
@@ -4456,10 +4454,9 @@ gateway: { mode: "local", port: 18789 }
           "env.vars.SETTING_01",
         ]);
 
-        const slot = readConfigSnapshotAuditRecord({
+        const slot = readLatestConfigSnapshotAuditRecord({
           env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
           homedir: () => home,
-          configPath,
         });
         expect(slot).toMatchObject({ configPath, rawHash: result.persistedHash });
         if (!slot) {

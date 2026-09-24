@@ -117,7 +117,6 @@ afterEach(closeTestConfigReloaders);
 
 const configAuditMocks = vi.hoisted(() => ({
   append: vi.fn(),
-  readSnapshot: vi.fn(),
   readLatestSnapshot: vi.fn(),
   upsertSnapshot: vi.fn(),
 }));
@@ -134,7 +133,6 @@ vi.mock("../config/config-journal-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config-journal-snapshot.js")>();
   return {
     ...actual,
-    readConfigSnapshotAuditRecord: configAuditMocks.readSnapshot,
     readLatestConfigSnapshotAuditRecordAsync: configAuditMocks.readLatestSnapshot,
     upsertConfigSnapshotAuditRecordAsync: configAuditMocks.upsertSnapshot,
   };
@@ -143,12 +141,7 @@ vi.mock("../config/config-journal-snapshot.js", async (importOriginal) => {
 beforeEach((context) => {
   prepareConfigReloadTest(context);
   configAuditMocks.append.mockReset();
-  configAuditMocks.readSnapshot.mockReset().mockReturnValue(null);
-  // Unfiltered reads delegate to the filtered mock with the harness watch path
-  // so slot fixtures seeded via readSnapshot serve both accessors.
-  configAuditMocks.readLatestSnapshot
-    .mockReset()
-    .mockImplementation(() => configAuditMocks.readSnapshot({ configPath: "/tmp/openclaw.json" }));
+  configAuditMocks.readLatestSnapshot.mockReset().mockReturnValue(null);
   configAuditMocks.upsertSnapshot.mockReset();
 });
 
@@ -2721,7 +2714,7 @@ describe("startGatewayConfigReloader", () => {
       { initialConfig },
     );
     await harness.reloader.ready;
-    configAuditMocks.readSnapshot.mockReturnValue({
+    configAuditMocks.readLatestSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: hashConfigRaw(JSON.stringify(nextConfig)),
       fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(nextConfig),
@@ -2878,7 +2871,7 @@ describe("startGatewayConfigReloader", () => {
     const acceptedConfig: OpenClawConfig = {
       gateway: { reload: {}, port: 18789 },
     };
-    configAuditMocks.readSnapshot.mockReturnValue({
+    configAuditMocks.readLatestSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: hashConfigRaw(JSON.stringify(acceptedConfig)),
       fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(acceptedConfig),
@@ -2919,7 +2912,7 @@ describe("startGatewayConfigReloader", () => {
     const initialConfig: OpenClawConfig = {
       gateway: { auth: { mode: "token", token: "beta" } },
     };
-    configAuditMocks.readSnapshot.mockReturnValue({
+    configAuditMocks.readLatestSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: "previous-raw-hash",
       fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(previousConfig),
@@ -2952,7 +2945,7 @@ describe("startGatewayConfigReloader", () => {
   });
 
   it("journals invalid initial snapshots as rejected startup edits", async () => {
-    configAuditMocks.readSnapshot.mockReturnValue({
+    configAuditMocks.readLatestSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: "previous-raw-hash",
       fingerprintedAuthoredConfig: { gateway: { port: 18789 } },
@@ -2985,7 +2978,7 @@ describe("startGatewayConfigReloader", () => {
     const initialConfig: OpenClawConfig = {
       gateway: { auth: { mode: "token", token: "beta" }, port: 18790 },
     };
-    configAuditMocks.readSnapshot.mockReturnValue({
+    configAuditMocks.readLatestSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: "previous-raw-hash",
       fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(previousConfig),
@@ -3008,7 +3001,7 @@ describe("startGatewayConfigReloader", () => {
   });
 
   it("journals an offline config deletion without clearing the snapshot slot", async () => {
-    configAuditMocks.readSnapshot.mockReturnValue({
+    configAuditMocks.readLatestSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: "previous-raw-hash",
       fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig({
@@ -3042,9 +3035,6 @@ describe("startGatewayConfigReloader", () => {
         gateway: { port: 18789 },
       }),
     };
-    configAuditMocks.readSnapshot.mockImplementation((params: { configPath: string }) =>
-      params.configPath === storedSnapshot.configPath ? storedSnapshot : null,
-    );
     // The unfiltered read still surfaces the foreign slot: it must become the
     // CAS token so path B can take the slot over, without seeding reconcile.
     configAuditMocks.readLatestSnapshot.mockReturnValue(storedSnapshot);

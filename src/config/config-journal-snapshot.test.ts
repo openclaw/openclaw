@@ -7,7 +7,6 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   fingerprintConfigSnapshotAuthoredConfig,
-  readConfigSnapshotAuditRecord,
   readLatestConfigSnapshotAuditRecord,
   readLatestConfigSnapshotAuditRecordAsync,
   restoreConfigSnapshotAuditRecord,
@@ -77,9 +76,7 @@ describe("config journal snapshots", () => {
       rawHash: "path-a-hash",
       authoredConfig: { gateway: { port: 1 } },
     });
-    // Path-filtered read for B sees nothing, but the unfiltered slot is the
-    // CAS token that lets B take the slot over from A.
-    expect(readConfigSnapshotAuditRecord({ ...context, configPath: pathB })).toBeNull();
+    // The unfiltered slot is the CAS token that lets B take the slot over from A.
     const foreign = await readLatestConfigSnapshotAuditRecordAsync(context);
     expect(foreign?.configPath).toBe(path.resolve(pathA));
     const taken = await upsertConfigSnapshotAuditRecordAsync({
@@ -132,7 +129,7 @@ describe("config journal snapshots", () => {
       expectedSnapshot: written,
     });
 
-    expect(readConfigSnapshotAuditRecord({ ...context, configPath })).toMatchObject({
+    expect(readLatestConfigSnapshotAuditRecord(context)).toMatchObject({
       rawHash: "newer-process",
     });
     expect(await readLatestConfigSnapshotAuditRecordAsync(context)).toEqual(

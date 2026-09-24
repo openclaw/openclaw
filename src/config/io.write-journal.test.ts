@@ -10,7 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { readConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
+import { readLatestConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import {
   createConfigIO,
@@ -109,10 +109,9 @@ describe("config write and startup journal", () => {
     await withJournal(async ({ home, configPath, io }) => {
       const write = await io.writeConfigFile({ gateway: { port: 18789 } });
       const writtenSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
-      const slot = readConfigSnapshotAuditRecord({
+      const slot = readLatestConfigSnapshotAuditRecord({
         env: process.env,
         homedir: () => home,
-        configPath,
       });
       expect(writtenSnapshot.valid).toBe(true);
       expect(slot).toMatchObject({ rawHash: write.persistedHash });
@@ -162,10 +161,9 @@ describe("config write and startup journal", () => {
           ),
         ).toEqual([]);
         expect(
-          readConfigSnapshotAuditRecord({
+          readLatestConfigSnapshotAuditRecord({
             env: process.env,
             homedir: () => home,
-            configPath: configPathB,
           }),
         ).toMatchObject({ configPath: configPathB, rawHash: snapshot.hash });
       });
