@@ -6866,6 +6866,38 @@ describe("runCodexAppServerAttempt", () => {
       }),
     );
   });
+  it("rejects subscription sharing on a supervised session before native client startup", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-source",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const runtimePlan = createCodexRuntimePlanFixture();
+    params.runtimePlan = {
+      ...runtimePlan,
+      auth: {
+        ...runtimePlan.auth,
+        selectedAuthMode: "oauth",
+        selectedAuthFlow: "chatgpt-token-sharing",
+      },
+    };
+    const clientFactory = vi.fn(async () => {
+      throw new Error("client must not start");
+    });
+    await expect(
+      runCodexAppServerAttempt(params, {
+        pluginConfig: { supervision: { enabled: true } },
+        clientFactory,
+      }),
+    ).rejects.toThrow("detach from native supervision first");
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
   it("fails before client startup when a successor generation hides a private supervision binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const sessionKey = "agent:main:supervised-stale-generation";

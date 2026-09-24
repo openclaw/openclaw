@@ -1,6 +1,10 @@
 import { readFile } from "node:fs/promises";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import {
+  buildControlUiCspHeader,
+  computeInlineScriptHashes,
+} from "../../../src/gateway/control-ui-csp.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
@@ -121,10 +125,26 @@ suite.define(() => {
     );
   });
 
-  it("opens the exact pasted text by keyboard, copies it, and returns it to the text field", async () => {
+  it("opens, copies, and restores exact pasted text under the Gateway CSP", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
+      const chatUrl = `${suite.server.baseUrl}chat`;
+      let gatewayCsp = "";
+      await page.route(chatUrl, async (route) => {
+        const response = await route.fetch();
+        const body = await response.text();
+        gatewayCsp = buildControlUiCspHeader({
+          inlineScriptHashes: computeInlineScriptHashes(body),
+        });
+        await route.fulfill({
+          response,
+          body,
+          headers: { ...response.headers(), "content-security-policy": gatewayCsp },
+        });
+      });
       const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
+      const response = await page.goto(chatUrl);
+      expect(gatewayCsp).not.toBe("");
+      expect(response?.headers()["content-security-policy"]).toBe(gatewayCsp);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
       await paste(composer);

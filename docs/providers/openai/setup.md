@@ -1,5 +1,5 @@
 ---
-summary: "Connect OpenAI with an API key or a ChatGPT/Codex subscription"
+summary: "Connect OpenAI with an API key, Codex subscription, or Sign in with ChatGPT"
 read_when:
   - You are connecting OpenAI to OpenClaw for the first time
   - You want Codex subscription auth instead of API keys
@@ -7,6 +7,9 @@ read_when:
 title: "OpenAI setup"
 sidebarTitle: "Setup"
 ---
+
+Compare [OpenAI authentication methods](/providers/openai/authentication) to
+choose based on model access, hosted plugins, usage tracking, and permissions.
 
 ## Getting started
 
@@ -421,3 +424,56 @@ sidebarTitle: "Setup"
 
   </Tab>
 </Tabs>
+
+<a id="chatgpt-token-sharing-preview" />
+
+## Sign in with ChatGPT (preview)
+
+Use Sign in with ChatGPT (SIWC) for app-specific permissions and OpenAI-native
+usage tracking while eligible Responses API requests use your ChatGPT allowance.
+Your account and workspace must have SIWC registration and token sharing enabled
+by OpenAI.
+
+Choose **Codex login** instead if you need OpenAI-hosted plugins or connected
+apps. SIWC does not support those services yet; OpenClaw tools and locally
+configured plugins can still use their own credentials. See
+[OpenAI authentication](/providers/openai/authentication) to compare the methods.
+
+Run this on the computer running OpenClaw:
+
+```bash
+openclaw models auth login --provider openai --method siwc
+```
+
+Approve token sharing during sign-in to enable model calls. If you grant identity
+permissions only, OpenClaw saves the account but asks you to enable sharing or
+choose another credential before inference.
+
+The browser returns to `http://localhost:8080/auth/callback`. If your browser runs
+on another computer, forward its port 8080 to OpenClaw's IPv4 loopback before
+starting sign-in. For an SSH host, keep this command running on your browser's
+computer:
+
+```bash
+ssh -N -L 8080:127.0.0.1:8080 user@gateway-host
+```
+
+Open the sign-in link on that computer.
+
+To reconnect an existing account, sign in with the same ChatGPT user and
+workspace. To switch either, choose **Connect a different ChatGPT account or
+workspace** in the sign-in prompt.
+
+### Current limitations
+
+- Developer function tools and web search are supported. OpenAI-hosted plugins,
+  connected apps, hosted MCP tools, tool search, and file-backed inputs are not
+  supported yet.
+- Responses requests use HTTP streaming. WebSocket inference and SIWC quota
+  reporting in OpenClaw are not available.
+- With the Codex runtime, SIWC requires a managed local process and an isolated
+  agent home. Automatic context summarization is supported; manual `/compact`,
+  remote execution, and supervised sessions are unavailable with this credential.
+
+Model and allowance eligibility are enforced by OpenAI. SIWC does not import
+ChatGPT conversations or Codex history.

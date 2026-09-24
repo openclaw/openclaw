@@ -187,7 +187,7 @@ async function createHostedChildFixture(
     );
   const captured = system
     ? undefined
-    : captureGatewayOperatorRunAuthority({
+    : await captureGatewayOperatorRunAuthority({
         client: identifiedClient(profile.id),
         context,
         sourceAuthority: {

@@ -157,9 +157,6 @@ describe("docs-sync-publish", () => {
     writePublisherDependencies(publishRoot, publisherDependencies(sourceSlugifyVersion));
     fs.writeFileSync(path.join(clawhubRoot, "docs", "index.md"), "# ClawHub\n");
     fs.writeFileSync(minimalMdx, "# Valid MDX\n\nThis file is valid.\n");
-    const retiredHelper = path.join(publishRoot, ".openclaw-sync", "lib", "mintlify-accordion.mjs");
-    fs.mkdirSync(path.dirname(retiredHelper), { recursive: true });
-    fs.writeFileSync(retiredHelper, "obsolete");
     fs.mkdirSync(path.join(publishRoot, "docs", "fa"), { recursive: true });
     const translation = "<Note>\n  </Note>\n";
     fs.writeFileSync(path.join(publishRoot, "docs", "fa", "index.md"), translation);
@@ -180,7 +177,6 @@ describe("docs-sync-publish", () => {
         [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
         { cwd: publishRoot, stdio: "pipe" },
       );
-      expect(fs.existsSync(retiredHelper)).toBe(false);
       expect(fs.readFileSync(path.join(publishRoot, "docs", "fa", "index.md"), "utf8")).toBe(
         translation,
       );

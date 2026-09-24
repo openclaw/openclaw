@@ -1977,7 +1977,7 @@ describe("gateway agent handler chat.abort integration", () => {
         ...(collect ? [[queuedChildSessionKey, runId, true] as const] : []),
         [unrelatedChildSessionKey, "other-parent-turn", false],
       ] as const) {
-        registerSubagentRun({
+        await registerSubagentRun({
           runId: childSessionKey,
           childSessionKey,
           controllerSessionKey:

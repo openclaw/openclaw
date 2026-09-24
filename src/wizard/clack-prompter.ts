@@ -214,23 +214,18 @@ export function createClackPrompter(
       return await runPromptWithNavigation(
         params.navigation,
         async (promptSignal) => {
-          if (params.searchable) {
-            const prompt = params.navigation ? autocompleteWithNavigationFooter : autocomplete;
-            return await prompt({
-              message,
-              options,
-              initialValue: params.initialValue,
-              filter: tokenizedOptionFilter,
-              signal: promptSignal,
-              ...(params.navigation ? { navigation: params.navigation } : {}),
-              output,
-            });
-          }
-          const prompt = params.navigation ? selectWithNavigationFooter : select;
+          const prompt = params.searchable
+            ? params.navigation
+              ? autocompleteWithNavigationFooter
+              : autocomplete
+            : params.navigation
+              ? selectWithNavigationFooter
+              : select;
           return await prompt({
             message,
             options,
             initialValue: params.initialValue,
+            ...(params.searchable ? { filter: tokenizedOptionFilter } : {}),
             signal: promptSignal,
             ...(params.navigation ? { navigation: params.navigation } : {}),
             output,
@@ -247,25 +242,18 @@ export function createClackPrompter(
       return await runPromptWithNavigation(
         params.navigation,
         async (promptSignal) => {
-          if (params.searchable) {
-            const prompt = params.navigation
+          const prompt = params.searchable
+            ? params.navigation
               ? autocompleteMultiselectWithNavigationFooter
-              : autocompleteMultiselect;
-            return await prompt({
-              message,
-              options,
-              initialValues: params.initialValues,
-              filter: tokenizedOptionFilter,
-              signal: promptSignal,
-              ...(params.navigation ? { navigation: params.navigation } : {}),
-              output,
-            });
-          }
-          const prompt = params.navigation ? multiselectWithNavigationFooter : multiselect;
+              : autocompleteMultiselect
+            : params.navigation
+              ? multiselectWithNavigationFooter
+              : multiselect;
           return await prompt({
             message,
             options,
             initialValues: params.initialValues,
+            ...(params.searchable ? { filter: tokenizedOptionFilter } : {}),
             signal: promptSignal,
             ...(params.navigation ? { navigation: params.navigation } : {}),
             output,

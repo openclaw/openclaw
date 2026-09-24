@@ -156,7 +156,8 @@ export function removeLegacyUpdateCompatChunks(packageRoot) {
   }
 
   const compatibilityPath = path.join(paths.root, "dist", "update-compat-inventory.json");
-  const recordedChunks = fs.existsSync(compatibilityPath)
+  const hasRecordedCompatibility = fs.existsSync(compatibilityPath);
+  const recordedChunks = hasRecordedCompatibility
     ? readJson(compatibilityPath).releases.flatMap((release) =>
         release.chunks.map((chunk) => chunk.path),
       )
@@ -172,17 +173,18 @@ export function removeLegacyUpdateCompatChunks(packageRoot) {
   ) {
     throw new Error("package fixture compatibility inventory has an invalid path");
   }
-  const chunks = new Set([
-    ...LEGACY_UPDATE_COMPAT_CHUNKS,
-    ...recordedChunks.filter((name) => {
-      if (!/-[A-Za-z0-9_-]{8}\.m?js$/.test(name)) {
-        return false;
-      }
-      return isUpdateCompatibilityChunk(
-        fs.readFileSync(path.join(paths.root, "dist", name), "utf8"),
-      );
-    }),
-  ]);
+  const chunks = new Set(
+    hasRecordedCompatibility
+      ? recordedChunks.filter((name) => {
+          if (!/-[A-Za-z0-9_-]{8}\.m?js$/.test(name)) {
+            return false;
+          }
+          return isUpdateCompatibilityChunk(
+            fs.readFileSync(path.join(paths.root, "dist", name), "utf8"),
+          );
+        })
+      : LEGACY_UPDATE_COMPAT_CHUNKS,
+  );
   const removed = [];
   for (const name of chunks) {
     const relativePath = `dist/${name}`;

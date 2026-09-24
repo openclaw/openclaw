@@ -366,6 +366,10 @@ Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models 
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 
+See [OpenAI authentication](/providers/openai/authentication) to compare Codex
+OAuth, device code, API keys, and Sign in with ChatGPT (`--method siwc`),
+including model access, hosted plugins, and shared versus personal setup.
+
 Examples:
 
 ```bash

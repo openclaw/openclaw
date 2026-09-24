@@ -290,14 +290,15 @@ Older targets retain their existing allowance and deadline behavior.
 When `--timeout` is omitted, current CLI and RPC finalization do not add an aggregate
 activation deadline. Explicit operator limits and inherited activation allowances
 still apply; older or unrecognized handoffs retain their existing finite-deadline
-behavior. Independent install, build, plugin-operation, readiness, and cleanup
-bounds still apply. An explicit `--timeout <seconds>` limits each finalization phase
+behavior. Probes, ownership admission, readiness, recovery, and cleanup retain
+their own bounds. An explicit `--timeout <seconds>` limits each finalization phase
 and its child commands. Admission and config phases scale with shared SQLite state.
 
 Post-plugin config validation and readiness checks use the measured shared and
-agent database sizes after Doctor finishes, including WAL files. Serial plugin
-operations retain individual deadlines. When an aggregate activation budget is
-present, it uses the measured database sizes, observed candidate startup, plugin
+agent database sizes after Doctor finishes, including WAL files. Post-core plugin
+installation and update work have no default deadline when `--timeout` is omitted;
+explicit operator limits and older caller allowances still apply. When an aggregate
+activation budget is present, it uses the measured database sizes, observed candidate startup, plugin
 count, and the caller's step allowance. Migrated finalization preserves explicit or
 inherited allowances. Aggregate expiry reports `update-activation-timeout` and
 retains ownership until writers settle; it does not authorize rollback or restart.
@@ -311,7 +312,7 @@ Use `openclaw update status` and Doctor for recovery guidance.
 | `--dry-run`                                      | Preview planned actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.                                                                                                                                                                                                                 |
 | `--admission <auto\|installed>`                  | Choose candidate admission when supported (`auto`, the default), or force installed admission checks. This option has no environment-variable form. Dry runs always use installed checks.                                                                                                                                                     |
 | `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                  |
-| `--timeout <seconds>`                            | Per-step timeout. Default `1800`.                                                                                                                                                                                                                                                                                                             |
+| `--timeout <seconds>`                            | Optional per-step deadline in seconds. Omit to let package installation, deferred lifecycle scripts, and candidate Doctor finish without a work deadline. Probes and recovery retain their own bounds.                                                                                                                                        |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                               |
 | `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                           |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                             |
@@ -425,7 +426,7 @@ freshness or dependencies. Those checks run when you apply the update; use
 
 | Flag                    | Default | Description                                                  |
 | ----------------------- | ------- | ------------------------------------------------------------ |
-| `--timeout <seconds>`   | `1800`  | Timeout for each update step.                                |
+| `--timeout <seconds>`   | Unset   | Optional deadline for each update step in seconds.           |
 | `--accept-capabilities` | `false` | Accept reviewed plugin capability changes during the update. |
 
 ## Detailed topics

@@ -239,8 +239,8 @@ esac
         expect(args.join(" ")).not.toMatch(/fixture-(openai|anthropic|google)-key/u);
         const mounts = args.filter((_, index) => args[index - 1] === "-v");
         expect(mounts.filter((mount) => mount.includes("node_modules"))).toEqual([]);
-        expect(args.some((arg) => arg.startsWith("OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT="))).toBe(
-          false,
+        expect(args).toContain(
+          "OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT=/usr/local/lib/node_modules/tsx/dist/loader.mjs",
         );
         expect(mounts).toEqual(
           expect.arrayContaining([

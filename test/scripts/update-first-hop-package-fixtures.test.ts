@@ -189,6 +189,17 @@ describe("first-hop package fixtures", () => {
     const native = "current-runtime-12345678.mjs";
     const stable = "new-runtime.js";
     const metadata = "dist/update-compat-inventory.json";
+    const inventoryPath = path.join(root, "dist/postinstall-inventory.json");
+    const legacyPaths = new Set(LEGACY_UPDATE_COMPAT_CHUNKS.map((name) => `dist/${name}`));
+    writeJson(
+      inventoryPath,
+      JSON.parse(fs.readFileSync(inventoryPath, "utf8")).filter(
+        (entry: string) => !legacyPaths.has(entry),
+      ),
+    );
+    for (const name of LEGACY_UPDATE_COMPAT_CHUNKS) {
+      fs.rmSync(path.join(root, "dist", name));
+    }
     writeJson(path.join(root, metadata), {
       releases: [{ chunks: [{ path: bridge }, { path: stable }, { path: native }] }],
     });
@@ -199,7 +210,6 @@ describe("first-hop package fixtures", () => {
       path.join(root, "dist", bridge),
       `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\nexport {};\n`,
     );
-    const inventoryPath = path.join(root, "dist/postinstall-inventory.json");
     writeJson(inventoryPath, [
       ...JSON.parse(fs.readFileSync(inventoryPath, "utf8")),
       metadata,
@@ -653,8 +663,13 @@ process.stdout.write(JSON.stringify([{ filename }]));
         expect(artifact.original.version).toBe("2026.8.1");
         for (const bridge of LEGACY_UPDATE_COMPAT_CHUNKS) {
           expect(artifact.candidate.entries).toContain(`package/dist/${bridge}`);
-          expect(artifact.negative.entries).not.toContain(`package/dist/${bridge}`);
-          expect(artifact.future.entries).not.toContain(`package/dist/${bridge}`);
+          if (sourceMode === "recorded") {
+            expect(artifact.negative.entries).toContain(`package/dist/${bridge}`);
+            expect(artifact.future.entries).toContain(`package/dist/${bridge}`);
+          } else {
+            expect(artifact.negative.entries).not.toContain(`package/dist/${bridge}`);
+            expect(artifact.future.entries).not.toContain(`package/dist/${bridge}`);
+          }
         }
       }
       for (const args of invocations) {

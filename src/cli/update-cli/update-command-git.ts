@@ -570,6 +570,7 @@ export async function updateGitInstall(params: {
                   runStep: (stepParams) =>
                     runUpdateStep({ ...stepParams, progress: params.progress }),
                   timeoutMs: effectiveTimeout,
+                  workTimeoutMs: params.timeoutMs ?? null,
                   env: mergeProcessEnv([installEnv, candidateEnv]),
                   installCwd: candidateRoot,
                   expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
@@ -583,11 +584,13 @@ export async function updateGitInstall(params: {
                       managedServiceEnv: params.getManagedServiceEnv(),
                       root,
                       timeoutMs: effectiveTimeout,
+                      workTimeoutMs: params.timeoutMs ?? null,
                     }),
                 });
               },
             }
           : {
+              onTransaction: params.onTransaction,
               runGitDoctor: (root, results) =>
                 runPackageUpdateDoctor({
                   ...params,
@@ -595,6 +598,7 @@ export async function updateGitInstall(params: {
                   managedServiceEnv: params.getManagedServiceEnv(),
                   root,
                   timeoutMs: effectiveTimeout,
+                  workTimeoutMs: params.timeoutMs ?? null,
                 }),
             }),
       },

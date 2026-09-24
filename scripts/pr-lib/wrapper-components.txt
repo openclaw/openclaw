@@ -185,6 +185,7 @@ src/agents/defaults.ts
 src/agents/glob-pattern.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-oauth-store-error.ts
+src/agents/model-auth-policy.ts
 src/agents/model-catalog-lookup.ts
 src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
