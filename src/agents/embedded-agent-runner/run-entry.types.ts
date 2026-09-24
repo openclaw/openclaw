@@ -14,6 +14,7 @@ import type {
   ModelFallbackRouteResolution,
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
+import type { TurnSendLedgerScope } from "../tools/turn-send-ledger.js";
 import type {
   EmbeddedAgentRunEntryTerminal,
   RunEntryTerminalBehavior,
@@ -47,6 +48,7 @@ export type RunEntryCandidateOptions = {
   modelRoutingProvenance: ModelFallbackAttemptProvenance;
   contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
   onContextEngineTurnCandidate: (facts: ContextEngineTurnAttemptFacts) => void;
+  onDeferredTurnSendLedgerScope: (scope: TurnSendLedgerScope) => void;
 };
 
 type RunEntryHarnessPreparation =

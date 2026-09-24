@@ -183,6 +183,7 @@ export function buildCliMcpGrantContext(params: {
     params.run.messageChannel ?? params.run.messageProvider,
   );
   const currentChannelId = normalizeOptionalString(params.run.currentChannelId);
+  const currentMessagingTarget = normalizeOptionalString(params.run.currentMessagingTarget);
   const grantedToolsAllow = params.run.cliToolAvailability?.openClaw ?? params.toolsAllow;
   const delegationCapability = readCliMcpDelegationCapability(params.run);
   // Trusted message-only completions stay restricted even when source routing
@@ -241,6 +242,7 @@ export function buildCliMcpGrantContext(params: {
     gatewayUiCommandTarget: params.run.gatewayUiCommandTarget,
     ...(params.run.pinnedWidgetAuthoring === true ? { pinnedWidgetAuthoring: true } : {}),
     currentChannelId,
+    currentMessagingTarget,
     currentThreadTs: normalizeOptionalString(params.run.currentThreadTs),
     currentMessageId:
       params.run.currentMessageId == null

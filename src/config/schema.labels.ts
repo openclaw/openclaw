@@ -4,6 +4,7 @@ import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
 import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
+import { MESSAGE_TOOL_FIELD_LABELS } from "./schema.labels.message-tool.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -155,6 +156,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.tools.message.crossContext.allowAcrossProviders":
     "Agent Cross-Context Messaging (Across Providers)",
   "agents.entries.*.tools.message.actions.allow": "Agent Message Action Allowlist",
+  "agents.entries.*.tools.message.maxMessagesPerTurnPerTarget":
+    "Agent Max Messages Per Turn Per Target",
+  "agents.entries.*.tools.message.turnSendNudge": "Agent Turn Send Nudge",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.workspaceOnly": "apply_patch Workspace-Only",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
@@ -214,13 +218,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.safeBinTrustedDirs": "Exec Safe Bin Trusted Dirs",
   "tools.exec.safeBinProfiles": "Exec Safe Bin Profiles",
   ...APPROVAL_FIELD_LABELS,
-  "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
-  "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
-  "tools.message.crossContext.marker.enabled": "Cross-Context Marker",
-  "tools.message.crossContext.marker.prefix": "Cross-Context Marker Prefix",
-  "tools.message.crossContext.marker.suffix": "Cross-Context Marker Suffix",
-  "tools.message.broadcast.enabled": "Enable Message Broadcast",
-  "tools.message.actions.allow": "Message Action Allowlist",
+  ...MESSAGE_TOOL_FIELD_LABELS,
   "tools.web.search.enabled": "Enable Web Search Tool",
   "tools.web.search.provider": "Web Search Provider",
   "tools.web.search.maxResults": "Web Search Max Results",

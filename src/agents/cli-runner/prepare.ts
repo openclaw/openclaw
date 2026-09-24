@@ -1782,6 +1782,21 @@ async function prepareCliRunContextWithinReadFence(
       ...(promptContext ? { promptContext, promptForHooks } : {}),
       ...(nodeSkillWorkshop ? { nodeSkillWorkshop } : {}),
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
+      // Record the exact ledger slot the loopback send tools write under so the
+      // settlement terminal can delete only that (session, run) pair. runId is
+      // required for a slot to exist; without it no send was keyed to this run.
+      // The loopback tools are granted mcpProjectionContext, whose (agentId,
+      // sessionKey, runId) identity is mcpContextBase; toolsAllow projection never
+      // shifts that key, so mcpContextBase is the authoritative slot identity here.
+      ...(mcpContextBase?.runId
+        ? {
+            turnSendLedgerScope: {
+              agentId: mcpContextBase.agentId,
+              sessionKey: mcpContextBase.sessionKey,
+              runId: mcpContextBase.runId,
+            },
+          }
+        : {}),
     };
   } catch (err) {
     try {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeIsolatedAgentParamsFixture } from "../src/cron/isolated-agent/job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "../src/cron/isolated-agent/run.suite-helpers.js";
 import {
@@ -13,7 +13,6 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 describe("Codex conversation delivery and cron retry", () => {
   setupRunCronIsolatedAgentTurnSuite();
-  afterEach(() => vi.restoreAllMocks());
 
   it.each(["sent", "queued"] as const)(
     "preserves the retry decision for a %s core conversation receipt",
@@ -21,12 +20,16 @@ describe("Codex conversation delivery and cron retry", () => {
       const { createCodexDynamicToolBridge } = await import("../extensions/codex/test-api.js");
       const { createConversationsSendTool } =
         await import("../src/agents/tools/conversation-tools.js");
-      const gateway = await import("../src/agents/tools/in-process-gateway.js");
+      const { callAgentToolGatewayRequest } =
+        await import("../src/agents/tools/in-process-gateway.js");
+      const { resolveConversation } =
+        await import("../src/config/sessions/conversation-registry.js");
       pickLastNonEmptyTextFromPayloadsMock.mockImplementation(
         (payloads?: Array<{ text?: string }>) => payloads?.at(-1)?.text ?? "",
       );
       const conversationRef = "conv_0123456789abcdef0123456789abcdef";
-      const callGateway = vi.spyOn(gateway, "callAgentToolGatewayRequest").mockResolvedValue({
+      const deps = { callGateway: callAgentToolGatewayRequest, resolveConversation };
+      const callGateway = vi.spyOn(deps, "callGateway").mockResolvedValue({
         status,
         conversationRef,
         channel: "qa-channel",
@@ -34,7 +37,7 @@ describe("Codex conversation delivery and cron retry", () => {
       });
       runEmbeddedAgentMock
         .mockImplementationOnce(async () => {
-          const tool = createConversationsSendTool({ agentId: "main" });
+          const tool = createConversationsSendTool({ agentId: "main" }, deps);
           const bridge = createCodexDynamicToolBridge({
             tools: [tool],
             signal: new AbortController().signal,

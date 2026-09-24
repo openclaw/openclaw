@@ -40,6 +40,7 @@ import { createOpenClawTools } from "../openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
 import { sanitizeMessageToolVisiblePayload } from "./message-tool-visible-content.js";
+import { resetTurnSendLedgerForTest } from "./turn-send-ledger.js";
 
 type CreateMessageTool = typeof createMessageTool;
 
@@ -203,8 +204,20 @@ const openClawToolsFactoryMocks = vi.hoisted(() => {
   });
   return {
     tool,
+    // Captures the options createOpenClawTools passes into the conversation tools
+    // so the assembly test can prove runId/session reach conversations_send.
+    conversationSendOptions: [] as Array<Record<string, unknown>>,
   };
 });
+
+vi.mock("./conversation-tools.js", () => ({
+  createConversationsListTool: () => openClawToolsFactoryMocks.tool("conversations_list"),
+  createConversationsSendTool: (options: Record<string, unknown>) => {
+    openClawToolsFactoryMocks.conversationSendOptions.push(options);
+    return openClawToolsFactoryMocks.tool("conversations_send");
+  },
+  createConversationsTurnTool: () => openClawToolsFactoryMocks.tool("conversations_turn"),
+}));
 
 vi.mock("../../infra/outbound/message-action-runner.js", async () => {
   const actual = await vi.importActual<
@@ -343,6 +356,7 @@ beforeEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
   resetDiagnosticSessionStateForTest();
+  resetTurnSendLedgerForTest();
   mocks.runMessageAction.mockReset();
   bootMocks.agentCommandFromSystem.mockReset();
   mocks.getRuntimeConfig.mockReset().mockReturnValue({});
@@ -2916,5 +2930,26 @@ describe("message tool sandbox passthrough", () => {
       });
     },
   );
+});
+describe("per-turn send budget wiring", () => {
+  it("wires the same run into both message and conversations_send tools", () => {
+    openClawToolsFactoryMocks.conversationSendOptions.length = 0;
+    setActivePluginRegistry(createTestRegistry([]));
+    const tools = createOpenClawTools({
+      agentSessionKey: "agent:main:reef:direct:operator",
+      runId: "run-assembly-1",
+      config: {} as never,
+      agentChannel: "reef",
+    });
+    const names = tools.map((candidate) => candidate.name);
+    expect(names).toContain("message");
+    expect(names).toContain("conversations_send");
+    // conversations_send must receive the same runId so it shares the per-turn
+    // ledger (a module-level map) with the message tool instead of a stale turn.
+    expect(openClawToolsFactoryMocks.conversationSendOptions.at(-1)).toMatchObject({
+      runId: "run-assembly-1",
+      agentSessionKey: "agent:main:reef:direct:operator",
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
