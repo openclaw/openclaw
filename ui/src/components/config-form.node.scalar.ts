@@ -292,13 +292,11 @@ export function renderTextInput(
     if (effectiveRedacted) {
       return;
     }
+    // Change follows input on blur; only a newly normalized value needs another patch.
+    const commit = (candidate: unknown) =>
+      configValuesEqual(value, candidate) || commitScalarValue(target, candidate);
     if (inputType === "number") {
-      applyNumericInputState(
-        target,
-        resolveNumericInputState(target, schema),
-        params,
-        (candidate) => commitScalarValue(target, candidate),
-      );
+      applyNumericInputState(target, resolveNumericInputState(target, schema), params, commit);
       return;
     }
     const editHint = beginScalarEdit(target, initialBranch);
@@ -306,7 +304,7 @@ export function renderTextInput(
     const rawMessage = stringConstraintMessage(raw, schema, effectiveValue, editHint);
     if (!rawMessage && !isPhonePresentation) {
       setControlValidity(target, "");
-      commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue, editHint));
+      commit(coerceTextInputValue(raw, schema, effectiveValue, editHint));
       finishScalarEdit(target);
       return;
     }
@@ -322,7 +320,7 @@ export function renderTextInput(
     ) {
       target.value = normalized;
       setControlValidity(target, "");
-      commitScalarValue(target, undefined);
+      commit(undefined);
       finishScalarEdit(target);
       return;
     }
@@ -334,7 +332,7 @@ export function renderTextInput(
     }
     target.value = normalized;
     setControlValidity(target, "");
-    commitScalarValue(target, coerceTextInputValue(normalized, schema, effectiveValue, editHint));
+    commit(coerceTextInputValue(normalized, schema, effectiveValue, editHint));
     finishScalarEdit(target);
   };
 
@@ -579,7 +577,10 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
         }
         const normalized = normalizeNumericValue(state.parsed, schema);
         target.value = formatConfigValueText(normalized);
-        if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
+        if (
+          setControlValidity(target, numericConstraintMessage(normalized, schema)) &&
+          !configValuesEqual(value, normalized)
+        ) {
           commitScalarValue(target, normalized);
         }
       }}
@@ -595,9 +596,11 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           state.message = numericConstraintMessage(state.parsed, schema);
           target.value = formatConfigValueText(state.parsed);
         }
-        applyNumericInputState(target, state, params, (candidate) =>
-          commitScalarValue(target, candidate),
-        );
+        applyNumericInputState(target, state, params, (candidate) => {
+          if (!configValuesEqual(value, candidate)) {
+            commitScalarValue(target, candidate);
+          }
+        });
       }}
     />
     ${renderStepButton(1)}
