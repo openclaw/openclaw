@@ -71,10 +71,7 @@ export function collectWhatsAppStatusIssues(
           message: "Auth state is still stabilizing.",
           fix: "Wait a moment for queued credential writes to finish, then retry the command or rerun health.",
         });
-        return;
-      }
-
-      if (healthState === "logged-out") {
+      } else if (healthState === "logged-out") {
         issues.push({
           channel: "whatsapp",
           accountId,
@@ -82,10 +79,7 @@ export function collectWhatsAppStatusIssues(
           message: `Session logged out${lastError ? `: ${lastError}` : "."}`,
           fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
         });
-        return;
-      }
-
-      if (!linked) {
+      } else if (!linked) {
         issues.push({
           channel: "whatsapp",
           accountId,
@@ -93,6 +87,11 @@ export function collectWhatsAppStatusIssues(
           message: "Not linked (no WhatsApp Web session).",
           fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
         });
+      }
+
+      // Preserve the explicit logged-out diagnosis; unstable and unlinked
+      // states can still have a separate runtime problem worth reporting.
+      if (healthState === "logged-out") {
         return;
       }
 

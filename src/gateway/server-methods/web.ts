@@ -191,6 +191,16 @@ export const webHandlers: GatewayRequestHandlers = {
       };
       const existingResult = await gateway.loginWithQrStartExisting?.(loginParams);
       if (existingResult) {
+        if (
+          existingResult.qrDataUrl &&
+          wasChannelRunning({
+            context,
+            channelId: provider.id,
+            accountId,
+          })
+        ) {
+          await context.stopChannel(provider.id, accountId);
+        }
         respond(true, existingResult, undefined);
         return;
       }

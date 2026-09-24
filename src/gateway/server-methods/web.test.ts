@@ -40,6 +40,7 @@ function createHandlerOptions(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   stopChannel: (channelId: string, accountId?: string) => Promise<void>;
   startChannel?: (channelId: string, accountId?: string) => Promise<void>;
+  running?: boolean;
 }): GatewayRequestHandlerOptions {
   return {
     req: {
@@ -52,7 +53,7 @@ function createHandlerOptions(params: {
     respond: params.respond,
     context: {
       getRuntimeSnapshot: () => ({
-        channels: {},
+        channels: params.running ? { whatsapp: { running: true } } : {},
         channelAccounts: {},
       }),
       startChannel: params.startChannel ?? (async () => undefined),
@@ -112,9 +113,14 @@ describe("webHandlers", () => {
     );
   });
 
-  it("returns an existing QR before running preflight", async () => {
-    const stopChannel = vi.fn(async () => undefined);
-    const respond = vi.fn();
+  it("stops a running channel before returning an existing QR", async () => {
+    const events: string[] = [];
+    const stopChannel = vi.fn(async () => {
+      events.push("stop");
+    });
+    const respond = vi.fn(() => {
+      events.push("respond");
+    });
     const loginWithQrStart = vi.fn(async () => ({
       qrDataUrl: "data:image/png;base64,new-qr",
       message: "Scan this QR in WhatsApp -> Linked Devices.",
@@ -136,13 +142,15 @@ describe("webHandlers", () => {
       createHandlerOptions({
         respond,
         stopChannel,
+        running: true,
       }),
     );
 
     expect(loginWithQrStartExisting).toHaveBeenCalledOnce();
     expect(loginWithQrStartPreflight).not.toHaveBeenCalled();
-    expect(stopChannel).not.toHaveBeenCalled();
+    expect(stopChannel).toHaveBeenCalledWith("whatsapp", undefined);
     expect(loginWithQrStart).not.toHaveBeenCalled();
+    expect(events).toEqual(["stop", "respond"]);
     expect(respond).toHaveBeenCalledWith(
       true,
       {
