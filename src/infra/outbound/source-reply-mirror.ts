@@ -264,6 +264,7 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
     return "not-delivered";
   }
   if (
+    !matchesDeliveredSourceTargets(params.mirror, deliveryFact) ||
     !isExactCurrentSourceConversation({
       ...params.mirror,
       deliveredPayload: params.deliveredPayload,
@@ -336,8 +337,8 @@ function matchesCurrentSourceTarget(
     return false;
   }
   const threadedTarget = resolveThreadedSourceTarget(params, requestedTarget);
-  const matchesToolContextTarget = getChannelPlugin(params.channel as ChannelId)?.threading
-    ?.matchesToolContextTarget;
+  const plugin = getChannelPlugin(params.channel as ChannelId);
+  const matchesToolContextTarget = plugin?.threading?.matchesToolContextTarget;
   if (
     threadPlacement === "match" &&
     (matchesToolContextTarget?.({
@@ -352,8 +353,25 @@ function matchesCurrentSourceTarget(
   ) {
     return true;
   }
-  return currentTargets.some(
-    (currentTarget) => requestedTarget === currentTarget || threadedTarget === currentTarget,
+  const normalizedTargets = new Set(
+    [requestedTarget, threadedTarget]
+      .map((target) => normalizeTargetForProvider(params.channel, target, plugin))
+      .filter((target): target is string => Boolean(target)),
+  );
+  return currentTargets.some((target) => {
+    const normalized = normalizeTargetForProvider(params.channel, target, plugin);
+    return normalized !== undefined && normalizedTargets.has(normalized);
+  });
+}
+
+function matchesDeliveredSourceTargets(
+  params: SourceReplyTranscriptMirrorParams,
+  delivery: ReturnType<typeof projectPluginMessageDeliveryFact>,
+): boolean {
+  // Requested routes cannot override contradictory transport facts. Match each
+  // reported recipient independently, without inheriting requested thread aliases.
+  return (delivery?.deliveredTargets ?? []).every((target) =>
+    matchesCurrentSourceTarget({ ...params, actionParams: { target } }, "match"),
   );
 }
 
@@ -455,7 +473,10 @@ function resolveDeliveredCurrentSourceReply(
   allowAsync: boolean,
 ): SourceReplyMatch {
   const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
-  if (deliveryFact && deliveryFact.status !== "settled") {
+  if (
+    (deliveryFact && deliveryFact.status !== "settled") ||
+    !matchesDeliveredSourceTargets(params, deliveryFact)
+  ) {
     return false;
   }
   switch (params.action.trim().toLowerCase()) {
@@ -551,7 +572,10 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,
 ): Promise<boolean> {
   const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
-  if (deliveryFact && (deliveryFact.status !== "settled" || deliveryFact.partialDelivery)) {
+  if (
+    (deliveryFact && (deliveryFact.status !== "settled" || deliveryFact.partialDelivery)) ||
+    !matchesDeliveredSourceTargets(params, deliveryFact)
+  ) {
     return false;
   }
   const threadPlacement = resolveSourceReplyThreadPlacement(

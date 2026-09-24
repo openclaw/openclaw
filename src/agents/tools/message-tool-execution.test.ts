@@ -62,13 +62,78 @@ describe("registered message action source completion", () => {
     action: ChannelMessageActionName;
     mode: string;
     target?: string;
+    delivery?: Record<string, unknown>;
+    media?: boolean;
     expected?: true;
   }> = [
-    ...(["upload-file", "sendAttachment", "sendWithEffect"] as const).flatMap((action) => [
+    ...(
+      [
+        "send",
+        "poll",
+        "reply",
+        "thread-reply",
+        "upload-file",
+        "sendAttachment",
+        "sendWithEffect",
+      ] as const
+    ).flatMap((action) => [
       { action, mode: "implicit target", expected: true as const },
       { action, mode: "explicit target", target: "channel:C123", expected: true as const },
+      {
+        action,
+        mode: "different delivered recipient",
+        target: "C123",
+        delivery: { toJid: "C999" },
+      },
     ]),
+    { action: "send", mode: "media", media: true, expected: true },
+    { action: "send", mode: "redirected media", media: true, delivery: { channelId: "C999" } },
     { action: "upload-file", mode: "other destination", target: "C999" },
+    {
+      action: "upload-file",
+      mode: "other request returning source",
+      target: "C999",
+      delivery: { toJid: "C123" },
+    },
+    ...["chatId", "channelId", "roomId", "conversationId"].map((field) => ({
+      action: "upload-file" as const,
+      mode: `reported ${field}`,
+      delivery: { [field]: "C999" },
+    })),
+    {
+      action: "upload-file",
+      mode: "canonical target",
+      delivery: { target: { kind: "chat", id: "C999" } },
+    },
+    {
+      action: "upload-file",
+      mode: "normalized recipient",
+      delivery: { toJid: "channel:C123" },
+      expected: true,
+    },
+    {
+      action: "sendWithEffect",
+      mode: "legacy result without recipient",
+      delivery: {},
+      expected: true,
+    },
+    {
+      action: "upload-file",
+      mode: "nested result",
+      delivery: { result: { messageId: "native-message-1", roomId: "C999" } },
+    },
+    {
+      action: "upload-file",
+      mode: "mixed receipt parts",
+      delivery: {
+        receipt: {
+          parts: [
+            { platformMessageId: "native-message-1", raw: { channelId: "C123" } },
+            { platformMessageId: "native-message-2", raw: { channelId: "C999" } },
+          ],
+        },
+      },
+    },
     ...["failure", "partial", "dry run", "progress", "throw"].map((mode) => ({
       action: "upload-file" as const,
       mode,
@@ -79,7 +144,7 @@ describe("registered message action source completion", () => {
 
   it.each(cases)(
     "records only eligible source completion for $action ($mode)",
-    async ({ action, mode, target, expected }) => {
+    async ({ action, mode, target, delivery, media, expected }) => {
       const handleAction = vi.fn(async ({ params }: ChannelMessageActionContext) => {
         if (mode === "throw") {
           throw new Error("synthetic upload failure");
@@ -87,7 +152,8 @@ describe("registered message action source completion", () => {
         return jsonResult({
           ok: mode !== "failure",
           messageId: "native-message-1",
-          toJid: params.to,
+          ...(delivery ?? { toJid: params.to }),
+          ...(action === "thread-reply" ? { receipt: { replyToId: "inbound-message" } } : {}),
           ...(mode === "partial" ? { sentBeforeError: true } : {}),
         });
       });
@@ -145,6 +211,10 @@ describe("registered message action source completion", () => {
         });
         const execution = tool.execute("source-upload", {
           action,
+          message: "Uploaded source reply",
+          ...(media ? { media: "https://example.invalid/source.png" } : {}),
+          ...(action === "reply" ? { messageId: "inbound-message" } : {}),
+          ...(action === "poll" ? { pollQuestion: "Ready?", pollOption: ["Yes", "No"] } : {}),
           ...(target ? { target } : {}),
           ...(mode === "progress" ? { final: false } : {}),
           ...(mode === "dry run" ? { dryRun: true } : {}),
@@ -159,16 +229,16 @@ describe("registered message action source completion", () => {
         if (mode !== "dry run") {
           expect(handleAction.mock.calls[0]?.[0]).toMatchObject({
             accountId: "default",
-            params: { to: mode === "other destination" ? "C999" : "C123" },
+            params: { to: target === "C999" ? "C999" : "C123" },
           });
         }
         if (result) {
-          const delivery = readEmbeddedMessageDeliveryFact(
+          const deliveryFact = readEmbeddedMessageDeliveryFact(
             (result.details as { messageDelivery?: unknown }).messageDelivery,
           );
-          expect(delivery?.sourceReplyDelivered).toBe(expected);
+          expect(deliveryFact?.sourceReplyDelivered).toBe(expected);
           if (expected) {
-            expect(delivery).toMatchObject({
+            expect(deliveryFact).toMatchObject({
               status: "settled",
               primaryPlatformMessageId: "native-message-1",
               partialDelivery: false,

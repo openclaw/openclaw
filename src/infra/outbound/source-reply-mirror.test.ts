@@ -117,6 +117,20 @@ describe("reconcileTerminalSourceReplyDelivery", () => {
     expect(receiptMocks.cancel).not.toHaveBeenCalled();
     expect(receiptMocks.complete).not.toHaveBeenCalled();
   });
+
+  it("does not settle or mirror a successful send delivered to another recipient", async () => {
+    const deliveredPayload = { ok: true, messageId: "sent-elsewhere", channelId: "other-chat" };
+
+    await expect(
+      reconcileTerminalSourceReplyDelivery({ deliveredPayload, mirror, receipt }),
+    ).resolves.toBe("not-source");
+    expect(receiptMocks.complete).not.toHaveBeenCalled();
+    expect(receiptMocks.cancel).not.toHaveBeenCalled();
+    await expect(
+      mirrorDeliveredSourceReplyToTranscript({ ...mirror, deliveredPayload }),
+    ).resolves.toBe(false);
+    expect(transcriptMocks.append).not.toHaveBeenCalled();
+  });
 });
 
 describe("isDeliveredCurrentSourceReply", () => {
