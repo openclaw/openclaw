@@ -14,6 +14,7 @@ extension OpenClawChatViewModel {
     }
 
     func replaceMessages(_ messages: [OpenClawChatMessage]) {
+        let messages = self.narration.reconcile(messages)
         guard self.messages != messages else { return }
         self.messages = messages
         self.seedInputHistory(from: messages)
