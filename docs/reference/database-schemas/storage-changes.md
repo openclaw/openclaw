@@ -1976,6 +1976,13 @@ new canonical generation.
 
 ### Keep engine-specific capabilities owned
 
+The WAL checkpoint owner executes checkpoints for runtime maintenance, idle-reader
+inspection, Doctor compaction, and duplicate-agent recovery. Runtime maintenance
+retains its health observations and partial-checkpoint reporting; offline
+maintenance still refuses busy truncation before compaction or recovery proceeds.
+The read cache's version-gated `NOOP` probe remains a freshness observation.
+This ownership cut changes no schema, stored bytes, admission, or update behavior.
+
 SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
 databases, WAL maintenance, integrity checks, and backup operations remain
 SQLite capabilities. Keep their implementation behind the memory or database

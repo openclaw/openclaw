@@ -526,17 +526,11 @@ export function configureSqliteWalMaintenance(
   let splitBrainDetectionEnabled = Boolean(tripwireDatabasePath);
   let splitBrainDetectionWarningLogged = false;
   const checkpointOwner = createSqliteWalCheckpoint(
+    db,
     options,
     DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES,
   );
-  const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
-    try {
-      return checkpointOwner.record(mode, db.prepare(`PRAGMA wal_checkpoint(${mode});`).get());
-    } catch (error) {
-      checkpointOwner.recordError(error);
-      return false;
-    }
-  };
+  const runCheckpoint = checkpointOwner.checkpoint;
 
   const runMaintenance = (operation: () => boolean): boolean => {
     if (invalidated) {
@@ -657,12 +651,7 @@ export function configureSqliteWalMaintenance(
     },
     checkpoint,
     reclaimFreePages,
-    inspectIdle: () =>
-      runMaintenance(() =>
-        checkpointOwner.inspectIdle(db.prepare("PRAGMA wal_checkpoint(PASSIVE);").get()),
-      )
-        ? "healthy"
-        : "retire",
+    inspectIdle: () => (runMaintenance(checkpointOwner.inspectIdle) ? "healthy" : "retire"),
     close: (closeOptions) => {
       clearInterval(timer ?? undefined);
       timer = null;
