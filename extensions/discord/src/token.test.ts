@@ -103,6 +103,43 @@ describe("resolveDiscordToken", () => {
     expect(res.tokenStatus).toBe("available");
   });
 
+  it("preserves a leading-underscore account identity and uses its own token", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "base-token",
+          accounts: {
+            _prod: { token: "underscore-prod-token" },
+            prod: { token: "plain-prod-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveDiscordToken(cfg, { accountId: "_prod" });
+    expect(res.token).toBe("underscore-prod-token");
+    expect(res.source).toBe("config");
+    expect(res.tokenStatus).toBe("available");
+  });
+
+  it("does not collapse an underscore-prefixed account onto a distinct account", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "base-token",
+          accounts: {
+            _prod: { token: "underscore-prod-token" },
+            prod: { token: "plain-prod-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const underscore = resolveDiscordToken(cfg, { accountId: "_prod" });
+    const plain = resolveDiscordToken(cfg, { accountId: "prod" });
+    expect(underscore.token).toBe("underscore-prod-token");
+    expect(plain.token).toBe("plain-prod-token");
+    expect(underscore.token).not.toBe(plain.token);
+  });
+
   it("uses the active runtime snapshot when resolving a matching source config", () => {
     const sourceCfg = {
       channels: {
