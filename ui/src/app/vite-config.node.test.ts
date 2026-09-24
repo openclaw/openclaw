@@ -797,6 +797,9 @@ describe("Control UI Vite config", () => {
         expect(addWatchFile.mock.calls.map(([file]) => path.normalize(file))).toContain(
           path.join(repoRoot, "src/config/schema.hints.ts"),
         );
+        expect(addWatchFile.mock.calls.map(([file]) => path.normalize(file))).not.toContain(
+          path.normalize(path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl")),
+        );
       },
     );
   });

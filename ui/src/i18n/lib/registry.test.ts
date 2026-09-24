@@ -55,6 +55,8 @@ describe("resolveNavigatorLocale", () => {
     ["nl-NL", "nl"],
     ["fa-IR", "fa"],
     ["ru-RU", "ru"],
+    ["gl", "gl"],
+    ["gl-ES", "gl"],
     ["sv-SE", "en"],
     ["", "en"],
   ] as const)("maps browser language %s to %s", (browserLanguage, expectedLocale) => {
@@ -65,7 +67,7 @@ describe("resolveNavigatorLocale", () => {
 describe("lazy locale registry", () => {
   it("keeps English as the default and materializes every registered foreign catalog", async () => {
     expect(DEFAULT_LOCALE).toBe("en");
-    expect(SUPPORTED_LOCALES).toHaveLength(21);
+    expect(SUPPORTED_LOCALES).toHaveLength(22);
     expect(await loadLazyLocaleTranslation("en")).toBeNull();
 
     const catalogs = await Promise.all(

@@ -225,6 +225,8 @@ function prettyLanguageLabel(locale: string): string {
       return "German";
     case "es":
       return "Spanish";
+    case "gl":
+      return "Galician";
     default:
       return locale;
   }

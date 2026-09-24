@@ -26,8 +26,8 @@ Edit English docs in `openclaw/openclaw` and push to `main`. The sync, translati
 
 ## Locale visibility
 
-- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `hi`, `ar`, `it`, `vi`, `nl`, `fa`, `ru`, `tr`, `uk`, `id`, `pl`, and `th`.
-- Docs translation workflows generate the same non-English locale set in `openclaw/docs`.
+- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `gl`, `hi`, `ar`, `it`, `vi`, `nl`, `fa`, `ru`, `tr`, `uk`, `id`, `pl`, and `th`.
+- Docs translation workflows generate non-English docs in `openclaw/docs` for the same locale set, except Galician (`gl`), which is currently supported in the Control UI only.
 - The Mintlify docs language picker can expose only the locales accepted by Mintlify `navigation.languages`. As of 2026-09-06, the publish configuration includes Russian (`ru`) and Hindi (`hi`).
 - Do not treat locale visibility in generated `docs/docs.json` as proof that translation artifacts exist. Verify each generated locale folder and its translation memory in `openclaw/docs`.
 

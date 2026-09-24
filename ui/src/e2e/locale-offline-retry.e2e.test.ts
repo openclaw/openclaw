@@ -82,7 +82,7 @@ suite.define(() => {
         await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe(locale);
         expect(requests.get(locale)).toBe(1);
       }
-      expect(requests.size).toBe(20);
+      expect(requests.size).toBe(21);
     } finally {
       await context.close();
     }
