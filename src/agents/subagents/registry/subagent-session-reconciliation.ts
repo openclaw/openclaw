@@ -25,7 +25,7 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { hasSubagentSessionOwnerInDatabase } from "./subagent-registry.store.sqlite.js";
+import { hasSubagentSessionOwnerInDatabase } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 

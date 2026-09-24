@@ -14,6 +14,7 @@ import {
 import { closedObject } from "./closed-object.js";
 import { ModelAuthProfileIdSchema } from "./model-account-selection.js";
 import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
+import { UserChannelIdentitySchema } from "./user-channel-identity.js";
 import { USER_PREFS_ENTRY_LIMIT } from "./user-profile-constants.js";
 import { WizardAnswerSchema, WizardStepSchema } from "./wizard.js";
 
@@ -21,6 +22,8 @@ export {
   ChatAccountSelectionSchema,
   type ChatAccountSelection,
 } from "./model-account-selection.js";
+
+export { UserChannelIdentitySchema } from "./user-channel-identity.js";
 
 export {
   GATEWAY_OWNER_PROFILE_ID,
@@ -100,16 +103,6 @@ export const UsersLinkEmailParamsSchema = closedObject({
 });
 export const UsersLinkEmailResultSchema = closedObject({ profile: UserProfileSchema });
 
-const ChannelIdentityPartSchema = Type.String({
-  minLength: 1,
-  maxLength: 512,
-  pattern: "^\\S(?:.*\\S)?$",
-});
-export const UserChannelIdentitySchema = closedObject({
-  channelId: ChannelIdentityPartSchema,
-  accountId: ChannelIdentityPartSchema,
-  senderId: ChannelIdentityPartSchema,
-});
 export const UserChannelIdentityLinkSchema = closedObject({
   profileId: UserProfileIdSchema,
   identity: UserChannelIdentitySchema,

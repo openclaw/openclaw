@@ -14,11 +14,9 @@ import {
   readSandboxRuntimeIdsInDatabase,
 } from "../agents/sandbox/registry.kernel.js";
 import {
-  loadSubagentRunsByRunIdsFromSqlite,
-  loadSubagentRunsForChildSessionFromSqlite,
-  loadSubagentRunsForSessionFromSqlite,
-  loadSubagentSessionListRunsFromSqlite,
-} from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+  loadSubagentRunsInDatabase,
+  loadSubagentSessionListRunsInDatabase,
+} from "../agents/subagents/registry/subagent-registry.store.read.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
@@ -152,7 +150,7 @@ serveOwnedWorkerTasks(
               const result = readOpenClawStateReadOnlyLocation(
                 ({ db }) => {
                   sourceAdmitted = true;
-                  return loadSubagentSessionListRunsFromSqlite(undefined, { db });
+                  return loadSubagentSessionListRunsInDatabase({ db });
                 },
                 input.databasePath,
                 input.location,
@@ -192,10 +190,12 @@ serveOwnedWorkerTasks(
                   };
                 }
                 if (command.type === "subagents.runs") {
-                  const rows =
+                  const rows = loadSubagentRunsInDatabase(
+                    { db },
                     command.scope.kind === "session"
-                      ? loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db })
-                      : loadSubagentRunsByRunIdsFromSqlite(command.scope.runIds, { db });
+                      ? command.scope
+                      : { kind: "runs", runIds: command.scope.runIds },
+                  );
                   return {
                     ok: true,
                     type: command.type,
@@ -302,9 +302,10 @@ serveOwnedWorkerTasks(
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    runs: loadSubagentRunsForChildSessionFromSqlite(command.childSessionKey, {
-                      db,
-                    }),
+                    runs: loadSubagentRunsInDatabase(
+                      { db },
+                      { kind: "child", sessionKey: command.childSessionKey },
+                    ),
                   };
                 }
                 if (command.type === "pluginBlob.lookup") {

@@ -206,8 +206,23 @@ export function openOpenClawAgentDatabase(
 }
 
 export type { OpenClawAgentDatabaseWriteAdmission } from "./openclaw-agent-db-admission.js";
-export const { withOpenClawAgentDatabaseAsync, withOpenClawAgentDatabaseAdmission } =
-  createOpenClawAgentDatabaseAdmissionOwner(openOpenClawAgentDatabaseSteps);
+type AdmissionOwner = ReturnType<typeof createOpenClawAgentDatabaseAdmissionOwner>;
+let admissionOwner: AdmissionOwner | undefined;
+
+// Bind the writable opener only when an admission operation is used, so read-only
+// consumers can omit it. Only the closure bundle is shared, never operation inputs.
+function getAdmissionOwner(): AdmissionOwner {
+  return (admissionOwner ??= createOpenClawAgentDatabaseAdmissionOwner(
+    openOpenClawAgentDatabaseSteps,
+  ));
+}
+
+export const withOpenClawAgentDatabaseAsync: AdmissionOwner["withOpenClawAgentDatabaseAsync"] = (
+  ...args
+) => getAdmissionOwner().withOpenClawAgentDatabaseAsync(...args);
+
+export const withOpenClawAgentDatabaseAdmission: AdmissionOwner["withOpenClawAgentDatabaseAdmission"] =
+  (...args) => getAdmissionOwner().withOpenClawAgentDatabaseAdmission(...args);
 
 function* openOpenClawAgentDatabaseSteps(
   options: OpenClawAgentDatabaseOptions,

@@ -8,7 +8,7 @@ import type {
 import {
   pageOperatorApprovalReceiptsForRunInDatabase,
   summarizeOperatorApprovalReceiptsForRunInDatabase,
-} from "../gateway/operator-approval-store.js";
+} from "../gateway/operator-approval-store.receipts.js";
 import { parsePositiveAuditCursor } from "./audit-cursor.js";
 import {
   pageExecutionDecisionFactsForContextInDatabase,

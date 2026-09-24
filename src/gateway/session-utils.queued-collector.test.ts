@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as subagentKill from "../agents/subagents/registry/subagent-control-kill.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
-import { loadSubagentSessionListRunsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { loadSubagentSessionListRunsInDatabase } from "../agents/subagents/registry/subagent-registry.store.read.js";
 import {
   claimSubagentRunKill,
   registerSubagentRun,
@@ -25,6 +25,7 @@ import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-sch
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { handleChatSend } from "./server-methods/chat-send-handler.js";
@@ -331,7 +332,7 @@ describe("queued collector session projection", () => {
     expect(await exactChild()).toMatchObject({ status: "queued", hasActiveSubagentRun: true });
     expect((await exactParent())?.hasActiveSubagentRun).toBe(true);
     const compact = expectDefined(
-      loadSubagentSessionListRunsFromSqlite().get(entry.runId),
+      loadSubagentSessionListRunsInDatabase(openOpenClawStateDatabase()).get(entry.runId),
       "compact queued record",
     );
     expect(compact.execution).toEqual({ status: "queued" });

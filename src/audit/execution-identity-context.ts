@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
 import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
-import { hasOperatorApprovalReceiptsForRunInDatabase } from "../gateway/operator-approval-store.js";
+import { hasOperatorApprovalReceiptsForRunInDatabase } from "../gateway/operator-approval-store.receipts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,

@@ -58,9 +58,9 @@ import {
   upsertSubagentRunRowInDatabase,
 } from "../registry/subagent-registry.store.kernel.js";
 import {
-  loadSubagentRunsForChildSessionFromSqlite,
+  loadSubagentRunsInDatabase,
   readSubagentRun,
-} from "../registry/subagent-registry.store.sqlite.js";
+} from "../registry/subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 
@@ -272,9 +272,10 @@ function ownsTasklessCompletion(
     ownerPayload(subagent) === ownerPayload(expected) &&
     !findTaskRecordByRunIdForViewInDatabase(database.db, subagent.taskRunId ?? subagent.runId) &&
     ![...subagentRuns.values()].some(newerSibling) &&
-    !loadSubagentRunsForChildSessionFromSqlite(subagent.childSessionKey, database).some(
-      newerSibling,
-    )
+    !loadSubagentRunsInDatabase(database, {
+      kind: "child",
+      sessionKey: subagent.childSessionKey,
+    }).some(newerSibling)
   );
 }
 

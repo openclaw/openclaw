@@ -9,7 +9,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
-import { loadSubagentRunsByRunIdsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.read.js";
 import {
   listSubagentRunsForRequester,
   registerSubagentRun,
@@ -22,6 +22,7 @@ import { resolvePhysicalSessionStorePath } from "../config/sessions/session-stor
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -231,14 +232,14 @@ describe("Completed child results on a real parent-agent turn", () => {
           };
           // Publish retained custody through the owner without registering an active child.
           persistSubagentRunsToDiskOrThrow(new Map([[retained.runId, retained]]), [retained.runId]);
-          const before = loadSubagentRunsByRunIdsFromSqlite([retained.runId]);
+          const before = readSubagentRun(openOpenClawStateDatabase(), retained.runId);
           const cursor = requests.length;
           await runParentAgentTurn(gateway.client, "Continue using any outstanding child result.");
           const parentRequest = requests.slice(cursor).join("\n");
           expect(parentRequest).toContain("## Child results awaiting delivery");
           expect(parentRequest).toContain(result);
           expect(parentRequest).not.toContain("## Recently Completed Subagents");
-          expect(loadSubagentRunsByRunIdsFromSqlite([retained.runId])).toEqual(before);
+          expect(readSubagentRun(openOpenClawStateDatabase(), retained.runId)).toEqual(before);
           const unrelatedCursor = requests.length;
           await runParentAgentTurn(
             gateway.client,

@@ -56,10 +56,13 @@ vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRunsForControllerFromSqlite: mocks.loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
   loadSubagentMaintenanceRunsFromSqlite: mocks.loadSubagentMaintenanceRunsFromSqlite,
-  loadSubagentSessionListRunsFromSqlite: mocks.nativeCompactRead,
   loadSubagentRunsForSessionsFromSqlite: mocks.loadSubagentRunsForSessionsFromSqlite,
   saveSubagentRegistryChangesToSqlite: mocks.saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,
+}));
+
+vi.mock("./subagent-registry.store.read.js", () => ({
+  loadSubagentSessionListRunsInDatabase: mocks.nativeCompactRead,
 }));
 
 function createRun(runId: string): SubagentRunRecord {

@@ -37,6 +37,7 @@ import {
   withSubagentRunReadSnapshot,
   prepareSubagentRunsSnapshotForRunIds,
 } from "./subagent-registry-state.js";
+import * as reads from "./subagent-registry.store.read.js";
 import * as store from "./subagent-registry.store.sqlite.js";
 
 let state: OpenClawTestState;
@@ -147,7 +148,7 @@ it("prepares cold compact facts through the real read worker and keeps caller Ma
   const retained = runs("retained");
   retained.get("one")!.taskRunId = "logical-task";
   store.saveSubagentRegistryToSqlite(retained);
-  const nativeLoad = vi.spyOn(store, "loadSubagentSessionListRunsFromSqlite");
+  const nativeLoad = vi.spyOn(reads, "loadSubagentSessionListRunsInDatabase");
   await prepareSubagentSessionListReadCache();
   const first = getSubagentSessionListRunsSnapshotForRead(new Map());
   expect(first.get("one")?.model).toBe("retained");
@@ -605,7 +606,7 @@ it("keeps published compact facts through a temporary writer scope without reloa
   persistSubagentRunsToDiskOrThrow(original);
   const initial = getSubagentSessionListRunsSnapshotForRead(new Map());
   const admission = captureOpenClawStateWorkerContext().admission;
-  const load = vi.spyOn(store, "loadSubagentSessionListRunsFromSqlite");
+  const load = vi.spyOn(reads, "loadSubagentSessionListRunsInDatabase");
   const observed: Array<Array<[string, string | undefined]>> = [];
   const stop = onSubagentRegistryPersisted(() => {
     observed.push(
@@ -691,7 +692,7 @@ it.each(["best effort", "strict refusal", "strict commit", "atomic commit"])(
         expect(publish).not.toThrow();
       }
       const committed = mode === "strict commit" || mode === "atomic commit";
-      expect(store.readSubagentRun(database, "one")?.model).toBe(committed ? "after" : "before");
+      expect(reads.readSubagentRun(database, "one")?.model).toBe(committed ? "after" : "before");
       const refused = mode === "strict refusal";
       expect(
         getSubagentRunsSnapshotForChildSession(new Map(), entry.childSessionKey).get("one"),

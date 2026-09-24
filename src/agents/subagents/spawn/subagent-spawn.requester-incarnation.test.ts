@@ -25,12 +25,13 @@ import {
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRunsByRunIdsFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { readSubagentRun } from "../registry/subagent-registry.store.read.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
@@ -189,7 +190,7 @@ it.each([
         throw new Error("Expected an accepted child run");
       }
       await settleSubagentRegistryPersistenceWork();
-      const [restored] = loadSubagentRunsByRunIdsFromSqlite([runId]);
+      const restored = readSubagentRun(openOpenClawStateDatabase(), runId);
       expect(restored).toMatchObject({
         runId,
         requesterSessionKey,

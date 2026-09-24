@@ -24,7 +24,7 @@ import {
   deleteSubagentRunRowInDatabase,
   upsertSubagentRunRowInDatabase,
 } from "./subagent-registry.store.kernel.js";
-import { readSubagentRun } from "./subagent-registry.store.sqlite.js";
+import { readSubagentRun } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function assertReplacementCorrelation(params: {

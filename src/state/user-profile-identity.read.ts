@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
-import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";

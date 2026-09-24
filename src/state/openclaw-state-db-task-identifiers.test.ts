@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
-import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { createStateSchemaMigrationStep } from "../infra/state-migrations.state-schema.js";
 import { readTaskRecord } from "../tasks/task-registry.store.kernel.js";

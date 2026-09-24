@@ -1,9 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Check } from "typebox/value";
-import {
-  GATEWAY_OWNER_PROFILE_ID,
-  UserChannelIdentitySchema,
-} from "../../packages/gateway-protocol/src/schema/users.js";
+import { UserChannelIdentitySchema } from "../../packages/gateway-protocol/src/schema/user-channel-identity.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
