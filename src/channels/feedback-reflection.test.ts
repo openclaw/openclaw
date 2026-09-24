@@ -88,7 +88,7 @@ describe("channel feedback reflection", () => {
         route: { agentId: "main", sessionKey: params.sessionKey },
         ctxPayload: expect.objectContaining({
           ChatType: "group",
-          ConversationRouteContextObserved: false,
+          ConversationRouteContextObserved: undefined,
         }),
       }),
     );
