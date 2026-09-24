@@ -14,6 +14,19 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+## Shared output projection
+
+Codex uses the shared native harness projection owners for bounded tool output,
+attributed assistant and tool messages, and presentation callback settlement.
+The shared settlement owner preserves callback order and joins pending
+presentation work before terminal delivery. Projection draining stays under the
+attempt cancellation and settlement deadline.
+
+The Codex adapter retains native item identities, protocol parsing, approvals,
+hook handling, and transcript provenance. Constructed messages are persisted
+through the existing scoped transcript APIs; the shared projection helpers do
+not own storage.
+
 During `initialize`, OpenClaw uses `capabilities.optOutNotificationMethods` to
 suppress unused app-server notifications before they reach the transport and JSON
 decoder. This includes cumulative turn diffs; file-change items still carry the
