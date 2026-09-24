@@ -81,7 +81,8 @@ describe("exact SQLite session batches", () => {
         const statement = prepare(sql);
         if (
           selectedInTransaction === undefined &&
-          /^select \* from "session_nodes" where "session_key" (?:=|in) /i.test(sql)
+          /from "session_nodes"/i.test(sql) &&
+          /where (?:"session_nodes"\.)?"session_key" (?:=|in) /i.test(sql)
         ) {
           selectedInTransaction = database.db.isTransaction;
           external
@@ -96,10 +97,10 @@ describe("exact SQLite session batches", () => {
         return statement;
       });
       try {
-        // Exact target selection is its first read; BEGIN DEFERRED alone does not pin a snapshot.
+        // Single-row validation shares the selected statement; only batch admission pins earlier.
         const pinnedBeforeSelection = reader === "batch" && admission !== "warm";
         expect(read()?.entry.label).toBe(pinnedBeforeSelection ? "before" : "after");
-        expect(selectedInTransaction).toBe(reader === "single" || pinnedBeforeSelection);
+        expect(selectedInTransaction).toBe(pinnedBeforeSelection);
         expect(database.db.isTransaction).toBe(false);
         expect(read()?.entry.label).toBe("after");
       } finally {

@@ -141,9 +141,6 @@ it("reads row metadata, board presence, and cold summary position from one snaps
               "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'after') WHERE session_key = ?",
             )
             .run(sessionKey);
-          peer
-            .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-            .run(sessionKey);
           peer.prepare("DELETE FROM board_tabs WHERE session_key = ?").run(sessionKey);
           peer
             .prepare(

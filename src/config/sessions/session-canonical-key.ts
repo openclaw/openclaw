@@ -471,7 +471,7 @@ export function assertCanonicalSqliteSessionRowsCurrent(
       sqliteStringSet(sessionKeys),
     ),
   )) {
-    validateCanonicalSessionRow(row);
+    validateCanonicalSessionRow(row, "read");
   }
 }
 

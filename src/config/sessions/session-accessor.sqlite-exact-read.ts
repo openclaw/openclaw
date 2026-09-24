@@ -6,10 +6,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
-import {
-  assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
-} from "../../infra/sqlite-transaction.js";
+import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -50,7 +47,6 @@ import type {
 } from "./session-accessor.types.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
-  assertCanonicalSqliteSessionRowsCurrent,
   readWithCanonicalSessionAdmission,
   readWithCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
@@ -356,24 +352,21 @@ export function loadExactSessionEntryCandidates(
           ...(scope.env ? { env: scope.env } : {}),
         }
       : toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }));
-  // Alias candidates share a store; fresh handles must not rescan canonical state per key.
-  const read = (database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">) =>
-    runSqliteDeferredTransactionSync(database.db, () => {
-      const physical = readOpenClawAgentDatabaseIdentity(database);
-      if (scope.expectedSource) {
-        assertCapturedSessionEntryReadSource(scope.expectedSource, database);
-      }
-      const entries = sessionKeys.flatMap((key) => {
-        const entry = readExactSessionEntryRow(database, key, scope.projection)?.entry;
-        return entry ? [{ sessionKey: key, entry }] : [];
-      });
-      assertCanonicalSqliteSessionRowsCurrent(database, sessionKeys);
-      scope.onReadSource?.(
-        { agentId: database.agentId, path: database.path },
-        { identity: physical.identity, birthtime: physical.birthtime },
-      );
-      return entries;
+  const read = (database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">) => {
+    const physical = readOpenClawAgentDatabaseIdentity(database);
+    if (scope.expectedSource) {
+      assertCapturedSessionEntryReadSource(scope.expectedSource, database);
+    }
+    const entries = sessionKeys.flatMap((key) => {
+      const entry = readExactSessionEntryRow(database, key, scope.projection, "canonical")?.entry;
+      return entry ? [{ sessionKey: key, entry }] : [];
     });
+    scope.onReadSource?.(
+      { agentId: database.agentId, path: database.path },
+      { identity: physical.identity, birthtime: physical.birthtime },
+    );
+    return entries;
+  };
   if (!scope.readOnly) {
     return read(openOpenClawAgentDatabase(options));
   }
