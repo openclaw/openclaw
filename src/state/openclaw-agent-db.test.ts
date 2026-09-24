@@ -24,7 +24,6 @@ import {
   updateAgentDeletionJournalDatabasePaths,
   updateAgentDeletionJournalCleanupPaths,
 } from "./agent-deletion-journal.js";
-import * as agentDeletionJournal from "./agent-deletion-journal.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
@@ -32,8 +31,6 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
-  createOpenClawAgentDatabasePathMatcher,
-  isSameOpenClawAgentDatabasePath,
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabases,
@@ -58,7 +55,11 @@ import {
   settleOpenClawAgentDatabaseWorkerClose,
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
+  isSameOpenClawAgentDatabasePath,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { materializeV21WorkerAgentDatabase } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -975,110 +976,6 @@ describe("openclaw agent database", () => {
     expect(() => assertNoOpenClawAgentDatabaseLeases("deleted", { env })).not.toThrow();
     removeAgentDeletionJournal(deletion.agentId, deletion.operationId, { env });
   });
-
-  describe.each(["registration", "lease claim", "lease drain"] as const)(
-    "deletion journal fencing at %s",
-    (caller) => {
-      it.each([
-        {
-          column: "database_paths_json",
-          value: "[1]",
-          afterPrepare: false,
-          error: "Invalid agent deletion database path journal.",
-        },
-        {
-          column: "cleanup_paths_json",
-          value: "[1]",
-          afterPrepare: false,
-          error: "Invalid agent deletion cleanup path journal.",
-        },
-        {
-          column: "operation_id",
-          value: "replacement",
-          afterPrepare: true,
-          error: "deletion journal changed",
-        },
-        {
-          column: "cleanup_completed",
-          value: 1,
-          afterPrepare: true,
-          error: "deletion journal changed",
-        },
-      ])("refuses a changed $column (after preparation: $afterPrepare)", (change) => {
-        const stateDir = createTempStateDir();
-        const env = { OPENCLAW_STATE_DIR: stateDir };
-        const claim = { agentId: "survivor", path: path.join(stateDir, "survivor.sqlite"), env };
-        const leaseId =
-          caller === "lease drain" ? claimOpenClawAgentDatabaseLease(claim) : undefined;
-        const deletion = beginAgentDeletionJournal(
-          {
-            operationId: "deletion",
-            deleteFiles: true,
-            agentId: "deleted",
-            agentDir: path.join(stateDir, "agents", "deleted", "agent"),
-            workspaceDir: path.join(stateDir, "workspace-deleted"),
-            sessionsDir: path.join(stateDir, "sessions-deleted"),
-          },
-          { env },
-        );
-        const { DatabaseSync } = requireNodeSqlite();
-        const writer = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
-        const registrations = writer.prepare(
-          "SELECT * FROM agent_databases ORDER BY agent_id, path",
-        );
-        const leases = writer.prepare("SELECT * FROM agent_database_leases ORDER BY lease_id");
-        const beforeRegistrations = registrations.all();
-        const beforeLeases = leases.all();
-        const mutate = () =>
-          writer
-            .prepare(`UPDATE agent_deletion_journal SET ${change.column} = ? WHERE agent_id = ?`)
-            .run(change.value, deletion.agentId);
-        const prepare = agentDeletionJournal.prepareAgentDeletionPathFence;
-        const preparation = change.afterPrepare
-          ? vi
-              .spyOn(agentDeletionJournal, "prepareAgentDeletionPathFence")
-              .mockImplementationOnce((...args) => {
-                const fence = prepare(...args);
-                // Commit through another connection after preparation releases its transaction.
-                mutate();
-                return fence;
-              })
-          : undefined;
-        try {
-          if (!change.afterPrepare) {
-            mutate();
-          }
-          expect(() => {
-            if (caller === "registration") {
-              registerOpenClawAgentDatabase(claim);
-            } else if (caller === "lease claim") {
-              claimOpenClawAgentDatabaseLease(claim);
-            } else {
-              assertNoOpenClawAgentDatabaseLeases(deletion.agentId, { env });
-            }
-          }).toThrow(change.error);
-          expect(registrations.all()).toEqual(beforeRegistrations);
-          expect(leases.all()).toEqual(beforeLeases);
-          expect(
-            writer
-              .prepare(`SELECT ${change.column} FROM agent_deletion_journal WHERE agent_id = ?`)
-              .get(deletion.agentId),
-          ).toEqual({ [change.column]: change.value });
-        } finally {
-          preparation?.mockRestore();
-          writer.close();
-          if (leaseId) {
-            releaseOpenClawAgentDatabaseLease(leaseId, { env });
-          }
-          removeAgentDeletionJournal(
-            deletion.agentId,
-            change.column === "operation_id" ? "replacement" : deletion.operationId,
-            { env },
-          );
-        }
-      });
-    },
-  );
 
   it("resolves under the per-agent state directory", () => {
     const stateDir = createTempStateDir();
@@ -2528,26 +2425,6 @@ describe("openclaw agent database", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "retries path resolution failures within one matcher",
-    () => {
-      const stateDir = fs.realpathSync(createTempStateDir());
-      const loopPath = path.join(stateDir, "loop.sqlite");
-      fs.symlinkSync("loop.sqlite", loopPath);
-      expect(() => isSameOpenClawAgentDatabasePath(loopPath, loopPath)).toThrow(
-        expect.objectContaining({ code: "ELOOP" }),
-      );
-      const matchesPath = createOpenClawAgentDatabasePathMatcher();
-      expect(() => matchesPath(loopPath, loopPath)).toThrow(
-        expect.objectContaining({ code: "ELOOP" }),
-      );
-
-      fs.unlinkSync(loopPath);
-      fs.writeFileSync(loopPath, "recovered");
-      expect(matchesPath(loopPath, loopPath)).toBe(true);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
     "resolves registered owners through symlinked database paths",
     () => {
       const stateDir = fs.realpathSync(createTempStateDir());
@@ -3475,6 +3352,7 @@ describe("openclaw agent database", () => {
 
   it("serializes concurrent ownership claims for one unowned database", async () => {
     const stateDir = createTempStateDir();
+    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
     const databasePath = path.join(stateDir, "relocated", "shared.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     const { DatabaseSync } = requireNodeSqlite();
@@ -3484,12 +3362,15 @@ describe("openclaw agent database", () => {
       launchAgentSchemaOpener({ agentId: "worker-a", databasePath, stateDir }),
       launchAgentSchemaOpener({ agentId: "worker-b", databasePath, stateDir }),
     ];
+    const completions = Promise.allSettled(
+      openers.flatMap(({ ready, beginAttempt, result }) => [ready, beginAttempt, result]),
+    );
     try {
       await Promise.all(openers.map((opener) => opener.ready));
       for (const opener of openers) {
         opener.child.stdin.end("go\n");
       }
-      await Promise.all(openers.map((opener) => opener.beginAttempt));
+      await Promise.race(openers.map((opener) => opener.beginAttempt));
       lockDb.exec("COMMIT;");
       lockDb.close();
 
@@ -3514,9 +3395,6 @@ describe("openclaw agent database", () => {
       ]);
     } finally {
       if (lockDb.isOpen) {
-        try {
-          lockDb.exec("ROLLBACK;");
-        } catch {}
         lockDb.close();
       }
       for (const opener of openers) {
@@ -3524,11 +3402,14 @@ describe("openclaw agent database", () => {
           opener.child.kill();
         }
       }
+      await completions;
     }
   });
 
   it("rechecks schema version after waiting for a concurrent writer", async () => {
     const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const state = openOpenClawStateDatabase({ env });
     const databasePath = path.join(stateDir, "relocated", "future.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     const { DatabaseSync } = requireNodeSqlite();
@@ -3552,21 +3433,17 @@ describe("openclaw agent database", () => {
         ok: false,
         error: expect.stringContaining(`newer schema version ${futureVersion}`),
       });
-      const db = new DatabaseSync(databasePath, { readOnly: true });
-      try {
+      {
+        using db = new DatabaseSync(databasePath, { readOnly: true });
         expect(readSqliteNumberPragma(db, "user_version")).toBe(futureVersion);
         expect(
           db
             .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'")
             .get(),
         ).toBeUndefined();
-      } finally {
-        db.close();
       }
-      expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
-      expect(
-        listOpenClawRegisteredAgentDatabases({ env: { OPENCLAW_STATE_DIR: stateDir } }),
-      ).toEqual([]);
+      expect(state.db.prepare("SELECT * FROM agent_deletion_journal").all()).toEqual([]);
+      expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
     } finally {
       if (lockDb.isOpen) {
         try {

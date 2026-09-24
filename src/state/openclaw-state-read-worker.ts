@@ -440,7 +440,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
 
 function requestBytes(request: OpenClawStateReadRequest): number {
   return [
-    ...Object.values(request.context.environment),
+    ...Object.entries(request.context.environment).flatMap(([key, value]) => [key, value]),
     request.context.coordinatorRuntime.directory,
     request.context.existingSchemaPath,
     request.databasePath,

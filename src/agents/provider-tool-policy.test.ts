@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  isCanonicalToolProviderPolicyKey,
   normalizeToolProviderPolicyKey,
   resolveProviderToolPolicy,
   resolveProviderToolPolicyEntry,
@@ -9,21 +8,23 @@ import {
 describe("provider tool policy", () => {
   it("normalizes provider and model keys", () => {
     expect(normalizeToolProviderPolicyKey(" OpenAI/GPT-5 ")).toBe("openai/gpt-5");
-    expect(isCanonicalToolProviderPolicyKey("openai/gpt-5")).toBe(true);
-    expect(isCanonicalToolProviderPolicyKey("openai/")).toBe(false);
+    expect(normalizeToolProviderPolicyKey("openai/")).toBe("openai");
   });
 
-  it("prefers canonical entries over aliases", () => {
+  it.each([
+    { alias: "amazon-bedrock", canonical: "bedrock" },
+    { alias: "openai/", canonical: "openai" },
+  ])("prefers $canonical over $alias", ({ alias, canonical }) => {
     const entry = resolveProviderToolPolicyEntry({
       byProvider: {
-        "amazon-bedrock": { profile: "alias" },
-        bedrock: { profile: "canonical" },
+        [alias]: { profile: "alias" },
+        [canonical]: { profile: "canonical" },
       },
-      modelProvider: "bedrock",
+      modelProvider: canonical,
     });
 
     expect(entry).toEqual({
-      key: "bedrock",
+      key: canonical,
       policy: { profile: "canonical" },
     });
   });

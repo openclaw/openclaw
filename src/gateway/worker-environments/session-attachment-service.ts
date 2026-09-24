@@ -207,7 +207,10 @@ export function createWorkerEnvironmentSessionAttachments(
       }
       const environment = store.get(record.environmentId);
       return environment
-        ? { attachment: { ...record, ownerEpoch: environment.ownerEpoch }, environment }
+        ? {
+            attachment: { ...record, ownerEpoch: environment.ownerEpoch },
+            environment: options.environmentAccess.project(environment),
+          }
         : undefined;
     },
     assertSessionAttachment,
@@ -417,10 +420,11 @@ export function createWorkerEnvironmentSessionAttachments(
       authorize: () => void,
     ) {
       // Close the durable relation before waiting for provisioning or transport cleanup.
-      return close(request.sessionId, authorize, request.environmentId);
-    },
-    retireSessionAttachment(sessionId: string) {
-      return close(sessionId, () => {});
+      return options.trackOperation(
+        close(request.sessionId, authorize, request.environmentId).then((record) =>
+          record ? options.environmentAccess.project(record) : undefined,
+        ),
+      );
     },
     async reconcileSessionAttachments() {
       await store.ready();
@@ -479,7 +483,7 @@ export function createWorkerEnvironmentSessionAttachments(
         (mutation.previous.sessionId !== currentSessionId || mutation.kind === "reset")
       ) {
         void options
-          .trackOperation(attachments.retireSessionAttachment(mutation.previous.sessionId))
+          .trackOperation(close(mutation.previous.sessionId, () => {}))
           .catch((error: unknown) =>
             options.warn(
               `Conversation environment cleanup will retry during reconciliation: ${boundedWorkerError(error)}`,
@@ -487,24 +491,12 @@ export function createWorkerEnvironmentSessionAttachments(
           );
       }
     },
-    getSessionAttachmentStatus: (sessionId: string) => {
-      const result = attachments.getSessionAttachmentStatus(sessionId);
-      return result
-        ? { ...result, environment: options.environmentAccess.project(result.environment) }
-        : undefined;
-    },
     createSessionAttachment: (...args: Parameters<typeof attachments.createSessionAttachment>) =>
       options.trackOperation(
         attachments.createSessionAttachment(...args).then((result) => ({
           ...result,
           environment: options.environmentAccess.project(result.environment),
         })),
-      ),
-    destroySessionAttachment: (...args: Parameters<typeof attachments.destroySessionAttachment>) =>
-      options.trackOperation(
-        attachments
-          .destroySessionAttachment(...args)
-          .then((record) => (record ? options.environmentAccess.project(record) : undefined)),
       ),
     prepareAttachedComputer: options.prepareAttachedComputer,
     execSessionAttachment: async (

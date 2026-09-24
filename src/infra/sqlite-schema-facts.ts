@@ -24,6 +24,8 @@ type SchemaOwner = {
   revision: number;
   facts?: SqliteSchemaFacts;
   dataVersion?: number;
+  readDepth: number;
+  readDataVersion?: number;
   transactionalSchema: boolean;
   transactionalFacts: boolean;
   snapshot?: object;
@@ -238,6 +240,7 @@ function trackSchemaChanges(
   registerNodeSqliteDisposeCallback(database, () => {
     invalidate(owner);
     owner.dataVersion = undefined;
+    owner.readDataVersion = undefined;
     // Native close can still fail; transaction settlement retains pending DDL publication.
     if (owner.scope) {
       scopes.finalizer.unregister(owner);
@@ -248,10 +251,30 @@ function trackSchemaChanges(
   });
 }
 
-/** Foreign commits can occur within one JS turn; only SQLite owns snapshot visibility. */
+/** Share freshness only within this synchronous call stack, never across an await. */
+export function runSqliteReadOperationSync<T>(database: DatabaseSync, operation: () => T): T {
+  const owner = owners.get(database);
+  if (!owner?.admitted || owner.authorizerActive) {
+    return operation();
+  }
+  owner.readDepth += 1;
+  try {
+    return operation();
+  } finally {
+    owner.readDepth -= 1;
+    if (owner.readDepth === 0) {
+      owner.readDataVersion = undefined;
+    }
+  }
+}
+
+/** Foreign commits are observed on the next operation; SQLite owns snapshot visibility. */
 export function readSqliteCacheDataVersion(database: DatabaseSync): number {
   const tracked = owners.get(database);
   const owner = tracked?.admitted ? tracked : undefined;
+  if (owner && !owner.authorizerActive && owner.readDataVersion !== undefined) {
+    return owner.readDataVersion;
+  }
   const row = executeWithCachedStatement(database, "PRAGMA data_version", [], (statement) =>
     statement.get(),
   );
@@ -260,8 +283,25 @@ export function readSqliteCacheDataVersion(database: DatabaseSync): number {
   }
   if (owner) {
     if (owner.dataVersion !== row.data_version) {
-      invalidate(owner);
+      const facts = owner.facts;
+      // Data commits preserve schema-derived caches; compare both markers in one snapshot.
+      const unchanged =
+        facts &&
+        runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
+          const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
+            s.get(),
+          );
+          return (
+            facts.schemaVersion === schemaVersion && facts.userVersion === userVersion?.user_version
+          );
+        });
+      if (!unchanged) {
+        invalidate(owner);
+      }
       owner.dataVersion = row.data_version;
+    }
+    if (owner.readDepth > 0 && !owner.authorizerActive) {
+      owner.readDataVersion = row.data_version;
     }
   }
   return row.data_version;
@@ -273,6 +313,7 @@ export function trackSqliteSchema(database: DatabaseSync, native: NativeSqlite):
     const owner: SchemaOwner = {
       admitted: false,
       revision: 0,
+      readDepth: 0,
       transactionalSchema: false,
       transactionalFacts: false,
       authorizerActive: false,
@@ -292,7 +333,7 @@ export function admitSqliteSchema(database: DatabaseSync): void {
   getAdmittedSqliteSchemaFacts(database);
 }
 
-/** DDL and foreign commits revoke the admission; ordinary reads consume its recorded facts. */
+/** Schema changes revoke the admission; ordinary reads consume its recorded facts. */
 export function getAdmittedSqliteSchemaFacts(
   database: DatabaseSync,
 ): SqliteSchemaFacts | undefined {
@@ -323,11 +364,8 @@ export function getAdmittedSqliteSchemaFacts(
   if (!owner.facts) {
     owner.snapshot = snapshot;
     owner.transactionalFacts = database.isTransaction;
-    owner.facts = runSqlitePinnedReadSnapshotSync(database, () => {
+    owner.facts = runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
       const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
-        s.get(),
-      );
-      const schemaVersion = executeWithCachedStatement(database, "PRAGMA schema_version", [], (s) =>
         s.get(),
       );
       const tables = executeWithCachedStatement(
@@ -339,7 +377,7 @@ export function getAdmittedSqliteSchemaFacts(
       return {
         revision: owner.revision,
         userVersion: Number(userVersion?.user_version ?? 0),
-        schemaVersion: Number(schemaVersion?.schema_version),
+        schemaVersion,
         tables: new Set(tables.flatMap((row) => (typeof row.name === "string" ? [row.name] : []))),
       };
     });

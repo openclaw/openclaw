@@ -5,20 +5,28 @@ import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js"
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-read.js";
+import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
 
 const key = "agent:main:probe";
 
 export function measureSessionSchemaProbes(database: { agentId: string; db: DatabaseSync }) {
-  const read = () => {
-    const snapshot = readSessionEntryCache(database, { cache: true, projection: "list" });
-    const entry = readExactSessionEntryRowValidated(database, key, "list")?.entry;
-    if (snapshot.entries.get(key)?.sessionId !== "probe" || entry?.sessionId !== "probe") {
-      throw new Error("Session probe did not read the seeded session");
-    }
+  const reads = {
+    cache: () =>
+      readSessionEntryCache(database, { cache: true, projection: "list" }).entries.get(key)
+        ?.sessionId === "probe",
+    exact: () =>
+      readExactSessionEntryRowValidated(database, key, "list")?.entry.sessionId === "probe",
+    owner: () => hasSqliteSessionOwnerColumns(database.db),
   };
+  return Object.fromEntries(
+    Object.entries(reads).map(([name, read]) => [name, measureRead(database.db, read)]),
+  );
+}
+
+function measureRead(database: DatabaseSync, read: () => boolean) {
   read();
   read();
-  const admitted = getAdmittedSqliteSchemaFacts(database.db) !== undefined;
+  const admitted = getAdmittedSqliteSchemaFacts(database) !== undefined;
   const counts = { schemaVersion: 0, userVersion: 0, dataVersion: 0 };
   const prototype = requireNodeSqlite().StatementSync.prototype;
   const restores: Array<() => void> = [];
@@ -54,7 +62,9 @@ export function measureSessionSchemaProbes(database: { agentId: string; db: Data
   const start = performance.now();
   try {
     for (let i = 0; i < 100; i++) {
-      read();
+      if (!read()) {
+        throw new Error("Session probe did not read the seeded session");
+      }
     }
     return { admitted, ...counts, elapsedMs: performance.now() - start };
   } finally {

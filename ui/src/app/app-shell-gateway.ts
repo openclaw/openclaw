@@ -129,12 +129,7 @@ export class ShellGatewayOwner {
       scope,
       profileId: context.gateway.snapshot?.selfUser?.id,
       onThemeChanged: (theme) => context.theme.recordServerSelection(theme, scope),
-      onApplied: (patch) => {
-        if (patch.sidebarEntries !== undefined) {
-          context.navigation.update({ sidebarEntries: patch.sidebarEntries });
-        }
-        context.theme.refresh();
-      },
+      onApplied: () => context.theme.refresh(),
     });
     void this.refreshProfileAppearancePrefs(context).catch(() => undefined);
     const localePref = resolveServerUiPrefState(snapshot.config, "locale", scope);

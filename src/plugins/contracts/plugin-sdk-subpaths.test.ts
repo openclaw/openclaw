@@ -26,8 +26,9 @@ import type {
   ReplyDispatchBeforeDeliverOptions as ReplyRuntimeBeforeDeliverOptions,
   ReplyDispatcher as ReplyRuntimeDispatcher,
 } from "openclaw/plugin-sdk/reply-runtime";
-import ts from "typescript";
-import { beforeAll, describe, expect, expectTypeOf, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import {
   buildPluginSdkPackageExports,
   deprecatedPublicPluginSdkEntrypoints,
@@ -66,6 +67,8 @@ import type { OpenClawPluginApi } from "../types.js";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const PLUGIN_SDK_DIR = resolve(SRC_ROOT, "plugin-sdk");
 const sourceCache = new Map<string, string>();
 const repoTsFilesCache = new Map<string, string[]>();
@@ -240,13 +243,7 @@ function collectNamedExportsFromRepoFile(relativePath: string): string[] {
 }
 
 function createSourceFile(absolutePath: string): ts.SourceFile {
-  return ts.createSourceFile(
-    absolutePath,
-    readCachedSource(absolutePath),
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  return parser.parseSourceFile(absolutePath, readCachedSource(absolutePath));
 }
 
 function resolveTypeScriptModuleSource(fromFile: string, specifier: string): string | null {

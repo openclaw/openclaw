@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
@@ -15,6 +16,8 @@ const runEmbeddedAgent = vi.hoisted(() =>
     }>
   >(),
 );
+
+const resolveModelAsync = vi.hoisted(() => vi.fn());
 
 const { appendMessage, admitWrite, loadEntry, removeSession } = vi.hoisted(() => ({
   appendMessage: vi.fn<(message: unknown) => void>(),
@@ -43,6 +46,7 @@ const preparedTarget = {
 };
 
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
+vi.mock("../agents/embedded-agent-runner/model.js", () => ({ resolveModelAsync }));
 vi.mock("../agents/sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: admitWrite,
 }));
@@ -78,6 +82,9 @@ function createCompanion(cfg: OpenClawConfig = {}) {
   });
 }
 
+const imageBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=";
+
 const question = {
   agentId: "main",
   sessionKey: "agent:main:main",
@@ -88,11 +95,12 @@ const question = {
 describe("session companion embedded invocation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveModelAsync.mockReset().mockResolvedValue({ model: { input: ["text", "image"] } });
     appendMessage.mockReset();
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
     loadEntry.mockReturnValue({ entry: { ...preparedTarget.sessionEntry } });
     removeSession.mockResolvedValue(undefined);
-    runEmbeddedAgent.mockResolvedValue({
+    runEmbeddedAgent.mockReset().mockResolvedValue({
       meta: { durationMs: 1, finalAssistantVisibleText: "The session is reading a file." },
     });
   });
@@ -103,10 +111,7 @@ describe("session companion embedded invocation", () => {
       const companion = createCompanion();
       const respond = vi.fn();
       const data = Buffer.concat([
-        Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=",
-          "base64",
-        ),
+        Buffer.from(imageBase64, "base64"),
         Buffer.alloc(padding),
       ]).toString("base64");
       try {
@@ -138,6 +143,98 @@ describe("session companion embedded invocation", () => {
       }
     },
   );
+
+  it.each(["catalog-only", "dynamic-discovery"])(
+    "uses the already prepared image model for %s without an extra resolution",
+    async (route) => {
+      const model = resolveBundledStaticCatalogModel({
+        provider: "mistral",
+        modelId: "mistral-medium-3-5",
+        cfg: { plugins: { entries: { mistral: { enabled: true } } } },
+        includeRuntimeDiscovery: true,
+      });
+      expect(model?.input).toContain("image");
+      if (!model) {
+        throw new Error("Expected the real bundled Mistral catalog row");
+      }
+      if (route === "catalog-only") {
+        resolveModelAsync.mockResolvedValue({ error: "Unknown model without bundled fallback" });
+      } else {
+        resolveModelAsync.mockRejectedValue(new Error("Unexpected additional dynamic discovery"));
+      }
+      const modelIo = vi.fn();
+      runEmbeddedAgent.mockImplementationOnce(async (params) => {
+        params.assertModelInput?.(model);
+        modelIo();
+        return { meta: { durationMs: 1, finalAssistantVisibleText: "The image is visible." } };
+      });
+      const companion = createCompanion();
+      const respond = vi.fn();
+      try {
+        await sessionCompanionHandlers["sessions.companion.ask"]!({
+          params: {
+            sessionKey: question.sessionKey,
+            question: "What does this show?",
+            attachments: [{ mimeType: "image/png", content: imageBase64 }],
+          },
+          client: { connId: "catalog-image-connection" },
+          context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
+          respond,
+        } as never);
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ answer: "The image is visible." }),
+        );
+        expect(modelIo).toHaveBeenCalledOnce();
+        expect(resolveModelAsync).not.toHaveBeenCalled();
+      } finally {
+        companion.dispose();
+      }
+    },
+  );
+
+  it("rejects an image before model I/O when the selected Side chat model is text-only", async () => {
+    const modelIo = vi.fn();
+    runEmbeddedAgent.mockImplementationOnce(async (params) => {
+      params.assertModelInput?.({ input: ["text"] });
+      modelIo();
+      return {
+        meta: { durationMs: 1, finalAssistantVisibleText: "Must not answer an unseen image." },
+      };
+    });
+    const companion = createCompanion();
+    const respond = vi.fn();
+    try {
+      await sessionCompanionHandlers["sessions.companion.ask"]!({
+        params: {
+          sessionKey: question.sessionKey,
+          question: "What does this show?",
+          attachments: [{ mimeType: "image/png", content: imageBase64 }],
+        },
+        client: { connId: "image-connection" },
+        context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringContaining("does not support image input"),
+          details: { reason: "image-input-unsupported" },
+          retryable: false,
+        }),
+      );
+      expect(modelIo).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(resolveModelAsync).not.toHaveBeenCalled();
+      await expect(companion.ask(question)).resolves.toMatchObject({ answer: expect.any(String) });
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+      expect(runEmbeddedAgent.mock.calls[1]?.[0].assertModelInput).toBeUndefined();
+      expect(resolveModelAsync).not.toHaveBeenCalled();
+    } finally {
+      companion.dispose();
+    }
+  });
 
   it("keeps read-only tools direct when the selected agent model opts into Code Mode", async () => {
     const cfg: OpenClawConfig = {

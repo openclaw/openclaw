@@ -32,7 +32,6 @@ type DebounceBuffer<T> = {
   debounceMs: number;
   flushDeadlineMs: number;
   releaseReady: () => void;
-  readyReleased: boolean;
   task: Promise<void>;
 };
 
@@ -302,14 +301,6 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     };
   };
 
-  const releaseBuffer = (buffer: DebounceBuffer<T>) => {
-    if (buffer.readyReleased) {
-      return;
-    }
-    buffer.readyReleased = true;
-    buffer.releaseReady();
-  };
-
   const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
     if (buffers.get(key) === buffer) {
       buffers.delete(key);
@@ -320,7 +311,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     }
     // Reserve each key's execution slot as soon as the first buffered item
     // arrives, so later same-key work cannot overtake a timer-backed flush.
-    releaseBuffer(buffer);
+    buffer.releaseReady();
     await buffer.task;
   };
 
@@ -351,7 +342,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       const canceledItems = buffer.items;
       buffer.items = [];
       cancelItems(canceledItems);
-      releaseBuffer(buffer);
+      buffer.releaseReady();
     }
     pendingBuffers.delete(key);
     return true;
@@ -409,10 +400,8 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           });
           return;
         }
-        await runFlush([item]);
-      } else {
-        await runFlush([item]);
       }
+      await runFlush([item]);
       return;
     }
 
@@ -422,7 +411,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       scheduleFlush(key, existing);
       return;
     }
-    if (key && buffers.has(key)) {
+    if (buffers.has(key)) {
       // Seal a full batch without waiting for its turn; the new batch reserves
       // the following FIFO slot while later ingress remains free to append.
       void flushKey(key);
@@ -464,7 +453,6 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           ),
         ),
       releaseReady: reservedTask.release,
-      readyReleased: false,
       task: reservedTask.task,
     };
     buffers.set(key, buffer);

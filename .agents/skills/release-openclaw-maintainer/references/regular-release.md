@@ -7,11 +7,11 @@ approved version, cut SHA, release branch and product-complete Code SHA,
 including final notes when ready. Use [validation](validation.md) to select
 phase-specific gates and `$release-openclaw-ci` for dispatch/recovery.
 
-The default is the fast path in `docs/reference/RELEASING.md`: one cut named
+Follow the stable release process in `docs/reference/RELEASING.md`: one cut named
 exactly `release/YYYY.M.PATCH` (no `-cutN` or staging suffixes), version
 alignment plus changelog and contribution record in one commit so Code SHA =
 Release SHA, one Tooling SHA frozen at dispatch, and one validation parent.
-Record the cut time; stable should be on npm within 6 hours of it. Backports are
+Record the cut time and validation outcome. Backports are
 merged `main` PRs cherry-picked before dispatch (pure-data model/catalog
 additions and bundled-runtime bumps qualify); after dispatch admit only a fix
 for a required-lane defect. A second cut (re-basing the candidate on newer
@@ -32,26 +32,16 @@ Choose `npmDistTag=beta` for a beta or `route=prepared` for the prepared button.
 Keep that intended selection on later notes-only parents. This admits committed
 publication source, not registry eligibility or publication authority.
 
-Record and reuse the full trusted Tooling SHA. Beta-publish and default
-stable-publish use `release_profile=beta`, `run_release_soak=false`; require
-`npm-beta-v1` for a qualifying canonical beta target, otherwise retain
-historical full behavior. As each child completes, rerun its failed jobs at
-most twice (`gh run rerun <child> --failed`, then
-`pnpm frv continue --failed --run <parent>` once children are terminal to
-seal; `pnpm frv rerun-failed` replaces the raw rerun once #156305 lands)
-without waiting for the operator. A lane that fails twice on a test the candidate did
-not touch, with no product cause found in the candidate delta, is flaky:
-record it, fix `main` in parallel, never re-cut. Only a confirmed product
-defect that a required lane blocks on creates a new Code SHA: the
-update/install path (previous stable updates to the candidate, install smoke,
-pack budget, worker bundle), the bytes to publish, or another required gate
-proven by diagnosis. A flake, an advisory lane, or a publish-tooling re-tag
-never does. Tooling,
-credentials, infrastructure or wrapper failure keeps the candidate and recovers
-the failed surface. Use [publication recovery](publication-recovery.md) for
-classification. While the parent runs, hold runner priority with the recipe
-in `docs/reference/RELEASING.md` (`pnpm frv prioritize` once #156305 lands)
-and restore cancelled runs after the seal.
+Record and reuse the full trusted Tooling SHA. Beta-publish uses
+`release_profile=beta`, `run_release_soak=false`; require `npm-beta-v1` for a
+qualifying canonical beta target. Stable-publish requires `release_profile=stable`
+or `full`, with `run_release_soak=true` and blocking performance. Record each
+child's first failure and fix its owner before focused validation; never replace
+failure with an automatic passing replay. Keep the candidate fixed unless a
+confirmed product defect requires a change, and preserve the recorded evidence.
+Use [publication recovery](publication-recovery.md) for classification and
+`pnpm frv prioritize` to manage runner priority while validation is active.
+Restore deferred PR runs after the release parent settles.
 
 An early `OpenClaw Performance` run is optional beta confidence:
 `target_ref=<code-sha>`, `profile=release`, `repeat=3`, deep profiling/live OpenAI
@@ -98,9 +88,7 @@ Tooling SHA (see `docs/reference/RELEASING.md`). The push may print a
 tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`
 and, only if missing, create it with
 `gh api -X POST repos/openclaw/openclaw/git/refs -f ref=refs/tags/<tag> -f sha=<tooling-sha>`.
-The tooling `main` must include #156816 (lane waiver forwarded to children) when
-a lane waiver is in force. Then consume existing validation against the untagged
-Release SHA:
+Consume validation evidence against the untagged Release SHA:
 
 ```bash
 pnpm release:candidate -- \
@@ -126,16 +114,12 @@ Omit `--plugin-sdk-api-acknowledgement` when no API change exists. The helper
 completes package/install proof and prints the selected route's next command; do not dispatch
 another equivalent validation. Its `npm-beta-v1` Telegram package result is
 `deferred-postpublish`, never passed. Other policies retain their check.
-Parallels and Telegram package proof belong to postpublish confidence on every
-track. A final version never records `npm-beta-v1`, so the helper runs both
-for stable unless you pass `--skip-parallels --skip-telegram`; use
-`--run-parallels` only on explicit operator direction. Optional
-`--windows-node-tag <exact-source-tag>` records its approved installer digest
-map; stable candidates do not require Windows. The default stable candidate is
-validated with the beta profile and no soak: pass `--release-profile beta` and
-the operator-approved `--stable-soak-waiver '<reason>'` using the standard
-wording in `docs/reference/RELEASING.md`; the helper forwards it to the
-embedded preflight and the printed publish command.
+Stable candidates use the stable profile by default, require soak and blocking
+performance evidence, and run candidate Telegram and Parallels checks before
+publication by default. Beta candidates retain their documented postpublish
+confidence deferrals. Optional `--windows-node-tag <exact-source-tag>` records
+its approved installer digest map; stable candidates do not require Windows
+asset publication before npm publication.
 
 For a prepare-only request, stop with the candidate, evidence, limitations, and
 printed next command. Do not create/push the final tag or publish/announce.
@@ -211,8 +195,8 @@ failure without republishing npm.
 
 Run [postpublish confidence](validation.md#postpublish-confidence) against the
 exact published package. For a beta-to-latest promotion, deferred lanes must
-pass at least once first, including published-package Telegram; a direct stable
-publish under the soak waiver runs them after publication. Run safe
+pass before promotion, including published-package Telegram. Direct stable
+publication also requires its stable/full validation and soak before publishing. Run safe
 independent rosters concurrently while controlling local Docker/VM load.
 Classify failures before admitting a fix to the next beta; do not scan moving
 main or automatically rerun all groups. An operator's beta-attempt cap counts

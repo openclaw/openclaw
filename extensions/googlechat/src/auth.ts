@@ -1,4 +1,5 @@
 // Googlechat plugin module implements auth behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
@@ -19,13 +20,6 @@ const CHAT_CERTS_URL =
 // a stalled googleapis.com endpoint blocks webhook auth indefinitely, including
 // cold-start and every 10-minute cache refresh.
 const GOOGLECHAT_CERT_FETCH_TIMEOUT_MS = 30_000;
-
-async function readGoogleChatCertsResponse(response: Response): Promise<Record<string, string>> {
-  return readProviderJsonResponse<Record<string, string>>(
-    response,
-    "Google Chat cert fetch failed",
-  );
-}
 
 // Size-capped to prevent unbounded growth in long-running deployments (#4948)
 const MAX_AUTH_CACHE_SIZE = 32;
@@ -76,22 +70,13 @@ async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<Goog
     resolveValidatedGoogleChatCredentials(account),
   ]);
 
-  const evictOldest = () => {
-    if (authCache.size > MAX_AUTH_CACHE_SIZE) {
-      const oldest = authCache.keys().next().value;
-      if (oldest !== undefined) {
-        authCache.delete(oldest);
-      }
-    }
-  };
-
   const auth = new GoogleAuth({
     ...(credentials ? { credentials } : {}),
     clientOptions: { transporter },
     scopes: [CHAT_SCOPE],
   });
   authCache.set(account.accountId, { key, auth });
-  evictOldest();
+  pruneMapToMaxSize(authCache, MAX_AUTH_CACHE_SIZE);
   return auth;
 }
 
@@ -122,7 +107,10 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
     if (!response.ok) {
       throw new Error(`Failed to fetch Chat certs (${response.status})`);
     }
-    const certs = await readGoogleChatCertsResponse(response);
+    const certs = await readProviderJsonResponse<Record<string, string>>(
+      response,
+      "Google Chat cert fetch failed",
+    );
     cachedCerts = { fetchedAt: now, certs };
     return certs;
   } finally {

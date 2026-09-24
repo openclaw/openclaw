@@ -470,3 +470,14 @@ it.each([false, true])(
     );
   },
 );
+
+it("reports an already stopped Gateway without starting it after repair", async () => {
+  boundary.stop.mockImplementation(async () => ({ ...settlement.stopped, stopped: false }));
+  const maintenance = await begin();
+  await maintenance!.finish({});
+  expect(boundary.restart).not.toHaveBeenCalled();
+  expect(boundary.health).not.toHaveBeenCalled();
+  const warning = expect.stringMatching(/already stopped before repair.*openclaw gateway start/);
+  expect(maintenance!.warnings).toContainEqual(warning);
+  expect(boundary.log).toHaveBeenCalledWith(warning);
+});

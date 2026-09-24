@@ -152,6 +152,13 @@ Cold archive decoding and restoration retain the existing archive worker and
 host generation/commit authorization; transcript read fences still bind the
 subsequent read. No validation cache or new restoration owner is introduced.
 
+Single-message lookups and display-message counts use that same history worker.
+Session-message broadcasts await the stored content and sequence in their existing
+per-transcript queue, then recheck the live session before publishing. Message
+lookup keeps its current-only, byte-limit, and reset-archive behavior; counts keep
+their projection-readiness retry. Process-held incognito transcripts remain with
+their in-memory owner. Schemas, retained data, and update behavior are unchanged.
+
 The asynchronous transcript-search facade similarly moves durable FTS reads for
 all four Gateway/tool callers through the existing worker lifecycle. Each caller
 rechecks current scope and authorization after awaiting. Warm `sessions.list`
@@ -178,6 +185,14 @@ runtime metadata. Optional preview and terminal-message facts use the retained
 history worker, with foreground priority and row-generation checks before
 publication. The host evaluates fallback notices using its current runtime plugin
 aliases; configuration and model policy do not travel to the read worker.
+
+Catalog-only replacement reuses complete accepted database facts for live resident
+rows while rebuilding their model presentation. Stored-data, configuration,
+physical-store, and lifecycle invalidations revoke those facts. Transcript updates
+revoke watermarks immediately even inside a coalesced presentation window. Cold
+archives retain no complete snapshot; exact archive reads remain bounded by the
+existing materialization cache. Schema, persisted data, and update behavior are
+unchanged.
 
 Durable keyed RPCs prepare only their selected dirty or archived rows through the
 worker before synchronous presentation; placement waits recheck that preparation.
@@ -282,10 +297,17 @@ Worktree run-lease cleanup deletes the exact token and reads the Git unlock targ
 through the shared-state worker. Failed deletions yield between bounded retries,
 retaining the original database admission and Git guard until deletion settles.
 Process exit retains its best-effort synchronous deletion because it cannot await
-a worker. Deferred context maintenance also awaits task completion and failure
+a worker. Git-guard admission reads its registry target through the same retained
+worker used by cleanup. Deferred context maintenance publishes its running state
+through the task worker before entering the engine, preparing the existing writer
+and reader owners for completion. It still awaits task completion and failure
 settlement before disposing its engine or releasing its process owner; its progress
-timer ends before terminal persistence. Worktree run admission, task creation and
-progress, and the remaining native cron transitions still need migration. This
+timer ends before terminal persistence. Cold worker startup belongs to admission;
+normal idle retirement and memory-pressure eviction remain in effect. Detached
+worker opening evaluates live admission guards in their captured caller context,
+then releases that capture after native opening settles.
+Worktree run admission writes, task creation and progress, and the remaining native
+cron transitions still need migration. This
 cutover preserves schemas, stored bytes, retention, configuration, and update behavior.
 
 Native cron receipt guards read deletion authority through their transaction's
@@ -341,6 +363,12 @@ operation outcomes. Placement
 writes, current-authority checks, and workspace retention retain their existing
 owners; these reporting snapshots grant no execution or deletion authority.
 
+Machine-catalog notifications coalesce pending profile changes and select their
+correlated placements through the same read worker. The Gateway publishes keyed
+session invalidations after the read and drains pending reporting on shutdown.
+Each batch reads current placement and environment facts; it retains no placement
+cache and does not scan the placement inventory on the main thread.
+
 This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the
 [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
@@ -360,3 +388,28 @@ lease; database close joins the callback and its retained worker cleanup. Cleanu
 refuses a replacement physical database and cannot delete a successor's lease.
 Upload formats, expiry limits, installation permissions, and update behavior are
 unchanged.
+
+Discord thread-binding startup and bundled mutations use the existing plugin-state
+worker. Inbound and outbound activity, binding changes, lifecycle settings, thread
+deletion, and expiry await their mutations. The existing registry serializes writes,
+checks the live manager and registry revision at worker admission, and joins accepted
+binds and writes before shutdown retires the manager. Manager and session-wide
+mutations share account ordering, but Discord network preparation stays outside the
+shared persistence queue. Session-wide operations reserve their selected accounts
+before waiting, so later unbinds include an earlier admitted bind. Activity-write
+failures are reported without suppressing inbound dispatch whose original abort
+and policy authority remains current. A later synchronous SDK update rebases on
+committed rows; delayed acknowledgements preserve that newer projection.
+If the native read fails before observing a pending target, compatibility calls leave
+its projection unchanged for the worker result. Accepted metadata uses the existing
+JSON codec to capture nested values before queue waits. An interrupted full-map
+save reports its acknowledged prefix without replaying it, and an acknowledged
+target mutation remains successful. Full-map
+registration preserves cross-account persistence and bounded eviction recency;
+activity retains its 15-second coalescing. Unavailable persistence retains the
+existing in-memory fallback, while revoked authority refuses publication. Stored
+records, namespace bounds, schema, and update behavior are unchanged. The public
+Discord SDK's synchronous list, touch, lifecycle setter, and unbind compatibility
+paths remain under the same owner, deprecated for removal at the next Plugin SDK
+major. Bundled callers use the awaited variants. ACP startup session reads are a
+separate worker migration.

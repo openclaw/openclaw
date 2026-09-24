@@ -138,6 +138,7 @@ function openAgentDatabaseBackend(
         shared = openOpenClawStateDatabase({
           path: input.stateDatabasePath,
           env: input.environment,
+          initializationAgentPaths: [input.databasePath],
         });
         sharedBorrow = retainOpenClawStateDatabase(shared);
       }

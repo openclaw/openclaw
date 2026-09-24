@@ -329,7 +329,7 @@ export const whatsappQaGroupReplyToMessageScenario: WhatsAppQaScenarioImplementa
 export const whatsappQaReplyToModeBatchedScenario: WhatsAppQaScenarioImplementation = {
   posture: "user-path",
   configOverrides: {
-    inboundDebounceMs: 250,
+    inboundDebounceMs: 2_000,
     replyToMode: "batched",
   },
   buildRun: () => {
@@ -341,14 +341,15 @@ export const whatsappQaReplyToModeBatchedScenario: WhatsAppQaScenarioImplementat
       afterSend: async (context) => {
         const second = await context.driver.sendText(
           context.target,
-          `Second batched WhatsApp QA message. Reply with only this exact marker: ${finalToken} only if the previous queued message is visible in this same run context.`,
+          `Second batched WhatsApp QA message. Reply with only this exact marker: ${finalToken} only if the first and second messages appear together in this single inbound message.`,
         );
         secondMessageId = second.messageId;
-        return "second batched message sent before debounce flush";
+        return "second batched message sent";
       },
       configMode: "allowlist",
       expectReply: true,
       input: `First batched WhatsApp QA message ${firstToken}. Wait for the next message before replying.`,
+      expectedSutMessageCount: 1,
       matchText: finalToken,
       target: "dm",
       verify: (reply) => {

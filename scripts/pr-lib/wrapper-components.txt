@@ -1,4 +1,5 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
+cli-root-options.mjs
 node-sqlite.mjs
 node-version.mjs
 package.json
@@ -134,6 +135,7 @@ scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-selector-source-facts.mts
 scripts/lib/tsdown-declaration-boundary.mts
+scripts/lib/tsgo-core-test-shards.mts
 scripts/lib/tsx-cli-shim.mjs
 scripts/lib/vitest-build-prerequisites.mts
 scripts/lib/vitest-cache-slots.mts
@@ -339,6 +341,7 @@ src/config/agent-dirs.ts
 src/config/agent-limits.ts
 src/config/agent-list-projection.ts
 src/config/agent-roster-provenance.ts
+src/config/agent-store-source.ts
 src/config/allowed-values.ts
 src/config/backup-rotation.ts
 src/config/bundled-channel-config-metadata.generated.ts
@@ -386,6 +389,7 @@ src/config/io.owner-display-secret.ts
 src/config/io.plugin-metadata.ts
 src/config/io.read-helpers.ts
 src/config/io.recovery.ts
+src/config/io.runtime-env.ts
 src/config/io.runtime-write-finalization.ts
 src/config/io.runtime.ts
 src/config/io.snapshot-preparation-scope.ts
@@ -459,8 +463,10 @@ src/config/sessions/artifacts.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
+src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-store-config.ts
 src/config/sessions/session-store-owner.ts
+src/config/sessions/targets-configured-agents.ts
 src/config/shell-env-expected-keys.ts
 src/config/source-value-projection.ts
 src/config/state-dir.ts
@@ -573,6 +579,7 @@ src/infra/boundary-path.ts
 src/infra/bun-sqlite-library.ts
 src/infra/clawhub-integrity.ts
 src/infra/clawhub-spec.ts
+src/infra/cli-root-options.ts
 src/infra/command-carriers.ts
 src/infra/config-dir.ts
 src/infra/container-env-file.ts
@@ -633,6 +640,7 @@ src/infra/fs-safe-advanced.ts
 src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe-defaults.ts
 src/infra/fs-safe.ts
+src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-process-argv.ts
 src/infra/gateway-supervision.ts
@@ -685,6 +693,7 @@ src/infra/net/undici-runtime.ts
 src/infra/node-compile-cache-env.ts
 src/infra/node-options.ts
 src/infra/node-runner-inventory.ts
+src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
 src/infra/non-fatal-cleanup.ts
 src/infra/npm-registry-spec.ts
@@ -1128,6 +1137,7 @@ src/process/spawn-broker/protocol.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
+src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-windows-job-native.ts
 src/process/windows-command.ts
 src/proxy-capture/env.ts
@@ -1240,6 +1250,7 @@ src/state/openclaw-state-db-existing-write.ts
 src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
+src/state/openclaw-state-db-initialization.ts
 src/state/openclaw-state-db-legacy-backfills.ts
 src/state/openclaw-state-db-maintenance.ts
 src/state/openclaw-state-db-open.ts

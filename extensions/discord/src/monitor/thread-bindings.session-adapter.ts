@@ -8,9 +8,13 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordChannelId } from "../target-parsing.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
+import { snapshotThreadBindingJson } from "./thread-bindings.persistence.js";
 import {
   resolveBindingRecordKey,
   resolvePreparedThreadBindingLifecycle,
@@ -111,7 +115,11 @@ export function createThreadBindingSessionAdapter(params: {
       }
       const conversationId = normalizeOptionalString(input.conversation.conversationId) ?? "";
       const placement = input.placement === "child" ? "child" : "current";
-      const metadata = input.metadata ?? {};
+      const metadata =
+        asOptionalObjectRecord(
+          snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
+        ) ?? {};
+      const targetKind = toThreadBindingTargetKind(input.targetKind);
       const label = normalizeOptionalString(metadata.label);
       const threadName =
         typeof metadata.threadName === "string"
@@ -154,7 +162,7 @@ export function createThreadBindingSessionAdapter(params: {
         channelId,
         createThread,
         threadName,
-        targetKind: toThreadBindingTargetKind(input.targetKind),
+        targetKind,
         targetSessionKey,
         agentId,
         label,
@@ -179,14 +187,23 @@ export function createThreadBindingSessionAdapter(params: {
         accountId: params.accountId,
         bindingId,
       });
+      if (threadId) {
+        params.manager.touchThreadSync({ threadId, at, persist: true });
+      }
+    },
+    touchAsync: async (bindingId, at) => {
+      const threadId = resolveThreadBindingConversationIdFromBindingId({
+        accountId: params.accountId,
+        bindingId,
+      });
       if (!threadId) {
         return;
       }
-      params.manager.touchThread({ threadId, at, persist: true });
+      await params.manager.touchThread({ threadId, at, persist: true });
     },
     unbind: async (input) => {
       if (input.targetSessionKey?.trim()) {
-        const removed = params.manager.unbindBySessionKey({
+        const removed = await params.manager.unbindBySessionKey({
           targetSessionKey: input.targetSessionKey,
           reason: input.reason,
         });
@@ -199,7 +216,7 @@ export function createThreadBindingSessionAdapter(params: {
       if (!threadId) {
         return [];
       }
-      const removed = params.manager.unbindThread({
+      const removed = await params.manager.unbindThread({
         threadId,
         reason: input.reason,
       });
@@ -221,16 +238,19 @@ export function createNoopThreadBindingManager(accountIdRaw?: string): ThreadBin
   registerSessionBindingAdapter(adapter);
   return {
     accountId,
+    isStopping: () => false,
     getIdleTimeoutMs: () => DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
     getMaxAgeMs: () => DEFAULT_THREAD_BINDING_MAX_AGE_MS,
     getByThreadId: () => undefined,
     getBySessionKey: () => undefined,
     listBySessionKey: () => [],
     listBindings: () => [],
-    touchThread: () => null,
+    touchThread: async () => null,
+    touchThreadSync: () => null,
     bindTarget: async () => null,
-    unbindThread: () => null,
-    unbindBySessionKey: () => [],
-    stop: () => unregisterSessionBindingAdapter({ channel: "discord", accountId, adapter }),
+    unbindThread: async () => null,
+    unbindBySessionKey: async () => [],
+    notifyUnbound: () => {},
+    stop: async () => unregisterSessionBindingAdapter({ channel: "discord", accountId, adapter }),
   };
 }

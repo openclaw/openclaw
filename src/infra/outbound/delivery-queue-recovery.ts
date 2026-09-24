@@ -647,33 +647,6 @@ async function resolveCompletedOwnerBeforeRecovery(
   return "recovered";
 }
 
-async function persistRecoveredPostSendState(
-  opts: {
-    owner: QueuedDeliveryOwner;
-    entry: QueuedDelivery;
-    log: RecoveryLogger;
-    producerClaimId?: string;
-  },
-  stateContext: DeliveryQueueStateContext,
-): Promise<QueuedPostSendState> {
-  // Recovery keeps its media lease until the adapter settles, even if the
-  // canonical post-send marker has to finalize the queue with a direct ack.
-  return persistQueuedPostSendState(
-    {
-      owner: opts.owner,
-      queuePolicy: opts.entry.queuePolicy ?? "best_effort",
-      preserveBatch: Boolean(opts.producerClaimId),
-      retainSpoolArtifacts: true,
-      onPostSendMarkerError: (error) => {
-        opts.log.warn(
-          `Delivery entry ${opts.entry.id} failed to persist post-send state; falling back to direct ack: ${formatErrorMessage(error)}`,
-        );
-      },
-    },
-    stateContext,
-  );
-}
-
 async function drainQueuedEntry(
   opts: {
     entry: QueuedDelivery;
@@ -858,15 +831,30 @@ async function drainQueuedEntry(
     return "already-gone";
   }
   owner.claimId = recoveryPlatformAttemptId(entry, producerClaimId);
-  const reservation = producerClaimId
-    ? await reserveDeliveryAttempt(
-        entry.id,
-        maxRetries,
-        opts.stateDir,
-        producerClaimId,
-        stateContext,
-      )
-    : await reserveDeliveryAttempt(entry.id, maxRetries, opts.stateDir, undefined, stateContext);
+  // Recovery keeps its media lease until the adapter settles, even if the
+  // canonical post-send marker has to finalize the queue with a direct ack.
+  const persistPostSendState = () =>
+    persistQueuedPostSendState(
+      {
+        owner,
+        queuePolicy: entry.queuePolicy ?? "best_effort",
+        preserveBatch: Boolean(producerClaimId),
+        retainSpoolArtifacts: true,
+        onPostSendMarkerError: (error) => {
+          opts.log.warn(
+            `Delivery entry ${entry.id} failed to persist post-send state; falling back to direct ack: ${formatErrorMessage(error)}`,
+          );
+        },
+      },
+      stateContext,
+    );
+  const reservation = await reserveDeliveryAttempt(
+    entry.id,
+    maxRetries,
+    opts.stateDir,
+    producerClaimId || undefined,
+    stateContext,
+  );
   if (reservation.status === "exhausted") {
     const errMsg = `delivery retry budget exhausted (${reservation.attemptCount}/${maxRetries})`;
     opts.onFailed?.(entry, errMsg);
@@ -907,15 +895,7 @@ async function drainQueuedEntry(
       },
       onDeliveryResult: async (deliveryResult) => {
         collectResults([deliveryResult]);
-        postSendState ??= await persistRecoveredPostSendState(
-          {
-            owner,
-            entry,
-            log: opts.log,
-            ...(producerClaimId ? { producerClaimId } : {}),
-          },
-          stateContext,
-        );
+        postSendState ??= await persistPostSendState();
       },
       onPlatformSendDispatch: async () => {
         await deliveryParams.onPlatformSendDispatch?.();
@@ -969,15 +949,7 @@ async function drainQueuedEntry(
       const errMsg = formatErrorMessage(failedOutcome.error);
       opts.onFailed?.(entry, errMsg);
       if (results.length > 0 || failedOutcomes.some((outcome) => outcome.sentBeforeError)) {
-        postSendState ??= await persistRecoveredPostSendState(
-          {
-            owner,
-            entry,
-            log: opts.log,
-            ...(producerClaimId ? { producerClaimId } : {}),
-          },
-          stateContext,
-        );
+        postSendState ??= await persistPostSendState();
         opts.log.warn(
           `Delivery entry ${entry.id} partially sent before best-effort recovery failed; preserving unknown_after_send`,
         );
@@ -1011,18 +983,7 @@ async function drainQueuedEntry(
         stateContext,
       );
     }
-    postSendState ??=
-      results.length > 0
-        ? await persistRecoveredPostSendState(
-            {
-              owner,
-              entry,
-              log: opts.log,
-              ...(producerClaimId ? { producerClaimId } : {}),
-            },
-            stateContext,
-          )
-        : undefined;
+    postSendState ??= results.length > 0 ? await persistPostSendState() : undefined;
     if (postSendState === "failed") {
       const errMsg = "recovered send completed but queue finalization failed";
       opts.onFailed?.(entry, errMsg);
@@ -1088,15 +1049,7 @@ async function drainQueuedEntry(
       // A rejected batch can still contain successful earlier sends. Preserve
       // that concrete evidence so reconnect recovery never replays the batch.
       try {
-        postSendState ??= await persistRecoveredPostSendState(
-          {
-            owner,
-            entry,
-            log: opts.log,
-            ...(producerClaimId ? { producerClaimId } : {}),
-          },
-          stateContext,
-        );
+        postSendState ??= await persistPostSendState();
       } catch (persistErr) {
         // Never overwrite concrete send evidence with a generic retry state.
         opts.log.error(

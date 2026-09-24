@@ -7,6 +7,7 @@ import {
   loadExactSessionEntryCandidatesReadOnlyBatch,
 } from "../config/sessions/session-accessor.js";
 import type {
+  CapturedSessionEntryReadSource,
   SessionEntryListScope,
   SessionEntryReadSource,
 } from "../config/sessions/session-accessor.types.js";
@@ -25,6 +26,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 type GatewaySessionStoreView = {
   store: Record<string, SessionEntry>;
   readSource?: SessionEntryReadSource;
+  capturedReadSource?: CapturedSessionEntryReadSource;
 };
 
 export type GatewaySessionStoreCache = Map<string, GatewaySessionStoreView>;
@@ -36,6 +38,7 @@ export type GatewaySessionStoreRead = {
   options: NonNullable<Parameters<typeof loadGatewaySessionLookupStore>[3]>;
   result?: Result<Record<string, SessionEntry>, unknown>;
   readSource?: SessionEntryReadSource;
+  capturedReadSource?: CapturedSessionEntryReadSource;
 };
 
 /** Single-target resolution keeps its original lazy read and failure order. */
@@ -51,6 +54,7 @@ export function readGatewaySessionStore(
     );
     read.result = ok(loaded.store);
     read.readSource = loaded.readSource;
+    read.capturedReadSource = loaded.capturedReadSource;
   }
   if (!read.result.ok) {
     throw read.result.error;
@@ -118,18 +122,12 @@ function loadGatewaySessionLookupStoreUncached(
   storePath: string,
   clone: boolean | undefined,
   agentId?: string,
-  options: {
-    exactKeys?: readonly string[];
-    listKeys?: readonly string[];
-    readOnly?: boolean;
-    projection?: SessionEntryListScope["projection"];
-    readConsistency?: SessionEntryListScope["readConsistency"];
-    readSource?: SessionEntryReadSource;
-  } = {},
+  options: NonNullable<Parameters<typeof loadGatewaySessionLookupStore>[3]> = {},
 ): GatewaySessionStoreView {
   if (options.exactKeys) {
     // Borrowed listing views and probes never create stores; ordinary owned reads may.
     let readSource: SessionEntryReadSource | undefined;
+    let capturedReadSource: CapturedSessionEntryReadSource | undefined;
     const target = options.readSource
       ? { readSource: options.readSource, readOnly: true as const }
       : {
@@ -141,13 +139,21 @@ function loadGatewaySessionLookupStoreUncached(
       ...target,
       projection: options.projection,
       sessionKeys: options.exactKeys,
-      onReadSource: (source) => {
+      onReadSource: (source, physical) => {
         readSource = source;
+        capturedReadSource = physical
+          ? {
+              ...source,
+              databaseIdentity: physical.identity,
+              databaseBirthtime: physical.birthtime,
+            }
+          : undefined;
       },
     });
     return {
       store: Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
       ...(readSource ? { readSource } : {}),
+      ...(capturedReadSource ? { capturedReadSource } : {}),
     };
   }
   const listEntries = options.readOnly

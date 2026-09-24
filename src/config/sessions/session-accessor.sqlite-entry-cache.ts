@@ -7,7 +7,10 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  runSqliteReadOperationSync,
+} from "../../infra/sqlite-schema-facts.js";
 import {
   sessionChanges,
   type SessionRowChange,
@@ -29,6 +32,7 @@ import {
   type SessionEntrySideMetadata,
 } from "./session-accessor.sqlite-entry-cache-projection.js";
 import type {
+  SessionEntryCacheReadOptions,
   SessionEntryCacheSnapshot,
   SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
@@ -382,53 +386,45 @@ export function trackSessionEntryCacheWrite(
 
 export function readSessionEntryCache(
   database: SessionEntryCacheDatabase,
-  options: {
-    cache: boolean;
-    latest?: boolean;
-    projection?: "full" | "list";
-    /** Uncached mixed snapshot: retain complete selected rows beside sibling metadata. */
-    fullEntryKeys?: readonly string[];
-    /** Stream full JSON once, retaining prompt snapshots only for selected rows. Never cached. */
-    retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean;
-    /** Topology admits metadata first; its worker owns participant hydration. Never cache this view. */
-    deferParticipants?: true;
-  },
+  options: SessionEntryCacheReadOptions,
 ): SessionEntryCacheSnapshot {
-  const projection = options.retainFullEntry ? "full" : options.projection;
-  const prepared = assertCanonicalSqliteSessionKeysCurrent(
-    database,
-    projection !== "full" && !options.fullEntryKeys,
-  );
-  if (
-    !options.cache ||
-    options.deferParticipants ||
-    options.fullEntryKeys ||
-    options.retainFullEntry ||
-    options.latest ||
-    projection === "full" ||
-    database.db.isTransaction ||
-    !getAdmittedSqliteSchemaFacts(database.db)
-  ) {
-    return loadSessionEntrySnapshot(
+  return runSqliteReadOperationSync(database.db, () => {
+    const projection = options.retainFullEntry ? "full" : options.projection;
+    const prepared = assertCanonicalSqliteSessionKeysCurrent(
       database,
-      projection,
-      prepared,
-      options.fullEntryKeys ? new Set(options.fullEntryKeys) : undefined,
-      options.retainFullEntry,
-      options.deferParticipants,
+      projection !== "full" && !options.fullEntryKeys,
     );
-  }
-  const validityToken = readSessionEntryCacheValidityToken(database.db, "cached");
-  const cached = sessionEntryCaches.get(database.db);
-  if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
-    return cached;
-  }
-  // Only tracked publications identify changed rows. A generation gap can contain
-  // same-timestamp or owner-only edits; updated_at cannot validate a partial reload.
-  const loaded = loadSessionEntrySnapshot(database, options.projection, prepared);
-  const next = { ...loaded, validityToken };
-  sessionEntryCaches.set(database.db, next);
-  return next;
+    if (
+      !options.cache ||
+      options.deferParticipants ||
+      options.fullEntryKeys ||
+      options.retainFullEntry ||
+      options.latest ||
+      projection === "full" ||
+      database.db.isTransaction ||
+      !getAdmittedSqliteSchemaFacts(database.db)
+    ) {
+      return loadSessionEntrySnapshot(
+        database,
+        projection,
+        prepared,
+        options.fullEntryKeys ? new Set(options.fullEntryKeys) : undefined,
+        options.retainFullEntry,
+        options.deferParticipants,
+      );
+    }
+    const validityToken = readSessionEntryCacheValidityToken(database.db, "cached");
+    const cached = sessionEntryCaches.get(database.db);
+    if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
+      return cached;
+    }
+    // Only tracked publications identify changed rows. A generation gap can contain
+    // same-timestamp or owner-only edits; updated_at cannot validate a partial reload.
+    const loaded = loadSessionEntrySnapshot(database, options.projection, prepared);
+    const next = { ...loaded, validityToken };
+    sessionEntryCaches.set(database.db, next);
+    return next;
+  });
 }
 
 function publishTrackedCacheUpdate(database: SessionEntryCacheDatabase, publish: () => void): void {

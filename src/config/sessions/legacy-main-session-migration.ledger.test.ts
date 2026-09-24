@@ -29,7 +29,12 @@ function databasePath(stateDir: string, agentId: string): string {
   return path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
 }
 
-function seedClaim(databaseAgentId: string, databasePathname: string, key: string): void {
+function seedClaim(
+  databaseAgentId: string,
+  databasePathname: string,
+  key: string,
+  env: NodeJS.ProcessEnv,
+): void {
   runOpenClawAgentWriteTransaction(
     (database) => {
       writeSessionEntry(
@@ -39,14 +44,19 @@ function seedClaim(databaseAgentId: string, databasePathname: string, key: strin
         { allowStoredAliases: true, previousEntry: null },
       );
     },
-    { agentId: databaseAgentId, path: databasePathname },
+    { agentId: databaseAgentId, path: databasePathname, env },
   );
 }
 
-function readClaim(databaseAgentId: string, databasePathname: string, key: string) {
+function readClaim(
+  databaseAgentId: string,
+  databasePathname: string,
+  key: string,
+  env: NodeJS.ProcessEnv,
+) {
   return runOpenClawAgentWriteTransaction(
     (database) => readExactSessionEntryRowForCanonicalRepair(database, key)?.entry,
-    { agentId: databaseAgentId, path: databasePathname },
+    { agentId: databaseAgentId, path: databasePathname, env },
   );
 }
 
@@ -58,7 +68,7 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
   const cfg = { agents: { entries: { ops: {} } } };
   const mainPath = databasePath(stateDir, "main");
   const opsPath = databasePath(stateDir, "ops");
-  seedClaim("main", mainPath, "agent:other:keep");
+  seedClaim("main", mainPath, "agent:other:keep", env);
   await migrateLegacyMainSessionKeys({ cfg, env, mode: "doctor-fix" });
 
   const changedStore = await migrateLegacyMainSessionKeys({
@@ -73,14 +83,14 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
   expect(changedStore.ledgerComplete).toBe(false);
 
   const restoredPath = path.join(root, "restored-main.sqlite");
-  seedClaim("main", restoredPath, "agent:main:restored");
+  seedClaim("main", restoredPath, "agent:main:restored", env);
   closeOpenClawAgentDatabasesForTest();
   fs.renameSync(mainPath, `${mainPath}.before-restore`);
   fs.renameSync(restoredPath, mainPath);
   const restored = await migrateLegacyMainSessionKeys({ cfg, env, mode: "doctor-fix" });
   expect(restored.outcomes.map((outcome) => outcome.kind)).toContain("migrated-cross-store");
-  expect(readClaim("main", mainPath, "agent:main:restored")).toBeUndefined();
-  expect(readClaim("ops", opsPath, "agent:ops:restored")).toBeDefined();
+  expect(readClaim("main", mainPath, "agent:main:restored", env)).toBeUndefined();
+  expect(readClaim("ops", opsPath, "agent:ops:restored", env)).toBeDefined();
 
   const jsonPath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
   fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
@@ -89,13 +99,13 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
   expect(laterJson.outcomes.map((outcome) => outcome.kind)).toContain("legacy-json-store");
   fs.unlinkSync(jsonPath);
 
-  seedClaim("main", mainPath, "agent:main:late");
+  seedClaim("main", mainPath, "agent:main:late", env);
   const startupShortcut = await migrateLegacyMainSessionKeys({ cfg, env, mode: "detect" });
   expect(startupShortcut.outcomes).toEqual([
     { kind: "no-legacy-rows", detail: "matching completed ledger" },
   ]);
   expect(startupShortcut.ledgerComplete).toBe(true);
-  expect(readClaim("main", mainPath, "agent:main:late")).toBeDefined();
+  expect(readClaim("main", mainPath, "agent:main:late", env)).toBeDefined();
 
   const creationScan = await migrateLegacyMainSessionKeys({
     cfg,
@@ -105,11 +115,11 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
   });
   expect(creationScan.ledgerComplete).toBe(false);
   expect(creationScan.outcomes.map((outcome) => outcome.kind)).toContain("migrated-cross-store");
-  expect(readClaim("main", mainPath, "agent:main:late")).toBeDefined();
+  expect(readClaim("main", mainPath, "agent:main:late", env)).toBeDefined();
 
   const repaired = await migrateLegacyMainSessionKeys({ cfg, env, mode: "doctor-fix" });
   expect(repaired.ledgerComplete).toBe(true);
   expect(repaired.outcomes.map((outcome) => outcome.kind)).toContain("migrated-cross-store");
-  expect(readClaim("main", mainPath, "agent:main:late")).toBeUndefined();
-  expect(readClaim("ops", opsPath, "agent:ops:late")).toBeDefined();
+  expect(readClaim("main", mainPath, "agent:main:late", env)).toBeUndefined();
+  expect(readClaim("ops", opsPath, "agent:ops:late", env)).toBeDefined();
 });
