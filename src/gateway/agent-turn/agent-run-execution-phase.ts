@@ -444,6 +444,7 @@ export async function startAgentRunExecution(params: {
         const execution = dispatchAdmittedAgentRun(
           withAgentRunDispatchExecutionIdentity(
             {
+              executionOrder: prepared.executionOrder,
               assertCurrent: assertDispatchCurrent,
               assertSettlementCurrent: assertTaskSettlementCurrent,
               admittedRunEntry: abortEntry,
@@ -681,6 +682,7 @@ export async function startAgentRunExecution(params: {
     });
   } finally {
     // Shutdown joins the execution through asynchronous runtime disposal, not just bookkeeping.
+    prepared.executionOrder?.release();
     prepared.releaseCallerAuthority?.();
     releaseGatewayRootContinuation?.();
   }

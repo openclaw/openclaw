@@ -3,7 +3,6 @@ import {
   createOperationalRunInstanceRef,
   type OperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
-import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   clearEmbeddedAgentRunAbortabilityForRunId,
   isEmbeddedAgentRunAbortableForRunId,
@@ -32,6 +31,7 @@ import {
   annotateInterSessionPromptText,
   isSubagentCoordinationInputProvenance,
 } from "../../sessions/input-provenance.js";
+import type { KeyedFifoLease } from "../../shared/keyed-fifo-lease.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -47,7 +47,10 @@ import {
   readGatewayDedupeEntry,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
-import { createAgentRunAdmissionRevalidator } from "./agent-run-admission-revalidation.js";
+import {
+  cleanupRejectedAgentRunAdmission,
+  createAgentRunAdmissionRevalidator,
+} from "./agent-run-admission-revalidation.js";
 import type {
   PrepareAgentRunDispatchParams,
   PreparedAgentRunDispatch,
@@ -55,7 +58,6 @@ import type {
 import {
   prepareAgentRunTaskTracking,
   registerSessionFollowupTask,
-  settleUnstartedGatewayAgentTask,
   type GatewayAgentDispatchTaskTracking,
   type RegisteredGatewayAgentTask,
 } from "./agent-run-task-tracking.js";
@@ -67,6 +69,7 @@ import {
   releasePreparedAgentRunUserTurnAfterFailure,
   type PreparedAgentRunUserTurn,
 } from "./agent-run-user-turn.js";
+import { reserveAgentSessionExecution } from "./agent-session-execution-order.js";
 
 export async function prepareAgentRunDispatch(
   params: PrepareAgentRunDispatchParams,
@@ -270,38 +273,24 @@ export async function prepareAgentRunDispatch(
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
   let capturedOperator: ReturnType<typeof retainGatewayOperatorRun> | undefined;
   let registeredFollowupTask: RegisteredGatewayAgentTask | undefined;
+  let executionOrder: KeyedFifoLease | undefined;
   const cleanupPreaccept = async (admissionReleased = false, failure?: string) => {
     const lease = preparedModelRuntimeLease;
     preparedModelRuntimeLease = undefined;
     const task = registeredFollowupTask;
     registeredFollowupTask = undefined;
-    try {
-      if (task) {
-        await settleUnstartedGatewayAgentTask({
-          tracking: task,
-          runId: params.runId,
-          admittedRunEntry: activeRunAbort.entry,
-          context: params.context,
-          outcome: buildAgentRunTerminalOutcome({
-            status: activeRunAbort.controller.signal.aborted ? "timeout" : "error",
-            stopReason: activeRunAbort.controller.signal.aborted
-              ? (activeRunAbort.entry?.abortStopReason ?? "rpc")
-              : undefined,
-            error: failure ?? "Follow-up admission ended before acceptance.",
-          }),
-        });
-      }
-    } finally {
-      try {
-        await lease?.[Symbol.asyncDispose]();
-      } finally {
-        capturedOperator?.release();
-        activeRunAbort.cleanup();
-        if (!admissionReleased) {
-          activeGatewayWorkAdmission.release();
-        }
-      }
-    }
+    await cleanupRejectedAgentRunAdmission({
+      preparedModelRuntimeLease: lease,
+      registeredFollowupTask: task,
+      activeRunAbort,
+      activeGatewayWorkAdmission,
+      executionOrder,
+      releaseCallerAuthority: capturedOperator?.release,
+      context: params.context,
+      runId: params.runId,
+      admissionReleased,
+      failure,
+    });
   };
   const rejectPreaccept = async (error: ReturnType<typeof errorShape>) => {
     try {
@@ -631,6 +620,15 @@ export async function prepareAgentRunDispatch(
         return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, failure));
       }
     }
+    // Acceptance must own a position before independently prepared commands can
+    // race to the runtime session lane. This is a new-turn barrier, not steering.
+    executionOrder = params.resolvedSessionKey
+      ? reserveAgentSessionExecution(
+          lifecycleStorePath,
+          params.resolvedSessionKey,
+          userTurn.inputProvenance,
+        )
+      : undefined;
     params.markAgentRunAccepted(true);
     setGatewayDedupeEntries({
       dedupe: params.context.dedupe,
@@ -671,6 +669,7 @@ export async function prepareAgentRunDispatch(
       isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
     });
     return {
+      executionOrder,
       activeGatewayWorkAdmission,
       activeRunAbort,
       ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),

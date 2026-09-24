@@ -1,11 +1,63 @@
 import { ErrorCodes, type ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import type { PreparedModelRuntimeLease } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
 import type { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { assertParentSubagentResumeCurrent } from "../session-subagent-resume.js";
 import { setAbortedAgentDedupeEntries } from "./agent-dedupe.js";
+import type { PreparedAgentRunDispatch } from "./agent-run-admission-types.js";
+import {
+  settleUnstartedGatewayAgentTask,
+  type RegisteredGatewayAgentTask,
+} from "./agent-run-task-tracking.js";
 import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
+
+/** Settle a rejected admission before releasing its runtime, ordering, and caller owners. */
+export async function cleanupRejectedAgentRunAdmission(
+  params: Pick<
+    PreparedAgentRunDispatch,
+    "activeGatewayWorkAdmission" | "activeRunAbort" | "executionOrder" | "releaseCallerAuthority"
+  > & {
+    preparedModelRuntimeLease?: PreparedModelRuntimeLease;
+    registeredFollowupTask?: RegisteredGatewayAgentTask;
+    context: AgentTurnContext;
+    runId: string;
+    admissionReleased?: boolean;
+    failure?: string;
+  },
+): Promise<void> {
+  const { activeRunAbort } = params;
+  try {
+    if (params.registeredFollowupTask) {
+      await settleUnstartedGatewayAgentTask({
+        tracking: params.registeredFollowupTask,
+        runId: params.runId,
+        admittedRunEntry: activeRunAbort.entry,
+        context: params.context,
+        outcome: buildAgentRunTerminalOutcome({
+          status: activeRunAbort.controller.signal.aborted ? "timeout" : "error",
+          stopReason: activeRunAbort.controller.signal.aborted
+            ? (activeRunAbort.entry?.abortStopReason ?? "rpc")
+            : undefined,
+          error: params.failure ?? "Follow-up admission ended before acceptance.",
+        }),
+      });
+    }
+  } finally {
+    try {
+      await params.preparedModelRuntimeLease?.[Symbol.asyncDispose]();
+    } finally {
+      params.executionOrder?.release();
+      params.releaseCallerAuthority?.();
+      activeRunAbort.cleanup();
+      if (!params.admissionReleased) {
+        params.activeGatewayWorkAdmission.release();
+      }
+    }
+  }
+}
 
 /** Revalidate the same prepared admission after each asynchronous preparation step. */
 export function createAgentRunAdmissionRevalidator(options: {
