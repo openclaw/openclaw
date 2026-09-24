@@ -482,10 +482,6 @@ watchos_reconnect_restarted_candidate() {
 }
 
 cleanup() {
-  local refusal_cleanup_status=0
-  if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
-    node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs cleanup-refusal || refusal_cleanup_status=$?
-  fi
   stop_gateway
   openclaw_e2e_stop_process "${plugin_registry_pid:-}"
   openclaw_e2e_stop_process "${missing_plugin_registry_pid:-}"
@@ -493,7 +489,6 @@ cleanup() {
   openclaw_e2e_stop_process "${mock_openai_pid:-}"
   openclaw_e2e_stop_process "${restart_mock_pid:-}"
   openclaw_e2e_stop_process "${restart_registry_pid:-}"
-  return "$refusal_cleanup_status"
 }
 
 on_error() {
@@ -522,16 +517,21 @@ on_exit() {
     status=1
     FAILURE_MESSAGE="upgrade survivor exited before all phases completed"
   fi
+  if [ "$SCENARIO" = "custom-plugin-siblings" ] &&
+    ! node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs cleanup-refusal; then
+    if [ "$status" -eq 0 ]; then
+      status=1
+      FAILURE_PHASE="sibling-refusal-cleanup"
+      FAILURE_MESSAGE="sibling refusal cleanup incomplete; inspect retained process identities"
+    fi
+  fi
   # Capture before stop/cleanup can replace the first failing service evidence.
   if [ "$status" -ne 0 ]; then
     node scripts/e2e/lib/upgrade-survivor/diagnostics.mjs capture \
       "$ARTIFACT_ROOT" "${FAILURE_PHASE:-${CURRENT_PHASE:-unknown}}" "$status" "$FAILURE_SIGNAL" "$last_update_observation_root" ||
       echo "Upgrade survivor diagnostics missing; preserving original phase failure." >&3
   fi
-  if ! cleanup; then
-    [ "$status" -ne 0 ] || status=1
-    [ -n "$FAILURE_MESSAGE" ] || FAILURE_MESSAGE="sibling refusal cleanup incomplete; inspect retained process identities"
-  fi
+  cleanup
   if [ "$status" -eq 0 ] && [ "$run_completed" = "1" ]; then
     write_summary passed ""
   else
@@ -1514,6 +1514,9 @@ update_candidate() {
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
   fi
   local update_node_options="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
+  if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
+    update_node_options+=" --import=$ARTIFACT_ROOT/sibling-refusal-preload.mjs"
+  fi
   if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
     update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs"
     update_env+=("OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_STATE_DIR=$OPENCLAW_STATE_DIR")
@@ -1587,8 +1590,8 @@ assert_sibling_published_refusal() {
   local refusal_exit=0
   node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs arm-refusal "$(package_root)" || return "$?"
   update_candidate || refusal_exit=$?
-  mv "$UPDATE_JSON" "$ARTIFACT_ROOT/sibling-refusal-update.json"
-  mv "$UPDATE_ERR" "$ARTIFACT_ROOT/sibling-refusal-update.err"
+  cp "$UPDATE_JSON" "$ARTIFACT_ROOT/sibling-refusal-update.json"
+  cp "$UPDATE_ERR" "$ARTIFACT_ROOT/sibling-refusal-update.err"
   node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-refusal \
     "$(package_root)" "$refusal_exit"
 }

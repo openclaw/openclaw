@@ -17,6 +17,8 @@ const registrations = path.join(artifacts, "sibling-registrations.jsonl");
 const evidencePath = path.join(artifacts, "sibling-source.json");
 const marker = "OPENCLAW_SIBLING_SOURCE_OK";
 const refusalArm = path.join(artifacts, "sibling-refusal.armed");
+const refusalPreload = path.join(artifacts, "sibling-refusal-preload.mjs");
+const refusalWorker = path.join(artifacts, "sibling-refusal-worker.json");
 const refusalChild = path.join(artifacts, "sibling-refusal-child.json");
 const refusalBaseline = path.join(artifacts, "sibling-refusal-baseline.json");
 
@@ -216,24 +218,40 @@ export default {
 };
 `,
     [path.join(pluginRoot, "doctor-contract-api.mjs")]: `import fs from "node:fs";
-import path from "node:path";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import value, { sharedSource } from "../shared/value.mjs";
 ${observe("doctor-module")}
+export function normalizeCompatibilityConfig({ cfg }) {
+  ${observe("doctor-contract")}
+  return { config: cfg, changes: [] };
+}
+`,
+    [refusalPreload]: `import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { isMainThread } from "node:worker_threads";
+${processIdentity.toString()}
 const privateRoot = process.env.OPENCLAW_STATE_DIR;
-const source = fileURLToPath(import.meta.url);
-if (fs.existsSync(${JSON.stringify(refusalArm)}) &&
+if (isMainThread &&
+    fs.existsSync(${JSON.stringify(refusalArm)}) &&
+    path.isAbsolute(privateRoot ?? "") &&
     privateRoot !== ${JSON.stringify(stateDir)} &&
     path.basename(privateRoot ?? "").startsWith("openclaw-update-canary-") &&
-    source.startsWith(privateRoot + path.sep) &&
+    process.env.OPENCLAW_CONFIG_PATH === path.join(privateRoot, "openclaw.json") &&
     process.env.OPENCLAW_UPDATE_IN_PROGRESS === "0" &&
     process.argv[1]?.endsWith("/dist/commands/doctor-lint.worker.js")) {
+  fs.writeFileSync(${JSON.stringify(refusalWorker)}, JSON.stringify({
+    worker: processIdentity(process.pid),
+    entry: process.argv[1],
+    stateDir: privateRoot,
+    configPath: process.env.OPENCLAW_CONFIG_PATH,
+    operatorStateDir: ${JSON.stringify(stateDir)},
+    operatorConfigPath: ${JSON.stringify(configPath)},
+  }), { flag: "wx" });
   process.once("exit", (code) => {
     if (code !== 0) return;
-    // Readiness is emitted by the real worker before this exit hook. Join the
-    // child so root-exit cleanup cannot race ahead of its bounded output.
+    // The real worker validates its rehearsal and emits readiness before exit.
+    // Join the child so root-exit cleanup cannot race ahead of its bounded output.
     spawnSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(`
 import fs from "node:fs";
 import { once } from "node:events";
@@ -249,10 +267,6 @@ for (let offset = 0; offset < bytes.length; offset += 64 * 1024) {
 }
 `)}], { stdio: ["ignore", "inherit", "inherit"] });
   });
-}
-export function normalizeCompatibilityConfig({ cfg }) {
-  ${observe("doctor-contract")}
-  return { config: cfg, changes: [] };
 }
 `,
   };
