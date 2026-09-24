@@ -1324,6 +1324,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it.each([
     { label: "desktop", width: 1366, hasTouch: false },
     { label: "mobile", width: 430, hasTouch: true },
+    { label: "wide touch", width: 1366, hasTouch: true },
   ])("keeps transcript turn and run block spacing on $label", async ({ width, hasTouch }) => {
     await withBrowserPage(
       openBrowserPage(width, 900, { hasTouch, isolated: true }),
@@ -1373,9 +1374,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           workToReply: 8,
           expandedTextToTool: 6,
           workedForSeparator: 0,
-          turn: hasTouch ? 49 : 42,
-          persistentTurn: hasTouch ? 49 : 42,
-          revealedPersistentTurn: hasTouch ? 49 : 42,
+          turn: width <= 768 ? 45 : hasTouch ? 49 : 42,
+          persistentTurn: width <= 768 ? 45 : hasTouch ? 49 : 42,
+          revealedPersistentTurn: width <= 768 ? 45 : hasTouch ? 49 : 42,
           simpleToPersistentTurn: hasTouch ? 45 : 42,
         });
       },

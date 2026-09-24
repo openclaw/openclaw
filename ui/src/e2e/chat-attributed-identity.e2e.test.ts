@@ -44,7 +44,9 @@ suite.define(() => {
   it.each([320, 390])("keeps revealed assistant controls compact at %s px", async (width) => {
     await suite.withPage(
       {
-        viewport: { width, height: 1000 },
+        viewport: { width, height: 844 },
+        isMobile: true,
+        deviceScaleFactor: 2,
         hasTouch: true,
         permissions: ["clipboard-read", "clipboard-write"],
       },
@@ -105,6 +107,10 @@ suite.define(() => {
         expect(tapArea.width).toBeGreaterThanOrEqual(44);
         expect(tapArea.height).toBeGreaterThanOrEqual(44);
         expect(tapArea.hitCorners).toBe(4);
+        const bubble = await agent.locator(".chat-bubble").boundingBox();
+        const groupBox = await agent.boundingBox();
+        expect(tapArea.top).toBeGreaterThanOrEqual(bubble!.y + bubble!.height);
+        expect(tapArea.top + tapArea.height).toBeLessThanOrEqual(groupBox!.y + groupBox!.height);
         // This point is below and outside the painted button, inside its real tap area.
         await page.touchscreen.tap(tapArea.left + 2, tapArea.top + tapArea.height - 2);
         await expect(copy).toHaveAttribute("data-copy-state", "copied");
