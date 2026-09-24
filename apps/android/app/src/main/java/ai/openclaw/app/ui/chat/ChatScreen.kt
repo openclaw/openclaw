@@ -3600,7 +3600,7 @@ private fun ChatThinkingLevelPicker(
             modifier =
               Modifier
                 .align(AbsoluteAlignment.BottomRight)
-                .absoluteOffset(x = 5.dp, y = 5.dp)
+                .absoluteOffset(x = (-4).dp, y = 5.dp)
                 .size(10.dp)
                 .background(ClawTheme.colors.surface, CircleShape)
                 .testTag("chat-fast-mode-badge"),

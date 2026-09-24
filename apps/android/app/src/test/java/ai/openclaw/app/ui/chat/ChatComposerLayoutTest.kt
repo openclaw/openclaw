@@ -3997,10 +3997,18 @@ class ChatComposerLayoutTest {
       }
     }
 
+    fun assertFastBadgePlacement() {
+      val gauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+      val badge = composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+      assertTrue("Fast bolt should sit to the left of the red sector", badge.center.x > gauge.center.x && badge.center.x < gauge.left + gauge.width * 0.75f)
+      assertTrue("Fast bolt should remain below the arc and needle", badge.top >= gauge.top + gauge.height * 0.75f)
+    }
+
     publishEffort("off")
     val offGaugeImage = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage()
     val offGauge = offGaugeImage.asAndroidBitmap()
     capture("off")
+    assertFastBadgePlacement()
     val pixels = offGaugeImage.toPixelMap()
     // The bolt sits below this quadrant; only the original Fast red-zone arc paints it red.
     val redZonePixels =
@@ -4026,10 +4034,7 @@ class ChatComposerLayoutTest {
     composeRule.runOnIdle { direction.value = LayoutDirection.Rtl }
     publishEffort("off")
     capture("rtl-off")
-    val gauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-    val badge = composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-    assertTrue("Fast cue must not cover the Off needle in RTL", badge.left > gauge.center.x)
-    assertTrue("Fast cue must sit below the needle and red arc in RTL", badge.top >= gauge.top + gauge.height * 0.75f)
+    assertFastBadgePlacement()
   }
 
   @Test
