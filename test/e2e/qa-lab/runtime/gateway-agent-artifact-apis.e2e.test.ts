@@ -1,5 +1,4 @@
 // Gateway agent and artifact API tests cover composed RPC behavior through a real server.
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -310,7 +309,6 @@ describe("Gateway agent and artifact APIs", () => {
     ).resolves.toEqual({ ok: true, agentId: createdAgent.agentId });
 
     const fileContent = "# Artifact steward\n\nOwns durable artifact verification.\n";
-    const expectedHash = createHash("sha256").update(fileContent).digest("hex");
     await expect(
       client.request("agents.files.set", {
         agentId: createdAgent.agentId,
@@ -333,7 +331,7 @@ describe("Gateway agent and artifact APIs", () => {
       ]),
     });
     const fileResult = await client.request<{
-      file: { content: string; name: string; missing: boolean };
+      file: { content: string; hash: string; name: string; missing: boolean };
     }>("agents.files.get", {
       agentId: createdAgent.agentId,
       name: "AGENTS.md",
@@ -341,9 +339,9 @@ describe("Gateway agent and artifact APIs", () => {
     expect(fileResult.file).toMatchObject({
       name: "AGENTS.md",
       content: fileContent,
+      hash: "407bf85d7a90b78dd69e8eba130109ab14ad57519e71993223bb3273898f0e16",
       missing: false,
     });
-    expect(createHash("sha256").update(fileResult.file.content).digest("hex")).toBe(expectedHash);
 
     const sessionKey = "agent:main:artifact-api";
     const sessionId = "gateway-agent-artifact-session";

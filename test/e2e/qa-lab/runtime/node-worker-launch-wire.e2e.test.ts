@@ -32,6 +32,7 @@ import {
   createPublishedWireWorkspace,
   startPairedNodeWorkerGateway,
   type PairedNodeWorkerHost,
+  type PublishedWireWorkspace,
   type WireGateway,
   wireMessageText,
 } from "./paired-node-worker-wire-fixture.js";
@@ -83,7 +84,7 @@ describe("node worker launch wire", () => {
     async () => {
       const root = tempDirs.make("openclaw-node-worker-launch-wire-");
       const provider = await startMidturnProvider();
-      const published = await createPublishedWireWorkspace(root);
+      let published: PublishedWireWorkspace | undefined;
       const gatewayOwner = createQaGatewayChild();
       let gateway: WireGateway | undefined;
       let operator: GatewayClient | undefined;
@@ -101,6 +102,7 @@ describe("node worker launch wire", () => {
       let cleanupFailures: unknown[];
 
       try {
+        published = await createPublishedWireWorkspace(root);
         gateway = await startPairedNodeWorkerGateway({
           owner: gatewayOwner,
           providerBaseUrl: provider.baseUrl,
@@ -582,7 +584,7 @@ describe("node worker launch wire", () => {
           operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
           stopQaGatewayFixture(gatewayOwner),
           provider.stop(),
-          closeWireServer(published.server),
+          published ? closeWireServer(published.server) : Promise.resolve(),
         ]);
         cleanupFailures = cleanup.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],

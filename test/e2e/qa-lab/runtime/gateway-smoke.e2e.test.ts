@@ -310,7 +310,7 @@ describe("gateway-smoke", () => {
     expect(stderr).toEqual(["connect failed: bad token"]);
   });
 
-  it("requires connect and health in order", async () => {
+  it("requires only connect and health for an unpaired iOS-shaped client", async () => {
     const fake = createSmokeDeps({
       connect: connectHelloResponse(),
       health: healthResponse(),
@@ -398,26 +398,5 @@ describe("gateway-smoke", () => {
     expect(fake.closed).toBe(1);
     expect(fake.calls.map((call) => call.method)).toEqual(["connect", "health"]);
     expect(fake.stderr).toEqual(["health failed: missing health summary payload"]);
-  });
-
-  it("does not call scoped chat history for an unpaired iOS-shaped client", async () => {
-    const fake = createSmokeDeps({
-      connect: connectHelloResponse(),
-      health: healthResponse(),
-      "chat.history": { ok: false, error: "session store unavailable" },
-    });
-
-    const code = await runGatewaySmoke(
-      { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" },
-      fake.deps,
-    );
-
-    expect(code).toBe(0);
-    expect(fake.closed).toBe(1);
-    expect(fake.calls).toEqual([
-      { method: "connect", timeout: undefined },
-      { method: "health", timeout: undefined },
-    ]);
-    expect(fake.stderr).toEqual([]);
   });
 });

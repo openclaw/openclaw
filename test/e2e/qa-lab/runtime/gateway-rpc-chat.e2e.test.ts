@@ -785,9 +785,9 @@ describe("Gateway chat RPCs", () => {
           typeof tool === "object" && tool !== null ? (tool as { name?: unknown }).name : undefined;
         return typeof name === "string" ? [name] : [];
       });
-      expect(declaredToolNames).not.toEqual(
-        expect.arrayContaining(["write", "edit", "apply_patch", "web_search"]),
-      );
+      for (const name of ["write", "edit", "apply_patch", "web_search"]) {
+        expect(declaredToolNames).not.toContain(name);
+      }
 
       await expect(
         gateway.call("sessions.patch", {

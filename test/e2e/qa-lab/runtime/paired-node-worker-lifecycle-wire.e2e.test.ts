@@ -188,7 +188,7 @@ describe("paired node worker lifecycle wire", () => {
     async () => {
       const root = tempDirs.make("openclaw-paired-node-worker-lifecycle-");
       const provider = await startPairedNodeWorkerLifecycleProvider([HOLD_A, HOLD_B]);
-      const published = await createPublishedWireWorkspace(root);
+      let published: PublishedWireWorkspace | undefined;
       const gatewayOwner = createQaGatewayChild();
       let gateway: WireGateway | undefined;
       let operator: GatewayClient | undefined;
@@ -196,6 +196,7 @@ describe("paired node worker lifecycle wire", () => {
       let testFailure: { error: unknown } | undefined;
       let cleanupFailures: unknown[];
       try {
+        published = await createPublishedWireWorkspace(root);
         gateway = await startPairedNodeWorkerGateway({
           owner: gatewayOwner,
           providerBaseUrl: provider.baseUrl,
@@ -470,7 +471,7 @@ describe("paired node worker lifecycle wire", () => {
           operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
           stopQaGatewayFixture(gatewayOwner),
           provider.stop(),
-          closeWireServer(published.server),
+          published ? closeWireServer(published.server) : Promise.resolve(),
         ]);
         cleanupFailures = cleanup.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],

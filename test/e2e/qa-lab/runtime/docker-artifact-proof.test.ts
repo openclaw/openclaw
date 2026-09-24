@@ -58,6 +58,8 @@ describe("Docker artifact proof producer", () => {
         },
         scenarioId: "compose-setup",
       }),
-    ).toContain("containers=gateway=container123");
+    ).toBe(
+      "package=openclaw@2026.7.6; sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; image=openclaw:functional@sha256:image; containers=gateway=container123",
+    );
   });
 });

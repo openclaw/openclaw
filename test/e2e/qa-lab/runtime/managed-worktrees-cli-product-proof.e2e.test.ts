@@ -35,17 +35,14 @@ afterEach(async () => {
   }
 });
 
-function parseCommandJson<T>(
-  label: string,
-  result: CommandResult,
-  parse: (value: unknown) => T = (value) => value as T,
-): T {
+function parseCommandJson<T>(label: string, result: CommandResult): T {
   if (result.code !== 0) {
     throw new Error(
       `${label} failed with exit ${String(result.code)}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
     );
   }
-  return parse(JSON.parse(result.stdout) as unknown);
+  const value: unknown = JSON.parse(result.stdout);
+  return value as T;
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {

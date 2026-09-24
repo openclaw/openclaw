@@ -74,7 +74,7 @@ let client: GatewayClient | undefined;
 afterEach(async () => {
   try {
     await runQaGatewayFixture(
-      async () => client?.stop(),
+      async () => client?.stopAndWait(),
       () => gatewayOwner && stopQaGatewayFixture(gatewayOwner),
       () => bus?.stop(),
     );
@@ -228,6 +228,8 @@ async function connectWebchat(
       onConnectError: reject,
       onClose: (code, reason) => reject(new Error(`Gateway closed ${code}: ${reason}`)),
     });
+    // Failed hello must leave the client owned by afterEach cleanup.
+    client = connecting;
     connecting.start();
   });
 }

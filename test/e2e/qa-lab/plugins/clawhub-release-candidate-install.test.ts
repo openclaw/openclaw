@@ -1,12 +1,12 @@
 // ClawHub release candidate producer tests cover blocked script evidence output.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "../../../../extensions/qa-lab/test-api.js";
+import { createTempDirTracker } from "../../../helpers/temp-dir.js";
 import { runClawHubReleaseCandidateInstallProducer } from "./clawhub-release-candidate-install.js";
 
-const tempRoots: string[] = [];
+const tempDirs = createTempDirTracker();
 const modelCases: {
   name: string;
   platform?: string;
@@ -215,11 +215,12 @@ const modelCases: {
   },
 ];
 
-afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
-  vi.unstubAllEnvs();
+afterEach(() => {
+  try {
+    tempDirs.cleanup();
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 describe("ClawHub release candidate install producer", () => {
@@ -227,10 +228,7 @@ describe("ClawHub release candidate install producer", () => {
     it(`writes blocked evidence with ${testCase.name}`, async () => {
       const { platform, model, windowsModel, expectedModel, expectedModelName, expectedProvider } =
         testCase;
-      const artifactBase = await fs.mkdtemp(
-        path.join(os.tmpdir(), "openclaw-clawhub-release-evidence-"),
-      );
-      tempRoots.push(artifactBase);
+      const artifactBase = tempDirs.make("openclaw-clawhub-release-evidence-");
       const missingTarballEnv = "OPENCLAW_TEST_MISSING_RELEASE_CANDIDATE_TARBALL";
       vi.stubEnv(missingTarballEnv, "");
       vi.stubEnv("OPENAI_API_KEY", "");

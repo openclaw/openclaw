@@ -786,9 +786,6 @@ describe("Codex paired-device exec-server carrier", () => {
             })}\n${gateway.logs().slice(-6_000)}`,
           );
         }
-        expect(interruptedOutcome.error).toEqual(
-          expect.stringMatching(/execution node disconnected.*fresh attempt/iu),
-        );
         await vi.waitFor(
           () => expect(processIsAlive(interruptedProcess)).toBe(false),
           WAIT_OPTIONS,

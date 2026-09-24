@@ -110,7 +110,12 @@ it.each(["http", "websocket"] as const)(
       }
     };
     try {
-      const captured = await hold.arrived;
+      const captured = await Promise.race([
+        hold.arrived,
+        catalog.then(() => {
+          throw new Error("Catalog request settled before the held response arrived");
+        }),
+      ]);
       provider.setPhase("restored");
       const observed = vi.fn(() => hold.release());
       provider.observeNextSuccess(observed, { model: "gpt-5.5", path: "/v1/responses" });

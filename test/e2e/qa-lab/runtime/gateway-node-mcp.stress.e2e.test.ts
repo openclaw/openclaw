@@ -201,6 +201,13 @@ describe("Gateway/node MCP real-process stress", () => {
         const sessionRich = await sessionRuntime.callTool("stdio", "parity_probe", {
           marker: "rich-result",
         });
+        expect(sessionRich.content.map((block) => block.type)).toEqual([
+          "text",
+          "resource_link",
+          "resource",
+          "audio",
+          "image",
+        ]);
         expect(nodeRich).toMatchObject({
           payload: {
             content: sessionRich.content.map((block) => ({ type: block.type })),

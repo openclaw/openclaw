@@ -508,7 +508,7 @@ describe("Gateway node control plane", () => {
       let gateway: GatewayHandle | undefined;
       let operator: GatewayClient | undefined;
       let node: GatewayClient | undefined;
-      let proofError: unknown;
+      let proofFailure: { error: unknown } | undefined;
       const cleanupErrors: unknown[] = [];
       const invocations: InvocationRecord[] = [];
       const handlerErrors: Error[] = [];
@@ -687,7 +687,7 @@ describe("Gateway node control plane", () => {
         await Promise.all(invocationResponses);
         expect(handlerErrors).toEqual([]);
       } catch (error) {
-        proofError = error;
+        proofFailure = { error };
       } finally {
         await Promise.all(invocationResponses);
         const clientCleanup = await Promise.allSettled([
@@ -715,7 +715,7 @@ describe("Gateway node control plane", () => {
           cleanupErrors.push(error);
         }
       }
-      const failures = proofError === undefined ? cleanupErrors : [proofError, ...cleanupErrors];
+      const failures = proofFailure ? [proofFailure.error, ...cleanupErrors] : cleanupErrors;
       if (failures.length === 1) {
         throw failures[0];
       }

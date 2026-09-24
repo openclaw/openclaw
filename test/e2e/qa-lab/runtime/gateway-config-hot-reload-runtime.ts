@@ -58,9 +58,9 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
   const failures: Array<{ prefix: string; message: string }> = [];
   const metadataProbes: Array<{ phase: string; modelCount: number; commandCount: number }> = [];
   const gatewayOwner = createQaGatewayChild();
-  const mock = await startQaMockOpenAiServer();
-  const fixture = await startHotReloadUpstreams(mock.baseUrl);
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hot-reload-"));
+  let mockOwner: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
+  let fixtureOwner: Awaited<ReturnType<typeof startHotReloadUpstreams>> | undefined;
+  let temporaryRootOwner: string | undefined;
   const connections: HotReloadConnection[] = [];
   let gateway: QaGatewayChild | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -72,6 +72,11 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
   let security: Awaited<ReturnType<typeof proveHotReloadSecurity>> | undefined;
   await runQaGatewayFixture(
     async () => {
+      const mock = (mockOwner = await startQaMockOpenAiServer());
+      const fixture = (fixtureOwner = await startHotReloadUpstreams(mock.baseUrl));
+      const temporaryRoot = (temporaryRootOwner = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-hot-reload-"),
+      ));
       await fs.access(path.join(repoRoot, "dist/control-ui/index.html"));
       pairingFixture = await prepareGatewayPairingFixture(temporaryRoot);
       const catalogPath = await writeHotReloadTerminalCatalog(temporaryRoot);
@@ -755,12 +760,14 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
     },
     () => stopQaGatewayFixture(gatewayOwner),
     () => pairingFixture?.close(),
-    () => fixture.close(),
-    () => mock.stop(),
+    () => fixtureOwner?.close(),
+    () => mockOwner?.stop(),
     async () => {
-      // Child cleanup does not own this parent identity store or its live WAL.
-      closeOpenClawStateDatabaseByPath(path.join(temporaryRoot, "state", "openclaw.sqlite"));
-      await fs.rm(temporaryRoot, { recursive: true, force: true });
+      if (temporaryRootOwner) {
+        // Child cleanup does not own this parent identity store or its live WAL.
+        closeOpenClawStateDatabaseByPath(path.join(temporaryRootOwner, "state", "openclaw.sqlite"));
+        await fs.rm(temporaryRootOwner, { recursive: true, force: true });
+      }
     },
   );
   return { summary, passedChecks, failures };

@@ -419,7 +419,7 @@ describe("TUI PTY evidence producer", () => {
         cases: [makeCase({ testFile: LOCAL_FILE })],
         requireBuiltCli: true,
       });
-      await runTuiPtyEvidenceProducer(
+      const evidence = await runTuiPtyEvidenceProducer(
         { artifactBase, repoRoot, scenarioId: scenario.id },
         {
           loadScenario: () => scenario,
@@ -432,6 +432,9 @@ describe("TUI PTY evidence producer", () => {
           },
         },
       );
+
+      expect(evidence.entries).toHaveLength(1);
+      expect(evidence.entries[0]?.result.status).toBe("pass");
 
       const proofMatrix = JSON.parse(
         await fs.readFile(path.join(artifactBase, "proof-matrix.json"), "utf8"),

@@ -33,12 +33,9 @@ describe("OTEL generation config watcher runtime", () => {
       ),
       "/workspace/repo",
     );
-    expect(failure).toContain("<repo>");
-    expect(failure).toContain("<local-endpoint>");
-    expect(failure).toContain("<temp-path>");
-    expect(failure).toContain("<gateway-token>");
-    expect(failure).not.toContain("/workspace/repo");
-    expect(failure).not.toContain(localEndpoint);
+    expect(failure).toBe(
+      "failed at <repo>/test.ts via <local-endpoint> in <temp-path> with <gateway-token>",
+    );
   });
 
   it("requires every exported span chain to terminate at the injected parent", () => {

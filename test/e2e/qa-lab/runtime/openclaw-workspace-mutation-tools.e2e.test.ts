@@ -106,5 +106,4 @@ test("OpenClaw applies and edits exact workspace bytes while rejecting escapes",
   expect(details.patch).toContain("-state: DRAFT\n+state: FINAL");
   const finalBytes = await fs.readFile(path.join(workspace, ARTIFACT), "utf8");
   expect(finalBytes).toBe(FINAL);
-  expect(finalBytes).not.toContain("DRAFT");
 });
