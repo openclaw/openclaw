@@ -9,6 +9,10 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import {
   createSourceRuntime,
   runSourceRuntime,
 } from "./doctor-config-preflight.process.test-support.js";
@@ -22,13 +26,17 @@ const tempDirs = createFixtureLifetime();
 afterAll(() => tempDirs.cleanup());
 
 function seedOwnerlessSchemaOnlyAgentDatabase(stateDir: string): string {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  // Exercise the migration refusal with known shared history, rather than a lost journal.
+  openOpenClawStateDatabase({ env });
+  closeOpenClawStateDatabaseForTest();
   const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(databasePath);
   try {
     ensureOpenClawAgentDatabaseSchema(database, {
       agentId: "openclaw",
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      env,
       path: databasePath,
       register: false,
     });

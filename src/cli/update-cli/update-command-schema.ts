@@ -208,7 +208,9 @@ export async function preflightUpdateCommandSchemas(params: {
           : { schemaVersions: packageTargetSchemaVersions };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {
         const failure = createUpdatePreflightFailure(
-          "target-git-metadata",
+          "failureCode" in target && target.failureCode
+            ? target.failureCode
+            : "target-git-metadata",
           target.metadataUnreadable,
         );
         throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {

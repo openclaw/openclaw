@@ -11,7 +11,7 @@ import {
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "../infra/state-database-coordinator.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { captureEnv } from "./env.js";
+import { captureEnv, withEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 type ConfigRuntimeResettable = typeof configRuntime & {
@@ -354,10 +354,12 @@ export async function createOpenClawTestState(
         const { saveAuthProfileStore } = createAuthProfileStoreRuntime(
           createExternalAuthRuntime(() => []),
         );
-        saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
-          filterExternalAuthProfiles: false,
-          syncExternalCli: false,
-        });
+        withEnv(env, () =>
+          saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
+            filterExternalAuthProfiles: false,
+            syncExternalCli: false,
+          }),
+        );
         return resolveAuthProfileDatabasePath(targetAgentDir);
       },
       applyEnv: () => {

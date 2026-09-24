@@ -90,15 +90,15 @@ vi.mock("../../infra/fs-safe-remove.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./store-sqlite-transition.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./store-sqlite-transition.js")>();
+vi.mock("./store-transition.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./store-transition.js")>();
   return {
     ...actual,
-    commitPendingSkillProposalTransition: (
+    commitPendingSkillProposalTransition: async (
       ...args: Parameters<typeof actual.commitPendingSkillProposalTransition>
     ) => {
       revisionFault.trip("CAS before commit");
-      const result = actual.commitPendingSkillProposalTransition(...args);
+      const result = await actual.commitPendingSkillProposalTransition(...args);
       revisionFault.trip("CAS after commit");
       return result;
     },

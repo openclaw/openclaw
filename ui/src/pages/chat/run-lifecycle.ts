@@ -54,7 +54,7 @@ export type ChatHistoryRunObservation = {
 };
 
 export type ChatRunError = {
-  kind?: "auth_refresh";
+  kind?: "auth_refresh" | "state_contention";
   summary: string;
   /** Display ownership only; the session reducer retains each run's diagnostic. */
   runId?: string;
@@ -209,7 +209,7 @@ export function setChatRunError(
   setChatRunOwner(state, runId);
   state.chatRunError = {
     ...(kind ? { kind } : {}),
-    summary: redactToolDetail(summary.trim(), { preservePaths: true }),
+    summary: redactToolDetail(summary.trim()),
     ...(runId ? { runId } : {}),
   };
 }
@@ -283,7 +283,10 @@ async function settleChatAbortResponse(
   if (ownsChatAbortIntent(state, intent)) {
     if (!result.ok) {
       const message = formatConnectError(result.error);
-      if (state.chatRunId) {
+      if (result.errorKind === "state_contention") {
+        setChatError(state, null);
+        setChatRunError(state, message, intent.runId ?? undefined, result.errorKind);
+      } else if (state.chatRunId) {
         setChatError(state, message);
       } else {
         setChatRunError(state, message, intent.runId ?? undefined);

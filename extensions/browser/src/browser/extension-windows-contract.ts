@@ -4,7 +4,7 @@ import {
   BROWSER_NATIVE_HOST_NAME,
   BROWSER_NATIVE_HOST_DESCRIPTION,
 } from "./extension-native-host.constants.js";
-import { parseStrictJsonObject } from "./extension-relay/auth-v2.js";
+import { parseStrictJsonObject } from "./extension-relay/strict-json.js";
 import { isValidProfileName } from "./profiles.js";
 
 export const WINDOWS_MANAGEMENT_LIMIT = 32768;

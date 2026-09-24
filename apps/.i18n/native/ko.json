@@ -593,7 +593,6 @@
     "native.android.56ba8fc553a399af": "적용, 거부, 격리에는 operator.admin 권한 범위가 필요합니다. 수명 주기 작업을 활성화하려면 공유 Gateway 인증으로 다시 연결하거나 기기의 operator.admin 권한 범위 업그레이드를 승인하세요.",
     "native.android.56d46eccb37487c3": "일정",
     "native.android.56d7703155f09152": "변경 사항을 검토하려면 Gateway에 연결하세요.",
-    "native.android.56da9a315483abe4": "음성 대화 중지됨",
     "native.android.56de778dd64c4cba": "다음 주기",
     "native.android.56eac13e3394c87f": "로그아웃",
     "native.android.5731193296f6ca25": "적용",

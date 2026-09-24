@@ -34,7 +34,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { readSkillCuratorReviewStatus } from "./collection-review-state.js";
+import { readSkillCuratorReviewStatus } from "./collection-review-state.test-support.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
 import { runSkillExperienceReview as runCapturedExperienceReview } from "./experience-review.js";
 import { inspectSkillProposal, listSkillProposals, proposeCreateSkill } from "./service.js";

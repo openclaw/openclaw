@@ -139,14 +139,19 @@ describe("chat transcript geometry", () => {
     let regionHeight = 600;
     let gutter = 100;
     let innerWidth = 768;
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("chat-thread-inner") ? innerWidth : 1200;
+    });
     const readInnerBounds = vi.fn(() => new DOMRect(gutter, 0, innerWidth, 1200));
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-      function (this: Element) {
-        return this.classList.contains("chat-thread-inner")
-          ? readInnerBounds()
-          : new DOMRect(0, 0, 1200, 600);
-      },
-    );
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      return this.classList.contains("chat-thread-inner")
+        ? readInnerBounds()
+        : new DOMRect(0, 0, 1200, 600);
+    });
     Object.defineProperty(region, "clientHeight", { get: () => regionHeight });
     const props = {
       ...threadProps("rail-geometry"),
@@ -174,6 +179,7 @@ describe("chat transcript geometry", () => {
       flushFrames();
       expect(viewport.hasAttribute("data-position-rail-gutter")).toBe(true);
       expect(viewport.style.getPropertyValue("--chat-position-rail-viewport-height")).toBe("600px");
+      expect(viewport.style.getPropertyValue("--chat-transcript-column-width")).toBe("768px");
       readInnerBounds.mockClear();
 
       for (const [index, text] of ["one", "two", "three"].entries()) {
@@ -191,6 +197,7 @@ describe("chat transcript geometry", () => {
       emitResize(inner, innerWidth, 1500);
       flushFrames();
       expect(viewport.hasAttribute("data-position-rail-gutter")).toBe(false);
+      expect(viewport.style.getPropertyValue("--chat-transcript-column-width")).toBe("1160px");
       expect(readInnerBounds).toHaveBeenCalledOnce();
       readInnerBounds.mockClear();
 
@@ -222,6 +229,9 @@ describe("chat transcript geometry", () => {
       emitResize(replacement, innerWidth, 400);
       flushFrames();
       expect(replacementViewport.hasAttribute("data-position-rail-gutter")).toBe(true);
+      expect(replacementViewport.style.getPropertyValue("--chat-transcript-column-width")).toBe(
+        "768px",
+      );
       readInnerBounds.mockClear();
       emitResize(inner, 400, 400);
       flushFrames();

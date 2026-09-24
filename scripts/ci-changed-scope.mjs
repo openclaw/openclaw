@@ -12,6 +12,37 @@ import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
 const CHANGED_PATHS_OUTPUT_MAX_BYTES = 64 * 1024;
 
+/** @param {string} changedPath */
+export function isCiDocumentationPath(changedPath) {
+  if (
+    /(?:^|\/)(?:test|tests|__tests__|fixture|fixtures|__fixtures__|test-fixtures|templates)\//u.test(
+      changedPath,
+    )
+  ) {
+    return false;
+  }
+  const instruction =
+    /(?:^|\/)AGENTS\.md$/u.test(changedPath) ||
+    /^\.agents\/skills\/.+\.md$/u.test(changedPath) ||
+    /^skills\/[^/]+\/SKILL\.md$/u.test(changedPath);
+  return (
+    /(?:^|\/)README\.mdx?$/u.test(changedPath) || instruction || changedPath.startsWith("docs/")
+  );
+}
+
+/**
+ * Catalog data skips PR Node rows; generator/runtime code keeps its test owners.
+ * @param {string} changedPath
+ */
+export function isNodeTestDataOnlyPath(changedPath) {
+  return (
+    isCiDocumentationPath(changedPath) ||
+    /^(?:ui\/src\/i18n\/(?:locales\/[^/]+\.ts|\.i18n\/[^/]+\.(?:json|jsonl))$|src\/wizard\/i18n\/locales\/[^/]+\.ts$|apps\/\.i18n\/native\/[^/]+\.json$)/u.test(
+      changedPath,
+    )
+  );
+}
+
 /** @type {ChangedScope} */
 const FULL_SCOPE = {
   runNode: true,
@@ -718,6 +749,9 @@ export function writeGitHubOutput(
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
   }
+  const nodeTestDataOnly =
+    changedPaths !== null && changedPaths.length > 0 && changedPaths.every(isNodeTestDataOnlyPath);
+  appendFileSync(outputPath, `node_test_data_only=${nodeTestDataOnly}\n`, "utf8");
   appendFileSync(outputPath, `run_node=${scope.runNode}\n`, "utf8");
   appendFileSync(outputPath, `run_macos=${scope.runMacos}\n`, "utf8");
   appendFileSync(outputPath, `run_macos_node=${scope.runMacosNode}\n`, "utf8");

@@ -665,6 +665,7 @@ export function createPackedCompletionSmokeEnv(
 
 export function collectPackedInstalledPackageVerificationErrors(params: {
   additionalCompanionManifestRoots?: string[];
+  allowLegacyGeneratedOwnership?: boolean;
   expectedVersion: string;
   installedBinaryVersion?: string;
   packageRoot: string;
@@ -674,6 +675,7 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
   ) as { version?: string };
   const errors = collectInstalledPackageErrors({
     additionalCompanionManifestRoots: params.additionalCompanionManifestRoots,
+    allowLegacyGeneratedOwnership: params.allowLegacyGeneratedOwnership,
     expectedVersion: params.expectedVersion,
     installedVersion: packageJson.version?.trim() ?? "",
     packageRoot: params.packageRoot,
@@ -687,6 +689,12 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
     );
   }
   return errors;
+}
+
+export function allowsLegacyGeneratedOwnershipForSourceRoot(sourceRoot: string): boolean {
+  return !existsSync(
+    resolve(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts"),
+  );
 }
 
 function verifyPackedInstalledPackage(params: {
@@ -712,6 +720,7 @@ function verifyPackedInstalledPackage(params: {
     // The selected source checkout is immutable release input. Its companion
     // manifests are the exact inputs packed by the following plugin preflight.
     additionalCompanionManifestRoots: [resolve("extensions")],
+    allowLegacyGeneratedOwnership: allowsLegacyGeneratedOwnershipForSourceRoot(resolve()),
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,
     packageRoot: params.packageRoot,
@@ -734,7 +743,7 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
     // Strict declaration checking needs the release-declared ws types; without
     // them skipLibCheck:false reports TS7016 before the __exportAll TS2304.
     "@types/ws": "8.18.1",
-    typescript: "6.0.3",
+    typescript: "7.0.2",
   };
   if (params.aiPackageSpec) {
     dependencies["@openclaw/ai"] = params.aiPackageSpec;
@@ -847,11 +856,8 @@ function runPackedPluginSdkTypescriptSmoke(
         );
       }
     }
-    const tscPath = [
-      join(consumerDir, "node_modules", "typescript", "bin", "tsc"),
-      join(installedOpenClawRoot, "node_modules", "typescript", "bin", "tsc"),
-    ].find((candidate) => existsSync(candidate));
-    if (!tscPath) {
+    const tscPath = join(consumerDir, "node_modules", "typescript", "bin", "tsc");
+    if (!existsSync(tscPath)) {
       throw new Error("release-check: packed plugin SDK TypeScript smoke could not find tsc.");
     }
     runReleaseCheckCommand(

@@ -125,7 +125,7 @@ mitigation; production CLI exit behavior, assertions, and deadlines are unchange
 The script erasability gate uses Node's strip-only parser, including when package
 checks run under Bun. It selects an installed Node runtime and skips Bun's `node` shim.
 
-The test toolchain pins stable Vitest `5.0.0`, including its browser and coverage
+The test toolchain pins stable Vitest `5.0.1`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
 suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module
 scope, and perform actions whose mock calls you assert inside the test.
@@ -237,11 +237,16 @@ JavaScript startup and output handling instead of repeated TypeScript compilatio
 
 Automatic-triage process fixtures share this generation for admission, failure handling, execution, process identity, and respawn checks. Compilation finishes before readiness deadlines begin, so children load prepared JavaScript. The detached helper uses the same sealed lease runtime as the installed package.
 
-Preparation is lazy across both projects and shards. Config imports, listing
-tests, and tiny tests that do not import these declarations do not load the
-subprocess compiler or compile workers. A shard that needs a declaration requests the
-outer runner's single build through its existing Node IPC channel during module
-collection, before fixture hooks and readiness deadlines. Every finite invocation
+Known core database-worker consumers prepare the invocation's compiled generation
+before test processes start, including when a case imports its worker declaration
+dynamically. Selection uses the existing database-worker inventory and honors CLI
+filters, exclusions, and include files. Other tests retain lazy preparation across
+projects and shards. Config imports, listing tests, watch runs, custom selections,
+and tiny tests that do not import these declarations do not eagerly compile workers.
+A shard that imports a declaration requests the outer runner's single build through
+its existing Node IPC channel; eager consumers reuse the completed generation.
+Static imports acquire it during module collection, before fixture hooks and readiness
+deadlines. Every finite invocation
 that needs a declaration pays for this fixed entry set; preparation timing is
 reported separately from child execution. The runner starts one short-lived native
 Node or Bun compiler child and joins it before returning the verified manifest to

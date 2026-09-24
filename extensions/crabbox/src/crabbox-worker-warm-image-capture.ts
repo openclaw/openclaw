@@ -69,7 +69,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
       projectCaptureRequired?: true;
       projectCaptureReplay?: true;
     },
-    prepareSource?: () => Promise<void>,
+    prepareAndScrubSource?: (scrubScript: string) => Promise<void>,
   ): Promise<boolean> {
     assertCurrent(context);
     const captureId = randomUUID();
@@ -215,16 +215,19 @@ export function createCrabboxWarmImageCapture(dependencies: {
         // Runtime preparation belongs only to a claimed capture. Scrub its forwarded
         // credential artifacts afterward, before any native image can include them.
         assertCurrent(context);
-        preparing = true;
-        await prepareSource?.();
-        preparing = false;
-        await checkpointCommand(
-          context,
-          "scrub",
-          dependencies.runArgs(context),
-          WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
-          SCRUB_WORKER_STATE,
-        );
+        if (prepareAndScrubSource) {
+          preparing = true;
+          await prepareAndScrubSource(SCRUB_WORKER_STATE);
+          preparing = false;
+        } else {
+          await checkpointCommand(
+            context,
+            "scrub",
+            dependencies.runArgs(context),
+            WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
+            SCRUB_WORKER_STATE,
+          );
+        }
         // A stopped allocation or manual recovery must not start another paid operation.
         assertCurrent(context);
         creating = await openStore().update(key, (current) => {

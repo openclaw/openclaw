@@ -19,7 +19,6 @@ import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import type { PrepareDispatchOperationContextReadyState } from "./dispatch-from-config.prepare-context.js";
 import {
@@ -369,26 +368,25 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
           }
           break;
         }
-        case "declined": {
-          const transcriptOwner = await persistPluginBindingUserTurn();
-          await sendBindingNotice(
-            { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
-            "terminal",
-            transcriptOwner,
-          );
-          return await finishPluginBindingDispatch("declined");
-        }
+        case "declined":
         case "error": {
           const transcriptOwner = await persistPluginBindingUserTurn();
-          logVerbose(
-            `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
-          );
+          if (targetedClaimOutcome.status === "error") {
+            logVerbose(
+              `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
+            );
+          }
           await sendBindingNotice(
-            { text: buildPluginBindingErrorText(pluginOwnedBinding) },
+            {
+              text:
+                targetedClaimOutcome.status === "error"
+                  ? buildPluginBindingErrorText(pluginOwnedBinding)
+                  : buildPluginBindingDeclinedText(pluginOwnedBinding),
+            },
             "terminal",
             transcriptOwner,
           );
-          return await finishPluginBindingDispatch("error");
+          return await finishPluginBindingDispatch(targetedClaimOutcome.status);
         }
       }
     }
@@ -397,7 +395,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   emitMessageReceivedHooks();
   return {
     status: "ready" as const,
-    state: extendPreparedDispatchState(state, { assertCurrentBindingRoute }),
+    state: Object.assign(state, { assertCurrentBindingRoute }),
   };
 }
 

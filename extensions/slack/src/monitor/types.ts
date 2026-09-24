@@ -4,7 +4,6 @@ import type {
   AgentSessionTitleChangedEvent,
   AppContextChangedEvent,
   AppHomeOpenedEvent,
-  ChannelCreatedEvent,
   ChannelIDChangedEvent,
   ChannelRenameEvent,
   MemberJoinedChannelEvent,
@@ -47,9 +46,6 @@ export type SlackReactionEvent = LooseSlackEvent<ReactionAddedEvent | ReactionRe
 export type SlackMemberChannelEvent = LooseSlackEvent<
   MemberJoinedChannelEvent | MemberLeftChannelEvent
 >;
-export type SlackChannelCreatedEvent = Omit<LooseSlackEvent<ChannelCreatedEvent>, "channel"> & {
-  channel?: Partial<ChannelCreatedEvent["channel"]>;
-};
 export type SlackChannelRenamedEvent = Omit<LooseSlackEvent<ChannelRenameEvent>, "channel"> & {
   channel?: Partial<ChannelRenameEvent["channel"]>;
 };

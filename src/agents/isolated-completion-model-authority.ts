@@ -7,6 +7,7 @@ import type { ModelRef } from "./model-ref-shared.js";
 /** A completion keeps its selected-model fence through the runtime's physical cleanup. */
 export function createIsolatedCompletionModelAuthority(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  mapOperatorAuthorizationError?: (error: unknown) => Error;
   abortSignal?: AbortSignal;
   assertCurrent: () => void;
   runtime: AsyncDisposable;
@@ -26,7 +27,11 @@ export function createIsolatedCompletionModelAuthority(params: {
         bound.model?.provider !== model?.provider ||
         bound.model?.model !== model?.model
       ) {
-        const execution = bindOperatorModelExecution(params.operatorAuthority, model);
+        const execution = bindOperatorModelExecution(
+          params.operatorAuthority,
+          model,
+          params.mapOperatorAuthorizationError,
+        );
         if (!execution) {
           return {};
         }

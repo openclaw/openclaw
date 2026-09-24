@@ -61,6 +61,7 @@ export function evaluateWorkflowExpression(
       | "issues"
       | "push"
       | "workflow_dispatch"
+      | "workflow_run"
       | "repository_dispatch"
       | "schedule";
     failed?: boolean;
@@ -72,16 +73,20 @@ export function evaluateWorkflowExpression(
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
+    additionalNeeds?: Record<string, { outputs: Record<string, string> }>;
+    jobResults?: Record<string, string>;
     pullRequestNumber?: number;
     ref?: string;
     resolveTargetOutputs?: Record<string, string>;
     releaseGate?: boolean;
+    releasePriorityRun?: string;
     releaseScope?: string;
     repository: string;
     runCheck?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
     requestedRunnerBackend?: "default" | "hybrid" | "runson";
     ciShape?: "default" | "main";
+    ciOnPush?: string;
     includeAndroid?: boolean;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
@@ -189,8 +194,13 @@ export function evaluateWorkflowExpression(
       ...context.steps,
     },
     needs: {
+      ...context.additionalNeeds,
       resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
+      "checks-baseline-ratchets": {
+        result: context.jobResults?.["checks-baseline-ratchets"] ?? "success",
+      },
       preflight: {
+        result: context.jobResults?.preflight ?? "success",
         outputs: {
           frozen_target: String(context.frozenTarget ?? false),
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
@@ -203,6 +213,8 @@ export function evaluateWorkflowExpression(
     vars: {
       MAINTAINER_COMMAND_REACTIONS: context.maintainerCommands ?? "",
       OPENCLAW_CI_RUNNER_BACKEND: context.runnerBackend ?? "",
+      OPENCLAW_CI_ON_PUSH: context.ciOnPush ?? "",
+      OPENCLAW_RELEASE_PRIORITY_RUN: context.releasePriorityRun ?? "",
     },
   });
 }

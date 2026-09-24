@@ -59,67 +59,13 @@ type PreparedMatrixTarget = {
   roomId: string;
   threadId?: string;
 };
-type MatrixApprovalMetadataAction = {
-  decision: ExecApprovalReplyDecision;
-  label: string;
-  style: PendingApprovalView["actions"][number]["style"];
-  command: string;
-};
-type MatrixApprovalMetadataBase = {
-  version: 1;
-  type: "approval.request";
-  id: string;
-  state: "pending";
-  kind: PendingApprovalView["approvalKind"];
-  phase: "pending";
-  title: string;
-  description?: string;
-  expiresAtMs: number;
-  metadata: PendingApprovalView["metadata"];
-  allowedDecisions: ExecApprovalReplyDecision[];
-  actions: MatrixApprovalMetadataAction[];
-};
-type MatrixExecApprovalMetadata = MatrixApprovalMetadataBase & {
-  kind: "exec";
-  ask?: string;
-  agentId?: string;
-  commandText: string;
-  commandPreview?: string;
-  cwd?: string;
-  envKeys?: readonly string[];
-  host?: string;
-  nodeId?: string;
-  sessionKey?: string;
-};
-type MatrixPluginApprovalSeverity = Extract<
-  PendingApprovalView,
-  { approvalKind: "plugin" }
->["severity"];
-type MatrixPluginApprovalMetadata = MatrixApprovalMetadataBase & {
-  kind: "plugin";
-  agentId?: string;
-  pluginId?: string;
-  toolName?: string;
-  severity: MatrixPluginApprovalSeverity;
-};
-type MatrixSystemAgentApprovalMetadata = MatrixApprovalMetadataBase & {
-  kind: "system-agent";
-  agentId?: string;
-  commandText: string;
-  operationSummary: string;
-};
-type MatrixApprovalMetadata =
-  | MatrixExecApprovalMetadata
-  | MatrixPluginApprovalMetadata
-  | MatrixSystemAgentApprovalMetadata;
-type MatrixApprovalExtraContent = {
-  [MATRIX_APPROVAL_METADATA_KEY]: MatrixApprovalMetadata;
-};
 type PendingApprovalContent = {
   approvalId: string;
   text: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
-  extraContent: MatrixApprovalExtraContent;
+  extraContent: {
+    [MATRIX_APPROVAL_METADATA_KEY]: ReturnType<typeof buildMatrixApprovalMetadata>;
+  };
 };
 type ReactionTargetRef = {
   accountId: string;
@@ -253,12 +199,12 @@ async function prepareTarget(
 function buildMatrixApprovalMetadata(params: {
   view: PendingApprovalView;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): MatrixApprovalMetadata {
-  const base: MatrixApprovalMetadataBase = {
-    version: 1,
-    type: "approval.request",
+}) {
+  const base = {
+    version: 1 as const,
+    type: "approval.request" as const,
     id: params.view.approvalId,
-    state: "pending",
+    state: "pending" as const,
     kind: params.view.approvalKind,
     phase: params.view.phase,
     title: params.view.title,
@@ -277,7 +223,7 @@ function buildMatrixApprovalMetadata(params: {
   if (params.view.approvalKind === "plugin") {
     return {
       ...base,
-      kind: "plugin",
+      kind: "plugin" as const,
       severity: params.view.severity,
       ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
       ...(params.view.pluginId != null ? { pluginId: params.view.pluginId } : {}),
@@ -288,7 +234,7 @@ function buildMatrixApprovalMetadata(params: {
   if (params.view.approvalKind === "system-agent") {
     return {
       ...base,
-      kind: "system-agent",
+      kind: "system-agent" as const,
       commandText: params.view.commandText,
       operationSummary: params.view.operationSummary,
       ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
@@ -297,7 +243,7 @@ function buildMatrixApprovalMetadata(params: {
 
   return {
     ...base,
-    kind: "exec",
+    kind: "exec" as const,
     commandText: params.view.commandText,
     ...(params.view.ask != null ? { ask: params.view.ask } : {}),
     ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),

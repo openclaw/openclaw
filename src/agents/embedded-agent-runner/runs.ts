@@ -378,13 +378,7 @@ export function restoreEmbeddedRunTimeoutAbandonment(
   return true;
 }
 
-function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): void {
-  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
-  if (normalizedSessionFile) {
-    if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile) === sessionId) {
-      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(normalizedSessionFile);
-    }
-  }
+function clearActiveRunSessionFiles(sessionId: string): void {
   // Always sweep every alias because callers may clear without the same
   // compatibility token used when the active run was registered.
   for (const [sessionFileKey, activeSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE) {
@@ -926,66 +920,34 @@ export function abortEmbeddedAgentRun(
     return true;
   }
 
-  const abortActiveEmbeddedRunHandles = (params: {
-    shouldAbort: (handle: EmbeddedAgentQueueHandle) => boolean;
-    formatDebugMessage: (sessionId: string) => string;
-    skipSessionIds?: ReadonlySet<string>;
-  }): boolean => {
-    let aborted = false;
-    for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-      if (params.skipSessionIds?.has(id)) {
-        continue;
-      }
-      if (!params.shouldAbort(handle)) {
-        continue;
-      }
-      if (!isEmbeddedRunHandleAbortable(id, handle)) {
-        continue;
-      }
-      diag.debug(params.formatDebugMessage(id));
-      try {
-        handle.abort(opts?.reason);
-        revokeCompletionClaim(id, handle.runId);
-        aborted = true;
-      } catch (err) {
-        diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
-      }
-    }
-    return aborted;
-  };
-
   const mode = opts?.mode;
-  if (mode === "compacting") {
-    const replyOwnedSessionIds = new Set(listActiveReplyRunSessionIds());
-    const replyAborted = abortActiveReplyRuns({
-      mode,
-      onAbortError: (id, err) =>
-        diag.warn(`abort failed: sessionId=${id} owner=reply_run err=${String(err)}`),
-    });
-    const aborted = abortActiveEmbeddedRunHandles({
-      shouldAbort: (handle) => handle.isCompacting(),
-      formatDebugMessage: (id) => `aborting compacting run: sessionId=${id}`,
-      skipSessionIds: replyOwnedSessionIds,
-    });
-    return replyAborted || aborted;
+  if (mode !== "all" && mode !== "compacting") {
+    return false;
   }
-
-  if (mode === "all") {
-    const replyOwnedSessionIds = new Set(listActiveReplyRunSessionIds());
-    const replyAborted = abortActiveReplyRuns({
-      mode,
-      onAbortError: (id, err) =>
-        diag.warn(`abort failed: sessionId=${id} owner=reply_run err=${String(err)}`),
-    });
-    const aborted = abortActiveEmbeddedRunHandles({
-      shouldAbort: () => true,
-      formatDebugMessage: (id) => `aborting run: sessionId=${id}`,
-      skipSessionIds: replyOwnedSessionIds,
-    });
-    return replyAborted || aborted;
+  const replyOwnedSessionIds = new Set(listActiveReplyRunSessionIds());
+  const replyAborted = abortActiveReplyRuns({
+    mode,
+    onAbortError: (id, err) =>
+      diag.warn(`abort failed: sessionId=${id} owner=reply_run err=${String(err)}`),
+  });
+  let aborted = false;
+  for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
+    if (replyOwnedSessionIds.has(id) || (mode === "compacting" && !handle.isCompacting())) {
+      continue;
+    }
+    if (!isEmbeddedRunHandleAbortable(id, handle)) {
+      continue;
+    }
+    diag.debug(`aborting ${mode === "compacting" ? "compacting " : ""}run: sessionId=${id}`);
+    try {
+      handle.abort(opts?.reason);
+      revokeCompletionClaim(id, handle.runId);
+      aborted = true;
+    } catch (err) {
+      diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
+    }
   }
-
-  return false;
+  return replyAborted || aborted;
 }
 
 type EmbeddedHeartbeatPreemptionResult = "not-heartbeat" | "drained" | "timed-out";
@@ -1802,7 +1764,7 @@ export function clearActiveEmbeddedRun(
     clearEmbeddedRunAbortability(handle, { retainFinalizing: true });
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
-    clearActiveRunSessionFiles(sessionId, sessionFile);
+    clearActiveRunSessionFiles(sessionId);
     logSessionStateChange({
       sessionId,
       sessionKey,

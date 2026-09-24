@@ -165,8 +165,9 @@ describe("worker placement dispatch reclaim", () => {
     });
 
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
-    expect(harness.log.slice(-13)).toEqual([
+    expect(harness.log.slice(-14)).toEqual([
       "placement:draining",
+      "workspace",
       "tunnel:attached",
       "workspace:quiesce",
       "workspace:reconcile",
@@ -212,6 +213,48 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.log).not.toContain("placement:reclaimed");
     expect(placementStore.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
   });
+
+  it.each(["stop", "move"])(
+    "finishes %s after authority closes during committed environment destruction",
+    async (operation) => {
+      let authorized = true;
+      const harness = createHarness(database, placementStore, {
+        reconcileChanged: false,
+        reconcileCommitsManifest: false,
+        afterDestroy: () => {
+          authorized = false;
+        },
+      });
+      const active = await harness.service.dispatch(REQUEST);
+      const authorize = () => {
+        if (!authorized) {
+          throw new Error("session access revoked after environment destruction");
+        }
+      };
+      const outcome =
+        operation === "stop"
+          ? harness.service.reclaim(REQUEST, authorize)
+          : harness.service.move(
+              {
+                ...REQUEST,
+                source: {
+                  generation: active.generation,
+                  environmentId: active.environmentId,
+                  ownerEpoch: active.activeOwnerEpoch,
+                },
+                target: { kind: "gateway" },
+              },
+              undefined,
+              authorize,
+            );
+      await expect(outcome).resolves.toMatchObject({
+        state: operation === "stop" ? "reclaimed" : "local",
+        turnClaim: null,
+      });
+      expect(harness.environments.destroy).toHaveBeenCalledOnce();
+      expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    },
+  );
 
   it("carries session authorization from move source teardown into destination dispatch", async () => {
     const harness = createHarness(database, placementStore, {
@@ -928,6 +971,7 @@ describe("worker placement dispatch reclaim", () => {
     const resume = createDeferredCore();
     const identities = [REQUEST.sessionKey, REQUEST.sessionId];
     const harness = createHarness(database, placementStore, {
+      workspacePath: root,
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       runReclaimBarrier: async ({ authorize, beforeDrain, begin, reclaim }) => {

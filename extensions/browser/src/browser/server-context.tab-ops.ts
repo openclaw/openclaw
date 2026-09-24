@@ -26,6 +26,7 @@ import type { CdpActionTimeouts } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { BrowserOpenResult } from "./client.types.js";
 import type { ResolvedBrowserProfile } from "./config.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
 import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
@@ -152,7 +153,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
         const pages = await listPagesViaPlaywright({
           cdpUrl: profile.cdpUrl,
-          ...(profile.engine === "lightpanda" ? { engine: profile.engine } : {}),
+          ...(profile.engine ? { engine: profile.engine } : {}),
           ssrfPolicy,
           timeoutMs,
           ...(capabilities.requiresCompleteTargetEnumeration
@@ -253,7 +254,8 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     return assignTabAliases(
       runtime,
       tabs,
-      !capabilities.usesChromeMcp && profile.engine !== "lightpanda",
+      !capabilities.usesChromeMcp &&
+        resolveBrowserEngine(profile.engine).descriptor.sessionScope !== "connection",
     );
   };
 
@@ -321,7 +323,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     tab: BrowserTab,
     options?: BrowserOperationOptions & { requireDurableOwnership?: boolean },
   ): Promise<BrowserOpenResult> => {
-    if (profile.engine === "lightpanda") {
+    if (resolveBrowserEngine(profile.engine).descriptor.sessionScope === "connection") {
       if (options?.requireDurableOwnership) {
         throw new Error("Connection-scoped browser pages cannot be retained by a dashboard.");
       }
@@ -386,7 +388,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         if (typeof createPageViaPlaywright === "function") {
           const page = await createPageViaPlaywright({
             cdpUrl: profile.cdpUrl,
-            ...(profile.engine === "lightpanda" ? { engine: profile.engine } : {}),
+            ...(profile.engine ? { engine: profile.engine } : {}),
             url,
             cdpPolicy,
             ...(opts?.signal ? { signal: opts.signal } : {}),

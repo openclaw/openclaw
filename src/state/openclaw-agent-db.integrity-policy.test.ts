@@ -18,9 +18,9 @@ import * as verifier from "./openclaw-database-verify.js";
 import {
   clearOpenClawAgentIntegrityVerification,
   readOpenClawAgentIntegrityVerification,
-  resolveQuarantineStorePath,
 } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {

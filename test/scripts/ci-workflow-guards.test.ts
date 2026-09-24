@@ -20,7 +20,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { minimatch } from "minimatch";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
@@ -29,6 +29,7 @@ import {
   createUiRealGatewayTestShards,
   createUiTestShardGroups,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { resolveRunVitestSpawnEnv } from "../../scripts/lib/vitest-process-env.mts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
@@ -69,6 +70,9 @@ import {
   writeExecutable,
 } from "./ci-workflow.test-support.js";
 import { runGeneratedPublisherScenario } from "./generated-publisher.test-support.js";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb";
 const CREATE_GITHUB_APP_TOKEN_V3 =
@@ -724,7 +728,7 @@ AFTER_CD
         realBehaviorProof.jobs["real-behavior-proof"].if,
       ),
     }).toEqual({
-      autoResponse: [],
+      autoResponse: ["title", "body", "base"],
       clawsweeperDispatch: [],
       labeler: ["title", "base"],
       realBehaviorProof: ["body", "base"],
@@ -797,8 +801,108 @@ AFTER_CD
     expect(exactReviewStep.run).toContain("ingress_fingerprint:$ingress_fingerprint");
   });
 
+  it("admits ClawSweeper content changes, commands, and stale-bug verification before allocation", () => {
+    const condition = String(
+      readWorkflow(".github/workflows/clawsweeper-dispatch.yml").jobs.dispatch.if,
+    )
+      .replace(/^\$\{\{|\}\}$/gu, "")
+      .replace("github.event.issue.labels.*.name", "issueLabels");
+    const cases: {
+      eventName: string;
+      action: string;
+      changes?: Record<string, unknown>;
+      allowed: boolean;
+      actor?: string;
+      actorId?: string;
+      label?: string;
+      issueLabels?: string[];
+    }[] = [
+      { eventName: "pull_request_target", action: "edited", changes: {}, allowed: false },
+      { eventName: "issues", action: "edited", changes: {}, allowed: false },
+      { eventName: "pull_request_target", action: "edited", allowed: true },
+      ...["title", "body", "base", "maintainer_can_modify", "unknown"].map((field) => ({
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { [field]: { from: "" } },
+        allowed: true,
+      })),
+      { eventName: "issues", action: "edited", changes: { body: { from: "" } }, allowed: true },
+      { eventName: "pull_request_target", action: "synchronize", allowed: true },
+      { eventName: "pull_request_target", action: "labeled", allowed: true },
+      { eventName: "pull_request_target", action: "unlabeled", allowed: true },
+      { eventName: "issue_comment", action: "created", allowed: true },
+      { eventName: "issue_comment", action: "edited", allowed: true },
+      { eventName: "pull_request_review", action: "edited", allowed: true },
+      { eventName: "pull_request_review_comment", action: "edited", allowed: true },
+      { eventName: "issues", action: "labeled", actor: "github-actions[bot]", allowed: false },
+      {
+        eventName: "issues",
+        action: "labeled",
+        actor: "github-actions[bot]",
+        actorId: "257215752",
+        label: "stale",
+        issueLabels: ["bug", "stale"],
+        allowed: true,
+      },
+    ];
+    for (const event of cases) {
+      expect(
+        Boolean(
+          runInNewContext(condition, {
+            github: {
+              actor: event.actor ?? "maintainer",
+              actor_id: event.actorId ?? "",
+              event_name: event.eventName,
+              event: {
+                action: event.action,
+                changes: event.changes,
+                label: { name: event.label ?? "enhancement" },
+              },
+            },
+            issueLabels: event.issueLabels ?? [],
+            contains: (values: string[], value: string) => values.includes(value),
+            endsWith: (value: string, suffix: string) => value.endsWith(suffix),
+            startsWith: (value: unknown, prefix: string) => String(value).startsWith(prefix),
+            toJSON: (value: unknown) => JSON.stringify(value),
+            vars: { OPENCLAW_RELEASE_PRIORITY_RUN: "" },
+          }),
+        ),
+        JSON.stringify(event),
+      ).toBe(event.allowed);
+    }
+  });
+
+  it("keeps existing ClawSweeper per-item coalescing after admission", () => {
+    const workflow = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
+    expect(workflow.concurrency).toBeUndefined();
+    const concurrency = workflow.jobs.dispatch.concurrency;
+    const evaluate = (
+      expression: string,
+      eventName: "issues" | "pull_request_target" | "issue_comment",
+      action: string,
+      runId: number,
+    ) =>
+      evaluateWorkflowExpression(expression, {
+        repository: "openclaw/openclaw",
+        eventName,
+        runAttempt: 1,
+        runId,
+        githubEvent: { action, issue: { number: 123 }, pull_request: { number: 123 } },
+      });
+    const opened = evaluate(concurrency.group, "pull_request_target", "opened", 1);
+    expect(evaluate(concurrency.group, "pull_request_target", "edited", 2)).toBe(opened);
+    expect(evaluate(concurrency["cancel-in-progress"], "pull_request_target", "edited", 2)).toBe(
+      true,
+    );
+    expect(evaluate(concurrency.group, "issue_comment", "created", 3)).toBe(opened);
+    expect(evaluate(concurrency.group, "issue_comment", "edited", 4)).toBe(opened);
+    expect(evaluate(concurrency["cancel-in-progress"], "issue_comment", "created", 3)).toBe(false);
+    expect(evaluate(concurrency["cancel-in-progress"], "issue_comment", "edited", 4)).toBe(true);
+  });
+
   it("runs the PR context and evidence gate only for relevant PR changes", () => {
     const workflow = readRealBehaviorProofWorkflow();
+    const job = workflow.jobs["real-behavior-proof"];
 
     expect(workflow.name).toBe("PR context and evidence");
     expect(workflow.jobs["real-behavior-proof"].name).toBe("PR context and evidence");
@@ -809,12 +913,11 @@ AFTER_CD
       "reopened",
       "ready_for_review",
     ]);
-    expect(workflow.concurrency.group).toBe(
+    expect(workflow.concurrency).toBeUndefined();
+    expect(job.concurrency.group).toBe(
       "${{ github.workflow }}-${{ github.event.pull_request.number }}",
     );
-    expect(workflow.concurrency["cancel-in-progress"]).toBe(
-      "${{ github.event.action == 'synchronize' }}",
-    );
+    expect(job.concurrency["cancel-in-progress"]).toBe(true);
   });
 
   it.each([
@@ -934,6 +1037,8 @@ AFTER_CD
           actor,
           githubEvent: {
             action,
+            issue: { author_association: "NONE" },
+            pull_request: { author_association: "NONE" },
             comment: { body: "testflight @openclaw/maintainer", user: { type } },
           },
         }),
@@ -943,7 +1048,8 @@ AFTER_CD
 
   it("isolates auto-response per item and ignores ClawSweeper PR label feedback", () => {
     const workflow = readWorkflow(".github/workflows/auto-response.yml");
-    const guard = workflow.jobs["auto-response"].if;
+    const job = workflow.jobs["auto-response"];
+    const guard = job.if;
 
     expect(workflow.on.issues.types).toEqual(["opened", "edited", "labeled"]);
     expect(workflow.on.issue_comment.types).toEqual(["created"]);
@@ -955,10 +1061,11 @@ AFTER_CD
       "labeled",
       "unlabeled",
     ]);
-    expect(workflow.concurrency.group).toBe(
+    expect(workflow.concurrency).toBeUndefined();
+    expect(job.concurrency.group).toBe(
       "${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}",
     );
-    expect(workflow.concurrency["cancel-in-progress"]).toBe(
+    expect(job.concurrency["cancel-in-progress"]).toBe(
       "${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' }}",
     );
     expect(guard).toContain("github.event_name != 'pull_request_target'");
@@ -1316,9 +1423,13 @@ AFTER_CD
     expect(openClawKitTests?.run).toContain("--no-parallel");
   });
 
-  it("keeps Testbox pull request validation off leased runner capacity", () => {
+  it("keeps Testbox runner admission and job budget compatible with delegated proof", () => {
     const workflow = readTestboxWorkflow();
 
+    expect(workflow.on.workflow_dispatch.inputs.timeout_minutes.default).toBe(240);
+    expect(workflow.jobs.check["timeout-minutes"]).toBe(
+      "${{ fromJSON(inputs.timeout_minutes || '240') }}",
+    );
     expect(workflow.jobs.check["runs-on"]).toBe(
       "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
     );
@@ -1507,11 +1618,29 @@ AFTER_CD
       });
     }
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
+    expect(nativePublishStep.with["invalidation-paths"].trim().split("\n")).toContain(
+      "ui/src/i18n/.i18n/glossary.*.json",
+    );
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
-    expect(workflow.on.push.paths).toContain("apps/android/app/src/play/**");
-    expect(workflow.on.push.paths).toContain("apps/android/app/src/thirdParty/**");
-    expect(workflow.on.push.paths).toContain("apps/android/wear/src/main/**");
+    for (const sourceRoot of [
+      "apps/android/app/src/main",
+      "apps/android/app/src/play",
+      "apps/android/app/src/thirdParty",
+      "apps/android/wear/src/main",
+      "apps/ios",
+      "apps/macos/Sources",
+      "apps/shared/OpenClawKit/Sources",
+    ]) {
+      expect(workflow.on.push.paths).toContain(`${sourceRoot}/**`);
+      expect(nativePublishStep.with["invalidation-paths"].trim().split("\n")).toContain(sourceRoot);
+    }
+    expect(workflow.on.push.paths).toContain("apps/macos/Package.swift");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/macos/Package.swift");
+    expect(workflow.on.push.paths).toContain(".github/actions/publish-generated-pr/policy.py");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain(
+      ".github/actions/publish-generated-pr/policy.py",
+    );
     for (const generatorInput of [
       "scripts/android-app-i18n.ts",
       "scripts/apple-app-i18n.ts",
@@ -1593,9 +1722,8 @@ AFTER_CD
     const controlUiPublishStep = controlUiFinalize.steps.find(
       (step: { name?: string }) => step.name === "Open or update generated locale PR",
     );
-    const sharedCatalogInputs = [
+    const controlUiCatalogInputs = [
       "scripts/lib/control-ui-i18n-catalog.ts",
-      "scripts/lib/control-ui-i18n-catalog-values.ts",
       "ui/src/i18n/lib/config-hint-translation.ts",
       "ui/src/lib/fnv1a.ts",
       "src/config/schema*.ts",
@@ -1604,15 +1732,31 @@ AFTER_CD
       "src/config/talk-defaults.ts",
       "src/config/channel-config-keys.ts",
     ];
-    const sharedCatalogInputOwners = [
+    const nativeInputOwners = [
       workflow.on.push.paths,
       nativePublishStep.with["invalidation-paths"].trim().split("\n"),
+    ];
+    const controlUiInputOwners = [
       controlUiWorkflow.on.push.paths,
       controlUiPublishStep.with["invalidation-paths"].trim().split("\n"),
     ];
-    for (const catalogInput of sharedCatalogInputs) {
-      for (const ownerPaths of sharedCatalogInputOwners) {
+    for (const catalogInput of controlUiCatalogInputs) {
+      for (const ownerPaths of controlUiInputOwners) {
         expect(ownerPaths).toContain(catalogInput);
+      }
+      for (const ownerPaths of nativeInputOwners) {
+        expect(ownerPaths).not.toContain(catalogInput);
+      }
+    }
+    for (const sharedTranslationInput of [
+      "scripts/control-ui-i18n.ts",
+      "scripts/lib/control-ui-i18n-catalog-values.ts",
+      "scripts/lib/control-ui-i18n-config.json",
+      "scripts/lib/control-ui-i18n-config.ts",
+      "scripts/lib/control-ui-i18n-sync-plan.ts",
+    ]) {
+      for (const ownerPaths of [...nativeInputOwners, ...controlUiInputOwners]) {
+        expect(ownerPaths).toContain(sharedTranslationInput);
       }
     }
     expect(controlUiPublishStep.with["generated-paths"].trim().split("\n")).toEqual([
@@ -2169,6 +2313,66 @@ AFTER_CD
       expect(result.branchExists).toBe(false);
       expect(result.mainGeneratedA).toBe("old-a");
       expect(result.mergeCalls).toBe("");
+      expect(result.summary).toContain(
+        "Deferred stale generated output because generator inputs changed on main.",
+      );
+    },
+  );
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(["src/config/schema.help.runtime.ts", "src/config/zod-schema.agent-runtime.ts"])(
+    "keeps native publication independent of Control UI schema changes: %s",
+    (sourcePath) => {
+      const nativeWorkflow = readWorkflow(NATIVE_APP_LOCALE_REFRESH_WORKFLOW);
+      const controlUiWorkflow = readWorkflow(CONTROL_UI_LOCALE_REFRESH_WORKFLOW);
+      const results = [nativeWorkflow, controlUiWorkflow].map((workflow) => {
+        const publisher = expectDefined(
+          workflow.jobs.finalize.steps.find(
+            (step: WorkflowStep) => step.uses === "./.github/actions/publish-generated-pr",
+          ),
+          "locale publisher",
+        );
+        return runGeneratedPublisherScenario(null, {
+          autoMerge: true,
+          invalidationPaths: publisher.with["invalidation-paths"],
+          updateSource: sourcePath,
+        });
+      });
+      const native = expectDefined(results[0], "native publication result");
+      const controlUi = expectDefined(results[1], "Control UI publication result");
+      expect(native.branchExists).toBe(true);
+      expect(native.generatedA).toBe("desired-a");
+      expect(native.mergeCalls).toContain("--auto --squash");
+      expect(controlUi.branchExists).toBe(false);
+      expect(controlUi.mergeCalls).toBe("");
+      expect(controlUi.summary).toContain(
+        "Deferred stale generated output because generator inputs changed on main.",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "defers native publication when shared translation config changes",
+    () => {
+      const workflow = readWorkflow(NATIVE_APP_LOCALE_REFRESH_WORKFLOW);
+      const publisher = expectDefined(
+        workflow.jobs.finalize.steps.find(
+          (step: WorkflowStep) => step.uses === "./.github/actions/publish-generated-pr",
+        ),
+        "native locale publisher",
+      );
+      const result = runGeneratedPublisherScenario(null, {
+        existingPr: true,
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        invalidationPaths: publisher.with["invalidation-paths"],
+        updateSource: "scripts/lib/control-ui-i18n-config.json",
+      });
+
+      expect(result.branchHead).toBe(result.initialBranch);
+      expect(result.generatedA).toBe("stale-pr-a");
+      expect(result.mergeCalls).toContain("--disable-auto");
       expect(result.summary).toContain(
         "Deferred stale generated output because generator inputs changed on main.",
       );
@@ -3754,6 +3958,7 @@ setImmediate(() => {
       "build-artifacts": "ubuntu-24.04",
       "check-additional-shard": "ubuntu-24.04",
       "check-shard": "ubuntu-24.04",
+      "checks-baseline-ratchets": "ubuntu-24.04",
       "checks-fast-channel-contracts-shard": "ubuntu-24.04",
       "checks-fast-core": "ubuntu-24.04",
       "checks-fast-plugin-contracts-shard": "ubuntu-24.04",
@@ -4308,19 +4513,6 @@ setImmediate(() => {
           );
           continue;
         }
-        if (step.with?.path === "full-release-flake-intent") {
-          expect(file).toBe(".github/workflows/full-release-validation.yml");
-          expect(jobId).toBe("automatic_flake_retry");
-          expect(step.uses).toBe(CACHE_SAVE_V5);
-          expect(step.with).toEqual({
-            path: "full-release-flake-intent",
-            key: "full-release-flake-intent-v1-${{ github.run_id }}-${{ matrix.child }}",
-          });
-          expect(step.if).toBe(
-            "${{ github.run_attempt == 1 && steps.intent_witness.outcome == 'success' }}",
-          );
-          continue;
-        }
         if (step.with?.path === ".cache/openclaw-cross-os-npm-cache/_cacache") {
           expect([
             ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
@@ -4487,6 +4679,7 @@ setImmediate(() => {
       "check-lint-hosted-core-shard",
       "check-shard",
       "check-test-types-hosted-core-shard",
+      "checks-baseline-ratchets",
       "checks-fast-channel-contracts-shard",
       "checks-fast-core",
       "checks-fast-plugin-contracts-shard",
@@ -5333,7 +5526,7 @@ server.listen(0, "127.0.0.1", () => {
       );
       expect(pipeline.uses).toBe("./.github/workflows/openclaw-repo-e2e-reusable.yml");
       expect(pipeline.with.ref).toBe("${{ needs.validate_selected_ref.outputs.selected_sha }}");
-      expect(pipeline.with.advisory).toBe("${{ inputs.advisory }}");
+      expect(pipeline.with.advisory).toBeUndefined();
       expect(pipeline.with.allow_frozen_target_scenario_omissions).toBe(
         "${{ inputs.allow_frozen_target_scenario_omissions }}",
       );
@@ -5361,7 +5554,7 @@ server.listen(0, "127.0.0.1", () => {
     expect(repoE2e.name).toBe("Repo E2E (${{ matrix.name }})");
     expect(repoE2e["timeout-minutes"]).toBe(90);
     expect(repoE2e.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 4 });
-    expect(repoE2e["continue-on-error"]).toBe("${{ inputs.advisory }}");
+    expect(repoE2e["continue-on-error"]).toBeUndefined();
     const producerSteps = producer.steps as WorkflowStep[];
     expect(producerSteps.find((step) => step.name === "Build dist for repo E2E")?.run).toContain(
       "full) pnpm build",
@@ -5514,6 +5707,7 @@ server.listen(0, "127.0.0.1", () => {
               });
             let cacheInputs: Record<string, string> | undefined;
             let configuredGeneration: string | undefined;
+            let configuredRestored: string | undefined;
             for (const step of transformSteps) {
               // Runner v2.336.0 evaluates embedded env before if; run/with inputs
               // are evaluated only after admission (CompositeActionHandler/ActionRunner).
@@ -5543,8 +5737,19 @@ server.listen(0, "127.0.0.1", () => {
                 cacheInputs = Object.fromEntries(
                   Object.entries(step.with ?? {}).map(([key, value]) => [key, render(value)]),
                 );
+                // Exercise misses and prefix hits; neither reports cache-hit=true.
+                steps[expectDefined(step.id, "transform restore step id")] = {
+                  outputs: {
+                    "cache-hit": generation === "a".repeat(64) ? "" : "false",
+                    "cache-matched-key":
+                      generation === "a".repeat(64)
+                        ? ""
+                        : `${expectDefined(cacheInputs["restore-keys"], "transform restore prefix").trim()}9-1`,
+                  },
+                };
               } else {
                 configuredGeneration = env.CACHE_GENERATION;
+                configuredRestored = env.CACHE_RESTORED;
               }
             }
             const enabled = os !== "Windows" && mode !== "off" && flags.includes("true");
@@ -5570,9 +5775,11 @@ server.listen(0, "127.0.0.1", () => {
                 "restore-keys": `${prefix}\n`,
               });
               expect(configuredGeneration).toBe(generation);
+              expect(configuredRestored).toBe(generation === "a".repeat(64) ? "false" : "true");
             } else {
               expect(cacheInputs).toBeUndefined();
               expect(configuredGeneration).toBeUndefined();
+              expect(configuredRestored).toBeUndefined();
             }
           }
         }
@@ -5778,7 +5985,7 @@ server.listen(0, "127.0.0.1", () => {
         task,
       ).toBe("true");
     }
-    for (const task of ["baseline-ratchets", "coercion-helpers"]) {
+    for (const task of ["startup-corpus", "coercion-helpers"]) {
       expect(
         evaluateWorkflowExpression(fastCoreSetup.with["restore-test-caches"], {
           eventName: "push",
@@ -6016,7 +6223,7 @@ server.listen(0, "127.0.0.1", () => {
     }
     expect(warmer.on).not.toHaveProperty("workflow_run");
     expect(checkoutStep.with).toBeUndefined();
-    expect(warmerSource).toContain('cron: "17 8 * * *"');
+    expect(warmer.on.schedule).toEqual([{ cron: "17 * * * *" }]);
     expect(warmerSource).not.toContain("OPENCLAW_NODE_TEST_CONFIGS_JSON");
     expect(warmStep.id).toBe("warm-caches");
     expect(warmStep["continue-on-error"]).toBe(true);
@@ -6814,8 +7021,10 @@ server.listen(0, "127.0.0.1", () => {
       },
     });
     expect(job["timeout-minutes"]).toBe(30);
-    expect(workflow.permissions).toEqual({ actions: "read", contents: "write" });
-    expect(workflow.concurrency).toEqual({ group: "docs-agent-main", "cancel-in-progress": false });
+    expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
+    expect(job.permissions).toEqual({ actions: "read", contents: "write" });
+    expect(workflow.concurrency).toBeUndefined();
+    expect(job.concurrency).toEqual({ group: "docs-agent-main", "cancel-in-progress": false });
     expect(steps[5]).toEqual({
       name: "Run Codex docs agent",
       if: "steps.gate.outputs.run_agent == 'true'",
@@ -8524,7 +8733,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     { job: "check-shard", task: "prod-types", events: [] },
     {
       job: "checks-fast-core",
-      task: "baseline-ratchets",
+      task: "startup-corpus",
       events: ["pull_request", "push", "workflow_dispatch"],
     },
     {
@@ -9328,7 +9537,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   });
 
   it("keeps private Control UI servers and resource-sensitive files under one serial owner", () => {
-    assertControlUiE2eOwnership((prefix) => tempDirs.make(prefix));
+    assertControlUiE2eOwnership((prefix) => tempDirs.make(prefix), parser);
   });
 
   it("retains shared worker limits and local throttling in the bundled UI project", () => {
@@ -10137,7 +10346,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
       "${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}",
     );
-    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
+    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBeUndefined();
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64).toBe(

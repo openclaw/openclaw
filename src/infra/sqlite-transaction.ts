@@ -8,10 +8,7 @@ import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsyste
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // The cache-state module keeps this lifecycle edge off the kysely value graph
 // so cold control-plane paths using transactions do not load kysely.
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  executeWithCachedStatement,
-} from "./kysely-sync-cache-state.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import {
   readSqliteBusyTimeout,
@@ -308,21 +305,8 @@ function logSlowTransactionStep(params: {
     pid: process.pid,
     step: params.step,
     threadId,
-    ...beginAdmissionLogFields(params.beginAdmission),
+    ...(params.beginAdmission ? { beginAdmission: { ...params.beginAdmission } } : {}),
   });
-}
-
-function beginAdmissionLogFields(diagnostics: SqliteBeginAdmissionDiagnostics | undefined) {
-  return diagnostics
-    ? {
-        beginAdmission: {
-          nativeAttempts: diagnostics.nativeAttempts,
-          nativeMs: diagnostics.nativeMs,
-          serviceCalls: diagnostics.serviceCalls,
-          serviceMs: diagnostics.serviceMs,
-        },
-      }
-    : {};
 }
 
 function execTimedTransactionStep(params: {
@@ -371,7 +355,7 @@ function execTimedTransactionStep(params: {
         ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
         step: params.step,
         threadId,
-        ...beginAdmissionLogFields(beginAdmission),
+        ...(beginAdmission ? { beginAdmission: { ...beginAdmission } } : {}),
       });
     }
     throw error;
@@ -501,23 +485,6 @@ export function runSqliteDeferredTransactionSync<T>(
   options?: SqliteTransactionOptions,
 ): T {
   return runSqliteTransactionSync(db, operation, "deferred", options);
-}
-
-/** Pin an implicit read snapshot without requiring transaction-control authorization. */
-export function runSqlitePinnedReadSnapshotSync<T>(db: DatabaseSync, operation: () => T): T {
-  return executeWithCachedStatement(db, "PRAGMA schema_version", [], (statement) => {
-    // sqlite-allow-raw: Stepping this pragma pins the connection's implicit read transaction.
-    const snapshot = statement.iterate();
-    try {
-      const first = snapshot.next();
-      if (first.done) {
-        throw new Error("SQLite schema version query returned no row");
-      }
-      return operation();
-    } finally {
-      snapshot.return?.();
-    }
-  });
 }
 
 export function runSqliteImmediateTransactionSync<T>(

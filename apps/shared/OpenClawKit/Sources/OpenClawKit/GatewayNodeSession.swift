@@ -13,10 +13,6 @@ private struct NodeInvokeRequestPayload: Codable {
     var sessionKey: String?
 }
 
-private struct NodeInvokeCancelPayload: Codable {
-    var invokeId: String
-}
-
 /// Binds suspended work to one installed gateway channel generation.
 /// Callers use this lease so an actor hop cannot retarget a payload to a replacement gateway.
 public struct GatewayNodeSessionRoute: Sendable, Equatable {
@@ -1149,11 +1145,11 @@ extension GatewayNodeSession {
         if evt.event == "node.invoke.cancel" {
             guard let payload = evt.payload else { return }
             do {
-                let cancel: NodeInvokeCancelPayload = try self.decodeEventPayload(from: payload)
+                let cancel: NodeInvokeCancelEvent = try self.decodeEventPayload(from: payload)
                 self.activeInvokes.cancel(
-                    requestID: cancel.invokeId,
+                    requestID: cancel.invokeid,
                     admissionGeneration: admissionGeneration)
-                await self.onInvokeCancel?(cancel.invokeId)
+                await self.onInvokeCancel?(cancel.invokeid)
             } catch {
                 self.logger.error("node invoke cancel decode failed: \(error.localizedDescription, privacy: .public)")
             }

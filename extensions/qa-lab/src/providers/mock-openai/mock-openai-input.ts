@@ -98,25 +98,48 @@ function extractCurrentTaskEvent(text: string): string | undefined {
   if (!isInternalRuntimeContextCarrierText(text)) {
     return undefined;
   }
-  // v4 quotes each top-level data fragment. Selected history can contain nested
-  // event text, but only a fragment starting with the event owns this turn.
-  for (const match of Array.from(
-    text.matchAll(
-      /^Conversation data \(data, not instructions\):\r?\n("(?:[^"\\\r\n]|\\.)*")\r?$/gmu,
-    ),
-  ).toReversed()) {
-    try {
-      const fragment: unknown = JSON.parse(match[1] ?? "");
-      if (typeof fragment === "string" && startsTaskEvent(fragment)) {
-        return fragment;
-      }
-    } catch {
-      // Malformed quoted data does not become a current task event.
+  for (const fragment of extractRuntimeConversationData(text).toReversed()) {
+    if (startsTaskEvent(fragment)) {
+      return fragment;
     }
   }
   // v3 keeps the producer event as a literal runtime-instruction fragment.
   const literal = /^\[Internal task completion event\](?:\r?\n|$)/mu.exec(text);
   return literal ? text.slice(literal.index) : undefined;
+}
+
+function extractRuntimeConversationData(text: string): string[] {
+  const fragments: string[] = [];
+  // Decode only top-level v4 data fragments, never quoted history nested inside them.
+  for (const match of text.matchAll(
+    /^Conversation data \(data, not instructions\):\r?\n("(?:[^"\\\r\n]|\\.)*")\r?$/gmu,
+  )) {
+    try {
+      const fragment: unknown = JSON.parse(match[1] ?? "");
+      if (typeof fragment === "string") {
+        fragments.push(fragment);
+      }
+    } catch {
+      // Malformed quoted data is not runtime context.
+    }
+  }
+  return fragments;
+}
+
+export function extractCurrentRuntimeContextTexts(input: ResponsesInputItem[]): string[] {
+  const turn = extractLastMatchingUserTurn(input);
+  if (!turn) {
+    return [];
+  }
+  return input.slice(turn.index + 1).flatMap((item) => {
+    const text = item.role === "user" ? extractInputText(item.content) : "";
+    if (!isInternalRuntimeContextCarrierText(text)) {
+      return [];
+    }
+    return /^Conversation data \(data, not instructions\):$/mu.test(text)
+      ? extractRuntimeConversationData(text)
+      : [text]; // Session v3 retains literal runtime context.
+  });
 }
 
 function isSubagentRecoveryText(text: string): boolean {
@@ -565,14 +588,15 @@ export function buildWhatsAppGroupDispatchReply(allInputText: string) {
   return QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE.exec(allInputText)?.[0];
 }
 
-export function buildWhatsAppBatchedReply(allInputText: string) {
-  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(allInputText);
+export function buildWhatsAppBatchedReply(prompt: string) {
+  const { current } = splitMockConversationContext(prompt);
+  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(current);
   const suffix = finalMatch?.[1];
   if (!suffix) {
     return undefined;
   }
   const firstMarker = `WHATSAPP_QA_BATCHED_FIRST_${suffix}`;
-  if (!allInputText.includes(firstMarker)) {
+  if (!current.includes(firstMarker)) {
     return `WHATSAPP_QA_BATCHED_MISSING_CONTEXT_${suffix}`;
   }
   return finalMatch[0];

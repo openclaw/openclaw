@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { isPrimarySessionTranscriptFileName } from "./artifacts.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveSessionFilePathCore } from "./paths.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import type { SessionEntry } from "./types.js";
 
 export type LegacySessionStoreTarget = { agentId: string; storePath: string; sqlitePath?: string };

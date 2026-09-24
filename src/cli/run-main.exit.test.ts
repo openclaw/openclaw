@@ -31,7 +31,7 @@ const PREFIXED_TLS_FINGERPRINT = `sha256:${TLS_FINGERPRINT.toUpperCase()}`;
 type RunMainModule = typeof import("./run-main.js");
 
 let runCli: RunMainModule["runCli"];
-let shouldStartProxyForCli: RunMainModule["shouldStartProxyForCli"];
+let shouldStartProxyForCli: typeof import("./run-main-policy.js").shouldStartProxyForCli;
 
 type ConfigSnapshotStub = {
   exists: boolean;
@@ -399,7 +399,7 @@ vi.mock("./program/program-context.js", () => ({
   getProgramContext: getProgramContextMock,
 }));
 
-vi.mock("./program/command-registry.js", () => ({
+vi.mock("./program/command-registry-core.js", () => ({
   registerCoreCliByName: registerCoreCliByNameMock,
 }));
 
@@ -564,7 +564,7 @@ describe("runCli exit behavior", () => {
     const runMainModule = await import("./run-main.js");
     expect(dotenvModuleImportState.count).toBe(0);
     runCli = runMainModule.runCli;
-    shouldStartProxyForCli = runMainModule.shouldStartProxyForCli;
+    ({ shouldStartProxyForCli } = await import("./run-main-policy.js"));
   });
 
   afterAll(() => {

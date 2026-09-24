@@ -49,14 +49,13 @@ export function resolveSessionVisibility(
   return entry.visibility ?? "shared";
 }
 
-/** Compare access facts only after the mutation owner has preserved the canonical target. */
+/** Compare access facts only after the caller has preserved the canonical target. */
 export function hasSessionReadAccessChanged(
   previous: SessionEntry | undefined,
   current: SessionEntry,
 ): boolean {
   return (
     !previous?.sessionId?.trim() ||
-    !previous.lifecycleRevision?.trim() ||
     previous.sessionId !== current.sessionId ||
     previous.lifecycleRevision !== current.lifecycleRevision ||
     sessionCreatorProfileId(previous.createdActor) !==
@@ -104,6 +103,7 @@ export function resolveSessionSharingTarget(params: {
     clone: false,
     // Authorization rechecks current metadata; prompt snapshots are not part of that binding.
     projection: "list",
+    readConsistency: "latest",
     // Batch callers reuse one store snapshot; single-target checks must not
     // materialize unrelated sessions for every task or authorization recheck.
     exactRead: params.exactRead ?? !params.storeCache,
