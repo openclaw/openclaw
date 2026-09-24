@@ -1684,7 +1684,7 @@ describe("CI changed Node test plan", () => {
         "measured app-server envelope",
       );
       // After fixture reuse, run 35537743091 measured 190.394s for 11 app-server
-      // files. The mixed config median must still not hide that native-worker tail.
+      // files. Preserve that per-file floor as the inventory changes chunk sizes.
       const appServerGroup = expectDefined(
         fallbackGroups([appServerJob]).find((group) =>
           group.includePatterns?.includes("extensions/codex/src/app-server/run-attempt.test.ts"),
@@ -1693,9 +1693,12 @@ describe("CI changed Node test plan", () => {
       );
       const files = expectDefined(appServerGroup.includePatterns, "app-server files");
       const config = expectDefined(appServerGroup.configs[0], "app-server config");
+      const appServerFileCount = files.filter((file) =>
+        file.startsWith("extensions/codex/src/app-server/"),
+      ).length;
       expect(
         extensionTestPlan.estimateExtensionTestCost(config, files.length, files),
-      ).toBeGreaterThanOrEqual(191);
+      ).toBeGreaterThanOrEqual(Math.ceil((190.394 / 11) * appServerFileCount));
       expect(appServerJob.runner).toBe("blacksmith-8vcpu-ubuntu-2404");
     }
     expect(shards.length).toBeGreaterThan(1);
