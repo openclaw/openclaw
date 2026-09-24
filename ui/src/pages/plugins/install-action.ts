@@ -1,7 +1,6 @@
 import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import { ref } from "lit/directives/ref.js";
 import { configureAnchoredPopup } from "../../components/anchored-overlay.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
@@ -18,7 +17,7 @@ export class PluginInstallAction extends OpenClawLightDomElement {
   @property({ attribute: false }) progress?: PluginInstallProgress;
   @property({ attribute: false }) busy = false;
   @property({ attribute: false }) disabled = false;
-  @property({ attribute: false }) label = "";
+  @property({ attribute: false }) pluginName = "";
   @property({ attribute: false }) buttonClass = "";
   @property({ attribute: false }) primary = false;
   @property({ attribute: false }) onInstall = () => {};
@@ -42,6 +41,9 @@ export class PluginInstallAction extends OpenClawLightDomElement {
 
   protected override updated(changed: PropertyValues) {
     if (changed.has("progress") || changed.has("busy")) {
+      // Lit refs run before first-render nodes are inserted. Restored progress needs
+      // its anchor configured after the button and popup have committed.
+      this.configurePopup();
       clearInterval(this.timer);
       this.timer = undefined;
       if (this.progress && this.progress.finishedAt === undefined) {
@@ -68,14 +70,15 @@ export class PluginInstallAction extends OpenClawLightDomElement {
     }
   };
 
-  private readonly configurePopup = (element?: Element) => {
+  private configurePopup(): void {
+    const element = this.querySelector("wa-popup");
     const button = this.querySelector("button");
     if (element instanceof WaPopup && button) {
       configureAnchoredPopup(element, button, "bottom");
       element.distance = 16;
       element.hoverBridge = true;
     }
-  };
+  }
 
   override render() {
     const progress = this.progress;
@@ -114,7 +117,18 @@ export class PluginInstallAction extends OpenClawLightDomElement {
         type="button"
         class=${`${this.buttonClass} plugin-install-action__button ${this.primary && !failed ? "primary oc-action-primary" : "oc-action-secondary"} ${failed ? "plugin-install-action__button--failed" : ""}`}
         ?disabled=${this.disabled && canInstall}
-        aria-label=${canInstall ? this.label || nothing : nothing}
+        aria-label=${
+          this.pluginName && (canInstall || failed)
+            ? t(
+                canInstall
+                  ? failed
+                    ? "pluginsPage.retryInstallNamed"
+                    : "pluginsPage.installNamed"
+                  : "pluginsPage.viewInstallStatusNamed",
+                { name: this.pluginName },
+              )
+            : nothing
+        }
         aria-busy=${active && !failed ? "true" : nothing}
         aria-expanded=${progress ? String(this.open) : nothing}
         aria-controls=${progress ? this.progressId : nothing}
@@ -132,16 +146,12 @@ export class PluginInstallAction extends OpenClawLightDomElement {
         }}
       >
         ${active && !failed ? html`<span class="btn__spinner" aria-hidden="true"></span>` : nothing}
-        ${t(canInstall ? "pluginsPage.install" : failed ? "pluginsPage.installProgress.failed" : "pluginsPage.installing")}
+        ${t(canInstall ? (failed ? "pluginsPage.retryInstall" : "pluginsPage.install") : failed ? "pluginsPage.installProgress.viewStatus" : "pluginsPage.installing")}
         ${progress ? icons.chevronDown : nothing}
       </button>
       ${
         progress
-          ? html`<wa-popup
-              class="plugin-install-action__popup"
-              ?active=${this.open}
-              ${ref(this.configurePopup)}
-            >
+          ? html`<wa-popup class="plugin-install-action__popup" ?active=${this.open}>
               <section
                 class="plugin-install-progress"
                 id=${this.progressId}
@@ -150,11 +160,12 @@ export class PluginInstallAction extends OpenClawLightDomElement {
               >
                 <div class="plugin-install-progress__header">
                   <strong
-                    >${t(failed ? "pluginsPage.installProgress.stopped" : "pluginsPage.installProgress.title")}</strong
+                    >${progress.failure?.title ?? t(failed ? "pluginsPage.installProgress.stopped" : "pluginsPage.installProgress.title")}</strong
                   ><span aria-hidden="true"
                     >${formatUnit({ value: duration, unit: "second" })}</span
                   >
                 </div>
+                ${progress.failure ? html`<p class="plugin-install-progress__recovery">${progress.failure.recovery}</p>` : nothing}
                 <ol class="plugin-install-progress__activities">
                   ${progress.activities.map(
                     (activity) => html`<li
@@ -170,6 +181,14 @@ export class PluginInstallAction extends OpenClawLightDomElement {
                   )}
                   ${failed && !progress.activities.some((activity) => activity.status === "failed") ? html`<li class="plugin-install-progress__activity plugin-install-progress__activity--failed"><span class="plugin-install-progress__icon" aria-hidden="true">!</span><span>${t("pluginsPage.installProgress.failure")}</span></li>` : nothing}
                 </ol>
+                ${
+                  progress.failure
+                    ? html`<details class="plugin-install-progress__failure">
+                        <summary>${t("pluginsPage.installProgress.details")}</summary>
+                        <p>${progress.failure.detail}</p>
+                      </details>`
+                    : nothing
+                }
               </section>
             </wa-popup>`
           : nothing

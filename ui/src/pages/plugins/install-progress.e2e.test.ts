@@ -156,7 +156,7 @@ describeControlUiE2e("plugin install button progress", () => {
                   ? "Plugin service failed to start."
                   : "Installed catalog refresh failed.",
             ...(outcome === "failure"
-              ? {}
+              ? { details: { pluginInstallRejected: true } }
               : { details: { persistence: { operation: "install", pluginId: installed.id } } }),
           });
           await page
@@ -172,8 +172,9 @@ describeControlUiE2e("plugin install button progress", () => {
           expect(await card.locator(".plugin-install-progress__activity--completed").count()).toBe(
             outcome === "failure" ? 4 : outcome === "runtime-failure" ? 5 : 6,
           );
+          await page.screenshot({ path: `${evidence}/failure-state.png` });
           expect((await button.textContent())?.trim()).toBe(
-            outcome === "failure" ? "Install" : "Install failed",
+            outcome === "failure" ? "Retry install" : "View status",
           );
           expect(await button.locator(".btn__spinner").count()).toBe(0);
           const stoppedAt = await timer.textContent();
@@ -181,7 +182,41 @@ describeControlUiE2e("plugin install button progress", () => {
           expect(await timer.textContent()).toBe(stoppedAt);
           expect(await page.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
           await page.screenshot({ path: `${evidence}/after.png` });
+          const captureFailure = async (expanded: boolean) => {
+            for (const width of [1440, 1366, 768, 390]) {
+              await page.setViewportSize({ width, height: 900 });
+              await button.hover();
+              await expect
+                .poll(async () => {
+                  const box = await card.boundingBox();
+                  return Boolean(
+                    box &&
+                    box.x >= 0 &&
+                    box.y >= 0 &&
+                    box.x + box.width <= width &&
+                    box.y + box.height <= 900,
+                  );
+                })
+                .toBe(true);
+              await page.screenshot({
+                path: `${evidence}/failure-${expanded ? "expanded-" : ""}${width}.png`,
+              });
+            }
+          };
+          await captureFailure(false);
           if (outcome === "failure") {
+            expect(await card.textContent()).toContain("Plugin not installed");
+            expect(await card.textContent()).toContain(
+              "Resolve the reported issue, then select Retry install.",
+            );
+            expect(
+              await page.locator('.plugins-row-message[role="alert"]').textContent(),
+            ).toContain("This attempt did not install the plugin.");
+            await card.getByText("Failure details", { exact: true }).click();
+            await card
+              .getByText("Registry refused the dependency download.", { exact: true })
+              .waitFor();
+            await captureFailure(true);
             await gateway.deferNext("plugins.install");
             await button.click();
             await gateway.waitForRequest("plugins.install", { after: 1 });
