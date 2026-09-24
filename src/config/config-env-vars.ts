@@ -217,10 +217,7 @@ export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.Pr
 }
 
 /** Collects config env vars safe to persist into managed service environments. */
-export function collectConfigServiceEnvVars(cfg?: OpenClawConfig): Record<string, string> {
-  // Runtime and service envs intentionally share filtering until a target-specific contract exists.
-  return collectConfigRuntimeEnvVars(cfg);
-}
+export const collectConfigServiceEnvVars = collectConfigRuntimeEnvVars;
 
 /** Builds a cloned environment with config env vars applied without mutating the base env. */
 export function createConfigRuntimeEnv(

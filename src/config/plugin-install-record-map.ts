@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "./types.plugins.js";
 import { StrictPluginInstallRecordSchema } from "./zod-schema.installs.js";
@@ -18,15 +19,10 @@ const NORMALIZED_STRING_FIELDS = [
   "installedAt",
   "clawhubUrl",
   "clawhubPackage",
-  "clawhubFamily",
-  "clawhubChannel",
-  "clawhubTrustDisposition",
   "clawhubTrustScanStatus",
   "clawhubTrustModerationState",
   "clawhubTrustCheckedAt",
   "clawhubTrustAcknowledgedAt",
-  "artifactKind",
-  "artifactFormat",
   "npmIntegrity",
   "npmShasum",
   "npmTarballName",
@@ -48,19 +44,8 @@ export type PluginInstallRecordMapState =
   | { status: "invalid" }
   | { status: "valid"; records: Record<string, PluginInstallRecord> };
 
-const utf8Encoder = new TextEncoder();
-
 function comparePluginIds(left: string, right: string): number {
-  const leftBytes = utf8Encoder.encode(left);
-  const rightBytes = utf8Encoder.encode(right);
-  const sharedLength = Math.min(leftBytes.length, rightBytes.length);
-  for (let index = 0; index < sharedLength; index += 1) {
-    const difference = (leftBytes[index] ?? 0) - (rightBytes[index] ?? 0);
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-  return leftBytes.length - rightBytes.length;
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
 export function createPluginInstallRecordMap<T>(): Record<string, T> {
@@ -102,15 +87,15 @@ export function parsePluginInstallRecord(value: unknown): PluginInstallRecord | 
   if (!parsed.success) {
     return null;
   }
-  const record = parsed.data as PluginInstallRecord & Record<string, unknown>;
+  const record = parsed.data;
   for (const field of NORMALIZED_STRING_FIELDS) {
     const fieldValue = record[field];
-    if (typeof fieldValue !== "string") {
+    if (fieldValue === undefined) {
       continue;
     }
     const normalized = fieldValue.trim();
     if (normalized) {
-      record[field] = normalized as never;
+      record[field] = normalized;
     } else {
       delete record[field];
     }

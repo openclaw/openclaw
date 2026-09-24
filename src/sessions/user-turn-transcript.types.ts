@@ -19,8 +19,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
-type UserTurnSessionEntry = SessionEntry;
-
 export type PersistedUserTurnMediaInput = Pick<
   MediaFactInput,
   | "contentType"
@@ -111,13 +109,13 @@ type UserTurnBeforeMessageWrite = (params: {
   sessionKey?: string;
 }) => AgentMessage | null;
 
-type UserTurnTranscriptPersistenceTarget = {
+export type UserTurnTranscriptTarget = {
   sessionId: string;
   expectedSessionId?: string;
   initialSessionEntry?: SessionEntry;
   sessionKey: string;
-  sessionEntry: UserTurnSessionEntry | undefined;
-  sessionStore?: Record<string, UserTurnSessionEntry>;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   agentId: string;
   threadId?: string | number;
@@ -125,8 +123,6 @@ type UserTurnTranscriptPersistenceTarget = {
   config?: unknown;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
-
-export type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget;
 
 export type UserTurnTranscriptAdmissionReceipt = TranscriptTurnAdmission;
 
@@ -149,7 +145,7 @@ export type UserTurnTranscriptPersistResult = {
   /** True only when this call inserted the transcript message. */
   appended?: boolean;
   sessionFile: string;
-  sessionEntry: UserTurnSessionEntry | undefined;
+  sessionEntry: SessionEntry | undefined;
   messageId: string;
   message: PersistedUserTurnMessage;
   admission: UserTurnTranscriptAdmissionReceipt;
@@ -159,24 +155,12 @@ export type UserTurnTranscriptTargetResolver =
   | UserTurnTranscriptTarget
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
-export type PersistUserTurnTranscriptParams = {
+export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
-  sessionId: string;
-  expectedSessionId?: string;
-  initialSessionEntry?: SessionEntry;
-  sessionKey: string;
-  sessionEntry: UserTurnSessionEntry | undefined;
-  sessionStore?: Record<string, UserTurnSessionEntry>;
-  storePath?: string;
-  agentId: string;
   logicalTurnId?: string;
-  threadId?: string | number;
-  cwd?: string;
-  config?: unknown;
   updateMode?: UserTurnTranscriptUpdateMode;
-  beforeMessageWrite?: UserTurnBeforeMessageWrite;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;

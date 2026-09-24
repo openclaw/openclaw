@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Session id resolution helpers resolve user-provided session references.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";
@@ -58,21 +57,17 @@ function normalizeSessionIdMatches(
 function collapseAliasMatches(matches: NormalizedSessionIdMatch[]): NormalizedSessionIdMatch[] {
   const grouped = new Map<string, NormalizedSessionIdMatch[]>();
   for (const match of matches) {
-    const bucket = grouped.get(match.normalizedRequestKey);
-    if (bucket) {
-      bucket.push(match);
-    } else {
-      grouped.set(match.normalizedRequestKey, [match]);
-    }
+    const group = grouped.get(match.normalizedRequestKey) ?? [];
+    group.push(match);
+    grouped.set(match.normalizedRequestKey, group);
   }
-
   return Array.from(grouped.values(), (group) => {
     if (group.length === 1) {
       return expectDefined(group[0], "normalized session id match");
     }
     // Aliases that normalize to the same request key represent one session.
     // Prefer freshest canonical key so ambiguity only reports distinct sessions.
-    const sorted = [...group].toSorted((a, b) => {
+    const sorted = group.toSorted((a, b) => {
       const timeDiff = compareNormalizedUpdatedAtDescending(a, b);
       if (timeDiff !== 0) {
         return timeDiff;
@@ -92,7 +87,7 @@ function selectFreshestUniqueMatch(
   if (matches.length === 1) {
     return matches[0];
   }
-  const sortedMatches = [...matches].toSorted(compareNormalizedUpdatedAtDescending);
+  const sortedMatches = matches.toSorted(compareNormalizedUpdatedAtDescending);
   const [freshest, secondFreshest] = sortedMatches;
   if ((freshest?.entry?.updatedAt ?? 0) > (secondFreshest?.entry?.updatedAt ?? 0)) {
     return freshest;

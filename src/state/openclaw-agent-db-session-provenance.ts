@@ -1,16 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 function readMigratedEntry(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value === "string") {
-    try {
-      return asOptionalRecord(JSON.parse(value));
-    } catch {
-      return undefined;
-    }
-  }
-  return asOptionalRecord(value);
+  return typeof value === "string" ? safeParseJsonRecord(value) : asOptionalRecord(value);
 }
 
 export function addSessionProvenanceColumns(
@@ -41,12 +36,8 @@ export function backfillSessionEntryProvenance(db: DatabaseSync, previousVersion
   if (previousVersion >= 8) {
     return;
   }
-  const hasSessionEntries = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_entries'")
-    .get();
-  const hasSessions = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'")
-    .get();
+  const hasSessionEntries = tableExists(db, "session_entries");
+  const hasSessions = tableExists(db, "sessions");
   if (!hasSessionEntries || !hasSessions) {
     return;
   }
@@ -82,10 +73,7 @@ export function backfillSessionEntryProvenance(db: DatabaseSync, previousVersion
 }
 
 export function backfillTranscriptMutationWatermarks(db: DatabaseSync): void {
-  const transcriptTable = db
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get("transcript_events") as { ok?: unknown } | undefined;
-  if (transcriptTable?.ok !== 1) {
+  if (!tableExists(db, "transcript_events")) {
     return;
   }
   db.exec(`

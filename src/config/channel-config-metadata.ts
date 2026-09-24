@@ -201,10 +201,10 @@ function prepareChannelConfigSchema(
     if (schema !== undefined) {
       assertChannelConfigSchemaTraversalDepth(schema);
     }
-    if (origin === "bundled") {
-      return widenOfficialExternalChannelSecretSchema({ channelId, schema });
-    }
-    const coreOwnedSchema = schema === undefined ? schema : normalizeCoreOwnedChannelSchema(schema);
+    const coreOwnedSchema =
+      origin === "bundled" || schema === undefined
+        ? schema
+        : normalizeCoreOwnedChannelSchema(schema);
     return widenOfficialExternalChannelSecretSchema({ channelId, schema: coreOwnedSchema });
   } catch (error) {
     if (origin === "bundled") {
@@ -407,17 +407,11 @@ export function collectChannelDmPolicyMetadata(
     };
     const dmAllowFromMode = doctorCapabilities?.dmAllowFromMode;
     const openDmRequiresAllowFromWildcard = doctorCapabilities?.openDmRequiresAllowFromWildcard;
-    for (const channelId of record.channels) {
-      put(
-        channelId,
-        originRank,
-        record.id,
-        channelId === packageChannelId ? dmAllowFromMode : undefined,
-        channelId === packageChannelId ? openDmRequiresAllowFromWildcard : undefined,
-      );
-    }
-    put(packageChannelId, originRank, record.id, dmAllowFromMode, openDmRequiresAllowFromWildcard);
-    for (const channelId of Object.keys(record.channelConfigs ?? {})) {
+    for (const channelId of [
+      ...record.channels,
+      packageChannelId,
+      ...Object.keys(record.channelConfigs ?? {}),
+    ]) {
       put(
         channelId,
         originRank,
