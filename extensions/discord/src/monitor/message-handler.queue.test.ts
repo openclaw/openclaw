@@ -1,3 +1,6 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover message handler.queue plugin behavior.
 import { getEventListeners } from "node:events";
 import fs from "node:fs/promises";
@@ -27,6 +30,7 @@ import {
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 import {
+  createIngressLifecycle,
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
@@ -48,23 +52,6 @@ function expectStatusPatch(setStatus: MockCallSource, expected: Record<string, u
       Object.entries(expected).every(([key, value]) => patch[key] === value),
     ),
   ).toBe(true);
-}
-
-function createIngressLifecycle(): DiscordIngressLifecycle & {
-  onAdopted: ReturnType<typeof vi.fn>;
-  onFailed: ReturnType<typeof vi.fn>;
-  onCancelled: ReturnType<typeof vi.fn>;
-  onAbandoned: ReturnType<typeof vi.fn>;
-} {
-  return {
-    abortSignal: new AbortController().signal,
-    onAdopted: vi.fn(async () => {}),
-    onDeferred: vi.fn(),
-    onAdoptionFinalizing: vi.fn(),
-    onFailed: vi.fn(async () => {}),
-    onCancelled: vi.fn(async () => {}),
-    onAbandoned: vi.fn(async () => {}),
-  };
 }
 
 type DiscordIngressPayload = {

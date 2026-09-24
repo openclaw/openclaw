@@ -122,6 +122,7 @@ export type CodexSessionCatalogError = {
 };
 
 export type CodexSessionCatalogHost = {
+  pending?: boolean;
   hostId: string;
   label: string;
   kind: "gateway" | "node";

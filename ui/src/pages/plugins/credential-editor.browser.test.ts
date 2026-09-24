@@ -46,7 +46,12 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
   };
   const field = {
     path,
-    value: state.kind === "reference" ? { ...state.ref, id: REDACTED_SENTINEL } : REDACTED_SENTINEL,
+    value:
+      state.kind === "reference"
+        ? { ...state.ref, id: REDACTED_SENTINEL }
+        : state.kind === "literal"
+          ? REDACTED_SENTINEL
+          : undefined,
     disabled: false,
     descriptionId: "credential-help",
     onPatch: vi.fn(),
@@ -151,7 +156,7 @@ describe("plugin credential authoring controls", () => {
     input.focus();
     editInput(input, "synthetic-first-key");
     await first.editor.updateComplete;
-    first.editor.querySelector<HTMLButtonElement>('[aria-label="Show entered key"]')!.focus();
+    first.editor.querySelector<HTMLButtonElement>('[aria-label="Show API key"]')!.focus();
     expect(first.context.onCommit).not.toHaveBeenCalled();
     second.editor.querySelector<HTMLInputElement>("input")!.focus();
     await vi.waitFor(() => expect(first.context.onCommit).toHaveBeenCalledOnce());
@@ -159,7 +164,81 @@ describe("plugin credential authoring controls", () => {
     expect(second.context.onCommit).not.toHaveBeenCalled();
   });
 
-  it("never puts the stored sentinel into an editable input; reveal affects only the entered draft", async () => {
+  it("reveals a stored literal only on request without committing it, and clears it on hide", async () => {
+    const { editor, scope, context } = await mount();
+    const input = editor.querySelector<HTMLInputElement>("input")!;
+    const reveal = editor.querySelector<HTMLButtonElement>('[aria-label="Show API key"]')!;
+    expect(input.value).toBe("");
+    expect(scope.client.request).toHaveBeenCalledWith("plugins.credentials.inspect", {
+      pluginId: "example",
+      path,
+      baseHash: "revision",
+    });
+    expect(reveal.disabled).toBe(false);
+    scope.client.request.mockResolvedValue({
+      baseHash: "revision",
+      credential: { kind: "literal", value: "synthetic-stored-key" },
+    });
+    reveal.click();
+    await vi.waitFor(() => expect(input.value).toBe("synthetic-stored-key"));
+    expect(input.type).toBe("text");
+    expect(scope.client.request).toHaveBeenLastCalledWith("plugins.credentials.inspect", {
+      pluginId: "example",
+      path,
+      baseHash: "revision",
+      reveal: true,
+    });
+    input.focus();
+    input.blur();
+    expect(context.onCommit).not.toHaveBeenCalled();
+    editor.querySelector<HTMLButtonElement>('[aria-label="Hide API key"]')!.click();
+    await editor.updateComplete;
+    expect(input.value).toBe("");
+    expect(input.type).toBe("password");
+  });
+
+  it.each(["revision", "connection", "permission", "field"])(
+    "discards a pending stored-key reveal after %s changes",
+    async (change) => {
+      const { editor, scope, context, field, update } = await mount();
+      const pending = createDeferred<unknown>();
+      scope.client.request.mockReturnValueOnce(pending.promise).mockResolvedValue({
+        baseHash: "new-revision",
+        credential: { kind: "literal" },
+      });
+      editor.querySelector<HTMLButtonElement>('[aria-label="Show API key"]')!.click();
+      await vi.waitFor(() => expect(scope.client.request).toHaveBeenCalledTimes(2));
+      if (change === "revision") {
+        context.baseHash = "new-revision";
+      }
+      if (change === "permission") {
+        context.canInspect = false;
+      }
+      if (change === "field") {
+        field.path = [...path.slice(0, -1), "otherKey"];
+      }
+      if (change === "connection") {
+        context.gateway = {
+          epoch: 2,
+          connected: false,
+          capture: () => null,
+          isCurrent: () => false,
+        } as unknown as GatewayPageController;
+      }
+      await update();
+      pending.resolve({
+        baseHash: "revision",
+        credential: { kind: "literal", value: "stale-private-key" },
+      });
+      await pending.promise;
+      await editor.updateComplete;
+      expect(editor.querySelector<HTMLInputElement>("input")?.value).toBe("");
+      expect(editor.innerHTML).not.toContain("stale-private-key");
+      expect(context.onCommit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the stored sentinel out of edits and reveals entered drafts locally", async () => {
     const { editor, context } = await mount();
     const field = editor.querySelector<HTMLInputElement>("input")!;
     expect(field.getAttribute("aria-describedby")).toBe("credential-help");
@@ -171,7 +250,7 @@ describe("plugin credential authoring controls", () => {
     expect(context.onCommit).not.toHaveBeenCalled();
     editInput(field, "synthetic-new-key");
     await editor.updateComplete;
-    editor.querySelector<HTMLButtonElement>('[aria-label="Show entered key"]')!.click();
+    editor.querySelector<HTMLButtonElement>('[aria-label="Show API key"]')!.click();
     await editor.updateComplete;
     expect(field.type).toBe("text");
     expect(field.value).toBe("synthetic-new-key");

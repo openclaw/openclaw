@@ -27,6 +27,13 @@ function expectIntroducersToStartCompleteSequences(
   }
 }
 
+function createKeyValueColumns() {
+  return [
+    { key: "K", header: "K", minWidth: 3 },
+    { key: "V", header: "V", flex: true, minWidth: 10 },
+  ];
+}
+
 const pluginListColumns = [
   { key: "Name", header: "Name", minWidth: 14, flex: true },
   { key: "ID", header: "ID", minWidth: 10, flex: true },
@@ -256,10 +263,7 @@ console.log(JSON.stringify({
   it("wraps ANSI-colored cells without corrupting escape sequences", () => {
     const out = renderTable({
       width: 36,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [
         {
           K: "X",
@@ -283,10 +287,7 @@ console.log(JSON.stringify({
     const foregroundReset = "\x1b[39m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [
         {
           K: "X",
@@ -376,10 +377,7 @@ console.log(JSON.stringify({
     const reset = "\x1b[0m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `prefix ${bold}${red}${"a".repeat(80)}${reset}` }],
     });
 
@@ -399,10 +397,7 @@ console.log(JSON.stringify({
     const globalReset = "\x1b[0m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${combined}${"u".repeat(80)}${globalReset}` }],
     });
 
@@ -425,10 +420,7 @@ console.log(JSON.stringify({
     const reset = "\x1b[0m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [
         {
           K: "X",
@@ -452,10 +444,7 @@ console.log(JSON.stringify({
     const foregroundReset = "\x1b[39m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${red}${"a".repeat(80)}${globalReset}` }],
     });
 
@@ -472,10 +461,7 @@ console.log(JSON.stringify({
     const close = "\x1b]8;;\x07";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${open}OpenClaw${close}` }],
     });
 
@@ -488,10 +474,7 @@ console.log(JSON.stringify({
     const foregroundReset = "\x9b39m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${red}${"a".repeat(80)}${globalReset}` }],
     });
 
@@ -512,10 +495,7 @@ console.log(JSON.stringify({
     const canonicalClose = "\x1b]8;;\x07";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${open}OpenClaw${close}` }],
     });
 
@@ -528,10 +508,7 @@ console.log(JSON.stringify({
     const close = "\x1b]8;;\x07";
     const out = renderTable({
       width: 20,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${open}${"OpenClaw".repeat(5)}${close} after` }],
     });
 
@@ -564,10 +541,7 @@ console.log(JSON.stringify({
       const out = renderTable({
         width: 20,
         border: "unicode",
-        columns: [
-          { key: "K", header: "K", minWidth: 3 },
-          { key: "V", header: "V", flex: true, minWidth: 10 },
-        ],
+        columns: createKeyValueColumns(),
         rows: [{ K: "X", V: `before ${link} after` }],
       });
 
@@ -594,10 +568,7 @@ console.log(JSON.stringify({
       const link = `${openSeq}OpenClaw${closeSeq}`;
       const out = renderTable({
         width: 20,
-        columns: [
-          { key: "K", header: "K", minWidth: 3 },
-          { key: "V", header: "V", flex: true, minWidth: 10 },
-        ],
+        columns: createKeyValueColumns(),
         rows: [{ K: "X", V: `${link} after` }],
       });
 
@@ -900,10 +871,7 @@ console.log(JSON.stringify({
     const sequence = "\x1b[31 m";
     const out = renderTable({
       width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
+      columns: createKeyValueColumns(),
       rows: [{ K: "X", V: `${sequence}${"a".repeat(80)}` }],
     });
 

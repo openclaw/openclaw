@@ -355,7 +355,8 @@ describe("sessions_spawn model fallback through the Gateway", () => {
                 "proof-backup": providerConfig(provider.baseUrl, ["backup", "child-backup"]),
               },
             },
-            tools: { profile: "coding" },
+            // The provider scripts a direct spawn to isolate the child's model fallback ladder.
+            tools: { profile: "coding", toolSearch: false },
             gateway: { auth: { mode: "token", token } },
             hooks: { enabled: false },
           };

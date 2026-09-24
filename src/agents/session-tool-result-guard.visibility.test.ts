@@ -45,6 +45,12 @@ describe("guardSessionManager transcript visibility", () => {
   it.each([
     { label: "memory maintenance", trigger: "memory", inputProvenance: undefined, hidden: true },
     {
+      label: "progress card refresh",
+      trigger: "user",
+      inputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
+      hidden: true,
+    },
+    {
       label: "subagent coordination",
       trigger: "user",
       inputProvenance: {

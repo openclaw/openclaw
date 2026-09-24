@@ -301,7 +301,11 @@ describe("triage external recovery handoff", () => {
         expect(output).toContain("No repair agent was started.");
         expect(output).not.toContain("Ready-to-run agent handoffs:");
         if (!agent) {
-          expect(output).toContain("Install Claude Code or Codex");
+          expect(output).toContain(
+            "No supported coding-agent CLI executable was found on this process's PATH.",
+          );
+          expect(output).toContain("If already installed, add its executable to this shell's PATH");
+          expect(output).toContain("open the saved debugging prompt in an agent you already use");
         }
         expect(mocks.spawn).not.toHaveBeenCalled();
         expect(mocks.runUtf8CommandWithTimeout).not.toHaveBeenCalled();
@@ -376,7 +380,7 @@ describe("triage external recovery handoff", () => {
           `${agent} is not found or unavailable for direct launch on PATH.`,
         );
         expect(runtime.log).toHaveBeenCalledWith(
-          `Install ${agent === "cursor" ? "Cursor Agent (cursor-agent)" : agent} on PATH, then run triage again.`,
+          `No ${agent === "cursor" ? "Cursor Agent (cursor-agent)" : agent} CLI executable was found on this process's PATH.`,
         );
         expect(runtime.exit).toHaveBeenCalledWith(1);
         expect(mocks.spawn).not.toHaveBeenCalled();

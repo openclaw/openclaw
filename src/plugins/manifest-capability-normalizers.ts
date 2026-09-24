@@ -14,6 +14,7 @@ import type {
   PluginManifestConfigLiteral,
   PluginManifestContracts,
   PluginManifestDangerousConfigFlag,
+  PluginManifestDecisionModel,
   PluginManifestMcpServer,
   PluginManifestMediaUnderstandingCapability,
   PluginManifestMediaUnderstandingProviderMetadata,
@@ -24,6 +25,34 @@ import type {
   PluginManifestToolProfile,
   PluginManifestTranscriptSource,
 } from "./manifest-types.js";
+
+export function normalizeManifestDecisionModels(
+  value: unknown,
+  providers: readonly string[] | undefined,
+): PluginManifestDecisionModel[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const models: PluginManifestDecisionModel[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const provider = normalizeOptionalString(entry.provider);
+    const id = normalizeOptionalString(entry.id);
+    const name = normalizeOptionalString(entry.name);
+    if (!provider || !id || !name || !providers?.includes(provider)) {
+      continue;
+    }
+    const ref = `${provider}/${id}`;
+    if (!seen.has(ref)) {
+      models.push({ provider, id, name });
+      seen.add(ref);
+    }
+  }
+  return models.length ? models : undefined;
+}
 
 /** Endpoint restrictions constrain a provider alias without changing stored credential identity. */
 export function normalizeManifestProviderAuthAliases(

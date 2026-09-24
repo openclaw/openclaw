@@ -1,3 +1,6 @@
+import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
+import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
+
 type RestartPostCheckContext = {
   activationAccepted: boolean;
   json: boolean;
@@ -59,7 +62,61 @@ export function createHealthyRestartSnapshot(): RestartHealthSnapshot {
   };
 }
 
-export function failRestartCheck(message: string, hints?: string[]) {
+export function createGatewayLockIdentity(
+  overrides: Partial<GatewayLockIdentity> = {},
+): GatewayLockIdentity {
+  return {
+    pid: 4200,
+    ownerId: "gateway-owner-old",
+    createdAt: "2026-07-16T12:00:00.000Z",
+    port: 18_789,
+    ...overrides,
+  };
+}
+
+export function createDeferredSafeRestartResult(): SafeGatewayRestartRequestResult {
+  return {
+    ok: true,
+    status: "deferred",
+    preflight: {
+      safe: false,
+      counts: {
+        queueSize: 1,
+        pendingReplies: 0,
+        embeddedRuns: 0,
+        cronRuns: 0,
+        backgroundExecSessions: 0,
+        rootRequests: 0,
+        activeTasks: 0,
+        totalActive: 1,
+      },
+      blockers: [{ kind: "queue", count: 1, message: "1 queued or active operation(s)" }],
+      summary: "restart deferred: 1 queued or active operation(s)",
+    },
+    restart: {
+      ok: true,
+      pid: 123,
+      signal: "SIGUSR2",
+      delayMs: 0,
+      mode: "emit",
+      coalesced: false,
+      cooldownMsApplied: 0,
+      emitHooksQueued: false,
+    },
+  };
+}
+
+export async function runRestartPostCheck(params: RestartParams, activationAccepted: boolean) {
+  await params.postRestartCheck?.({
+    activationAccepted,
+    json: Boolean(params.opts?.json),
+    stdout: process.stdout,
+    warnings: [],
+    fail: failRestartCheck,
+  });
+}
+
+function failRestartCheck(message: string, hints?: string[]) {
   const error: Error & { hints?: string[] } = new Error(message);
   error.hints = hints;
   throw error;

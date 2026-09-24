@@ -5,7 +5,7 @@ import type {
   DocumentExtractionRequest,
   DocumentExtractionResult,
 } from "openclaw/plugin-sdk/document-extractor";
-import type { WorkerTaskControl } from "openclaw/plugin-sdk/process-runtime";
+import type { WorkerTaskControl } from "openclaw/plugin-sdk/worker-task-server";
 
 const MAX_EXTRACTED_TEXT_CHARS = 200_000;
 const MAX_RENDER_DIMENSION = 10_000;
@@ -108,25 +108,28 @@ export async function extractPdfContent(
     if (request.pageNumbers?.length && pages?.length === 0) {
       throw new Error(`No requested PDF pages exist in this ${pdf.pageCount}-page document.`);
     }
-    const pageSelection = pages ? { pages } : { maxPages: request.maxPages };
-
-    const textResult = await pdf.extract({
-      mode: "text",
-      ...pageSelection,
-      maxTextChars: MAX_EXTRACTED_TEXT_CHARS,
-    });
+    const selectedPages =
+      pages ?? Array.from({ length: Math.min(pdf.pageCount, request.maxPages) }, (_, i) => i + 1);
+    const imagePages: number[] = [];
+    let text = "";
+    for (const pageNumber of selectedPages) {
+      control.throwIfCancelled();
+      const pageText = pdf.page(pageNumber).text();
+      if (pageText.trim().length < request.minTextChars) {
+        imagePages.push(pageNumber);
+      }
+      const separator = text ? "\n\n" : "";
+      const remaining = MAX_EXTRACTED_TEXT_CHARS - text.length - separator.length;
+      if (pageText && remaining > 0) {
+        text += separator + pageText.slice(0, remaining);
+      }
+    }
     control.throwIfCancelled();
-    const text = textResult.text;
-
-    if (text.trim().length >= request.minTextChars) {
+    if (imagePages.length === 0) {
       return { text, images: [] };
     }
 
-    // Allocate the remaining aggregate budget across pages still to render so
-    // an early page cannot consume the budget and starve later pages.
-    const imagePages =
-      pages ?? Array.from({ length: Math.min(pdf.pageCount, request.maxPages) }, (_, i) => i + 1);
-
+    // Share the aggregate pixel budget only across pages needing image fallback.
     try {
       const { encodePng, PdfError } = await import("clawpdf");
       const images: DocumentExtractedImage[] = [];

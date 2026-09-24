@@ -1,7 +1,15 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
 import { supervisedTaskCommandEntries } from "./command-catalog-supervision.js";
-import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog-types.js";
+import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.types.js";
+
+export type {
+  CliCommandPluginLoadPolicy,
+  CliPluginRegistryScope,
+  CliNetworkProxyPolicy,
+  CliCommandPathPolicy,
+  CliCommandCatalogEntry,
+} from "./command-catalog.types.js";
 
 function hasCliOption(argv: readonly string[], name: string): boolean {
   for (const arg of argv.slice(2)) {
@@ -391,7 +399,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   {
     commandPath: ["worktrees"],
-    policy: { loadPlugins: "never", networkProxy: "bypass" },
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
   },
   {
     commandPath: ["fleet"],
@@ -442,9 +450,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { ownsProtocolStdout: true },
   },
   {
+    commandPath: ["browser", "extension"],
+    // Desktop browser helpers validate config without Gateway Doctor or state migrations.
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["browser", "extension", "native-host"],
     exact: true,
-    policy: { hideBanner: true, ownsProtocolStdout: true, networkProxy: "bypass" },
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
   },
   {
     commandPath: ["node"],

@@ -1,9 +1,11 @@
 /** Offline destination ownership and conservative adoption of historical import evidence. */
 import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -26,6 +28,108 @@ import {
   readTranscriptFingerprint,
 } from "./doctor-session-sqlite-readers.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
+
+function verifyTranscriptEvents(
+  database: DatabaseSync,
+  source: { path: string; sessionId: string; originalPath: string },
+  allowMissingSuffix = false,
+): { events: number; missingEvents: number } | undefined {
+  return withSqliteSessionImportStage((stage) => {
+    let seq = 0;
+    const validate = createTranscriptEventReader(
+      source.path,
+      source.sessionId,
+      false,
+      readTranscriptFingerprint(source.path),
+      source.originalPath,
+    )((event) => stage.append(0, seq++, JSON.stringify(event)));
+    const repair = stage.repairLegacyTranscript(0);
+    // Old metadata cannot prove that a now-discarded branch was deliberately retired then.
+    if (repair.repaired || !repair.recognized) {
+      return undefined;
+    }
+    const db = getSessionKysely(database);
+    const sourceRows = stage.rows(0)[Symbol.iterator]();
+    try {
+      let expected = sourceRows.next();
+      for (const event of iterateSqliteQuerySync(
+        database,
+        db
+          .selectFrom("transcript_events")
+          .select(transcriptEventJsonSql(database).as("event_json"))
+          .where("session_id", "=", source.sessionId)
+          .orderBy("seq", "asc"),
+      )) {
+        if (allowMissingSuffix) {
+          stage.addSeen(event.event_json);
+          const entry: unknown = JSON.parse(event.event_json);
+          if (isRecord(entry) && typeof entry.id === "string") {
+            stage.addSeen(`id\0${entry.id}`);
+          }
+        }
+        if (expected.done) {
+          break;
+        }
+        // Canonical history may contain newer events, but must preserve source order and repeats.
+        if (event.event_json === expected.value.eventJson) {
+          expected = sourceRows.next();
+          if (expected.done) {
+            break;
+          }
+        }
+      }
+      let missingEvents = 0;
+      if (allowMissingSuffix) {
+        while (!expected.done) {
+          const entry: unknown = JSON.parse(expected.value.eventJson);
+          // Append-only import cannot insert a missing middle row or replace an existing ID.
+          if (
+            stage.contains(expected.value.eventJson) ||
+            (isRecord(entry) && typeof entry.id === "string" && stage.contains(`id\0${entry.id}`))
+          ) {
+            return undefined;
+          }
+          missingEvents += 1;
+          expected = sourceRows.next();
+        }
+      }
+      validate();
+      return expected.done ? { events: seq, missingEvents } : undefined;
+    } finally {
+      sourceRows.return?.();
+    }
+  });
+}
+
+/** Read-only content proof for Doctor's informational missing-index finding. */
+export function verifyCanonicalSessionTranscriptSources(params: {
+  target: { agentId: string; sqlitePath: string };
+  sources: readonly { path: string; sessionId: string; originalPath?: string }[];
+  env: NodeJS.ProcessEnv;
+  allowMissingSuffix?: boolean;
+}): { entries: number; events: number; missingEvents: number } | undefined {
+  const verified = withOpenClawAgentDatabaseReadOnly(
+    (database) => {
+      let events = 0;
+      let missingEvents = 0;
+      for (const source of params.sources) {
+        const verifiedSource = verifyTranscriptEvents(
+          database.db,
+          { ...source, originalPath: source.originalPath ?? source.path },
+          params.allowMissingSuffix,
+        );
+        if (!verifiedSource) {
+          return undefined;
+        }
+        events += verifiedSource.events;
+        missingEvents += verifiedSource.missingEvents;
+      }
+      return { entries: params.sources.length, events, missingEvents };
+    },
+    { agentId: params.target.agentId, path: params.target.sqlitePath, env: params.env },
+  );
+  return verified.found ? verified.value : undefined;
+}
 
 /** Keep one owner proof per database; fence in-place writes and sidecar changes after awaits. */
 export function createRecoveryDestinationVerifier(stateDir: string) {
@@ -160,36 +264,10 @@ export function verifyHistoricalMigrationArtifact(params: {
           }
           continue;
         }
-        const complete = withSqliteSessionImportStage((stage) => {
-          let seq = 0;
-          const validate = createTranscriptEventReader(
-            move.archivePath,
-            sessionId,
-            false,
-            readTranscriptFingerprint(move.archivePath),
-            move.sourcePath,
-          )((event) => stage.append(0, seq++, JSON.stringify(event)));
-          const repair = stage.repairLegacyTranscript(0);
-          // Old metadata cannot prove that a now-discarded branch was deliberately retired then.
-          if (repair.repaired || !repair.recognized) {
-            return false;
-          }
-          for (const event of iterateSqliteQuerySync(
-            database.db,
-            db
-              .selectFrom("transcript_events")
-              .select("event_json")
-              .where("session_id", "=", sessionId),
-          )) {
-            stage.addSeen(event.event_json);
-          }
-          for (const event of stage.rows(0)) {
-            if (!stage.contains(event.eventJson)) {
-              return false;
-            }
-          }
-          validate();
-          return true;
+        const complete = verifyTranscriptEvents(database.db, {
+          path: move.archivePath,
+          originalPath: move.sourcePath,
+          sessionId,
         });
         if (!complete) {
           return false;

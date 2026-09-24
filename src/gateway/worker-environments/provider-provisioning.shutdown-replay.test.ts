@@ -11,6 +11,7 @@ import {
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -93,14 +94,14 @@ describe("worker node provisioning shutdown replay", () => {
       expectedGeneration: requested.generation,
       patch: { environmentId: intent.environmentId },
     });
-    const environment = support.testState.store.createIntent({
+    const environment = await support.testState.store.createIntent({
       environmentId: intent.environmentId,
       providerId: provider.id,
       profileId: "development",
       profileSnapshot: { install: "bundle", settings: { region: "test" } },
       provisionOperationId: intent.provisionOperationId,
     });
-    support.testState.store.transition({
+    await support.testState.store.transition({
       environmentId: environment.environmentId,
       from: "requested",
       to: "provisioning",
@@ -197,11 +198,12 @@ describe("worker node provisioning shutdown replay", () => {
     expect(destroy).not.toHaveBeenCalled();
 
     support.testState.service = undefined;
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     support.testState.stateDb = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: support.testState.root },
     });
-    support.testState.store = createWorkerEnvironmentStore({
+    support.testState.store = await createWorkerEnvironmentStore({
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });

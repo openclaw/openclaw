@@ -23,7 +23,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { ChatToolIconController } from "./chat-tool-icon-controller.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
-import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
@@ -31,6 +30,7 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
+import { renderChatTasksPanel } from "./components/chat-tasks-panel.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
@@ -216,14 +216,17 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       },
       dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : nothing,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
-      tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
+      tasks: renderChatTasksPanel({
+        backgroundTasks,
+        host: state,
+        presented: this.presented,
+        loadFullAssistantMessage: chatProps.loadFullAssistantMessage,
+      }),
       renderDetail: (content) =>
         renderChatDetailSlot({
-          backgroundTasks,
           chat: chatProps,
           content,
           host: state,
-          layout: sidebarLayout,
         }),
       digest: observerDigest,
       activeRunId: observerRunId,
@@ -273,6 +276,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
             .presented=${this.visuallyPresented}
           ></openclaw-plugin-contributions>`;
     const content = renderSidebarRegion({
+      presentationId: this.presentationId,
       availableWidth: this.paneWidth,
       fetchFavicon: resolveChatLinkFaviconFetcher(state),
       availableSlots,

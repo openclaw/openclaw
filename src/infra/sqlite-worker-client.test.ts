@@ -11,6 +11,8 @@ const closedError = { code: "closed", message: "SQLite worker store is closed" }
 
 function createActor(): Actor {
   return {
+    nativeStopped: Promise.resolve(),
+    markNativeStopped() {},
     id: 1,
     key: "client-fixture",
     databasePath: "/fixture/state.sqlite",

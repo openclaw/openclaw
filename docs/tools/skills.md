@@ -599,6 +599,7 @@ metadata:
       `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
       previous download behavior. Response bodies are capped at 256 MiB; larger
       transfers are aborted while streaming, and partial staging data is removed.
+      Archive extraction does not require a system `tar` command.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent
@@ -740,6 +741,8 @@ the total number of operating-system file watches.
   <Accordion title="Skills watcher">
     By default, OpenClaw watches skill folders and bumps the snapshot when
     `SKILL.md` files change, including skill roots first created after startup.
+    Removing and recreating a skill folder or its parent keeps discovery on the
+    configured path, including on Windows.
     Configure under `skills.load`:
 
     ```json5

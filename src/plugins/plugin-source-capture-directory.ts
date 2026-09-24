@@ -26,13 +26,42 @@ type Instance = {
 };
 const { instances, ownedRoots, sweeps, warningBackoff } = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginSourceCaptureInstances"),
-  () => ({
-    instances: new Map<string, Instance>(),
-    ownedRoots: new Set<string>(),
-    sweeps: new Map<string, Promise<void>>(),
-    warningBackoff: new Map<string, { next: number; delay: number }>(),
-  }),
+  () => {
+    process.once("exit", () => {
+      // Explicit exits cannot await generation disposal. These native leases belong
+      // only to this exiting process; worker overrides remain with their parent.
+      for (const [key, instance] of instances) {
+        try {
+          const root = retireInstance(key, instance);
+          if (root) {
+            fs.rmSync(root, { recursive: true, force: true });
+          }
+        } catch (error) {
+          process.stderr.write(`Plugin source capture exit cleanup failed: ${String(error)}\n`);
+        }
+      }
+    });
+    return {
+      instances: new Map<string, Instance>(),
+      ownedRoots: new Set<string>(),
+      sweeps: new Map<string, Promise<void>>(),
+      warningBackoff: new Map<string, { next: number; delay: number }>(),
+    };
+  },
 );
+
+function retireInstance(key: string, instance: Instance): string | undefined {
+  instance.closing = true;
+  // Keep custody and the retryable handle if native close fails.
+  instance.lease?.release();
+  if (instance.root) {
+    ownedRoots.delete(instance.root);
+  }
+  instance.references = 0;
+  instances.delete(key);
+  clearInterval(instance.timer);
+  return instance.root;
+}
 
 function instanceDirectory(stateDir: string): string {
   return path.join(stateDir, "tmp", "plugin-captures");
@@ -161,9 +190,9 @@ export function sweepPluginSourceCaptureDirectories(stateDir = resolveStateDir()
   return sweep;
 }
 
-function createCaptureDirectory(instance: Instance, stateDir: string): string {
+function createCaptureDirectory(instance: Instance, stateDir: string, prefix: string): string {
   if (instance.root) {
-    return fs.mkdtempSync(path.join(instance.root, "captures", PLUGIN_SOURCE_CAPTURE_PREFIX));
+    return fs.mkdtempSync(path.join(instance.root, "captures", prefix));
   }
   const prepare = (fallback: boolean): string => {
     let directory: string | undefined;
@@ -186,7 +215,7 @@ function createCaptureDirectory(instance: Instance, stateDir: string): string {
       }
       const captures = path.join(canonical, "captures");
       fs.mkdirSync(captures, { mode: 0o700 });
-      const capture = fs.mkdtempSync(path.join(captures, PLUGIN_SOURCE_CAPTURE_PREFIX));
+      const capture = fs.mkdtempSync(path.join(captures, prefix));
       instance.root = canonical;
       instance.lease = lease;
       ownedRoots.add(canonical);
@@ -263,27 +292,19 @@ export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) 
       released = true;
       return undefined;
     }
-    retained.closing = true;
-    // Keep custody and the retryable handle if native close fails.
-    retained.lease?.release();
-    if (retained.root) {
-      ownedRoots.delete(retained.root);
-    }
+    const root = retireInstance(key, retained);
     released = true;
-    retained.references = 0;
-    instances.delete(key);
-    clearInterval(retained.timer);
-    return retained.root;
+    return root;
   };
   return {
     get managedRoot() {
       return retained.managedRoot;
     },
-    createDirectory() {
+    createDirectory(prefix = PLUGIN_SOURCE_CAPTURE_PREFIX) {
       if (released || retained.closing) {
         throw new Error("Plugin source instance has been released");
       }
-      return createCaptureDirectory(retained, key);
+      return createCaptureDirectory(retained, key, prefix);
     },
     release() {
       const root = retire();
@@ -298,4 +319,23 @@ export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) 
       }
     },
   };
+}
+
+/** The producer retains this root until its worker has confirmed exit. */
+export function createPluginSourceCaptureRoot(stateDir: string, prefix: string) {
+  const instance = retainPluginSourceCaptureInstance(stateDir);
+  try {
+    const directory = instance.createDirectory(prefix);
+    return {
+      directory,
+      managedRoot: instance.managedRoot,
+      release: async () => {
+        await removeTemporaryArtifacts(directory, "Plugin source worker");
+        await instance.releaseAsync();
+      },
+    };
+  } catch (error) {
+    instance.release();
+    throw error;
+  }
 }

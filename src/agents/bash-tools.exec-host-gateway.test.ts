@@ -4205,8 +4205,8 @@ EOF`,
       return resolveCronJobConfigRevision(loadedJob);
     }
 
-    function mintStandingGrant(revision: string): void {
-      insertOperatorApproval({
+    async function mintStandingGrant(revision: string): Promise<void> {
+      await insertOperatorApproval({
         approval: {
           id: "cron-approval-1",
           kind: "exec",
@@ -4236,7 +4236,7 @@ EOF`,
         },
         databaseOptions: databaseOptions(),
       });
-      const resolved = resolveOperatorApproval({
+      const resolved = await resolveOperatorApproval({
         id: "cron-approval-1",
         decision: "allow-always",
         resolver: { kind: "device", id: "reviewer-1" },
@@ -4270,7 +4270,7 @@ EOF`,
 
     it("executes a cron occurrence via a standing grant without prompting", async () => {
       const revision = seedCronJobRow();
-      mintStandingGrant(revision);
+      await mintStandingGrant(revision);
       unregisterCronSource = registerCronRunExecSource("cron-run-1", {
         agentId: "main",
         jobId: "job-1",
@@ -4300,7 +4300,7 @@ EOF`,
 
     it("denies at the spawn boundary when the grant is invalidated after consult", async () => {
       const revision = seedCronJobRow();
-      mintStandingGrant(revision);
+      await mintStandingGrant(revision);
       unregisterCronSource = registerCronRunExecSource("cron-run-1", {
         agentId: "main",
         jobId: "job-1",

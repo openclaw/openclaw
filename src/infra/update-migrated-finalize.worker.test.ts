@@ -184,89 +184,108 @@ it.each(["json", "human", "check"] as const)(
   },
 );
 
-it("binds migrated worker finalization to its local candidate runtime", async () => {
-  const env = Object.fromEntries(
-    ["TMPDIR", "TMP", "TEMP"].flatMap((key) =>
-      process.env[key] === undefined ? [] : [[key, process.env[key]]],
-    ),
-  );
-  const input = {
-    params: {
-      root: "/fixture/candidate",
-      result: {
-        status: "ok",
-        mode: "npm",
+it.each([false, true])(
+  "binds migrated worker finalization to its local candidate runtime (restart pending=%s)",
+  async (restartPending) => {
+    const env = Object.fromEntries(
+      ["TMPDIR", "TMP", "TEMP"].flatMap((key) =>
+        process.env[key] === undefined ? [] : [[key, process.env[key]]],
+      ),
+    );
+    const input = {
+      params: {
         root: "/fixture/candidate",
-        runId: "candidate-run",
-        steps: [],
-        durationMs: 0,
+        result: {
+          status: "ok",
+          mode: "npm",
+          root: "/fixture/candidate",
+          runId: "candidate-run",
+          steps: [],
+          durationMs: 0,
+        },
+        mutationStarted: true,
+        installKindChanged: false,
+        configSnapshot: {
+          path: "/fixture/openclaw.json",
+          exists: false,
+          raw: null,
+          parsed: {},
+          sourceConfig: {},
+          resolved: {},
+          runtimeConfig: {},
+          config: {},
+          valid: true,
+          issues: [],
+          warnings: [],
+          legacyIssues: [],
+        },
+        requestedChannel: null,
+        storedChannel: "stable",
+        channel: "stable",
+        downgradeRisk: false,
+        shouldRestart: false,
+        opts: {
+          json: true,
+          run: {
+            runId: "candidate-run",
+            env,
+            activationTimeoutMs: 1_000,
+            ...(restartPending
+              ? { completionOwner: "gateway-restart" as const, gatewayRestartRequired: true }
+              : {}),
+          },
+        },
+        controlPlaneUpdateSentinelMeta: null,
+        preUpdatePluginInstallRecords: {},
+        startedAt: 1,
+        updateStepTimeoutMs: 1_000,
+        rollbackBlockedReason: "state-migrated-no-rollback",
       },
-      mutationStarted: true,
-      installKindChanged: false,
-      configSnapshot: {
-        path: "/fixture/openclaw.json",
-        exists: false,
-        raw: null,
-        parsed: {},
-        sourceConfig: {},
-        resolved: {},
-        runtimeConfig: {},
-        config: {},
-        valid: true,
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
-      },
-      requestedChannel: null,
-      storedChannel: "stable",
-      channel: "stable",
-      downgradeRisk: false,
-      shouldRestart: false,
-      opts: { json: true, run: { runId: "candidate-run", env, activationTimeoutMs: 1_000 } },
-      controlPlaneUpdateSentinelMeta: null,
-      preUpdatePluginInstallRecords: {},
-      startedAt: 1,
-      updateStepTimeoutMs: 1_000,
-      rollbackBlockedReason: "state-migrated-no-rollback",
-    },
-    bufferedSteps: [],
-    resultPath: "/fixture/result.json",
-  };
-  const completed = createDeferredCore();
-  fixture.close.mockImplementation(async () => completed.resolve());
-  fixture.finish.mockResolvedValue(input.params.result);
-  fixture.terminal.mockReturnValue({ runId: "candidate-run", status: "succeeded" });
-  process.argv = [process.execPath, "update-migrated-finalize.worker.js"];
-  vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
-    yield JSON.stringify(input);
-    return undefined;
-  });
+      bufferedSteps: [],
+      resultPath: "/fixture/result.json",
+    };
+    const completed = createDeferredCore();
+    fixture.close.mockImplementation(async () => completed.resolve());
+    fixture.finish.mockResolvedValue(input.params.result);
+    fixture.terminal.mockReturnValue({
+      runId: "candidate-run",
+      status: restartPending ? "running" : "succeeded",
+      phase: restartPending ? "restarting" : "finished",
+    });
+    process.argv = [process.execPath, "update-migrated-finalize.worker.js"];
+    vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
+      yield JSON.stringify(input);
+      return undefined;
+    });
 
-  await import("./update-migrated-finalize.worker.js");
-  await completed.promise;
+    await import("./update-migrated-finalize.worker.js");
+    await completed.promise;
 
-  expect(fixture.finish).toHaveBeenCalledExactlyOnceWith(
-    {
-      ...input.params,
-      opts: {
-        ...input.params.opts,
-        run: { ...input.params.opts.run, executorFence: fixture.fence },
+    expect(fixture.finish).toHaveBeenCalledExactlyOnceWith(
+      {
+        ...input.params,
+        opts: {
+          ...input.params.opts,
+          run: { ...input.params.opts.run, executorFence: fixture.fence },
+        },
       },
-    },
-    { candidateRuntime: true },
-  );
-  expect(fixture.fence.assertCurrent).toHaveBeenCalled();
-  expect(fixture.writeFile).toHaveBeenCalledExactlyOnceWith(
-    input.resultPath,
-    JSON.stringify({
-      result: input.params.result,
-      exitCode: 0,
-      terminalRunId: "candidate-run",
-      executorDelegation: "pid-start-v1",
-    }),
-    { mode: 0o600 },
-  );
-});
+      { candidateRuntime: true },
+    );
+    expect(fixture.fence.assertCurrent).toHaveBeenCalled();
+    expect(fixture.writeFile).toHaveBeenCalledExactlyOnceWith(
+      input.resultPath,
+      JSON.stringify({
+        result: input.params.result,
+        exitCode: 0,
+        ...(restartPending
+          ? { restartRunId: "candidate-run" }
+          : { terminalRunId: "candidate-run" }),
+        executorDelegation: "pid-start-v1",
+      }),
+      { mode: 0o600 },
+    );
+  },
+);
 
 it.each([
   {
@@ -275,6 +294,15 @@ it.each([
     operator: null,
     owner: "parent",
     serialized: "1800",
+    expected: undefined,
+  },
+  {
+    name: "supported omission with foreground restart pending",
+    version: 1,
+    operator: null,
+    owner: "parent",
+    serialized: "1800",
+    restartPending: true,
     expected: undefined,
   },
   {
@@ -350,19 +378,26 @@ it.each([
           runId: "synthetic-run",
           env: {},
           activationTimeoutMs: row.inherited,
+          ...(row.restartPending
+            ? { completionOwner: "gateway-restart", gatewayRestartRequired: true }
+            : {}),
         },
       },
       updateStepTimeoutMs: 1_800_000,
       rollbackBlockedReason: "state-migrated-no-rollback",
       preUpdatePluginInstallRecords: {},
-      result,
+      result: { ...result, runId: "synthetic-run" },
     },
   };
   const settled = createDeferredCore();
   fixture.close.mockImplementation(async () => settled.resolve());
   fixture.budget.mockResolvedValue(10_800_000);
-  fixture.finish.mockResolvedValue(result);
-  fixture.terminal.mockReturnValue({ runId: "synthetic-run", status: "ok" });
+  fixture.finish.mockResolvedValue(input.params.result);
+  fixture.terminal.mockReturnValue({
+    runId: "synthetic-run",
+    status: row.restartPending ? "running" : "succeeded",
+    ...(row.restartPending ? { phase: "restarting" } : {}),
+  });
   process.argv = [process.execPath, "update-migrated-finalize.worker.js"];
   vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
     yield JSON.stringify(input);
@@ -381,4 +416,22 @@ it.each([
   );
   expect(fixture.finish).toHaveBeenCalledOnce();
   expect(fixture.writeFile).toHaveBeenCalledOnce();
+  if (row.restartPending) {
+    expect(fixture.finish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: expect.objectContaining({ timeout: undefined }),
+      }),
+      { candidateRuntime: true },
+    );
+    expect(fixture.writeFile).toHaveBeenCalledWith(
+      input.resultPath,
+      JSON.stringify({
+        result: input.params.result,
+        exitCode: 0,
+        restartRunId: "synthetic-run",
+        executorDelegation: "pid-start-v1",
+      }),
+      { mode: 0o600 },
+    );
+  }
 });

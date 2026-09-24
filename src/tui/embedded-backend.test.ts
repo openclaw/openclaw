@@ -5,7 +5,6 @@ import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-questi
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
-import { createEmbeddedCallGateway } from "../agents/tools/embedded-gateway-stub.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
   clearEmbeddedPluginApprovalBroker,
@@ -27,6 +26,7 @@ import {
   registerEmbeddedModelCatalogTests,
   withEmbeddedModelCatalogOwnerFixture,
 } from "./embedded-model-catalog.test-support.js";
+import { registerEmbeddedSessionReaderTests } from "./embedded-session-reader.test-support.js";
 import type { TuiModelChoice } from "./tui-backend.js";
 
 type EmbeddedAgentResult = {
@@ -906,74 +906,13 @@ describe("EmbeddedTuiBackend", () => {
     );
   });
 
-  it("shares one resident projection between local lists and embedded session tools", async () => {
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    const opts = { agentId: "work", includeGlobal: true, search: "global" };
-    try {
-      await backend.listSessions(opts);
-      await createEmbeddedCallGateway()({ method: "sessions.list", params: opts });
-      expect(createSessionRowProjectionMock).toHaveBeenCalledOnce();
-      expect(listProjectedSessionsMock).toHaveBeenCalledTimes(2);
-      expect(listProjectedSessionsMock).toHaveBeenNthCalledWith(1, {
-        projection: sessionProjection,
-        opts,
-      });
-      expect(listProjectedSessionsMock).toHaveBeenNthCalledWith(2, {
-        projection: sessionProjection,
-        opts,
-      });
-    } finally {
-      await backend.stop();
-    }
-    expect(sessionProjection.dispose).toHaveBeenCalledOnce();
-    await expect(createEmbeddedCallGateway()({ method: "sessions.list" })).rejects.toThrow(
-      "Embedded session projection is unavailable",
-    );
-  });
-
-  it("disposes projection startup that finishes after shutdown begins", async () => {
-    const startup = deferred<typeof sessionProjection>();
-    createSessionRowProjectionMock.mockReturnValueOnce(startup.promise);
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await vi.waitFor(() => expect(createSessionRowProjectionMock).toHaveBeenCalledOnce());
-    const stopped = backend.stop();
-    startup.resolve(sessionProjection);
-    await stopped;
-    expect(sessionProjection.dispose).toHaveBeenCalledOnce();
-    await expect(backend.listSessions()).rejects.toThrow(
-      "Embedded session projection is unavailable",
-    );
-  });
-
-  it("gates session reads on the startup migration so legacy keys are never observed early", async () => {
-    let resolveMigration: () => void = () => {};
-    const migrationDone = new Promise<void>((resolve) => {
-      resolveMigration = resolve;
-    });
-    runSessionStartupMigrationMock.mockReturnValueOnce(migrationDone);
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-
-    const listed = backend.listSessions({ agentId: "work" });
-    await flushMicrotasks();
-    expect(createSessionRowProjectionMock).not.toHaveBeenCalled();
-    expect(listProjectedSessionsMock).not.toHaveBeenCalled();
-
-    resolveMigration();
-    await listed;
-    expect(runSessionStartupMigrationMock).toHaveBeenCalledWith({
-      cfg: {},
-      env: process.env,
-      log: {
-        info: expect.any(Function),
-        warn: expect.any(Function),
-      },
-    });
-    expect(listProjectedSessionsMock).toHaveBeenCalledTimes(1);
-    await backend.stop();
+  registerEmbeddedSessionReaderTests({
+    createBackend: () => new EmbeddedTuiBackend(),
+    sessionProjection,
+    createSessionRowProjectionMock,
+    listProjectedSessionsMock,
+    runSessionStartupMigrationMock,
+    flushMicrotasks,
   });
 
   it("rejects embedded session reads when the actual startup migration finds a legacy store", async () => {
@@ -1619,7 +1558,7 @@ describe("EmbeddedTuiBackend", () => {
     publication.reject(new Error("catalog publication failed"));
     await failure;
     expect(withPreparedModelCatalogOwnerMock).not.toHaveBeenCalled();
-    await backend.stop();
+    await expect(backend.stop()).rejects.toThrow("catalog publication failed");
   });
 
   it.each(selectedGlobalSessionCases)(

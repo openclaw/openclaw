@@ -689,7 +689,8 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     const fullWidth = widgets.length === 1 && widgets[0]?.sizeW === BOARD_GRID_COLUMNS;
     const page =
       fullWidth &&
-      (widgets[0]?.pluginKind === "session:website" ||
+      (widgets[0]?.name === this.pageWidgetName ||
+        widgets[0]?.pluginKind === "session:website" ||
         widgets[0]?.pluginKind === "browser:dashboard");
     return html`
       <section

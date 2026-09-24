@@ -63,7 +63,7 @@ import type {
   UnknownToolErrorOptions,
   UnknownToolRecoverySurface,
 } from "./tool-search-types.js";
-import { asToolParamsRecord, textResult, ToolInputError } from "./tools/common.js";
+import { textResult, ToolInputError } from "./tools/common.js";
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
@@ -127,99 +127,6 @@ function findEntryByExactId(
     );
   }
   return entry;
-}
-
-const TOOL_SEARCH_SELECTOR_KEYS = ["id", "toolId", "name"] as const;
-
-function readToolSearchSelector(params: Record<string, unknown>): string | undefined {
-  const value = params.id ?? params.toolId ?? params.name;
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-export function readToolSearchId(args: unknown): string {
-  const params = asToolParamsRecord(args);
-  const value = readToolSearchSelector(params);
-  if (value === undefined) {
-    throw new ToolInputError("id must be a non-empty string.");
-  }
-  return value.trim();
-}
-
-export function readToolSearchCallArgs(
-  args: unknown,
-  catalog?: ToolSearchCatalogSession,
-): { id: string; input: unknown } {
-  const params = asToolParamsRecord(args);
-  const dottedInput = Object.fromEntries(
-    Object.entries(params)
-      .filter(([key]) => key.startsWith("args.") && key.length > 5)
-      .map(([key, value]) => [key.slice(5), value]),
-  );
-  const nestedInput = params.args ?? params.input;
-  // Some local models emit an empty args/input wrapper while flattening the real
-  // arguments to the top level. Treat an empty wrapper as absent so the fallback
-  // below preserves those parameters instead of returning {}.
-  const nestedInputIsEmpty = isRecord(nestedInput) && Object.keys(nestedInput).length === 0;
-  if (nestedInput != null && !nestedInputIsEmpty) {
-    return {
-      id: readToolSearchId(params),
-      input: isRecord(nestedInput) ? { ...dottedInput, ...nestedInput } : nestedInput,
-    };
-  }
-
-  const matchingSelectors = catalog
-    ? TOOL_SEARCH_SELECTOR_KEYS.flatMap((key) => {
-        const value = params[key];
-        if (typeof value !== "string") {
-          return [];
-        }
-        const matches = catalog.entries.filter(
-          (entry) => entry.id === value || entry.name === value,
-        );
-        return matches.length > 0 ? [{ key, matches }] : [];
-      })
-    : [];
-  const matchedToolIds = new Set(
-    matchingSelectors.flatMap(({ matches }) => matches.map((entry) => entry.id)),
-  );
-  if (matchedToolIds.size > 1) {
-    throw new ToolInputError(
-      "Ambiguous tool selectors: pass the target tool id and nest target arguments under args.",
-    );
-  }
-  const matchingSelector = matchingSelectors[0]?.key;
-  const selector = matchingSelector ?? TOOL_SEARCH_SELECTOR_KEYS.find((key) => params[key] != null);
-  const id = readToolSearchId(selector ? { [selector]: params[selector] } : params);
-
-  // Remove every alias that actually identifies the selected catalog tool;
-  // unmatched id/name fields can still be required arguments of that tool.
-  const wrapperKeys = new Set<string>([
-    "args",
-    "input",
-    ...matchingSelectors.map(({ key }) => key),
-    ...(matchingSelector ? [] : [selector ?? "id"]),
-  ]);
-  const targetInputEntries = Object.entries(params).filter(([key]) => !wrapperKeys.has(key));
-  const flattenedInput = Object.fromEntries(
-    targetInputEntries.filter(([key]) => !(key.startsWith("args.") && key.length > 5)),
-  );
-  return { id, input: { ...dottedInput, ...flattenedInput } };
-}
-
-export function prepareToolSearchDispatcherArguments(args: unknown): unknown {
-  if (!isRecord(args) || TOOL_SEARCH_SELECTOR_KEYS.some((key) => Object.hasOwn(args, key))) {
-    return args;
-  }
-  const nestedInput = args.args ?? args.input;
-  if (!isRecord(nestedInput)) {
-    return args;
-  }
-  const selectorValue = readToolSearchSelector(nestedInput);
-  if (selectorValue === undefined) {
-    return args;
-  }
-  const { args: _wrappedArgs, input: _wrappedInput, ...outerRest } = args;
-  return { ...outerRest, ...nestedInput, id: selectorValue };
 }
 
 type CatalogSchemaName = "inputSchema" | "outputSchema";
@@ -391,11 +298,20 @@ export class ToolSearchRuntime {
     private readonly options: { prepareInput?: boolean; validateInput?: boolean } = {},
   ) {}
 
-  search = async (query: string, options?: { limit?: number } & CatalogVisibilityOptions) => {
+  search = async (
+    query: string,
+    options?: { limit?: number; parentToolCallId?: string } & CatalogVisibilityOptions,
+  ) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.searchCount += 1;
     const limit = readToolSearchLimit(options?.limit, this.config);
     const entries = visibleCatalogEntries(catalog, options);
+    const compactEntry = (entry: ToolSearchCatalogEntry) => {
+      if (entry.source !== "openclaw" && options?.parentToolCallId) {
+        this.observeNetworkContent(options.parentToolCallId);
+      }
+      return compactToolSearchCatalogEntry(entry);
+    };
     // A query that is exactly a tool name or id is a request for that tool, not
     // a description of one. BM25 alone can rank a shorter entry that merely
     // mentions the word above it, and the limit then drops the tool asked for.
@@ -409,7 +325,7 @@ export class ToolSearchRuntime {
         );
     // An unambiguous exact lookup never needs schema traversal or a BM25 index.
     if (limit === 1 && exactMatches.length === 1) {
-      return exactMatches.slice(0, limit).map((entry) => compactToolSearchCatalogEntry(entry));
+      return exactMatches.slice(0, limit).map(compactEntry);
     }
     const indexKey = options?.allowedIds ?? options?.includeMcp !== false;
     let catalogIndexes = this.searchIndexes.get(catalog);
@@ -459,9 +375,7 @@ export class ToolSearchRuntime {
               a.value.id.localeCompare(b.value.id),
           ).map((hit) => hit.value)
         : [];
-    return [...exactEntries, ...ranked]
-      .slice(0, limit)
-      .map((entry) => compactToolSearchCatalogEntry(entry));
+    return [...exactEntries, ...ranked].slice(0, limit).map(compactEntry);
   };
 
   all = (options?: CatalogVisibilityOptions) =>
@@ -478,12 +392,17 @@ export class ToolSearchRuntime {
       },
     );
 
-  describe = async (id: string, options?: CatalogVisibilityOptions & UnknownToolErrorOptions) => {
+  describe = async (
+    id: string,
+    options?: CatalogVisibilityOptions & UnknownToolErrorOptions & { parentToolCallId?: string },
+  ) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.describeCount += 1;
-    return describeEntry(
-      findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
-    );
+    const entry = findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills });
+    if (entry.source !== "openclaw" && options?.parentToolCallId) {
+      this.observeNetworkContent(options.parentToolCallId);
+    }
+    return describeEntry(entry);
   };
 
   call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {

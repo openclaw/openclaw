@@ -117,3 +117,28 @@ export function createDiscordPreflightArgs(params: {
     client: params.client,
   };
 }
+
+export function createThreadBinding(
+  overrides?: Partial<import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord>,
+) {
+  return {
+    bindingId: "default:thread-1",
+    targetSessionKey: "agent:main:subagent:child-1",
+    targetKind: "subagent",
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-1",
+      parentConversationId: "parent-1",
+    },
+    status: "active",
+    boundAt: 1,
+    metadata: {
+      agentId: "main",
+      boundBy: "test",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+    },
+    ...overrides,
+  } satisfies import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord;
+}

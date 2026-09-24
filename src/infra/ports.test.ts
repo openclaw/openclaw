@@ -212,27 +212,27 @@ describeUnix("inspectPortUsage", () => {
     ]);
   });
 
-  it("keeps only listener rows that can block a scoped bind", async ({ skip }) => {
-    await using server = net.createServer();
-    const address = await listenServer(skip, server, 0, "127.0.0.1");
-    const port = address.port;
-
-    mockUnixCommands({
-      lsof: commandOutput(
-        `p111\ncgateway\nnTCP 127.0.0.1:${port} (LISTEN)\n` +
-          `p222\ncother\nnTCP 127.0.0.2:${port} (LISTEN)\n`,
-      ),
-    });
-
-    const result = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
-
-    expect(result.status).toBe("busy");
-    expect(result.listeners).toHaveLength(1);
-    expect(result.listeners[0]).toMatchObject({
-      pid: 111,
-      address: `TCP 127.0.0.1:${port} (LISTEN)`,
-    });
-  });
+  it.for(["127.0.0.1", "0.0.0.0"])(
+    "preserves the relevant %s listener in single and batched loopback inspection",
+    async (host, { skip }) => {
+      await using server = net.createServer();
+      const { port } = await listenServer(skip, server, 0, host);
+      const address = `TCP ${host === "0.0.0.0" ? "*" : host}:${port} (LISTEN)`;
+      mockUnixCommands({
+        lsof: commandOutput(
+          `p111\ncgateway\nn${address}\np222\ncother\nnTCP 127.0.0.2:${port} (LISTEN)\n`,
+        ),
+      });
+      const single = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
+      const batch = await inspectPortUsages([port], {
+        probeHostsByPort: new Map([[port, ["127.0.0.1"]]]),
+      });
+      for (const result of [single, batch.get(port)]) {
+        expect(result?.status).toBe("busy");
+        expect(result?.listeners).toEqual([{ pid: 111, command: "gateway", address }]);
+      }
+    },
+  );
 
   it.for([
     { probeHost: "127.0.0.1", unrelatedWildcard: "[::]" },
@@ -279,20 +279,23 @@ describeUnix("inspectPortUsage", () => {
     });
   });
 
-  it("reports busy when lsof is missing but loopback listener exists", async ({ skip }) => {
-    await using server = net.createServer();
-    const address = await listenServer(skip, server, 0, "127.0.0.1");
-    const port = address.port;
+  it.for(["127.0.0.1", "0.0.0.0"])(
+    "reports busy when lsof is missing and %s serves loopback",
+    async (host, { skip }) => {
+      await using server = net.createServer();
+      const address = await listenServer(skip, server, 0, host);
+      const port = address.port;
 
-    runCommandWithTimeoutMock.mockRejectedValueOnce(
-      Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
-    );
+      runCommandWithTimeoutMock.mockRejectedValueOnce(
+        Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
+      );
 
-    const result = await inspectPortUsage(port);
-    expect(result.status).toBe("busy");
-    const enoentErrors = (result.errors ?? []).filter((err) => err.includes("ENOENT"));
-    expect(enoentErrors.length).toBeGreaterThan(0);
-  });
+      const result = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
+      expect(result.status).toBe("busy");
+      const enoentErrors = (result.errors ?? []).filter((err) => err.includes("ENOENT"));
+      expect(enoentErrors.length).toBeGreaterThan(0);
+    },
+  );
 
   it.for(["single", "batch"])(
     "falls back to ss when lsof is unavailable (%s)",

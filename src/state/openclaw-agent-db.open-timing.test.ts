@@ -18,6 +18,7 @@ import {
   withOpenClawAgentDatabaseAsync,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const logger = vi.hoisted(() => ({ warn: vi.fn() }));
@@ -218,6 +219,7 @@ describe("agent database open timings", () => {
       closeOpenClawAgentDatabaseByPath(pathname);
       if (drift === "physical") {
         closeOpenClawAgentDatabasesForTest();
+        clearOpenClawAgentIntegrityVerification(pathname, options.env);
       }
       logger.warn.mockClear();
 
@@ -270,6 +272,7 @@ describe("agent database open timings", () => {
     const { options, pathname, advance } = createTimedOpen(0, 0, 120.75);
     openOpenClawAgentDatabase(options);
     closeOpenClawAgentDatabasesForTest();
+    clearOpenClawAgentIntegrityVerification(pathname, options.env);
     logger.warn.mockClear();
     let admissions = 0;
 
@@ -316,6 +319,7 @@ describe("agent database open timings", () => {
     const { options, pathname, advance } = createTimedOpen(0);
     openOpenClawAgentDatabase(options);
     closeOpenClawAgentDatabasesForTest();
+    clearOpenClawAgentIntegrityVerification(pathname, options.env);
     logger.warn.mockClear();
     const nativeFinished = createDeferredCore();
     const release = createDeferredCore();

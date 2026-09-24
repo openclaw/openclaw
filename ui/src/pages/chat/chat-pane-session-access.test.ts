@@ -151,7 +151,7 @@ describe("chat pane session access", () => {
 
   it("cancels header rename when the Gateway source changes for the same session", () => {
     const patch = vi.fn(async () => ({}));
-    const sessions = { patch } as unknown as SessionCapability;
+    const sessions = createSessionCapabilityFixture({ patch });
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions });
     const hello = {

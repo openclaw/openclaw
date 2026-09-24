@@ -562,6 +562,11 @@ function holdNativeExit(
   child.on("newListener", onListener);
   const end = vi.spyOn(stdin, "end").mockImplementation(() => {
     closing = true;
+    if (!withholdExitConfirmation) {
+      // Hold the shutdown clock with the child: binding reads and chat.abort
+      // must precede the exit deadline, even when the host is busy.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
     return stdin;
   });
   const destroy = vi.spyOn(stdin, "destroy").mockImplementation(() => stdin);
@@ -632,6 +637,9 @@ function holdNativeExit(
         return;
       }
       released = true;
+      if (!withholdExitConfirmation) {
+        vi.useRealTimers();
+      }
       child.off("newListener", onListener);
       restoreExitConfirmation();
       end.mockRestore();

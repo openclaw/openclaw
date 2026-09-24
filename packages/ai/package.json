@@ -118,7 +118,7 @@
     }
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.124.0",
+    "@anthropic-ai/sdk": "0.125.0",
     "@google/genai": "2.22.0",
     "@mistralai/mistralai": "2.7.0",
     "openai": "7.15.0",

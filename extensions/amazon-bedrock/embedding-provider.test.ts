@@ -4,7 +4,14 @@ import { NodeHttp2Handler } from "@smithy/node-http-handler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBedrockEmbeddingProvider, hasAwsCredentials } from "./embedding-provider.js";
 
-vi.mock("@aws-sdk/client-bedrock-runtime", { spy: true });
+vi.mock("@aws-sdk/client-bedrock-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aws-sdk/client-bedrock-runtime")>();
+  return {
+    ...actual,
+    // Whole-module autospies mutate the Smithy prototype shared with control-plane clients.
+    BedrockRuntimeClient: vi.fn(actual.BedrockRuntimeClient),
+  };
+});
 
 afterEach(() => {
   vi.mocked(bedrockRuntimeSdk.BedrockRuntimeClient).mockReset();

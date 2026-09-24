@@ -5,7 +5,7 @@ import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.l
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-manager.js";
+import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-launch-record.js";
 import type * as RegistryPersistence from "./subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
@@ -238,4 +238,31 @@ export function mockCallArg(
     throw new Error(`expected ${label} call ${callIndex}`);
   }
   return call[argIndex] as Record<string, unknown>;
+}
+
+type SubagentRegistryModule =
+  typeof import("./subagents/registry/subagent-registry.test-helpers.js");
+export type SubagentRegistryHarness = Omit<SubagentRegistryModule, "registerSubagentRun"> & {
+  registerSubagentRun(params: SubagentRunParamsOverrides): void;
+};
+
+export function createSubagentRegistryHarness(
+  registry: SubagentRegistryModule,
+): SubagentRegistryHarness {
+  return {
+    ...registry,
+    registerSubagentRun: (params) => {
+      const registration = createSubagentRunParams(params);
+      if (registration.taskRowOwnership !== "required") {
+        return registry.registerSubagentRun({
+          ...registration,
+          taskRowOwnership: registration.taskRowOwnership,
+        });
+      }
+      if (registration.queued) {
+        throw new Error("Required queued registration belongs in awaited fixtures");
+      }
+      return registry.registerSubagentRun({ ...registration, queued: false });
+    },
+  };
 }

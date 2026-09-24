@@ -71,8 +71,11 @@ vi.mock("./abort-operation.js", () => ({
   stopSubagentsForRequester: stopSubagentsForRequesterMock,
 }));
 
-vi.mock("./abort-primitives.js", () => ({
+vi.mock("./abort-trigger-text.js", () => ({
   isAbortTrigger: vi.fn((raw: string) => raw === "stop"),
+}));
+
+vi.mock("./abort-primitives.js", () => ({
   setAbortMemory: vi.fn(),
 }));
 

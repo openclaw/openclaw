@@ -25,6 +25,12 @@ not be sandbox-blocked, and a runtime backend must be loaded and healthy. If
 any condition fails, ACP skills and `sessions_spawn` ACP guidance stay hidden
 so the agent does not suggest an unavailable backend.
 
+ACP policy changes apply without restarting the Gateway. Enablement, dispatch,
+the default agent, and allowed agents govern new admissions; backend and fallback
+settings govern subsequent turns. Admitted turns retain their session ownership.
+The ACPX health check selects from the current allowed agents unless its plugin
+config sets an explicit `probeAgent`.
+
 <AccordionGroup>
   <Accordion title="First-run gotchas">
     - If `plugins.allow` is set, it is a restrictive plugin inventory and **must** include `acpx`, or the installed ACP backend is intentionally blocked (`/acp doctor` reports the missing allowlist entry).

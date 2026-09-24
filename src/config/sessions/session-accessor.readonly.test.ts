@@ -12,6 +12,7 @@ import {
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
   isOpenClawAgentDatabaseOpen,
@@ -33,12 +34,12 @@ import {
   readSessionTranscriptWatermark,
   readSessionIdentityEvidenceBatch,
   readSessionStoreSummaryReadOnly,
-  recordSessionParticipant,
   replaceSessionEntrySync,
   resolveTranscriptSessionKeyBySessionId,
   upsertSessionEntryCore,
   withSessionEntryReadOnlyScope,
 } from "./session-accessor.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import * as sqliteTargets from "./session-sqlite-target.js";
 
@@ -74,13 +75,11 @@ describe("session accessor readonly listing", () => {
       openOpenClawAgentDatabase(options);
       replaceSessionEntrySync({ ...scope, sessionKey }, { sessionId: "visible", updatedAt: 1 });
       closeOpenClawAgentDatabasesForTest();
-      const handles = new Set<DatabaseSync>();
       const captureDatabase = () => {
         const result = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
         if (!result.found) {
           throw new Error("Expected existing shared database");
         }
-        handles.add(result.value);
         return result.value;
       };
       const descendants: Promise<DatabaseSync>[] = [];
@@ -109,16 +108,13 @@ describe("session accessor readonly listing", () => {
         expect(retained?.isOpen).toBe(false);
         const [descendant] = await Promise.all(descendants);
         expect(Object.is(descendant, retained)).toBe(false);
-        expect(descendant?.isOpen).toBe(false);
+        expect(descendant?.isOpen).toBe(true);
         expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+        await closeOpenClawAgentDatabaseByPathAsync(storePath);
+        expect(descendant?.isOpen).toBe(false);
       } finally {
         await Promise.allSettled(descendants);
-        for (const database of handles) {
-          if (database.isOpen) {
-            clearNodeSqliteKyselyCacheForDatabase(database);
-            database.close();
-          }
-        }
+        await closeOpenClawAgentDatabaseByPathAsync(storePath);
       }
     },
   );
@@ -134,24 +130,32 @@ describe("session accessor readonly listing", () => {
     replaceSessionEntrySync({ ...scope, sessionKey }, entry);
     closeOpenClawAgentDatabasesForTest();
 
-    withSessionEntryReadOnlyScope(scope, () => {
-      expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("shared");
-      const retained = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
-      if (!retained.found) {
-        throw new Error("Expected existing shared database");
-      }
-      expect(retained.value.isOpen).toBe(true);
-      expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey })?.entry.visibility).toBe(
-        "shared",
-      );
-      replaceSessionEntrySync({ ...scope, sessionKey }, { ...entry, visibility: "draft" });
-      closeOpenClawAgentDatabasesForTest();
-      expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey })?.entry.visibility).toBe(
-        "draft",
-      );
-      expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("draft");
-      withOpenClawAgentDatabaseReadOnly(({ db }) => expect(db).toBe(retained.value), options);
-    });
+    const peer = new DatabaseSync(storePath);
+    try {
+      withSessionEntryReadOnlyScope(scope, () => {
+        expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("shared");
+        const retained = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
+        if (!retained.found) {
+          throw new Error("Expected existing shared database");
+        }
+        expect(retained.value.isOpen).toBe(true);
+        expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey })?.entry.visibility).toBe(
+          "shared",
+        );
+        peer
+          .prepare(
+            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.visibility', ?) WHERE session_key = ?",
+          )
+          .run("draft", sessionKey);
+        expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey })?.entry.visibility).toBe(
+          "draft",
+        );
+        expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("draft");
+        withOpenClawAgentDatabaseReadOnly(({ db }) => expect(db).toBe(retained.value), options);
+      });
+    } finally {
+      peer.close();
+    }
     expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
   });
 

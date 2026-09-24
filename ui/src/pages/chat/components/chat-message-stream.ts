@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
@@ -16,6 +17,7 @@ import {
 } from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
+import { renderChatReplyAttribution } from "./chat-reply-attribution.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { shouldToggleSelectableDisclosure, syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
@@ -55,6 +57,7 @@ type StreamMessageOptions = Pick<
 >;
 
 export type StreamGroupOptions = StreamMessageOptions & {
+  branding?: ThemeBranding;
   entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
   onReply?: (target: MessageReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -74,42 +77,50 @@ export function renderStreamGroupParts(
   return repeat(
     parts,
     (part) => `${part.kind}:${part.key}`,
-    (part) => {
-      if (part.kind === "reading-indicator") {
-        return renderChatWorkingIndicator(part, {
-          waitingApproval: opts.waitingApproval === true,
-          startupLabel: opts.startupLabel,
-          outputTokens: opts.runOutputTokens,
-          presentation,
-        });
-      }
-      if (part.kind === "question") {
-        const prompt = opts.questionPrompts?.get(part.questionId);
-        return prompt ? renderChatQuestionSummary(prompt) : nothing;
-      }
-      const source = prepareChatMessageRender({
-        role: "assistant",
-        content: [{ type: "text", text: part.text }],
-        timestamp: part.startedAt,
-      });
-      return renderGroupedMessage(
-        source,
-        part.key,
-        {
-          ...opts,
-          isStreaming: part.isStreaming,
-          entryRef: opts.entryRefFor?.(part.key),
-          showReasoning: false,
-          // Settled segments can be replied to without transcript IDs or footer actions.
-          messageActions: resolveMessageActionDetails(source, {
-            messageId: part.key,
-            onReply: opts.onReply,
-            senderLabel: opts.assistant?.name ?? "Assistant",
-          }),
-        },
-        opts.onOpenSidebar,
-      );
+    (part) => renderStreamGroupPart(part, opts, presentation),
+  );
+}
+
+export function renderStreamGroupPart(
+  part: StreamGroupPart,
+  opts: StreamGroupOptions,
+  presentation: "standalone" | "continuation",
+) {
+  if (part.kind === "reading-indicator") {
+    return renderChatWorkingIndicator(part, {
+      mascot: opts.branding?.mascot,
+      workingPhrases: opts.branding?.workingPhrases,
+      waitingApproval: opts.waitingApproval === true,
+      startupLabel: opts.startupLabel,
+      outputTokens: opts.runOutputTokens,
+      presentation,
+    });
+  }
+  if (part.kind === "question") {
+    const prompt = opts.questionPrompts?.get(part.questionId);
+    return prompt ? renderChatQuestionSummary(prompt) : nothing;
+  }
+  const source = prepareChatMessageRender({
+    role: "assistant",
+    content: [{ type: "text", text: part.text }],
+    timestamp: part.startedAt,
+  });
+  return renderGroupedMessage(
+    source,
+    part.key,
+    {
+      ...opts,
+      isStreaming: part.isStreaming,
+      entryRef: opts.entryRefFor?.(part.key),
+      showReasoning: false,
+      // Settled segments can be replied to without transcript IDs or footer actions.
+      messageActions: resolveMessageActionDetails(source, {
+        messageId: part.key,
+        onReply: opts.onReply,
+        senderLabel: opts.assistant?.name ?? "Assistant",
+      }),
     },
+    opts.onOpenSidebar,
   );
 }
 
@@ -139,7 +150,10 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   return html`
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
-      <div class="chat-group-messages">${renderStreamGroupParts(parts, opts, "standalone")}</div>
+      <div class="chat-group-messages">
+        ${renderChatReplyAttribution(parts.find((part) => part.kind === "stream")?.replyToSender)}
+        ${renderStreamGroupParts(parts, opts, "standalone")}
+      </div>
       ${
         footerStartedAt !== null && !active
           ? html`

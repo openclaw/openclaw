@@ -4,10 +4,10 @@
  */
 import {
   inferToolMetaFromArgs,
+  sanitizeToolArgs,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   isJsonObject,
   type CodexDynamicToolCallParams,
@@ -35,40 +35,11 @@ export function isCodexCommandBearingToolCall(
   );
 }
 
-/** Recursively redacts sensitive strings and handles circular values in event payloads. */
-function sanitizeCodexAgentEventValue(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (typeof value === "string") {
-    return redactToolPayloadText(value);
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    return value.map((entry) => sanitizeCodexAgentEventValue(entry, seen));
-  }
-  if (value && typeof value === "object") {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value)) {
-      out[key] =
-        typeof child === "string"
-          ? redactSensitiveFieldValue(key, child)
-          : sanitizeCodexAgentEventValue(child, seen);
-    }
-    return out;
-  }
-  return value;
-}
-
 /** Sanitizes a record-shaped Codex agent event payload. */
 export function sanitizeCodexAgentEventRecord(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
-  return sanitizeCodexAgentEventValue(value) as Record<string, unknown>;
+  return sanitizeToolArgs(value) as Record<string, unknown>;
 }
 
 /** Sanitizes dynamic-tool arguments before diagnostic/event emission. */

@@ -503,6 +503,24 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         if (!earlyPlaywrightTarget) {
           throw new Error("Initial Playwright inventory did not contain the controlled target");
         }
+        await controlled.evaluate(() => {
+          document.body.dataset.relayWaitStartedAt = String(Date.now());
+        });
+        const awaitedRuntimeWait = await dispatcher.dispatch({
+          method: "POST",
+          path: "/act",
+          query: { profile: "e2e" },
+          body: {
+            kind: "wait",
+            targetId: earlyPlaywrightTarget,
+            fn: "() => Date.now() - Number(document.body.dataset.relayWaitStartedAt) >= 17000",
+            timeoutMs: 25_000,
+          },
+        });
+        expect(awaitedRuntimeWait.status, JSON.stringify(awaitedRuntimeWait.body)).toBe(200);
+        process.stderr.write(
+          "[browser-extension-e2e] 17-second Runtime wait passed with 25-second action budget\n",
+        );
         // Capture the existing context before the socket fault; target detachment keeps it alive.
         const connectOverCdp = vi.spyOn(chromium, "connectOverCDP");
         let relayPlaywrightContext: BrowserContext;

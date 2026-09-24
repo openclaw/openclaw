@@ -1,6 +1,7 @@
 // Discord helper module supports message handler helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { vi } from "vitest";
+import type { DiscordIngressLifecycle } from "./ingress.js";
 import type { createDiscordMessageDispatcher } from "./message-dispatcher.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
@@ -78,5 +79,22 @@ export function createDiscordPreflightContext(channelId = "ch-1") {
     isGuildMessage: false,
     inboundEventKind: "message",
     effectiveWasMentioned: false,
+  };
+}
+
+export function createIngressLifecycle(): DiscordIngressLifecycle & {
+  onAdopted: ReturnType<typeof vi.fn>;
+  onFailed: ReturnType<typeof vi.fn>;
+  onCancelled: ReturnType<typeof vi.fn>;
+  onAbandoned: ReturnType<typeof vi.fn>;
+} {
+  return {
+    abortSignal: new AbortController().signal,
+    onAdopted: vi.fn(async () => {}),
+    onDeferred: vi.fn(),
+    onAdoptionFinalizing: vi.fn(),
+    onFailed: vi.fn(async () => {}),
+    onCancelled: vi.fn(async () => {}),
+    onAbandoned: vi.fn(async () => {}),
   };
 }

@@ -410,6 +410,7 @@ describe("session pull request snapshot store", () => {
   it.each(["new", "reset", "branch-switch", "fork", "rewind"])(
     "retires and force-refreshes only the matching session for %s",
     async (reason) => {
+      vi.useFakeTimers();
       const harness = createGatewayHarness();
       const store = sessionPullRequestsForGateway(harness.gateway);
       const owner = {};
@@ -456,6 +457,8 @@ describe("session pull request snapshot store", () => {
       expect(store.get(otherKey)?.pullRequests).toEqual([{ number: 2 }]);
       expect(listener).toHaveBeenCalled();
       await flushSync();
+      expect(harness.request).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
         sessionKeys: [key, otherKey].toSorted(),
         refreshSessionKeys: [key],
@@ -662,6 +665,59 @@ describe("session pull request snapshot store", () => {
       sessionKeys: ["agent:main:demo", "agent:main:other"],
       refreshSessionKeys: ["agent:main:demo"],
     });
+    store.unwatch(owner);
+    await flushSync();
+  });
+
+  it("debounces automatic bursts per session while an explicit refresh absorbs its timer", async () => {
+    vi.useFakeTimers();
+    const harness = createGatewayHarness();
+    const store = sessionPullRequestsForGateway(harness.gateway);
+    const owner = {};
+    const first = "agent:main:first";
+    const second = "agent:main:second";
+    store.watch(owner, [first, second]);
+    await flushSync();
+    harness.request.mockClear();
+
+    store.refresh(first, { automatic: true });
+    store.refresh(second, { automatic: true });
+    await vi.advanceTimersByTimeAsync(2_000);
+    store.refresh(first, { automatic: true });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(harness.request).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
+      sessionKeys: [first, second],
+      refreshSessionKeys: [second],
+    });
+
+    store.refresh(first);
+    await flushSync();
+    await flushSync();
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
+      sessionKeys: [first, second],
+      refreshSessionKeys: [first],
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(harness.request).toHaveBeenCalledTimes(2);
+    store.unwatch(owner);
+    await flushSync();
+  });
+
+  it("drops a delayed automatic refresh when its watch is replaced", async () => {
+    vi.useFakeTimers();
+    const harness = createGatewayHarness();
+    const store = sessionPullRequestsForGateway(harness.gateway);
+    const owner = {};
+    store.watch(owner, ["agent:main:old"]);
+    await flushSync();
+    store.refresh("agent:main:old", { automatic: true });
+    store.watch(owner, ["agent:main:next"]);
+    await flushSync();
+    harness.request.mockClear();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(harness.request).not.toHaveBeenCalled();
     store.unwatch(owner);
     await flushSync();
   });

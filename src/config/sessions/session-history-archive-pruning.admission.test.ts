@@ -16,6 +16,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -99,7 +100,7 @@ it("does not invent an admission mode when a warm database rejects a different o
   const options = { agentId: "main", env: state.env };
   const database = openOpenClawAgentDatabase(options);
   const before = database.db.prepare("SELECT total_changes() AS changes").get();
-  const checkpoint = vi.spyOn(database.walMaintenance, "checkpoint");
+  const checkpoint = vi.spyOn(database.walMaintenance, "reclaimFreePages");
   const warnings = observePruningFailures();
   const archivePruning = { trigger: "initial" as const };
   const wrongOwner = { ...options, agentId: "other", path: database.path };
@@ -216,15 +217,21 @@ it("defers vacuum when a writer acquires its lock after checkpoint", async () =>
   expect(before).toBeGreaterThan(512);
   const busyTimeout = database.db.prepare("PRAGMA busy_timeout").get();
   const writer = realOpen(database.path);
-  const checkpoint = database.walMaintenance.checkpoint.bind(database.walMaintenance);
-  const checkpointSpy = vi
-    .spyOn(database.walMaintenance, "checkpoint")
-    .mockImplementationOnce(() => {
-      const completed = checkpoint();
-      expect(completed).toBe(true);
-      writer.exec("BEGIN IMMEDIATE");
-      return completed;
-    });
+  const prepare = database.db.prepare.bind(database.db);
+  let checkpointObserved = false;
+  const checkpointSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+    const statement = prepare(sql);
+    if (sql === "PRAGMA wal_checkpoint(TRUNCATE);" && !checkpointObserved) {
+      const get = statement.get.bind(statement);
+      statement.get = () => {
+        const row = get();
+        checkpointObserved = true;
+        writer.exec("BEGIN IMMEDIATE");
+        return row;
+      };
+    }
+    return statement;
+  });
   try {
     const startedAt = performance.now();
     await runExclusiveSqliteSessionWrite(
@@ -387,6 +394,7 @@ it.each([
       if (cold) {
         closed = closeOpenClawAgentDatabaseByPath(database.path);
         invalidateOpenClawAgentDatabaseValidation(database.path);
+        clearOpenClawAgentIntegrityVerification(database.path, state.env);
       }
       observing = true;
     };

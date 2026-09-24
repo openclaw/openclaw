@@ -750,14 +750,19 @@ describe("executeAgentTurn: provider failures", () => {
     const abortController = new AbortController();
     const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
 
-    const resultPromise = executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
+    const onBlockReply = vi.fn();
+    const resultPromise = executeAgentTurn(
+      createMinimalRunAgentTurnParams({ replyOperation, opts: { onBlockReply } }),
+    );
     await vi.advanceTimersByTimeAsync(0);
     abortController.abort();
     await expect(resultPromise).resolves.toMatchObject({
       kind: "final",
     });
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("does not leave an overload notice timer after an aborted failure", async () => {

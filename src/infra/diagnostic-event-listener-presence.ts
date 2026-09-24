@@ -45,7 +45,21 @@ function getDiagnosticEventListenerPresence(): DiagnosticEventListenerPresence {
 export type InternalDiagnosticEventInterest<EventType extends string = string> = Readonly<{
   include?: readonly EventType[];
   exclude?: readonly EventType[];
+  /** Restricts trusted events only; untrusted events still use include/exclude. */
+  includeTrusted?: readonly EventType[];
 }>;
+
+export function isInternalDiagnosticEventInterested<EventType extends string>(
+  interest: InternalDiagnosticEventInterest<EventType> | undefined,
+  type: EventType,
+  trusted: boolean,
+): boolean {
+  return (
+    (!interest?.include || interest.include.includes(type)) &&
+    !interest?.exclude?.includes(type) &&
+    (!trusted || !interest?.includeTrusted || interest.includeTrusted.includes(type))
+  );
+}
 
 function updateEventInterestDelta(
   state: DiagnosticEventListenerPresence,

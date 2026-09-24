@@ -1,12 +1,16 @@
 // Source readers participate in file exclusion without changing source SQLite state.
+import { statSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 import {
   createSqliteLifecycleAggregateError,
   runWithSqliteCoordinator,
 } from "./sqlite-coordinator.js";
 import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
-import { acquireStateDatabaseHandleLease } from "./state-database-coordinator.js";
+import {
+  acquireStateDatabaseHandleExclusion,
+  acquireStateDatabaseHandleLease,
+} from "./state-database-coordinator.js";
 
 // A failed native close cannot let GC retire its admission before child exit.
 const unclosedSourceReads = new Set<{
@@ -28,14 +32,56 @@ export function withSqliteSourceReadDatabase<T>(
   pathname: string,
   inspectionOperation: "source" | "snapshot",
   operation: (database: DatabaseSync) => T,
-): T {
-  const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
+): T;
+export function withSqliteSourceReadDatabase<T>(
+  pathname: string,
+  inspectionOperation: "source" | "snapshot",
+  operation: (database: DatabaseSync) => T,
+  mode: "immutable",
+): T | undefined;
+export function withSqliteSourceReadDatabase<T>(
+  pathname: string,
+  inspectionOperation: "source" | "snapshot",
+  operation: (database: DatabaseSync) => T,
+  mode?: "immutable",
+): T | undefined {
+  const immutable = mode === "immutable";
+  const acquire = immutable ? acquireStateDatabaseHandleExclusion : acquireStateDatabaseHandleLease;
+  const lease = acquire({ databasePath: pathname, busyTimeoutMs: 0 });
   let database: DatabaseSync | undefined;
   try {
+    const before = immutable ? statSync(pathname, { bigint: true }) : undefined;
+    const hasSidecars = () =>
+      ["-wal", "-shm", "-journal"].some(
+        (suffix) => statSync(pathname + suffix, { throwIfNoEntry: false }) !== undefined,
+      );
+    const unchanged = () => {
+      const current = statSync(pathname, { bigint: true });
+      return (
+        before?.isFile() &&
+        current.dev === before.dev &&
+        current.ino === before.ino &&
+        current.ctimeNs === before.ctimeNs &&
+        current.mtimeNs === before.mtimeNs &&
+        current.size === before.size &&
+        !hasSidecars()
+      );
+    };
+    // Immutable reads ignore SQLite journals and locks. Exclude every managed
+    // native owner and require a consolidated, unchanged source for this scope.
+    if (immutable && hasSidecars()) {
+      return undefined;
+    }
     database = withSqliteInspectionOperation(inspectionOperation, () =>
-      openNodeSqliteDatabase(pathname, { readOnly: true }),
+      openNodeSqliteDatabase(immutable ? resolveImmutableSqliteFileUri(pathname) : pathname, {
+        readOnly: true,
+      }),
     );
-    return operation(database);
+    if (immutable && !unchanged()) {
+      return undefined;
+    }
+    const result = operation(database);
+    return immutable && !unchanged() ? undefined : result;
   } finally {
     try {
       database?.close();

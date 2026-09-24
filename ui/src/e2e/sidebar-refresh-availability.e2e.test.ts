@@ -88,7 +88,7 @@ suite.define(() => {
         })
         .toBe(true);
       expect(await sidebar.getByRole("alert").count()).toBe(0);
-      await sidebar.getByText("Suspending…", { exact: true }).waitFor();
+      await sidebar.locator(".gateway-status__label", { hasText: "Suspending…" }).waitFor();
       expect(await sidebar.getByText("Retained sample session", { exact: true }).isVisible()).toBe(
         true,
       );
@@ -122,7 +122,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("connect")).length)
         .toBeGreaterThan(1);
-      await sidebar.getByText("Suspending…", { exact: true }).waitFor();
+      await sidebar.locator(".gateway-status__label", { hasText: "Suspending…" }).waitFor();
       expect(await sidebar.getByRole("alert").count()).toBe(0);
       await page.screenshot({ path: path.join(artifactDir, "after-sidebar.png") });
     } finally {

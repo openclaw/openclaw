@@ -5,7 +5,10 @@ import {
   type ReplyToolAuthorityInput,
 } from "../../auto-reply/reply/reply-tool-authority.js";
 import { withSessionTranscriptQuestionAnswers } from "../../config/sessions/session-transcript-read-fence.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import {
   getGatewayToolCallerIdentity,
@@ -56,6 +59,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     originatingChannel: attempt.messageChannel,
     toolsAllow: attempt.toolsAllow,
     disableTools: attempt.disableTools,
+    operatorAuthority: readAdmittedRunOperatorAuthority(admitted),
     run: {
       ...attempt,
       model: attempt.modelId,

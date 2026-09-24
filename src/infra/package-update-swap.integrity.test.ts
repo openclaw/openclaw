@@ -568,7 +568,7 @@ describe("retained npm package integrity", () => {
           });
         }
         expect(await transaction.complete({ activationVerified: true }, () => {})).toMatchObject({
-          name: "global install backup retention",
+          name: "package-backup-retention",
           exitCode: 1,
         });
         expect(replaced).toBe(true);

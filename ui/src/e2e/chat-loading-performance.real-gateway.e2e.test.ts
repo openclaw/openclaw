@@ -13,6 +13,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { installHistoryPaginationProbe } from "./chat-history-pagination-probe.test-support.ts";
 import { installChatLoadingReadinessObserver } from "./chat-loading-readiness.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -263,6 +264,14 @@ suite.define(() => {
       async ({ page, context }) => {
         await installChatLoadingReadinessObserver(page);
         await page.addInitScript(() => {
+          // Measure short-link resolution, not cached-roster route recovery. Keep
+          // restored Home preferences; clear identity admission in each new document
+          // because the previous document can persist its boot record on pagehide.
+          for (const key of Object.keys(localStorage)) {
+            if (key.startsWith("openclaw.control.bootRecord.v1:")) {
+              localStorage.removeItem(key);
+            }
+          }
           window.localStorage.setItem(
             "openclaw:control-ui:community-invite",
             JSON.stringify({ dismissedAtMs: 1770000000000 }),
@@ -306,6 +315,17 @@ suite.define(() => {
           }).observe({ type: "longtask", buffered: true });
         });
         const pending = new Map<string, RpcMetric>();
+        const waitForResolutionResponse = (requestStart = 0) =>
+          expect
+            .poll(() =>
+              rpc
+                .slice(requestStart)
+                .some(
+                  (metric) =>
+                    metric.method === "sessions.resolve" && metric.receivedMs !== undefined,
+                ),
+            )
+            .toBe(true);
         const waitForStartupCommit = async (
           sessionKey: string,
           pane: Locator,
@@ -470,6 +490,8 @@ suite.define(() => {
         if (captureUiProof) {
           await page.screenshot({ path: path.join(artifactDir, "02-selected-and-home-ready.png") });
         }
+        // An accepted identity publication can render the tail before resolve replies.
+        await waitForResolutionResponse();
         const startupMetrics = structuredClone(rpc);
         const startupIdentity = await page.evaluate(() => window.chatLoadingReadiness);
         const images = await page
@@ -545,6 +567,7 @@ suite.define(() => {
             )
             .toEqual({ loadingOlder: false, historyIntentConsumed: false });
         await thread.hover();
+        await installHistoryPaginationProbe(selectedPane, transcriptLength, selectedKey);
         const profiler = captureUiProof ? await context.newCDPSession(page) : undefined;
         if (profiler) {
           await profiler.send("Profiler.enable");
@@ -558,6 +581,7 @@ suite.define(() => {
         while (loadedMessages < transcriptLength) {
           await waitForHistoryGesture();
           await thread.evaluate((element) => {
+            window.historyPaginationProbe.begin();
             element.scrollTop = 0;
           });
           await page.mouse.wheel(0, -500);
@@ -586,6 +610,10 @@ suite.define(() => {
           });
         });
         const paginationRenderedMs = Date.now() - paginationStartedAt;
+        const browserPagination = await page.evaluate(async () => {
+          await window.historyPaginationProbe.done;
+          return window.historyPaginationProbe.result();
+        });
         const performanceAfterPagination = await readPerformanceSample(page);
         if (profiler) {
           const { profile } = await profiler.send("Profiler.stop");
@@ -629,7 +657,8 @@ suite.define(() => {
           const requestStart = rpc.length;
           pending.clear();
           startedAt = Date.now();
-          await page.reload();
+          // Keep the same short-link input even if navigation canonicalized the prior URL.
+          await page.goto(`${url.origin}${url.pathname}`);
           await waitForControlUiGatewayReady(page);
           const narrowSelectedCommitted = waitForStartupCommit(
             selectedKey,
@@ -666,6 +695,7 @@ suite.define(() => {
           if (captureUiProof) {
             await page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
           }
+          await waitForResolutionResponse(requestStart);
           return {
             width: 1050,
             homeOpen,
@@ -703,6 +733,7 @@ suite.define(() => {
               pagination: paginationMetrics,
               paginationLoadedMs,
               paginationRenderedMs,
+              browserPagination,
               initialLoadedMessages,
               olderPageCommits,
               performanceBeforePagination,

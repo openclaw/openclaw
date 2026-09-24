@@ -121,7 +121,7 @@ export function projectNormalizedToolItem(params: {
   const args = itemToolArgs(item);
   const commandBearing = isCommandBearingToolItem(item, args);
   const meta = itemMeta(item, params.detailMode);
-  const event = shouldEmitTranscriptToolProgress(name, args)
+  const event = shouldEmitTranscriptToolProgress(name)
     ? {
         stream: "tool",
         data: {

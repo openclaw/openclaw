@@ -69,3 +69,35 @@ export function backgroundTaskDeliveryLabel(task: TaskSummary): string | undefin
   } as const;
   return t(labels[task.deliveryStatus]);
 }
+
+export type BackgroundTaskObservations = {
+  taskActivityById: Map<string, Pick<TaskSummary, "lastActivity" | "diffStat">>;
+};
+
+export function prepareTaskSnapshot(
+  state: BackgroundTaskObservations,
+  task: TaskSummary,
+): TaskSummary {
+  const retained = state.taskActivityById.get(task.id);
+  const lastActivity = isActiveTask(task)
+    ? (task.lastActivity ?? retained?.lastActivity)
+    : undefined;
+  const diffStat = task.diffStat ?? retained?.diffStat;
+  const streamingFields = {
+    ...(lastActivity ? { lastActivity } : {}),
+    ...(diffStat ? { diffStat } : {}),
+  };
+  if (lastActivity || diffStat) {
+    state.taskActivityById.set(task.id, streamingFields);
+  } else {
+    state.taskActivityById.delete(task.id);
+  }
+  if (lastActivity === task.lastActivity && diffStat === task.diffStat) {
+    return task;
+  }
+  const next = { ...task, ...streamingFields };
+  if (!lastActivity) {
+    delete next.lastActivity;
+  }
+  return next;
+}

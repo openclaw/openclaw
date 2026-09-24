@@ -11,6 +11,8 @@ import {
   createGateway,
   createSessionResult,
   enterQuery,
+  expectPalettePromptMode,
+  findPaletteOption,
   mountPalette,
 } from "./command-palette.test-support.ts";
 import "./command-palette.ts";
@@ -84,7 +86,7 @@ describe("CommandPalette lifecycle", () => {
     const list = vi.fn(async () => createSessionResult("agent:main:old", "Old chat"));
     const { palette, provider } = await mountPalette(createContext(gateway, list));
     await enterQuery(palette, "old");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(palette.textContent).toContain("Old chat");
 
@@ -104,6 +106,21 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).not.toContain("Old chat");
   });
 
+  it("keeps local filtering usable if the connection drops during typing", async () => {
+    const { gateway, setConnected } = createGateway(true);
+    const list = vi.fn(async () => null);
+    const { palette } = await mountPalette(createContext(gateway, list));
+    await enterQuery(palette, "plugins");
+    await vi.advanceTimersByTimeAsync(100);
+    setConnected(false);
+    await palette.updateComplete;
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
+    expect(list).not.toHaveBeenCalled();
+    findPaletteOption(palette, "Plugins", true)!.click();
+    expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
+  });
+
   it("retries the pending query after the gateway reconnects", async () => {
     const harness = createGateway(true);
     const stale = createDeferred<SessionsListResult | null>();
@@ -113,7 +130,7 @@ describe("CommandPalette lifecycle", () => {
       .mockResolvedValueOnce(createSessionResult("agent:main:retry", "Retry chat"));
     const { palette } = await mountPalette(createContext(harness.gateway, list));
     await enterQuery(palette, "retry");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     expect(list).toHaveBeenCalledOnce();
 
     harness.setConnected(false);
@@ -123,13 +140,65 @@ describe("CommandPalette lifecycle", () => {
 
     harness.setConnected(true);
     await palette.updateComplete;
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
 
     expect(list).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ search: "retry" }));
     expect(palette.textContent).toContain("Retry chat");
   });
+
+  it.each(["reconnect", "config.changed", "chat.metadata.changed", "agent"])(
+    "keeps prompt searches stopped through %s and resumes when shortened",
+    async (change) => {
+      const request = vi.fn(async (method: string) =>
+        method === "sessions.search"
+          ? { results: [], sessions: [] }
+          : { models: [{ id: "fixture", provider: "fixture", name: "Needle model" }] },
+      );
+      const harness = createGateway(true, { methods: ["sessions.search"], request });
+      const list = vi.fn(async () => createSessionResult("agent:main:needle", "Needle session"));
+      const context = createContext(harness.gateway, list);
+      const { palette } = await mountPalette(context);
+      const prompt = "needle\nSummarize the discussion and prepare a follow-up task.";
+      await enterQuery(palette, prompt);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(list).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+
+      if (change === "reconnect") {
+        harness.setConnected(false);
+        await palette.updateComplete;
+        harness.setConnected(true);
+      } else if (change === "agent") {
+        context.agentSelection.set("reviewer");
+      } else {
+        harness.emit(change);
+      }
+      await palette.updateComplete;
+      await vi.advanceTimersByTimeAsync(200);
+      await palette.updateComplete;
+      const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+      expect(input.value).toBe(prompt);
+      expect(list).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+      expectPalettePromptMode(palette);
+
+      input.value = "needle";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(200);
+      await palette.updateComplete;
+      expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "needle" }));
+      expect(request).toHaveBeenCalledWith(
+        "sessions.search",
+        expect.objectContaining({ query: "needle" }),
+      );
+      expect(request).toHaveBeenCalledWith("models.list", expect.anything());
+      expect(findPaletteOption(palette, "Needle session")).toBeDefined();
+      expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+      expect(palette.querySelectorAll(".cmd-palette__filter")).toHaveLength(3);
+    },
+  );
 
   it("clears the old Gateway prompt before searching the replacement context", async () => {
     const initial = createGateway(true);
@@ -141,13 +210,13 @@ describe("CommandPalette lifecycle", () => {
     );
     const { palette, provider } = await mountPalette(createContext(initial.gateway, initialList));
     await enterQuery(palette, "chat");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     expect(initialList).toHaveBeenCalledOnce();
 
     stale.resolve(createSessionResult("agent:main:stale", "Stale chat"));
     provider.setContext(createContext(replacement.gateway, replacementList));
     await palette.updateComplete;
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
 
     expect(palette.isOpen).toBe(false);
@@ -159,7 +228,7 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).not.toContain("Stale chat");
 
     await enterQuery(palette, "chat");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(replacementList).toHaveBeenCalledOnce();
     expect(palette.textContent).toContain("Fresh chat");

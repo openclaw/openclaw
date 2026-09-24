@@ -261,7 +261,10 @@ describe("event-loop measurement telemetry", () => {
     expect(getInternalDiagnosticEventSequence()).toBe(0);
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    subscribe: () => () => void | Promise<void>;
+  }>([
     { name: "no listener", subscribe: () => () => {} },
     { name: "public listener", subscribe: () => onDiagnosticEvent(() => {}) },
     {
@@ -285,7 +288,7 @@ describe("event-loop measurement telemetry", () => {
       await waitForDiagnosticEventsDrained();
       expect(getInternalDiagnosticEventSequence()).toBe(0);
     } finally {
-      unsubscribe();
+      await unsubscribe();
     }
   });
 

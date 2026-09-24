@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
 import {
   getAcpSessionManager,
   registerAcpRuntimeBackend,
@@ -13,9 +14,9 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
-import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "./runtime.js";
+import { AcpxRuntime } from "./runtime.js";
 
-const peer = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const peer = fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url));
 
 it.each(["queued", "setup"] as const)(
   "cancels real %s ACP dispatch without a provider prompt or error final",

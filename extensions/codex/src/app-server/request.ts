@@ -131,6 +131,7 @@ type CodexAppServerJsonClientOptions = Pick<
   sessionKey?: string;
   sessionId?: string;
   isolated?: boolean;
+  signal?: AbortSignal;
   assertCurrent?: () => void;
   catalogPreview?: true;
   catalogPreviewCache?: CodexCatalogPreviewCache;
@@ -221,6 +222,7 @@ const CODEX_USAGE_DEADLINE_RESERVE_MS =
 /** Reads rate limits and best-effort account identity from one isolated app-server session. */
 export async function readCodexAppServerUsage(options: {
   timeoutMs: number;
+  signal?: AbortSignal;
   agentDir?: string;
   authProfileId?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
@@ -233,6 +235,7 @@ export async function readCodexAppServerUsage(options: {
   return await withCodexAppServerJsonClient(
     {
       timeoutMs: options.timeoutMs,
+      signal: options.signal,
       timeoutMessage: "codex app-server usage read timed out",
       agentDir: options.agentDir,
       ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
@@ -307,6 +310,11 @@ export async function withCodexAppServerJsonClient<T>(
   let errorPhase: CodexControlRequestPhase | undefined;
   observeControlPhase(params.controlObservation, activePhase);
   const timeoutController = new AbortController();
+  const abort = () => timeoutController.abort(params.signal?.reason);
+  params.signal?.addEventListener("abort", abort, { once: true });
+  if (params.signal?.aborted) {
+    abort();
+  }
   const deadline =
     Number.isFinite(timeoutMs) && timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
   const isPastDeadline = () => deadline !== undefined && performance.now() >= deadline;
@@ -324,6 +332,7 @@ export async function withCodexAppServerJsonClient<T>(
   };
 
   try {
+    throwIfAbandoned();
     return await withAbortableTimeout({
       signal: timeoutController.signal,
       timeoutMs,
@@ -489,6 +498,7 @@ export async function withCodexAppServerJsonClient<T>(
     }
     throw error;
   } finally {
+    params.signal?.removeEventListener("abort", abort);
     // `withTimeout` only stops awaiting. Abort the shared operation before its
     // timeout becomes observable so no delayed acquire can issue a request or retry.
     timeoutController.abort(createScopeCleanupError(timeoutMessage));

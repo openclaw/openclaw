@@ -15,6 +15,7 @@ import {
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../src/shared/worker-bundle-hash.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -56,6 +57,9 @@ describe("worker deploy build plugin", () => {
   describe("portable output", () => {
     const fixtureDirs = useAutoCleanupTempDirTracker(afterAll);
     const fixtureLifetime = createFixtureLifetime();
+    const workerEntryNames = WORKER_BUNDLE_ARTIFACT_PATHS.map(
+      (artifact) => `worker/${artifact.replace(/\.mjs$/u, "")}`,
+    );
     let preparedDist: string;
     let preparedArchive: string;
 
@@ -81,12 +85,14 @@ describe("worker deploy build plugin", () => {
       const activationSource = fs.realpathSync(
         path.resolve("src/plugin-sdk/facade-activation-check.runtime.ts"),
       );
+      // Mixed runtime/declaration graphs also contain worker paths, but are not archived.
       for (const sibling of configs.filter(
         (candidate) =>
           candidate !== config &&
           typeof candidate.entry === "object" &&
           !Array.isArray(candidate.entry) &&
-          Object.keys(candidate.entry).some((entry) => entry.startsWith("worker/")),
+          Object.keys(candidate.entry).length > 0 &&
+          Object.keys(candidate.entry).every((entry) => workerEntryNames.includes(entry)),
       )) {
         const { bundles } = await build({
           ...sibling,
@@ -118,6 +124,9 @@ export { highlight, supportsLanguage } from "../agents/utils/syntax-highlight.js
 export { createOwnedStdioProcess, closeOwnedStdioProcess } from "../process/owned-stdio.js";
 export { explainShellCommand } from "../infra/command-explainer/extract.js";
 export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
+export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
+export { saveExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
+export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 export { projectComputerActResult } from "../agents/tools/computer-tool-result.js";
@@ -139,6 +148,11 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
         ],
       });
       try {
+        const builtEntries = vi
+          .mocked(build)
+          .mock.calls.flatMap(([options]) => Object.keys(options?.entry ?? {}));
+        expect(builtEntries.length).toBe(workerEntryNames.length);
+        expect(builtEntries.toSorted()).toEqual(workerEntryNames.toSorted());
         // A dynamic import cycle can leave an unstaged root facade even with code splitting off.
         expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toEqual([
           "worker/worker.mjs",
@@ -162,6 +176,70 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
         }
       }
     });
+
+    it("commits exec authorization through the SQLite worker in a relocated archive", ({
+      signal,
+    }) =>
+      fixtureLifetime.run(async () => {
+        const root = fixtureLifetime.createTempDir("openclaw-worker-exec-authorization-");
+        const relocated = path.join(root, "bundles", "installed");
+        fs.mkdirSync(relocated, { recursive: true });
+        await tar.extract({ file: preparedArchive, cwd: relocated });
+        const result = await fixtureLifetime.track(
+          runNodeScript(
+            [
+              "--input-type=module",
+              "--eval",
+              `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const {
+  commitExecAuthorizationLocked,
+  saveExecApprovals,
+  readExecApprovalsSnapshot,
+  closeOpenClawStateDatabaseAsync,
+} = await import(pathToFileURL(entry).href);
+const match = { id: "portable-exec", pattern: process.execPath };
+const command = "portable exec authorization";
+saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } });
+try {
+  const assertCurrent = await commitExecAuthorizationLocked({
+    agentId: "main", matches: [match], command, resolvedPath: process.execPath,
+    authorization: { source: "current-policy", security: "full", ask: "off", allowlistSatisfied: true },
+  });
+  assertCurrent();
+  await closeOpenClawStateDatabaseAsync();
+  const stored = readExecApprovalsSnapshot().file.agents.main.allowlist[0];
+  assert.equal(stored.lastUsedCommand, command);
+  assert.equal(stored.lastResolvedPath, process.execPath);
+  assert.ok(stored.lastUsedAt > 0);
+} finally {
+  await closeOpenClawStateDatabaseAsync();
+}
+console.log("relocated exec authorization persisted");
+`,
+              path.join(relocated, "worker.mjs"),
+            ],
+            {
+              PATH: process.env.PATH,
+              SystemRoot: process.env.SystemRoot,
+              WINDIR: process.env.WINDIR,
+              HOME: root,
+              USERPROFILE: root,
+              OPENCLAW_STATE_DIR: path.join(root, "state"),
+              TMPDIR: root,
+              TMP: root,
+              TEMP: root,
+            },
+            30_000,
+            { cwd: root, signal },
+          ),
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("relocated exec authorization persisted");
+      }));
 
     it("keeps activated plugin facades lazy and config-aware in a relocated archive", ({
       signal,

@@ -77,6 +77,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   isNonTextMediaPath?: (path: string) => boolean;
   workspaceDir?: string;
   sessionSourceMtimes?: ReadonlyMap<string, number | undefined>;
+  memorySourceMtimes?: ReadonlyMap<string, number | undefined>;
   /** MMR configuration for diversity-aware re-ranking */
   mmr?: Partial<MMRConfig>;
   /** Temporal decay configuration for recency-aware scoring */
@@ -240,6 +241,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     temporalDecay: temporalDecayConfig,
     workspaceDir: params.workspaceDir,
     sessionSourceMtimes: params.sessionSourceMtimes,
+    memorySourceMtimes: params.memorySourceMtimes,
     nowMs: params.nowMs,
   });
   const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);

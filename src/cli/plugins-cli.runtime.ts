@@ -714,6 +714,7 @@ function buildMarketplaceRefreshPayload(
       typeof import("../plugins/official-external-plugin-catalog.js").loadConfiguredHostedOfficialExternalPluginCatalogEntries
     >
   >,
+  feedUrl?: string,
 ): MarketplaceRefreshPayload {
   const payload: MarketplaceRefreshPayload = {
     source: result.source,
@@ -743,6 +744,13 @@ function buildMarketplaceRefreshPayload(
   if (result.source === "bundled-fallback") {
     payload.error = result.error;
   }
+  const rawMetadataUrl = payload.metadata?.url;
+  if (payload.metadata) {
+    payload.metadata = { ...payload.metadata, url: redactMarketplaceFeedUrl(payload.metadata.url) };
+  }
+  if (payload.error) {
+    payload.error = redactMarketplaceOutputText(payload.error, [feedUrl, rawMetadataUrl]);
+  }
   return payload;
 }
 
@@ -771,23 +779,6 @@ function redactMarketplaceOutputText(
     redacted = redacted.replaceAll(rawUrl, () => redactMarketplaceFeedUrl(rawUrl));
   }
   return redacted;
-}
-
-function sanitizeMarketplaceRefreshPayload(
-  payload: MarketplaceRefreshPayload,
-  params?: { feedUrl?: string },
-): MarketplaceRefreshPayload {
-  const rawMetadataUrl = payload.metadata?.url;
-  const sanitized: MarketplaceRefreshPayload = {
-    ...payload,
-    ...(payload.metadata
-      ? { metadata: { ...payload.metadata, url: redactMarketplaceFeedUrl(payload.metadata.url) } }
-      : {}),
-  };
-  if (payload.error) {
-    sanitized.error = redactMarketplaceOutputText(payload.error, [params?.feedUrl, rawMetadataUrl]);
-  }
-  return sanitized;
 }
 
 function formatMarketplaceEntryInstall(entry: MarketplaceEntryPayload): string | undefined {
@@ -889,9 +880,7 @@ export async function runPluginMarketplaceEntriesCommand(
     ...(opts.feedUrl ? { feedUrl: opts.feedUrl } : {}),
     ...(opts.offline ? { offline: true } : {}),
   });
-  const summary = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
-    feedUrl: opts.feedUrl,
-  });
+  const summary = buildMarketplaceRefreshPayload(result, opts.feedUrl);
   const entries: MarketplaceEntryPayload[] = result.entries.map((entry) => {
     const id = catalog.resolveOfficialExternalPluginId(entry);
     const install = catalog.resolveOfficialExternalPluginInstall(entry) ?? undefined;
@@ -978,9 +967,7 @@ export async function runPluginMarketplaceRefreshCommand(
       runtimeNotice = "Marketplace catalog saved for the next Gateway start.";
     }
   }
-  const payload = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
-    feedUrl: opts.feedUrl,
-  });
+  const payload = buildMarketplaceRefreshPayload(result, opts.feedUrl);
 
   const failedPinnedRefresh = shouldFailPinnedMarketplaceRefresh({
     expectedSha256,

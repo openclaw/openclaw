@@ -13,6 +13,7 @@ import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow,
+  persistSubagentRunsToDiskAsyncOrThrow,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
 
@@ -37,6 +38,7 @@ export type SubagentRegistryDeps = {
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
   persistSubagentRunsToDisk: typeof persistSubagentRunsToDisk;
   persistSubagentRunsToDiskOrThrow: typeof persistSubagentRunsToDiskOrThrow;
+  persistSubagentRunsToDiskAsyncOrThrow: typeof persistSubagentRunsToDiskAsyncOrThrow;
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
@@ -80,6 +82,7 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   onAgentEvent,
   persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow,
+  persistSubagentRunsToDiskAsyncOrThrow,
   resolveAgentTimeoutMs,
   restoreSubagentRunsFromDisk,
   runSubagentAnnounceFlow: async (params) =>

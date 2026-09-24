@@ -1,9 +1,11 @@
 // Browser tests cover exact Playwright page selection by CDP target id.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import { pwAi } from "./pw-ai.js";
+import { markTargetBlocked } from "./pw-session-connection.js";
 
 const {
   closePageByTargetIdViaPlaywright,
@@ -25,6 +27,7 @@ type MockPageSpec = {
   targetId?: string;
   url?: string;
   title?: string;
+  beforeTargetLookup?: () => Promise<void>;
   targetLookupError?: string;
   navigateDuringTargetLookup?: boolean;
   subframeNavigationDuringTargetLookup?: boolean;
@@ -79,6 +82,7 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
           if (method !== "Target.getTargetInfo") {
             return {};
           }
+          await spec?.beforeTargetLookup?.();
           if (spec?.targetLookupError) {
             throw new Error(spec.targetLookupError);
           }
@@ -117,6 +121,7 @@ function installBrowser(pages: MockPageSpec[]): BrowserMockBundle {
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   connectOverCdpSpy.mockReset();
   getChromeWebSocketEndpointSpy.mockReset();
   await closePlaywrightBrowserConnection().catch(() => {});
@@ -182,6 +187,32 @@ describe("pw-session getPageForTargetId", () => {
     });
 
     expect(resolved).toBe(pages[1]);
+  });
+
+  it("selects a healthy target within one probe window despite stuck sibling tabs", async () => {
+    vi.useFakeTimers();
+    const { pages } = installBrowser([
+      ...Array.from({ length: 10 }, (_, index) => ({
+        targetId: `STUCK_${index}`,
+        beforeTargetLookup: () => new Promise<void>(() => {}),
+      })),
+      { targetId: "HEALTHY" },
+    ]);
+    let resolved: import("playwright-core").Page | undefined;
+    const selection = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "HEALTHY",
+    }).then((page) => {
+      resolved = page;
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(resolved).toBe(pages[10]);
+    } finally {
+      await vi.runAllTimersAsync();
+      await selection;
+    }
   });
 
   it("focuses and closes only the exact target when URLs are identical", async () => {
@@ -266,6 +297,55 @@ describe("pw-session getPageForTargetId", () => {
     expect(resolved).toBe(fresh.pages[1]);
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
     expect(stale.browserClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a replacement connection when an older selection finishes after recovery", async () => {
+    const cdpUrl = "http://127.0.0.1:9333";
+    const lookupStarted = createDeferred<void>();
+    const finishLookup = createDeferred<void>();
+    const stalePage: MockPageSpec = { targetId: "OLD_TARGET" };
+    const stale = makeBrowser([stalePage]);
+    const fresh = makeBrowser([{ targetId: "TARGET_OK" }]);
+    connectOverCdpSpy.mockResolvedValueOnce(stale.browser).mockResolvedValue(fresh.browser);
+    getChromeWebSocketEndpointSpy.mockResolvedValue(null);
+    await getPageForTargetId({ cdpUrl });
+
+    stalePage.beforeTargetLookup = () => {
+      lookupStarted.resolve();
+      return finishLookup.promise;
+    };
+    const selection = getPageForTargetId({ cdpUrl, targetId: "TARGET_OK" });
+    await lookupStarted.promise;
+    await closePlaywrightBrowserConnection({ cdpUrl });
+    await expect(getPageForTargetId({ cdpUrl, targetId: "TARGET_OK" })).resolves.toBe(
+      fresh.pages[0],
+    );
+    finishLookup.resolve();
+
+    await expect(selection).resolves.toBe(fresh.pages[0]);
+    expect(fresh.browserClose).not.toHaveBeenCalled();
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves blocked targets when reconnecting after a stale selection", async () => {
+    const cdpUrl = "http://127.0.0.1:9333";
+    const stale = makeBrowser([{ targetId: "OLD_TARGET" }]);
+    const fresh = makeBrowser([{ targetId: "BLOCKED" }, { targetId: "HEALTHY" }]);
+    connectOverCdpSpy.mockResolvedValueOnce(stale.browser).mockResolvedValue(fresh.browser);
+    getChromeWebSocketEndpointSpy.mockResolvedValue(null);
+    await getPageForTargetId({ cdpUrl });
+    markTargetBlocked(cdpUrl, "BLOCKED");
+
+    await expect(getPageForTargetId({ cdpUrl, targetId: "HEALTHY" })).resolves.toBe(fresh.pages[1]);
+    await expect(getPageForTargetId({ cdpUrl })).resolves.toBe(fresh.pages[1]);
+    await expect(getPageForTargetId({ cdpUrl, targetId: "BLOCKED" })).rejects.toThrow(
+      "Browser target is unavailable after SSRF policy blocked its navigation.",
+    );
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+    await expect(getPageForTargetId({ cdpUrl, targetId: "MISSING_TARGET" })).rejects.toBeInstanceOf(
+      BrowserTabNotFoundError,
+    );
+    await expect(getPageForTargetId({ cdpUrl })).resolves.toBe(fresh.pages[1]);
   });
 
   it("fails after a single reconnect when the refreshed browser is still page-less", async () => {

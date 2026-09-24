@@ -193,7 +193,7 @@ export async function runSupervisedPublication(params: {
     // A nonzero/unknown transport result is reconciled by the following read;
     // it is never interpreted as proof that the push did not happen.
     await runPublicationCommand(
-      githubPublicationPushArgs(remote, prepared.headCommit, profile.branch),
+      githubPublicationPushArgs(remote, prepared.headCommit, profile.branch, previous ?? ""),
       { cwd: gitDirectory, env },
     );
     if ((await remoteHead()) !== prepared.headCommit) {

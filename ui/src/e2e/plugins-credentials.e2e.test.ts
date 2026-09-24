@@ -81,13 +81,14 @@ const featureMethods = [
 
 suite.define(() => {
   it.each([
-    { width: 390, readOnly: false, literal: false },
-    { width: 1174, readOnly: false, literal: false },
-    { width: 1174, readOnly: true, literal: false },
-    { width: 1174, readOnly: false, literal: true },
+    { width: 390, readOnly: false, literal: false, missing: false },
+    { width: 1174, readOnly: false, literal: false, missing: false },
+    { width: 1174, readOnly: true, literal: false, missing: false },
+    { width: 1174, readOnly: false, literal: true, missing: false },
+    { width: 390, readOnly: false, literal: false, missing: true },
   ])(
-    "edits the advertised nested reference through the acknowledged writer at $width (readOnly=$readOnly, literal=$literal)",
-    async ({ width, readOnly, literal }) => {
+    "edits the advertised nested reference through the acknowledged writer at $width (readOnly=$readOnly, literal=$literal, missing=$missing)",
+    async ({ width, readOnly, literal, missing }) => {
       await suite.withPage(
         { colorScheme: "dark", viewport: { width, height: 900 } },
         async ({ page }) => {
@@ -100,6 +101,9 @@ suite.define(() => {
             Object.assign(initial.plugins.entries.workboard.config.search, {
               apiKey: REDACTED_SENTINEL,
             });
+          }
+          if (missing) {
+            Reflect.deleteProperty(initial.plugins.entries.workboard.config.search, "apiKey");
           }
           const gateway = await installMockGateway(page, {
             featureMethods,
@@ -121,9 +125,11 @@ suite.define(() => {
               },
               "plugins.credentials.inspect": {
                 baseHash: configMocks["config.get"].hash,
-                credential: literal
-                  ? { kind: "literal" }
-                  : { kind: "reference", ref: originalRef, unresolved: false },
+                credential: missing
+                  ? { kind: "missing" }
+                  : literal
+                    ? { kind: "literal" }
+                    : { kind: "reference", ref: originalRef, unresolved: false },
               },
               "config.get": {
                 ...configMocks["config.get"],
@@ -142,8 +148,8 @@ suite.define(() => {
             },
           });
           await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
-          await page.getByRole("heading", { name: "Workboard settings", exact: true }).waitFor();
-          if (literal) {
+          await page.locator("openclaw-plugin-settings-editor").waitFor();
+          if (literal || missing) {
             const input = page.getByLabel("Search API key", { exact: true });
             await input.waitFor();
             expect(await input.inputValue()).toBe("");
@@ -154,12 +160,44 @@ suite.define(() => {
                 .getAttribute("href"),
             ).toBe("https://provider.example/signup");
             await input.focus();
-            await page.getByRole("heading", { name: "Workboard settings", exact: true }).click();
+            await page
+              .locator("openclaw-plugin-settings-editor")
+              .getByLabel("Search settings", { exact: true })
+              .click();
             expect(await gateway.getRequests("config.set")).toHaveLength(0);
+            const reveal = page.getByRole("button", { name: "Show API key", exact: true });
+            await expect
+              .poll(async () => (await gateway.getRequests("plugins.credentials.inspect")).length)
+              .toBe(1);
+            expect(
+              (await gateway.getRequests("plugins.credentials.inspect"))[0]?.params,
+            ).not.toHaveProperty("reveal");
+            if (literal) {
+              await gateway.setMethodResponse("plugins.credentials.inspect", {
+                baseHash: configMocks["config.get"].hash,
+                credential: { kind: "literal", value: "synthetic-stored-key" },
+              });
+              await reveal.click();
+              await expect.poll(() => input.inputValue()).toBe("synthetic-stored-key");
+              expect(
+                (await gateway.getRequests("plugins.credentials.inspect")).at(-1)?.params,
+              ).toMatchObject({
+                pluginId: "workboard",
+                path: credentialPath,
+                baseHash: configMocks["config.get"].hash,
+                reveal: true,
+              });
+              await page.getByRole("button", { name: "Hide API key", exact: true }).click();
+              expect(await input.inputValue()).toBe("");
+              expect(await gateway.getRequests("config.set")).toHaveLength(0);
+            } else {
+              expect(await reveal.isDisabled()).toBe(true);
+              expect(await input.getAttribute("placeholder")).toBe("demo-key");
+            }
             await input.fill("synthetic-new-key");
-            await page.getByRole("button", { name: "Show entered key", exact: true }).click();
+            await page.getByRole("button", { name: "Show API key", exact: true }).click();
             expect(await input.getAttribute("type")).toBe("text");
-            await page.getByRole("button", { name: "Hide entered key", exact: true }).click();
+            await page.getByRole("button", { name: "Hide API key", exact: true }).click();
             await gateway.deferNext("config.set");
             await input.press("Enter");
             const request = await gateway.waitForRequest("config.set");

@@ -2745,24 +2745,6 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(/Telegram polls are disabled/);
   });
 
-  it("deletes a message", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok" } },
-    } as OpenClawConfig;
-    await handleTelegramAction(
-      {
-        action: "deleteMessage",
-        chatId: "123",
-        messageId: 456,
-      },
-      cfg,
-    );
-    const call = mockCall(deleteMessageTelegram, 0, "delete message");
-    expect(call[0]).toBe("123");
-    expect(call[1]).toBe(456);
-    expect(requireRecord(call[2], "delete message options").token).toBe("tok");
-  });
-
   it("binds delegated topic edit and delete actions before provider execution", async () => {
     const actionContext = {
       conversationReadOrigin: "delegated" as const,

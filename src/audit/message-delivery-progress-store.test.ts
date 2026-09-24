@@ -16,7 +16,7 @@ import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "../state/openclaw-state-schema
 import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v12-foldin.test-support.js";
 import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v13-widerow.test-support.js";
 import { removePreparedWorkerOwnershipColumns } from "../state/openclaw-state-schema-v17.test-support.js";
-import { recordAuditEvent } from "./audit-event-store.js";
+import { recordAuditEventInDatabase } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
 import {
   createExecutionIdentityAdmissionToken,
@@ -27,8 +27,8 @@ import {
   pageOutboundMessageAuditEventsForRunInDatabase,
 } from "./message-delivery-audit-store.js";
 import {
-  pruneExpiredOutboundMessageProgress,
-  recordOutboundMessageProgress,
+  pruneExpiredOutboundMessageProgressInDatabase,
+  recordOutboundMessageProgressInDatabase,
 } from "./message-delivery-progress-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -134,7 +134,10 @@ describe("outbound message progress companion", () => {
     db.exec(schema.slice(start, end + ") STRICT;".length));
 
     expect(
-      recordOutboundMessageProgress(progressInput("message.outbound.queued"), database),
+      recordOutboundMessageProgressInDatabase(progressInput("message.outbound.queued"), {
+        ...database,
+        database: openOpenClawStateDatabase(database),
+      }),
     ).toBeDefined();
     const columns = db.prepare("PRAGMA table_info(outbound_message_progress)").all() as Array<{
       name: string;
@@ -160,7 +163,10 @@ describe("outbound message progress companion", () => {
     ).toBe(0);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
 
-    recordAuditEvent(terminalInput(), database);
+    recordAuditEventInDatabase(terminalInput(), {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
     expect(
@@ -175,10 +181,19 @@ describe("outbound message progress companion", () => {
   it("ensures idempotently, deduplicates replay, and stores no raw message material", () => {
     const database = databaseOptions();
     const queued = progressInput("message.outbound.queued");
-    const first = recordOutboundMessageProgress(queued, database);
+    const first = recordOutboundMessageProgressInDatabase(queued, {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
     closeOpenClawStateDatabaseForTest();
-    const recoveredReplay = recordOutboundMessageProgress(queued, database);
-    recordOutboundMessageProgress(progressInput("message.outbound.platform-started"), database);
+    const recoveredReplay = recordOutboundMessageProgressInDatabase(queued, {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
+    recordOutboundMessageProgressInDatabase(progressInput("message.outbound.platform-started"), {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
 
     expect(first).toMatchObject({ action: "message.outbound.queued", outcome: "queued" });
     expect(recoveredReplay).toBeUndefined();
@@ -215,15 +230,18 @@ describe("outbound message progress companion", () => {
   it("merges tied progress and terminal rows with stable paging across restart", () => {
     const database = databaseOptions();
     const occurredAt = Date.now();
-    recordOutboundMessageProgress(
+    recordOutboundMessageProgressInDatabase(
       progressInput("message.outbound.queued", { occurredAt }),
-      database,
+      { ...database, database: openOpenClawStateDatabase(database) },
     );
-    recordOutboundMessageProgress(
+    recordOutboundMessageProgressInDatabase(
       progressInput("message.outbound.platform-started", { occurredAt }),
-      database,
+      { ...database, database: openOpenClawStateDatabase(database) },
     );
-    recordAuditEvent(terminalInput({ occurredAt }), database);
+    recordAuditEventInDatabase(terminalInput({ occurredAt }), {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
 
     const first = pageOutboundMessageAuditEventsForRunInDatabase(
       openOpenClawStateDatabase(database).db,
@@ -260,20 +278,20 @@ describe("outbound message progress companion", () => {
   it(`preserves the ${PINNED_PRE_C04_READER_SHA} terminal-only reader contract across reopen`, () => {
     const database = databaseOptions();
     const occurredAt = Date.now();
-    recordOutboundMessageProgress(
+    recordOutboundMessageProgressInDatabase(
       progressInput("message.outbound.queued", { occurredAt }),
-      database,
+      { ...database, database: openOpenClawStateDatabase(database) },
     );
-    recordOutboundMessageProgress(
+    recordOutboundMessageProgressInDatabase(
       progressInput("message.outbound.platform-started", { occurredAt }),
-      database,
+      { ...database, database: openOpenClawStateDatabase(database) },
     );
-    recordAuditEvent(
+    recordAuditEventInDatabase(
       terminalInput({
         occurredAt,
         executionIdentityToken: createExecutionIdentityAdmissionToken("run-progress"),
       }),
-      database,
+      { ...database, database: openOpenClawStateDatabase(database) },
     );
     openOpenClawStateDatabase(database);
     expect(
@@ -416,9 +434,9 @@ describe("outbound message progress companion", () => {
   it("pages large offsets across bounded owner-stream chunks", () => {
     const database = databaseOptions();
     const occurredAt = Date.now();
-    recordOutboundMessageProgress(
+    recordOutboundMessageProgressInDatabase(
       progressInput("message.outbound.queued", { occurredAt }),
-      database,
+      { ...database, database: openOpenClawStateDatabase(database) },
     );
     const { db } = openOpenClawStateDatabase(database);
     db.prepare("DELETE FROM outbound_message_progress").run();
@@ -477,10 +495,13 @@ describe("outbound message progress companion", () => {
   it("rejects a cursor whose owner row was pruned while preserving the other owner", () => {
     const database = databaseOptions();
     const occurredAt = Date.now();
-    recordAuditEvent(terminalInput({ occurredAt }), database);
-    recordOutboundMessageProgress(
+    recordAuditEventInDatabase(terminalInput({ occurredAt }), {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
+    recordOutboundMessageProgressInDatabase(
       progressInput("message.outbound.queued", { occurredAt }),
-      database,
+      { ...database, database: openOpenClawStateDatabase(database) },
     );
     const first = pageOutboundMessageAuditEventsForRunInDatabase(
       openOpenClawStateDatabase(database).db,
@@ -514,13 +535,19 @@ describe("outbound message progress companion", () => {
   it("prunes expired progress without touching retained terminal rows", () => {
     const database = databaseOptions();
     const occurredAt = Date.now() - 31 * 24 * 60 * 60_000;
-    recordOutboundMessageProgress(
+    recordOutboundMessageProgressInDatabase(
       progressInput("message.outbound.queued", { occurredAt }),
-      database,
+      { ...database, database: openOpenClawStateDatabase(database) },
     );
-    recordAuditEvent(terminalInput({ occurredAt: Date.now() }), database);
+    recordAuditEventInDatabase(terminalInput({ occurredAt: Date.now() }), {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
 
-    pruneExpiredOutboundMessageProgress({ database, now: Date.now() });
+    pruneExpiredOutboundMessageProgressInDatabase({
+      database: { ...database, database: openOpenClawStateDatabase(database) },
+      now: Date.now(),
+    });
     const { db } = openOpenClawStateDatabase(database);
     expect(
       (
@@ -536,7 +563,10 @@ describe("outbound message progress companion", () => {
 
   it("bounds each expired progress maintenance transaction", () => {
     const database = databaseOptions();
-    recordOutboundMessageProgress(progressInput("message.outbound.queued"), database);
+    recordOutboundMessageProgressInDatabase(progressInput("message.outbound.queued"), {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
     const { db } = openOpenClawStateDatabase(database);
     db.exec("DELETE FROM outbound_message_progress");
     const now = Date.now();
@@ -557,13 +587,26 @@ describe("outbound message progress companion", () => {
        FROM numbers`,
     ).run(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT + 1, expiredAt);
 
-    expect(pruneExpiredOutboundMessageProgress({ database, now })).toBe(
-      OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT,
-    );
+    expect(
+      pruneExpiredOutboundMessageProgressInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+        now,
+      }),
+    ).toBe(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT);
     expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
       count: 1,
     });
-    expect(pruneExpiredOutboundMessageProgress({ database, now })).toBe(1);
-    expect(pruneExpiredOutboundMessageProgress({ database, now })).toBe(0);
+    expect(
+      pruneExpiredOutboundMessageProgressInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+        now,
+      }),
+    ).toBe(1);
+    expect(
+      pruneExpiredOutboundMessageProgressInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+        now,
+      }),
+    ).toBe(0);
   });
 });

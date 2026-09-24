@@ -1,4 +1,4 @@
-import type { CliCommandCatalogEntry } from "./command-catalog-types.js";
+import type { CliCommandCatalogEntry } from "./command-catalog.types.js";
 
 // Unlike passive task inspection/admission, these commands execute model tools.
 // Activate configured policy hooks and normal execution bootstrap before custody.

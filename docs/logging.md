@@ -677,8 +677,13 @@ parent's `pid`, `threadId` and `isMainThread`, the actual Node `workerThreadId`,
 startup, validation, admission waits, work, and cleanup. It does not measure CPU
 time or isolate a validation phase. Short writer sections can therefore remain
 quiet while this whole-operation warning exposes slow preparation between them.
-The record inherits an existing parent trace when available; it contains no
-database path, session identifier, plan content, or raw error.
+The record inherits an existing parent trace when available. Failed retained
+reclamation operations also include `sessionIdHash` (when targeting one session),
+`error` (the redacted message and causes), and `errorFrame` (the first stack frame).
+These failures emit one warning even below one second, named
+`SQLite reclamation Worker failed`; slower failures use the existing slow-operation
+warning. Session identifiers use the same hash as other session SQLite diagnostics;
+the failure fields are redacted and bounded to 2,048 characters each.
 Cold-storage operations use the same warning with `reclamationKind` set to
 `cold-batch` (archive or externalize), `cold-maintain` (reclaim free pages), or
 `cold-restore` (restore a transcript). Their writer warnings carry the same Worker

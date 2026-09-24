@@ -86,6 +86,31 @@ before middleware transforms its result, and carry it into the attempt result.
 This confirms a final external source reply and does not depend on destination
 arguments or transcript mirrors.
 
+## Reply attachments from a remote workspace
+
+A harness whose files are remote can call the optional
+`params.hostCapabilities.prepareReplyMedia` before closing its file transport.
+The host applies the existing sender read policy and channel/account byte limit,
+then saves authorized attachment bytes for delivery.
+
+| Request                      | Result             | Harness action                                                                                            |
+| ---------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------- |
+| `kind: "attempt"`, `attempt` | `preparedMedia`    | Set `attempt.preparedReplyMedia` on the same result object. Core applies it after final answer selection. |
+| `kind: "payload"`, `payload` | Prepared `payload` | Deliver this copy through `onBlockReply`; keep the persisted message unchanged.                           |
+
+Both requests supply `readWorkspaceFile(relativePath, { maxBytes, signal })`.
+The reader must enforce the byte limit and workspace boundary and honor
+cancellation. It receives only paths authorized under the host's captured
+policy. Supply `workspaceRoot` when the remote workspace has a different
+absolute path; the host maps that alias to the logical workspace before checking
+policy. Keep the reader alive until preparation finishes.
+
+Missing, denied, and oversized attachments produce the usual delivery failure
+notice; preparation does not fall back to a stale Gateway workspace file.
+Prepared facts contain file locations and failures, never a live reader. Do not
+rewrite assistant text or transcript messages to insert Gateway file paths.
+When the capability is absent, this remote attachment preparation is unavailable.
+
 ## Terminal outcome classification
 
 Native harnesses that own their own protocol projection can use

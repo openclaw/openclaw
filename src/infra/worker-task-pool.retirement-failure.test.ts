@@ -415,4 +415,39 @@ describe("worker task retirement failures", () => {
       expect(options.onExecutionSettled).toBe(executionSettled);
     },
   );
+  it.each(["ok", "failed"] as const)(
+    "preserves public result error precedence when settlement callback throws after %s",
+    async (outcome) => {
+      const pool = createPool();
+      const callbackFailure = new Error("settlement callback failed");
+      const executionSettled = vi.fn(() => {
+        throw callbackFailure;
+      });
+      const first = pool
+        .run("first", { onExecutionSettled: executionSettled })
+        .catch((error: unknown) => error);
+      const worker = expectDefined(workers[0], "task worker");
+      worker.emit(
+        "message",
+        outcome === "ok"
+          ? { status: "ok", taskId: taskId(worker), value: "first" }
+          : { status: "failed", taskId: taskId(worker), error: "original worker failure" },
+      );
+      const result = await first;
+      if (outcome === "ok") {
+        expect(result).toBe(callbackFailure);
+      } else {
+        expect(result).toMatchObject({ message: "original worker failure", code: "failed" });
+        expect(result).not.toBe(callbackFailure);
+      }
+      expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: false });
+      expect(pool.getSnapshot().pendingTasks).toBe(0);
+      const next = pool.run("next", {});
+      const posted = expectDefined(worker.postMessage.mock.calls.at(-1)?.[0], "successor request");
+      worker.emit("message", { status: "ok", taskId: posted.taskId, value: "next" });
+      expect(await next).toBe("next");
+      expect(workers).toHaveLength(1);
+      expect(worker.terminate).not.toHaveBeenCalled();
+    },
+  );
 });

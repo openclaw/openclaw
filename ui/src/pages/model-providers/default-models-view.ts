@@ -3,6 +3,10 @@ import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profi
 import { BASE_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelAuthStatusProvider, ModelAuthStatusResult } from "../../api/types.ts";
+import {
+  renderDecisionModelPicker,
+  type DecisionModelEntry,
+} from "../../components/decision-model-picker.ts";
 import { icons } from "../../components/icons.ts";
 import { renderModelPicker, type ModelPickerOption } from "../../components/model-picker.ts";
 import {
@@ -22,6 +26,7 @@ import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } fr
 
 type DefaultModelsViewProps = {
   models: ModelPickerEntry[];
+  decisionModels: DecisionModelEntry[];
   selection: DefaultModelSelection;
   authStatus?: ModelAuthStatusResult | null;
   automaticUtilityModel?: string | null;
@@ -41,6 +46,7 @@ type DefaultModelsViewProps = {
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
+  onDecisionChange: (model: string | null) => void;
   onThinkingChange: (level: string, element: HTMLElement) => void;
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
@@ -156,26 +162,31 @@ function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
 }
 
 // Discovery progress does not change the saved selection or disable known models.
-function renderCatalogProgress(props: DefaultModelsViewProps): TemplateResult | typeof nothing {
-  if (props.catalogDiscovering) {
-    return html`
-      <div class="model-providers__catalog-progress" role="status" aria-live="polite">
-        <span class="btn__spinner" aria-hidden="true"></span>
-        <span>${t("modelProviders.defaults.discoveringMore")}</span>
-      </div>
-    `;
-  }
-  if (props.catalogDiscoveryError) {
-    return html`
-      <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
-        <span>${t("modelProviders.defaults.discoverFailed")}</span>
-        <button class="btn btn--sm" type="button" @click=${props.onCatalogRetry}>
-          ${t("modelProviders.defaults.retryDiscover")}
-        </button>
-      </div>
-    `;
-  }
-  return nothing;
+function renderCatalogProgress(props: DefaultModelsViewProps): TemplateResult {
+  return html`
+    ${
+      props.catalogDiscovering
+        ? html`
+            <div class="model-providers__catalog-progress" role="status" aria-live="polite">
+              <span class="btn__spinner" aria-hidden="true"></span>
+              <span>${t("modelProviders.defaults.discoveringMore")}</span>
+            </div>
+          `
+        : nothing
+    }
+    ${
+      props.catalogDiscoveryError
+        ? html`
+            <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
+              <span>${t("modelProviders.defaults.discoverFailed")}</span>
+              <button class="btn btn--sm" type="button" @click=${props.onCatalogRetry}>
+                ${t("modelProviders.defaults.retryDiscover")}
+              </button>
+            </div>
+          `
+        : nothing
+    }
+  `;
 }
 
 export function renderDefaultModels(props: DefaultModelsViewProps) {
@@ -273,6 +284,18 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           showSelectedDetail: true,
           onChange: (value) =>
             props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value),
+        }),
+      })}
+      ${renderSettingsRow({
+        title: t("chat.modelControls.decisionLabel"),
+        description: t("chat.modelControls.decisionHelp"),
+        control: renderDecisionModelPicker({
+          id: "model-providers-decision-model",
+          models: props.decisionModels,
+          value: props.selection.decisionModel,
+          disabled: !props.canMutate || saving,
+          title,
+          onChange: props.onDecisionChange,
         }),
       })}
       ${renderSettingsRow({

@@ -13,6 +13,7 @@ export type LeaseScenario = {
   preDoctorChannel?: string;
   invalidConfig?: boolean;
   failDoctor?: "pre" | "post";
+  doctorWarnings?: string[];
   readinessFailure?: "finding" | "execution";
   hostVersion?: string;
   writerConfig?: OpenClawConfig;
@@ -67,6 +68,13 @@ export async function runUpdateLeaseChild(): Promise<void> {
     assert.deepEqual(process.argv.slice(2), ["config", "validate", "--json"]);
     assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, "0");
     await record("validate");
+    process.stdout.write(
+      JSON.stringify(
+        scenario.invalidConfig
+          ? { valid: false, issues: [{ path: "gateway.port", message: "Invalid port" }] }
+          : { valid: true },
+      ),
+    );
     process.exitCode = scenario.invalidConfig ? 1 : 0;
     return;
   }
@@ -149,7 +157,7 @@ export async function runUpdateLeaseChild(): Promise<void> {
       const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
       assert.ok(runId, "Doctor did not inherit its invoking repair run ID");
       const { DatabaseSync } = await import("node:sqlite");
-      const { readUpdateRunRecord } = await import("../../infra/update-run-reader.js");
+      const { readUpdateRunRecord } = await import("../../infra/update-run-read.kernel.js");
       const { resolveOpenClawStateSqlitePath } =
         await import("../../state/openclaw-state-db.paths.js");
       const { inspectUpdateRepairDriverAdmission } =
@@ -191,6 +199,16 @@ export async function runUpdateLeaseChild(): Promise<void> {
     if (scenario.failDoctor === phase) {
       throw new Error("doctor fixture failure");
     }
+    if (scenario.doctorWarnings?.length) {
+      const { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, writeUpdatePostInstallDoctorResult } =
+        await import("../../infra/update-doctor-result.js");
+      const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+      assert.ok(resultPath);
+      await writeUpdatePostInstallDoctorResult({
+        resultPath,
+        result: { status: "ok", warnings: scenario.doctorWarnings },
+      });
+    }
     return;
   }
   if (command === "probe") {
@@ -201,7 +219,7 @@ export async function runUpdateLeaseChild(): Promise<void> {
       if (!(error instanceof Error) || !("code" in error)) {
         throw error;
       }
-      assert.equal(error.code, "OPENCLAW_STATE_LEASE_TIMEOUT");
+      assert.equal(error.code, "OPENCLAW_STATE_LEASE_HELD");
       process.stdout.write("excluded");
     }
     return;

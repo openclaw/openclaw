@@ -5,6 +5,8 @@ import { guard } from "lit/directives/guard.js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { i18n, t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
+import { icons } from "./icons.ts";
+import { linkReaderAuthorHref } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { normalizeMarkdownRenderOptions } from "./markdown-render-options.ts";
@@ -340,37 +342,191 @@ function renderComment(comment: ControlUiLinkReaderComment, base: string, loadIm
   </article>`;
 }
 
+type ReaderChecks = NonNullable<ControlUiLinkReaderDocument["checks"]>;
+
+function checkIcon(state: ReaderChecks["state"]) {
+  switch (state) {
+    case "success":
+      return icons.check;
+    case "failure":
+      return icons.circleX;
+    case "pending":
+      return icons.clock;
+    case "unavailable":
+      return icons.circleQuestionMark;
+    default:
+      return icons.circle;
+  }
+}
+
+function checkLabel(state: ReaderChecks["items"][number]["state"]) {
+  const labels = {
+    success: "linkReader.checkSuccess",
+    failure: "linkReader.checkFailure",
+    pending: "linkReader.checkPending",
+    neutral: "linkReader.checkNeutral",
+  } as const;
+  return t(labels[state]);
+}
+
+function renderChecks(checks: ReaderChecks, base: string) {
+  const labels = {
+    success: "linkReader.checksSuccess",
+    failure: "linkReader.checksFailure",
+    pending: "linkReader.checksPending",
+    neutral: "linkReader.checksNeutral",
+    unavailable: "linkReader.checksUnavailable",
+  } as const;
+  const source = checks.url ? documentUrl(checks.url, base)?.href : undefined;
+  return html`<details
+    class=${"lr-checks lr-checks--" + checks.state}
+    data-reader-section="checks"
+    tabindex="-1"
+    ?open=${checks.state === "failure"}
+  >
+    <summary>
+      <span class="lr-checks-icon" aria-hidden="true">${checkIcon(checks.state)}</span>
+      <span class="lr-checks-heading"
+        ><strong>${t(labels[checks.state])}</strong
+        ><span class="lr-meta">${checks.summary}</span></span
+      >
+      <span class="lr-checks-chevron" aria-hidden="true">${icons.chevronDown}</span>
+      ${
+        !checks.truncated &&
+        checks.state !== "unavailable" &&
+        checks.items.length === checks.total &&
+        checks.total > 0
+          ? html`<span class="lr-checks-meter" aria-hidden="true"
+              >${checks.items.map((item) => html`<span class=${"lr-check-segment lr-check-segment--" + item.state}></span>`)}</span
+            >`
+          : nothing
+      }
+    </summary>
+    <ul class="lr-check-list">
+      ${checks.items.map((item) => {
+        const url = item.url ? documentUrl(item.url, base)?.href : undefined;
+        return html`<li class=${"lr-check lr-check--" + item.state}>
+          <span class="lr-check-symbol" role="img" aria-label=${checkLabel(item.state)}
+            >${checkIcon(item.state)}</span
+          >
+          <span class="lr-check-copy"
+            >${
+              url
+                ? html`<a
+                    href=${url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    referrerpolicy="no-referrer"
+                    data-link-reader-external
+                    >${item.name}${icons.externalLink}</a
+                  >`
+                : html`<span>${item.name}</span>`
+            }
+            <span class="lr-meta">${item.detail ?? checkLabel(item.state)}</span>
+          </span>
+        </li>`;
+      })}
+    </ul>
+    ${checks.truncated ? html`<p class="lr-note">${t("linkReader.checksTruncated")}</p>` : nothing}
+    <footer class="lr-checks-footer">
+      ${checks.commit ? html`<code title=${t("linkReader.checksCommit", { commit: checks.commit })}>${checks.commit.slice(0, 7)}</code>` : nothing}
+      ${source ? html`<a href=${source} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" data-link-reader-external>${t("linkReader.checksSource")}${icons.externalLink}</a>` : nothing}
+    </footer>
+  </details>`;
+}
+
+function renderSectionLink(section: string, label: string, count?: number) {
+  return html`<button
+    type="button"
+    @click=${(event: MouseEvent) => {
+      const button = event.currentTarget;
+      if (!(button instanceof HTMLButtonElement)) {
+        return;
+      }
+      const destination = button
+        .closest(".lr-document")
+        ?.querySelector<HTMLElement>(`[data-reader-section="${section}"]`);
+      if (destination instanceof HTMLDetailsElement) {
+        destination.open = true;
+      }
+      destination?.focus({ preventScroll: true });
+      destination?.scrollIntoView({ block: "start" });
+    }}
+  >
+    ${label}${count !== undefined ? html`<span class="lr-count">${count}</span>` : nothing}
+  </button>`;
+}
+
 export function renderLinkReaderContent(
   detail: ControlUiLinkReaderDocument,
   target: LinkReaderTarget,
   loadImage?: LoadImage,
 ) {
-  return html`<div class="lr-meta">${detail.subtitle ?? target.reader.label}</div>
-    <h1>${detail.title}</h1>
-    <div class="lr-meta lr-item-meta">
+  const authorHref = linkReaderAuthorHref(detail.authorUrl, detail.url);
+  const coAuthors = detail.coAuthors ?? [];
+  const unnamed = Math.max(coAuthors.length, detail.coAuthorCount ?? 0) - coAuthors.length;
+  const coAuthorNames =
+    coAuthors.map((author) => author.name).join(", ") + (unnamed ? " +" + unnamed : "");
+  return html`<article class="lr-document">
+    <header class="lr-document-header">
+      <div class="lr-eyebrow">${detail.subtitle ?? target.reader.label}</div>
+      <h1>${detail.title}</h1>
+      <div class="lr-meta lr-item-meta">
+        ${
+          detail.badge
+            ? html`<span class=${"lr-state lr-state--" + detail.badge.tone}
+                >${detail.badge.label}</span
+              >`
+            : nothing
+        }
+        ${
+          detail.author
+            ? authorHref
+              ? html`<a
+                  href=${authorHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-link-reader-external
+                  >${t("linkReader.byAuthor", { author: detail.author })}</a
+                >`
+              : html`<span>${t("linkReader.byAuthor", { author: detail.author })}</span>`
+            : nothing
+        }
+        ${coAuthorNames.trim() ? html`<span class="lr-coauthors">${t("linkReader.coAuthors", { authors: coAuthorNames.trim() })}</span>` : nothing}
+        ${renderDate(detail.createdAt)}
+      </div>
       ${
-        detail.badge
-          ? html`<span class=${"lr-state lr-state--" + detail.badge.tone}
-              >${detail.badge.label}</span
-            >`
+        detail.metadata?.length
+          ? html`<dl class="lr-metadata">
+              ${detail.metadata.map(
+                ({ label, value, tone }) =>
+                  html`<div class=${"lr-metric lr-metric--" + (tone ?? "neutral")}>
+                    <dt>${label}</dt>
+                    <dd>${value}</dd>
+                  </div>`,
+              )}
+            </dl>`
           : nothing
       }
-      ${
-        detail.author
-          ? html`<span>${t("linkReader.byAuthor", { author: detail.author })}</span>`
-          : nothing
-      }
-      ${renderDate(detail.createdAt)}
-      ${detail.metadata?.map(
-        ({ label, value }) => html`<span>${label ? label + ": " : ""}${value}</span>`,
-      )}
-    </div>
+    </header>
+    <nav class="lr-section-nav" aria-label=${t("linkReader.navigation")}>
+      ${renderSectionLink("overview", t("linkReader.overview"))}
+      ${detail.checks ? renderSectionLink("checks", t("linkReader.checks"), detail.checks.total) : nothing}
+      ${detail.files ? renderSectionLink("files", t("linkReader.filesShort"), detail.filesTotal ?? detail.files.length) : nothing}
+      ${detail.comments ? renderSectionLink("comments", t("linkReader.discussion"), detail.commentsTotal ?? detail.comments.length) : nothing}
+    </nav>
+    ${detail.checks ? renderChecks(detail.checks, detail.url) : nothing}
     ${
       detail.partial
         ? html`<p class="lr-note" role="status">${t("linkReader.partial")}</p>`
         : nothing
     }
-    <section aria-label=${t("linkReader.description")} class="lr-description">
+    <section
+      aria-label=${t("linkReader.description")}
+      class="lr-description"
+      data-reader-section="overview"
+      tabindex="-1"
+    >
       <div class="lr-markdown">
         ${
           detail.body
@@ -386,13 +542,17 @@ export function renderLinkReaderContent(
     </section>
     ${
       detail.files
-        ? html`<section aria-label=${t("linkReader.files")} class="lr-files" id="files">
+        ? html`<section
+            aria-label=${t("linkReader.files")}
+            class="lr-files"
+            id="files"
+            data-reader-section="files"
+            tabindex="-1"
+          >
             <h2>
               ${t("linkReader.files")}
-              <span class="lr-meta"
-                >${detail.files.length}${
-                  detail.filesTotal !== undefined ? " / " + detail.filesTotal : ""
-                }</span
+              <span class="lr-count"
+                >${detail.files.length}${detail.filesTotal !== undefined && detail.filesTotal !== detail.files.length ? " / " + detail.filesTotal : ""}</span
               >
             </h2>
             ${detail.files.map((file) => renderFile(file, detail.filesExpanded === true))}
@@ -411,13 +571,16 @@ export function renderLinkReaderContent(
     }
     ${
       detail.comments
-        ? html`<section aria-label=${t("linkReader.comments")} class="lr-comments">
+        ? html`<section
+            aria-label=${t("linkReader.comments")}
+            class="lr-comments"
+            data-reader-section="comments"
+            tabindex="-1"
+          >
             <h2>
               ${t("linkReader.comments")}
-              <span class="lr-meta"
-                >${detail.comments.length}${
-                  detail.commentsTotal !== undefined ? " / " + detail.commentsTotal : ""
-                }</span
+              <span class="lr-count"
+                >${detail.comments.length}${detail.commentsTotal !== undefined && detail.commentsTotal !== detail.comments.length ? " / " + detail.commentsTotal : ""}</span
               >
             </h2>
             ${detail.comments.map((comment) => renderComment(comment, detail.url, loadImage))}
@@ -433,5 +596,6 @@ export function renderLinkReaderContent(
             }
           </section>`
         : nothing
-    }`;
+    }
+  </article>`;
 }

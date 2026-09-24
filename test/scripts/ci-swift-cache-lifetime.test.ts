@@ -60,6 +60,7 @@ function runClockStep(owner: Step, now: number, started = "") {
 }
 
 type Context = {
+  cacheMode?: string;
   allowed?: string;
   authorized?: boolean;
   phase?: string;
@@ -78,7 +79,10 @@ function selected(owner: Step, context: Context = {}) {
   const result = runInNewContext((owner.if ?? "true").replace(/\.([a-zA-Z_][\w-]*)/g, '["$1"]'), {
     needs: {
       preflight: {
-        outputs: { cache_write_allowed: context.authorized === false ? "false" : "true" },
+        outputs: {
+          cache_mode: context.cacheMode ?? "restore",
+          cache_write_allowed: context.authorized === false ? "false" : "true",
+        },
       },
     },
     matrix: { phase: context.phase ?? "tests" },
@@ -168,6 +172,10 @@ describe("macOS optional Swift cache lifetime", () => {
   );
 
   it("retains phase ownership and historical metadata compatibility", () => {
+    expect(selected(budget, { phase: "packages" })).toBe(false);
+    for (const owner of [packageSave, metadata, buildSave]) {
+      expect(selected(owner, { phase: "packages", allowed: "" }), owner.name).toBe(false);
+    }
     expect(selected(packageSave, { primary: "release" })).toBe(false);
     expect(selected(packageSave, { primary: "release", phase: "release" })).toBe(true);
     expect(selected(buildSave, { primary: "release" })).toBe(true);
@@ -193,7 +201,12 @@ describe("macOS optional Swift cache lifetime", () => {
       ["Restore Swift build directory cache", buildSave],
     ] as const) {
       const restore = step(restoreName);
-      expect(restore.if).toBe("needs.preflight.outputs.cache_mode != 'off'");
+      for (const phase of ["tests", "release", "packages"]) {
+        expect(selected(restore, { phase }), `${restoreName}: ${phase}`).toBe(
+          phase !== "packages" || save === packageSave,
+        );
+        expect(selected(restore, { phase, cacheMode: "off" })).toBe(false);
+      }
       expect(restore.uses).toBe("actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
       expect(save.uses).toBe("actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
       expect(save.with?.path).toBe(restore.with?.path);

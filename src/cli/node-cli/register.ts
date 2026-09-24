@@ -3,21 +3,11 @@ import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
-import { runNodeHost } from "../../node-host/runner.js";
-import { runNodeHostWorker } from "../../node-host/worker.js";
 import { defaultRuntime } from "../../runtime.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { formatInvalidPortOption } from "../error-format.js";
 import { formatHelpExamples } from "../help-format.js";
-import { addNodeCommandOptions } from "./command-options.js";
-import {
-  runNodeDaemonInstall,
-  runNodeDaemonRestart,
-  runNodeDaemonStart,
-  runNodeDaemonStatus,
-  runNodeDaemonStop,
-  runNodeDaemonUninstall,
-} from "./daemon.js";
+import { addNodeCommandOptions, createNodeWorkerCommand } from "./command-options.js";
 import { resolveNodeGatewayOptions, resolveNodePairGatewayOptions } from "./gateway-options.js";
 import { runNodeIdentityShow } from "./identity.js";
 
@@ -36,12 +26,13 @@ export function registerNodeCli(program: Command) {
       ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.openclaw.ai/cli/node")}\n`,
   );
 
-  node
-    .command("worker", { hidden: true })
-    .description("Run the private macOS app node-host worker")
-    .action(async () => {
-      await runNodeHostWorker();
-    });
+  node.addCommand(
+    createNodeWorkerCommand().action(async (opts: { desktopSharing?: boolean }) => {
+      const { runNodeHostWorker } = await import("../../node-host/worker.js");
+      await runNodeHostWorker({ desktopSharingEnabled: opts.desktopSharing });
+    }),
+    { hidden: true },
+  );
 
   addNodeCommandOptions(node.command("run").description("Run the headless node host (foreground)"))
     .option(
@@ -64,6 +55,10 @@ export function registerNodeCli(program: Command) {
     .option("--display-name <name>", "Override node display name")
     .option("--session-host", "Host worker sessions for this foreground process")
     .addOption(new Option("--ephemeral").hideHelp())
+    .addOption(new Option("--desktop-sharing").hideHelp())
+    .addOption(new Option("--no-desktop-sharing").hideHelp())
+    .addOption(new Option("--auth-from-env").hideHelp())
+    .addOption(new Option("--parent-stdin").hideHelp())
     .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
     .option("--no-share-installed-apps", "Disable installed application sharing")
     .action(async (opts, command: Command) => {
@@ -91,6 +86,7 @@ export function registerNodeCli(program: Command) {
         defaultRuntime.exit(1);
         return;
       }
+      const { runNodeHost } = await import("../../node-host/runner.js");
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
@@ -106,6 +102,9 @@ export function registerNodeCli(program: Command) {
         nodeId: opts.nodeId,
         displayName: opts.displayName,
         installedAppsSharing: opts.shareInstalledApps,
+        desktopSharingEnabled: opts.desktopSharing,
+        gatewayAuthFromEnv: opts.authFromEnv,
+        parentStdin: opts.parentStdin,
         commands: opts.commands ?? inheritOptionFromParent<string[]>(command, "commands"),
         allCommands: opts.allCommands ?? inheritOptionFromParent<boolean>(command, "allCommands"),
       });
@@ -116,6 +115,7 @@ export function registerNodeCli(program: Command) {
     .description("Show node host status")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
+      const { runNodeDaemonStatus } = await import("./daemon.js");
       await runNodeDaemonStatus(opts);
     });
 
@@ -123,8 +123,8 @@ export function registerNodeCli(program: Command) {
     .command("identity")
     .description("Print the node host device identity (device id + public key)")
     .option("--json", "Output JSON", false)
-    .action((opts) => {
-      runNodeIdentityShow(opts);
+    .action(async (opts) => {
+      await runNodeIdentityShow(opts);
     });
 
   addNodeCommandOptions(
@@ -145,6 +145,7 @@ export function registerNodeCli(program: Command) {
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)
     .action(async (opts, command: Command) => {
+      const { runNodeDaemonInstall } = await import("./daemon.js");
       await runNodeDaemonInstall({
         ...opts,
         commands: opts.commands ?? inheritOptionFromParent<string[]>(command, "commands"),
@@ -153,10 +154,10 @@ export function registerNodeCli(program: Command) {
     });
 
   for (const [name, action] of [
-    ["uninstall", runNodeDaemonUninstall],
-    ["stop", runNodeDaemonStop],
-    ["start", runNodeDaemonStart],
-    ["restart", runNodeDaemonRestart],
+    ["uninstall", "runNodeDaemonUninstall"],
+    ["stop", "runNodeDaemonStop"],
+    ["start", "runNodeDaemonStart"],
+    ["restart", "runNodeDaemonRestart"],
   ] as const) {
     node
       .command(name)
@@ -165,7 +166,8 @@ export function registerNodeCli(program: Command) {
       )
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
-        await action(opts);
+        const daemon = await import("./daemon.js");
+        await daemon[action](opts);
       });
   }
 }

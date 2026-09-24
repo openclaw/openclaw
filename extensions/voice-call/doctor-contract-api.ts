@@ -151,6 +151,8 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "supervised workflows -> durable resource custody";
     case "supervised-attempt-custody-v19":
       return "supervised attempts -> episode-owned workspace custody";
+    case "github-publication-requester-authority-v18":
+      return "GitHub publication receipts -> original requesting authority";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements -> execution-mode claims";
     case "operator-approvals-system-agent":

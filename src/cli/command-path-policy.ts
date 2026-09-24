@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Resolves CLI command path policy from the declarative command catalog.
 import { getCommandPathWithRootOptions } from "./argv.js";
-import type { CliCommandPathPolicy, CliNetworkProxyPolicy } from "./command-catalog-types.js";
+import type { CliCommandPathPolicy, CliNetworkProxyPolicy } from "./command-catalog.types.js";
 import { cliCommandCatalog } from "./command-catalog.js";
 import { matchesCommandPath } from "./command-path-matches.js";
 import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";

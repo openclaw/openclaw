@@ -69,7 +69,7 @@ suite.define(() => {
       await groups.waitFor({ state: "visible" });
 
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await openSessionMenuSubmenu(page, "Move to group");
       await page.getByRole("menuitem", { name: "Move back to Groups" }).waitFor({
         state: "visible",

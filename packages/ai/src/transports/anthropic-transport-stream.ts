@@ -23,7 +23,7 @@ import {
 } from "../providers/anthropic-auth-headers.js";
 import {
   applyClaudeRequestContract,
-  ANTHROPIC_CLAUDE_CODE_VERSION,
+  buildAnthropicClaudeCodeIdentity,
   defaultsClaudeAdaptiveThinking,
   prepareClaudeNoPrefillRequestContext,
   requiresClaudeAdaptiveThinking,
@@ -501,25 +501,17 @@ function createAnthropicTransportClient(params: {
   }
   if (isAnthropicOAuthApiKey(apiKey)) {
     const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: true });
+    const identity = buildAnthropicClaudeCodeIdentity(betaHeader, model.headers, optionHeaders);
     return {
       client: createAnthropicMessagesClient({
         apiKey: null,
         authToken: apiKey,
         baseURL: model.baseUrl,
-        defaultHeaders: mergeTransportHeaders(
-          {
-            accept: "application/json",
-            "anthropic-dangerous-direct-browser-access": "true",
-            ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
-            "user-agent": `claude-cli/${ANTHROPIC_CLAUDE_CODE_VERSION}`,
-            "x-app": "cli",
-          },
-          model.headers,
-          optionHeaders,
-        ),
+        defaultHeaders: identity.headers,
         fetch,
       }),
       isOAuthToken: true,
+      claudeCodeVersion: identity.version,
     };
   }
   if (useAnthropicServerSideFallback(model)) {
@@ -555,6 +547,7 @@ async function buildAnthropicParams(
   context: Context,
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
+  claudeCodeVersion?: string,
 ): Promise<{
   params: Record<string, unknown>;
   toolProjection?: AnthropicToolProjection;
@@ -607,7 +600,12 @@ async function buildAnthropicParams(
   if (!isOAuthToken && useAnthropicServerSideFallback(model)) {
     params.fallbacks = ANTHROPIC_SERVER_SIDE_FALLBACKS;
   }
-  const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthToken, cacheControl);
+  const system = buildAnthropicSystemBlocks(
+    context.systemPrompt,
+    isOAuthToken,
+    cacheControl,
+    claudeCodeVersion,
+  );
   if (system) {
     params.system = system;
   }
@@ -733,17 +731,19 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         }
         const transportOptions = resolveAnthropicTransportOptions(model, options, apiKey);
         const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
-        const { client, isOAuthToken, directApiKeyBetaHeader } = createAnthropicTransportClient({
-          model,
-          context: requestContext,
-          apiKey,
-          options: transportOptions,
-        });
+        const { client, isOAuthToken, directApiKeyBetaHeader, claudeCodeVersion } =
+          createAnthropicTransportClient({
+            model,
+            context: requestContext,
+            apiKey,
+            options: transportOptions,
+          });
         const builtParams = await buildAnthropicParams(
           model,
           requestContext,
           isOAuthToken,
           transportOptions,
+          claudeCodeVersion,
         );
         usedCompactionReplay = builtParams.usedCompactionReplay;
         let params = builtParams.params;

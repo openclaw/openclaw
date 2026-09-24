@@ -1035,6 +1035,8 @@ describe("validateNodePresenceActivityPayload", () => {
   it("accepts bounded input idle time", () => {
     expectAccepted(validateNodePresenceActivityPayload, [
       { idleSeconds: 12 },
+      { idleSeconds: 12, source: "app" },
+      { idleSeconds: 12, source: "system" },
       { idleSeconds: 2_592_000, saturated: true },
       { action: "clear" },
     ]);
@@ -1042,6 +1044,7 @@ describe("validateNodePresenceActivityPayload", () => {
 
   it("rejects negative, unbounded, and extra fields", () => {
     expectRejected(validateNodePresenceActivityPayload, [
+      { idleSeconds: 12, source: "browser" },
       { idleSeconds: -1 },
       { idleSeconds: 2_592_001 },
       { idleSeconds: 1, active: true },

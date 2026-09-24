@@ -133,6 +133,7 @@ export function createCatalogAttemptReporter(
     },
     published: (providers, kind, publication) => {
       const previouslyFailed = hasFailedProviders();
+      const previouslyPendingCount = pendingProviders.length;
       const acquisitionKind = kind ?? "provider";
       pendingProviders = providers
         ? pendingProviders.filter((provider) => !providers.includes(provider))
@@ -145,7 +146,11 @@ export function createCatalogAttemptReporter(
         attempt.failedProviders[acquisitionKind].clear();
       }
       owner.catalogAttempt = attempt;
-      notifyPreparedModelCatalogPublication(publication, previouslyFailed !== hasFailedProviders());
+      notifyPreparedModelCatalogPublication(
+        publication,
+        previouslyPendingCount !== pendingProviders.length ||
+          previouslyFailed !== hasFailedProviders(),
+      );
     },
     failed,
     createFailureHandler: (providers, beforeProviderFailure) => {

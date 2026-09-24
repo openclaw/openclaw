@@ -1,9 +1,16 @@
 import "./subagent-spawn-model.mocks.shared.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  installSpawnAuthorityFixture,
+  waitForSubagentCleanupCompleted,
+} from "./subagent-spawn.authority.test-support.js";
 /** Registered native children retain their own lifecycle after spawn handoff. */
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -51,9 +58,10 @@ import {
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { installSpawnAuthorityFixture } from "./subagent-spawn.authority.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
+
+vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 
 const fixture = installSpawnAuthorityFixture();
 const { parentSessionKey, parentRunId, groupId, createBoundParent } = fixture;
@@ -108,18 +116,45 @@ describe("pending spawn invocation authority", () => {
       }
       const completedB = subagentRuns.get("b")!;
       const completedGeneration = completedB.generation;
-      emitAgentEvent({
-        runId: "b",
-        sessionKey: key("b"),
-        stream: "lifecycle",
-        data: { phase: "end", endedAt: Date.now() },
+      const cleanupEntered = createDeferred();
+      const releaseCleanup = createDeferred();
+      const cleanupBrowser = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
+      const originalCleanup = cleanupBrowser.getMockImplementation()!;
+      cleanupBrowser.mockImplementation(async (params) => {
+        if (params.sessionKeys.includes(key("b"))) {
+          cleanupEntered.resolve();
+          await releaseCleanup.promise;
+        }
+        await originalCleanup(params);
       });
-      await vi.dynamicImportSettled();
-      await vi.waitFor(() => expect(findTaskByRunId("b")?.status).toBe("succeeded"));
+      let cleanup: Promise<void> | undefined;
+      try {
+        emitAgentEvent({
+          runId: "b",
+          sessionKey: key("b"),
+          stream: "lifecycle",
+          data: { phase: "end", endedAt: Date.now() },
+        });
+        await cleanupEntered.promise;
+        expect(findTaskByRunId("b")?.status).toBe("succeeded");
+        expect(completedB.cleanupCompletedAt).toBeUndefined();
+        let ready = false;
+        cleanup = waitForSubagentCleanupCompleted(completedB).then(() => {
+          ready = true;
+        });
+        // Imports can be idle while completion still has not scheduled its cleanup tails.
+        await vi.dynamicImportSettled();
+        expect(ready, "task success is not cleanup readiness").toBe(false);
+      } finally {
+        releaseCleanup.resolve();
+        await cleanup;
+        cleanupBrowser.mockImplementation(originalCleanup);
+      }
       clearAgentRunContext("b");
       await settleSubagentRegistryPersistenceWork();
       expect(completedB).toMatchObject({
         generation: completedGeneration,
+        cleanupCompletedAt: expect.any(Number),
         spawnMode: "session",
         execution: { status: "terminal" },
         endedReason: "subagent-complete",

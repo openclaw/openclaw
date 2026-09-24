@@ -1,6 +1,7 @@
 import type { ConversationSendResult } from "../../packages/gateway-protocol/src/schema/agent.js";
 import {
   ConversationDeliveryInputError,
+  getConversationDeliveryOperation,
   type ConversationDeliveryRecord,
 } from "../config/sessions/conversation-delivery-store.js";
 import {
@@ -12,10 +13,8 @@ import { resolveConversationRouteFingerprint } from "../config/sessions/conversa
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   ConversationDeliveryRejectedError,
-  defaultConversationDeliveryDeps,
   resultFromExistingOperation,
   sendGatewayConversationMessage,
-  type ConversationDeliveryDeps,
 } from "../infra/outbound/conversation-delivery.js";
 import {
   ConversationInputError,
@@ -26,39 +25,27 @@ import {
   assertConversationRouteEligibleForAgent,
 } from "./conversation-route-ownership.js";
 
-type ConversationSendDeps = ConversationDeliveryDeps & {
-  resolveConversation: typeof resolveConversation;
-};
-
-const defaultDeps: ConversationSendDeps = {
-  ...defaultConversationDeliveryDeps,
-  resolveConversation,
-};
-
 /** Performs one durable conversation send inside the Gateway channel owner. */
-export async function runGatewayConversationSend(
-  params: {
-    config: OpenClawConfig;
-    readCurrentConfig?: () => OpenClawConfig;
-    agentId: string;
-    senderIsOwner: boolean;
-    sourceSessionKey?: string;
-    operationId: string;
-    conversationRef: string;
-    message: string;
-    signal?: AbortSignal;
-    /** Internal durable source owner; never reconstructed from a public request field. */
-    assertSourceCurrent?: () => void;
-  },
-  deps: ConversationSendDeps = defaultDeps,
-): Promise<ConversationSendResult> {
+export async function runGatewayConversationSend(params: {
+  config: OpenClawConfig;
+  readCurrentConfig?: () => OpenClawConfig;
+  agentId: string;
+  senderIsOwner: boolean;
+  sourceSessionKey?: string;
+  operationId: string;
+  conversationRef: string;
+  message: string;
+  signal?: AbortSignal;
+  /** Internal durable source owner; never reconstructed from a public request field. */
+  assertSourceCurrent?: () => void;
+}): Promise<ConversationSendResult> {
   params.assertSourceCurrent?.();
   const scope = resolveConversationRegistryScope(params);
   try {
     const operation: ConversationDeliveryRecord | undefined = await runConversationDatabaseWrite(
       scope,
       (writeScope) =>
-        deps.getOperation(writeScope, params.operationId, {
+        getConversationDeliveryOperation(writeScope, params.operationId, {
           operationKind: "send",
           conversationRef: params.conversationRef,
           ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
@@ -66,7 +53,7 @@ export async function runGatewayConversationSend(
         }),
     );
 
-    const conversation = deps.resolveConversation(scope, params.conversationRef);
+    const conversation = resolveConversation(scope, params.conversationRef);
     if (!conversation) {
       throw new ConversationInputError(
         `Conversation not found: ${params.conversationRef} (use conversations_list)`,
@@ -84,7 +71,6 @@ export async function runGatewayConversationSend(
     const sent =
       completed ??
       (await sendGatewayConversationMessage({
-        deps,
         scope,
         context: {
           agentId: params.agentId,
@@ -106,7 +92,6 @@ export async function runGatewayConversationSend(
             conversationRef: conversation.conversationRef,
             expectedRouteFingerprint: routeFingerprint,
             scope,
-            resolveConversation: deps.resolveConversation,
           });
         },
         ...(operation ? { operation } : {}),

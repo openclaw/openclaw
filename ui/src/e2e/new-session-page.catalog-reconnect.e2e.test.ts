@@ -336,7 +336,7 @@ suite.define(() => {
           repoRoot: WORKSPACE,
           path: worktreePath,
           branch: "openclaw/terminal-task",
-          baseRef: "main",
+          baseRef: "origin/main",
           ownerKind: "manual",
           createdAt: 1,
           lastActiveAt: 1,
@@ -367,8 +367,9 @@ suite.define(() => {
       const initialBranchRequestCount = (await gateway.getRequests("worktrees.branches")).length;
       await worktreeButton.click();
       await expect
-        .poll(() => placePopover.getByLabel("From", { exact: true }).inputValue())
+        .poll(() => placePopover.getByLabel("From", { exact: true }).getAttribute("placeholder"))
         .toBe("main");
+      expect(await placePopover.getByLabel("From", { exact: true }).inputValue()).toBe("");
       await placePopover.getByLabel("Name", { exact: true }).fill("terminal-task");
       await page.locator("#new-session-checkout-trigger").click();
       await page.locator(".new-session-page__message").fill("  inspect the checkout  ");
@@ -390,7 +391,6 @@ suite.define(() => {
       expect(worktreeRequest.params).toEqual({
         repoRoot: WORKSPACE,
         name: "terminal-task",
-        baseRef: "main",
       });
       const terminalRequest = await gateway.waitForRequest("sessions.catalog.startTerminal");
       expect(terminalRequest.params).toEqual({
@@ -881,7 +881,8 @@ suite.define(() => {
       });
       await worktreeItem.click();
       const baseInput = placeSelect.locator('input[aria-label="From"]');
-      await expect.poll(() => baseInput.inputValue()).toBe("main");
+      await expect.poll(() => baseInput.getAttribute("placeholder")).toBe("main");
+      expect(await baseInput.inputValue()).toBe("");
       await page.keyboard.press("Escape");
 
       await gateway.deferNext("worktrees.branches");

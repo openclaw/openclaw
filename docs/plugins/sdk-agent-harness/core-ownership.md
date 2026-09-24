@@ -73,10 +73,53 @@ files. Other Memory plugins must declare `supportsWorkspaceMemoryReadSources`
 and consume the classifier's `readSources` input; otherwise automatic remote
 Memory context is excluded. Missing source metadata cannot select a local copy.
 
+Async Skill preparation can use the binding's optional `loadSkills` callback.
+It reads workspace-owned Skill roots on the Harness, while bundled and
+Gateway-installed plugin roots stay on Gateway. The callback returns native
+discovery facts and Harness platform/binary availability; Gateway still applies
+configuration and filters. Local workspaces and document-only bindings without
+`loadSkills` retain local discovery, including after the document service stops.
+Once a binding provides `loadSkills`, unavailable remote Skill access fails explicitly.
+
 This binding provides remote document and bootstrap access. It does not enable
 a remote OpenClaw worker or move its agent loop. Memory search and maintenance,
 skills, attachments, and host provisioning require separate integration and
 verification before removing workspace synchronization.
+
+### Input attachments for a remote workspace
+
+A trusted Gateway plugin can supply `prepareTurnAttachments` on its existing
+`AgentWorkspaceAccess` binding. Core calls `prepareAgentWorkspaceAttachments`
+from `openclaw/plugin-sdk/agent-workspace-runtime` to resolve admitted input files
+and invoke this capability before a harness attempt or Codex steering.
+It appends the returned Harness-path note only to execution input. Original media
+references and transcript text stay on Gateway for image hydration and replay.
+
+`createWorkspaceAttachmentPreparer` implements this callback over an existing
+filesystem bridge with `createFileExclusive`. It reads only Gateway's media
+store, transfers input files without replacing existing Harness copies, and
+preserves the existing 50 MiB staging allowance and higher configured limits.
+The host supplies `createBridge(assertCurrent, signal)` over its own backend;
+check that authority and signal before each transport command.
+
+A failed enabled transfer prevents dispatch. Bindings without this optional
+callback keep their existing input handling, including inline images; they do
+not gain automatic file transfer. Unconfigured local workspaces are unchanged. This interface does
+not provision a backend or acquire credentials. Each host adapter supplies its
+own authorized bridge.
+
+### Host-only execution
+
+A harness that launches an unsandboxed local application declares
+`executionEnvironment: "host-only"`. Core rejects sandbox-required, sandboxed,
+workspace-only, and unsupported session-permission contexts before native
+preparation and invocation. The harness does not implement a second sandbox
+policy or silently reinterpret a working directory as confinement.
+
+The Control UI may offer an administrator an explicit per-chat recovery action
+for optional sandboxing. The Gateway owns that mutation and revalidates the
+original session and permission state; the capability declaration never grants
+permission to remove a required sandbox or other configured restrictions.
 
 ### Native tool-policy enforcement
 
@@ -112,6 +155,11 @@ OpenClaw then visibly rejects explicitly restricted turns before invoking the
 harness. The operator can switch the session to the embedded runtime or upgrade
 the harness. Channel `/btw` side questions with a restrictive direct policy are
 rejected by core and are not covered by this declaration.
+
+For a known, actionable refusal, `AgentHarnessPreflightError` accepts an optional
+`userMessage`. Core renders this owner-authored public copy across chat surfaces
+without a verbose setting or generic retry/reset advice. Keep technical context
+in the error's `message` and `cause`; omit `userMessage` for diagnostic failures.
 
 ### Harness-owned auth bootstrap
 

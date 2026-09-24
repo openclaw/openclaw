@@ -52,7 +52,11 @@ describe("restart health", () => {
         attempts: 360,
         delayMs: 500,
       });
-      expect(snapshot).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 100_000 });
+      expect(snapshot, snapshot.probeError).toMatchObject({
+        healthy: true,
+        waitOutcome: "healthy",
+        elapsedMs: 100_000,
+      });
       expect(snapshot.staleGatewayPids).toEqual([]);
     },
   );

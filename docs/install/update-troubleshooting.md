@@ -17,6 +17,14 @@ start one owned automatic repair; other failures retain diagnostics and handoff
 commands. See [automatic recovery](/cli/triage#automatic-failure-handoff). The original update failure and exit status remain authoritative;
 diagnostics do not turn a failed update into a successful one.
 
+If the update health check emits a complete lint report but does not exit before
+its deadline, the failure identifies that completion separately from process
+termination. An exited child whose output pipes remain open is reported
+separately. Without a complete lint report, a deadline does not establish that
+the checks finished. When automatic repair cannot find a usable inference route
+before starting a repair turn, it is recorded as skipped; the original update
+check remains the reported failure.
+
 In the Control UI, a failed attempt opens **Ask OpenClaw** with its recorded
 details and asks it to investigate before retrying. A lost connection or
 verification timeout is presented as an unknown outcome. The tab remembers the
@@ -84,6 +92,28 @@ The controls require a connected Gateway, support for the corresponding typed
 Gateway method, and administrator scope. When those conditions are not met, use
 the CLI fallback on the Gateway host.
 
+## Doctor cannot enter maintenance during finalization
+
+`finalize:doctor` can report `Doctor could not enter maintenance` when a Gateway
+still owns the selected state directory. A starting Gateway and a healthy serving
+Gateway retain that ownership for their entire process lifetime; waiting for
+readiness does not release the lock.
+
+Finalizers with this recovery wait for startup through the existing readiness
+observer. If the same holder is verified serving the installed version and build,
+the update finishes with a warning and leaves the Gateway running. Update history
+names the holder and records the skipped Doctor pass. Config and plugin maintenance
+remain pending. At the next maintenance window, stop that Gateway through its
+service or deployment owner, run `openclaw update repair`, then start it through
+the same owner. Check `openclaw update status --json` and
+`openclaw gateway status --deep` for the recorded warning and current health.
+
+Do not delete lock files to force entry. A dead process releases the physical lock,
+and lease owners reclaim provably dead identities. Unknown ownership, an unreadable
+database, incompatible schemas, active database writers, or unconfirmed subprocess
+cleanup still require their named recovery action; a maintenance warning does not
+authorize concurrent repair or discard recovery backups.
+
 ## Node and global install permissions
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
@@ -147,6 +177,13 @@ changes inside a running container are not durable.
 
 ## Published 2026.9.4 on large agent fleets
 
+The published 2026.9.4 updater shares a five-minute deadline across snapshot
+preparation and candidate checks. Its failure log tail combines output from
+those checks: `Doctor complete.` can belong to the preceding repair pass, even
+when lint is the failed step. The elapsed time in the final log line measures
+the whole rehearsal; the step duration measures the individual check. A complete
+lint JSON report is needed to establish that lint finished before termination.
+
 Published OpenClaw 2026.9.4 can spend many minutes preparing model catalogs and
 chat metadata after its HTTP listener binds. In an instrumented 480-agent
 control with no update, HTTP probes remained unanswered during 944 seconds of
@@ -191,6 +228,21 @@ restarting the same 2026.9.4 fleet resolves the failed-update condition.
 
 ## Plugin repair warnings
 
+`post-update-plugins` / `plugin-convergence` with
+`post-plugin-doctor-execution-failed` can describe a Doctor child failure after
+the package was already installed. Updated convergence records that execution
+failure as a warning, retains its exit reason and available plugin diagnostics,
+and continues to config validation, readiness checks, and Gateway activation.
+`openclaw update status` shows the warning even when the update succeeds. A later
+failure report keeps it in a separate **Warnings** section.
+
+A throwing plugin config-repair hook leaves that plugin's input unchanged and
+names the plugin in its warning. Repair the plugin, then run
+`openclaw doctor --fix` or `openclaw update repair`.
+Explicit state-migration or config-write refusals remain blocking. So does a
+Doctor child whose shutdown could not be confirmed: it may still write state.
+Preserve the backup and resolve that specific refusal before retrying.
+
 Doctor's configured-plugin repair and payload-verification warnings do not block
 Gateway readiness. A tracked plugin whose payload is unavailable is marked
 unavailable, and its configuration and pending migration inputs stay preserved.
@@ -222,9 +274,42 @@ declared ClawHub source for the new core release cohort. The released 2026.9.4
 catalog omitted that source for Codex; the correction is on main in
 [#148518](https://github.com/openclaw/openclaw/pull/148518).
 
+### Missing temporary plugin captures
+
+An `ENOENT` path containing `openclaw-plugin-build-` can identify a missing
+runtime source capture even when the installed plugin files still exist.
+Reloading or replacing that plugin reports the unavailable recovery snapshot
+as a warning and loads the installed replacement after normal cleanup.
+Run `openclaw plugins reload <id>`, or reinstall the plugin if its installed
+payload also needs repair. If replacement fails, the missing previous code
+cannot be restored; healthy plugins retain their available recovery snapshots.
+
+Older releases can reject enable, uninstall, and reinstall while trying to copy
+that same missing capture. Restart the Gateway through its service owner before
+retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
+### Large model-catalog temporary directories
+
+Older releases can retain several complete plugin copies inside
+`openclaw-model-catalog-*` directories. A scan of only top-level
+`openclaw-plugin-build-*` paths misses those nested copies. Current catalog
+workers reuse the selected runtime capture for provider discovery and remove
+their scratch tree when its owner retires.
+
+Upgrade the host, then run `openclaw doctor` to inspect legacy captures.
+`openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
+when no other OpenClaw process is running. Do not delete captures based on their
+age or absence from open-file or memory-map lists: an idle owner can still need
+them. Modern captures use SQLite custody to prove retirement. See
+[plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
 ## Reason codes
 
 - `dirty`, `no-upstream`: repair the source checkout before retrying.
+- `runtime-artifact-publication`: the affected Gateway is running or cannot be
+  verified offline. Inspect `openclaw gateway status --deep`, stop it through its
+  service owner, and retry. On macOS, a loaded LaunchAgent can respawn even when
+  disabled and temporarily has no PID; `openclaw gateway stop` unloads it.
 - `update-ledger-busy`: another process held the state database's write lock
   beyond the update step budget. The command exited successfully without admitting
   a run and left previous history intact. Retry once the Gateway's writes settle.
@@ -276,6 +361,14 @@ changed` when the updater's umask differs from the installed launcher's
   not writable by the invoking user; fix ownership and permissions, then retry.
   Re-run the [installer](/install/installer) if the package install is
   incomplete.
+- `runtime-verification-failed` near 300 seconds at `candidate gateway canary`
+  when updating from 2026.9.4: the installed updater shares that deadline across
+  the snapshot and candidate checks, even with a larger `--timeout`. The elapsed
+  failure duration is not Gateway startup time alone. Use the same
+  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+  then run `openclaw doctor --fix` and restart the Gateway. See
+  [#144858](https://github.com/openclaw/openclaw/issues/144858) and
+  [#154381](https://github.com/openclaw/openclaw/issues/154381).
 - `doctor-failed`: run `openclaw doctor` on the Gateway host, resolve its
   findings, then retry. See [Doctor](/cli/doctor) for the check list and
   `--fix` behavior.

@@ -3,7 +3,6 @@ import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
-import { isImageMediaPath, isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import "./chat-audio-player.ts";
 import "./chat-svg-attachment.ts";
 import "./chat-video-player.ts";
@@ -28,7 +27,6 @@ import {
   renderAssistantAttachmentStatusCard,
 } from "./chat-message-attachment-status.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import { renderMessageImages } from "./chat-message-images.ts";
 import {
   buildAssistantAttachmentUrl,
   isLocalAssistantAttachmentSource,
@@ -37,6 +35,7 @@ import {
   isChatMediaResourceCurrent,
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
+  resolveAttachmentImageKind,
   scheduleChatMediaResourceRefresh,
   type AttachmentItem,
   type AssistantAttachmentItem,
@@ -453,7 +452,12 @@ export function renderAssistantAttachments(
         options,
         onOpenSidebar,
         onAssistantAttachmentLoaded,
-        inlinePlayback ? "inline" : "card",
+        inlinePlayback ||
+          (item.type === "attachment" &&
+            item.attachment.kind === "audio" &&
+            item.attachment.isVoiceNote)
+          ? "inline"
+          : "card",
       ),
     )}
   </div>`;
@@ -478,25 +482,7 @@ export function renderMessageAttachment(
   }
   const { attachment } = item;
   const pastedText = presentation === "card" && isSentPastedTextAttachment(item);
-  const normalizedMimeType = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  const inferTypeFromExtension =
-    !normalizedMimeType || normalizedMimeType === "application/octet-stream";
-  const imageAttachment =
-    attachment.kind === "image" ||
-    (attachment.kind === "document" &&
-      (isImageMediaPath(attachment.url, normalizedMimeType) ||
-        (inferTypeFromExtension && isImageMediaPath(attachment.label, undefined))));
-  const svgImage =
-    normalizedMimeType === "image/svg+xml" ||
-    (inferTypeFromExtension &&
-      (isSvgImageMediaPath(attachment.url, undefined) ||
-        isSvgImageMediaPath(attachment.label, undefined)));
-  if (imageAttachment && !svgImage) {
-    return renderMessageImages(
-      [{ ...attachment, alt: attachment.label, fileName: attachment.label }],
-      options,
-    );
-  }
+  const imageAttachment = resolveAttachmentImageKind(attachment) === "svg";
   const resolved = resolveAttachmentSource(attachment, options);
   if (resolved.status !== "available" && !pastedText) {
     return renderAssistantAttachmentStatusCard({
@@ -623,7 +609,7 @@ export function renderMessageAttachment(
       .sizeBytes=${media?.sizeBytes}
       .serverDurationMs=${media?.durationMs}
       .voiceNote=${attachment.isVoiceNote === true}
-      .onExpand=${openAttachmentSidebar}
+      .onExpand=${attachment.isVoiceNote ? undefined : openAttachmentSidebar}
       .onMediaLoaded=${onAssistantAttachmentLoaded}
     ></openclaw-chat-audio-player>`;
   }

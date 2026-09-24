@@ -6,6 +6,7 @@ export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() =
 
 // v19 fences workers that ignore physical attempt resource custody.
 // v18 prevents older supervised workers from ignoring accepted workflow contracts.
+// v18 binds shared GitHub publication to its original requesting authority.
 // v17 records one-use prepared worker capacity and node workspace ownership.
 // v16 makes Skill Workshop ownership directory-based instead of row-provenance-based.
 // v15 removes redundant agent/session projections from conversation bindings.
@@ -64,6 +65,7 @@ export const FIRST_USE_STATE_TABLES = [
   "node_worker_turns",
   "operator_approval_execution_identities",
   "operator_approval_standing_grants",
+  "operator_approval_standing_grant_generations",
   "web_push_approval_deliveries",
   "execution_decision_facts",
   "execution_owner_lifecycle_bindings",
@@ -177,6 +179,7 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "supervised-workflow-custody-v18"
     | "supervised-attempt-custody-v19"
     | "prepared-worker-ownership-v17"
+    | "github-publication-requester-authority-v18"
     | "operator-approvals-system-agent"
     | "session-watch-cursor-provenance-v4"
     | "strict-tables-v3";

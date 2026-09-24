@@ -18,8 +18,3 @@ export function buildAnnounceIdFromChildRun(params: AnnounceIdFromChildRunParams
 export function buildAnnounceIdempotencyKey(announceId: string): string {
   return `${ANNOUNCE_IDEMPOTENCY_KEY_PREFIX}${announceId}`;
 }
-
-/** True when a gateway run id belongs to an announce delivery turn. */
-export function isAnnounceRunId(runId: string | null | undefined): boolean {
-  return typeof runId === "string" && runId.startsWith(ANNOUNCE_IDEMPOTENCY_KEY_PREFIX);
-}

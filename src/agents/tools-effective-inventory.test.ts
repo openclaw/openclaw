@@ -1001,7 +1001,7 @@ describe("resolveEffectiveToolInventory", () => {
     expect(result.notices).toBeUndefined();
   });
 
-  it("passes resolved model compat into effective tool creation", async () => {
+  it("passes session identity and resolved model compat into effective tool creation", async () => {
     const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => [
       mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
     ]);
@@ -1037,10 +1037,12 @@ describe("resolveEffectiveToolInventory", () => {
       agentDir: "/tmp/agents/main/agent",
       modelProvider: "xai",
       modelId: "grok-test",
+      sessionId: "current-conversation",
     });
 
     expect(createToolsMock).toHaveBeenCalledTimes(1);
     const createToolsOptions = createToolsMock.mock.calls.at(0)?.[0];
+    expect(createToolsOptions?.sessionId).toBe("current-conversation");
     expect(createToolsOptions?.allowGatewaySubagentBinding).toBe(true);
     expect(createToolsOptions?.modelCompat).toEqual({ supportsTools: true });
     expect(createToolsOptions?.modelApi).toBe("openai-completions");

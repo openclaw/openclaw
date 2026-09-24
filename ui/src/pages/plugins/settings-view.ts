@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { renderNode } from "../../components/config-form.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
@@ -8,23 +9,18 @@ import {
   renderSettingsLoadingSkeleton,
   renderSettingsPage,
   renderSettingsPageHeader,
-  renderSettingsRow,
   renderSettingsSection,
-  renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import type { PluginsInspectResult } from "../../lib/plugins/index.ts";
+import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { renderPluginReadme } from "./catalog-detail.ts";
-import {
-  renderArtTile,
-  renderPluginDeclaredCapabilities,
-  renderPluginGrants,
-} from "./consent-dialog.ts";
+import { renderArtTile } from "./consent-dialog.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
+import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
   renderPluginMetadata,
@@ -38,11 +34,15 @@ import {
   type PluginRowMessage,
 } from "./plugin-row-message.ts";
 import { matchesPluginQuery } from "./plugin-state-presentation.ts";
-import type { PluginSettingsEditor, PluginSettingsField } from "./settings-editor.ts";
+import type { PluginMutationAction } from "./plugins-page-model.ts";
+import {
+  flattenPluginSettingsFields,
+  type PluginSettingsEditor,
+  type PluginSettingsField,
+} from "./settings-editor.ts";
 import { renderPluginLifecycle } from "./settings-lifecycle.ts";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
 import type { PluginToolPreview } from "./tool-preview.ts";
-import "./settings-editor.ts";
 
 export type PluginSettingsTab = "installed" | "advanced";
 
@@ -52,16 +52,14 @@ type SharedProps = Omit<
 > & {
   loading: boolean;
   error: string | null;
-  busy: Readonly<Record<string, boolean>>;
+  busy: Readonly<Record<string, PluginMutationAction>>;
   messages: Readonly<Record<string, PluginRowMessage>>;
   iconUrls: Readonly<Record<string, string>>;
   canMutate: boolean;
-  reloadBlockedReason: string | null;
   mutationBlockedReason: string | null;
   onIconError: (pluginId: string) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onUninstall: (pluginId: string, rowKey: string) => void;
-  onReload: (pluginId: string, rowKey: string) => void;
   onConfigReload: () => void;
   onRefresh: () => void;
 };
@@ -80,6 +78,7 @@ export type DetailProps = SharedProps &
   PluginSettingsEditorModel & {
     renderCredential?: PluginSettingsEditor["renderCredential"];
     onAskPlugin?: () => void;
+    installProgress?: PluginInstallProgress;
     onAskSetting?: (field: PluginSettingsField) => void;
     skillsSection?: TemplateResult;
     tools?: PluginToolPreview[];
@@ -88,6 +87,9 @@ export type DetailProps = SharedProps &
 
     inspection: PluginsInspectResult | null;
     inspectionError: string | null;
+    catalog?: PluginDiscoveryDetailResult;
+    catalogLoading?: boolean;
+    catalogIconUrls?: Readonly<Record<string, string>>;
     hostControlsSchema: JsonSchema | null;
     backLabel: string;
     tab: InstalledPluginDetailTab;
@@ -254,15 +256,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
               }}
             />
           </label>
-          ${renderSettingsSection(
-            {
-              title: t("pluginsPage.settingsInstalled"),
-              description: t("pluginsPage.settingsInstalledDescription"),
-              count: (props.result?.plugins ?? []).filter((plugin) => plugin.installed).length,
-              carapace: true,
-            },
-            renderInstalledInventory(props),
-          )}
+          <div class="settings-group oc-settings-group">${renderInstalledInventory(props)}</div>
         `
       : html`<div id="plugin-settings-advanced">
           ${renderSettingsSection(
@@ -297,95 +291,43 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
   );
 }
 
-function renderAccess(props: DetailProps): TemplateResult {
+function permissionSettings(props: DetailProps): PluginSettingsEditor["permissions"] {
   if (!props.inspection) {
-    return renderSettingsLoadingSkeleton({ rows: 3, carapace: true });
+    return { fields: [], loading: true };
   }
-  const grants = props.inspection.grants;
-  const modelOverride = Boolean(
-    grants.llm?.allowModelOverride ||
-    grants.llm?.allowAuthProfileOverride ||
-    grants.llm?.allowAgentIdOverride ||
-    grants.subagent?.allowModelOverride,
-  );
-  return html`
-    ${renderSettingsRow({
-      title: t("pluginsPage.promptContextAccess"),
-      description: t("pluginsPage.promptContextAccessDescription"),
-      control: renderSettingsStatus({
-        kind: grants.hooks.allowPromptInjection.effective ? "warn" : "muted",
-        label: grants.hooks.allowPromptInjection.effective
-          ? t("pluginsPage.accessAllowed")
-          : t("pluginsPage.accessBlocked"),
-        carapace: true,
-      }),
-      carapace: true,
-    })}
-    ${renderSettingsRow({
-      title: t("pluginsPage.conversationAccess"),
-      description: t("pluginsPage.conversationAccessDescription"),
-      control: renderSettingsStatus({
-        kind: grants.hooks.allowConversationAccess.effective ? "warn" : "muted",
-        label: grants.hooks.allowConversationAccess.effective
-          ? t("pluginsPage.accessAllowed")
-          : t("pluginsPage.accessBlocked"),
-        carapace: true,
-      }),
-      carapace: true,
-    })}
-    ${renderSettingsRow({
-      title: t("pluginsPage.modelOverrideAccess"),
-      description: t("pluginsPage.modelOverrideAccessDescription"),
-      control: renderSettingsStatus({
-        kind: modelOverride ? "warn" : "muted",
-        label: modelOverride ? t("pluginsPage.accessAllowed") : t("pluginsPage.accessBlocked"),
-        carapace: true,
-      }),
-      carapace: true,
-    })}
-  `;
-}
-
-function renderPermissions(props: DetailProps, query: string): TemplateResult | typeof nothing {
-  if (!props.inspection) {
-    return query ? nothing : renderSettingsLoadingSkeleton({ rows: 3, carapace: true });
-  }
-  const pluginEntry = pluginEntryValue(props.configValue, props.pluginId);
-  const controls =
+  const fields =
     props.hostControlsSchema && props.configValue
-      ? renderNode({
+      ? resolveConfigObjectFields({
           rawAvailable: false,
           maskSensitive: true,
           schema: props.hostControlsSchema,
-          value: pluginEntry,
+          value: pluginEntryValue(props.configValue, props.pluginId),
           path: ["plugins", "entries", props.pluginId],
           hints: props.configHints,
           unsupported: new Set(props.configUnsupportedPaths),
-          disabled: !props.canEditConfig || props.configBusy,
+          disabled: !props.connected || !props.canEditConfig || props.configBusy,
           showLabel: false,
           compact: true,
           commitOnBlur: true,
-          searchCriteria:
-            query && !t("pluginsPage.editor.permissions").toLocaleLowerCase().includes(query)
-              ? { text: query, tags: [] }
-              : undefined,
           onPatch: props.onConfigPatch,
           onRemove: props.onConfigRemove,
-        })
-      : nothing;
-  if (query && controls === nothing) {
-    return nothing;
+        }).fields.flatMap((field) => flattenPluginSettingsFields(field, String(field.path.at(-1))))
+      : [];
+  for (const field of fields) {
+    const key = field.path[4];
+    if (
+      field.path[3] !== "hooks" ||
+      field.path.length !== 5 ||
+      (key !== "allowPromptInjection" && key !== "allowConversationAccess")
+    ) {
+      continue;
+    }
+    const labelKey = key === "allowPromptInjection" ? "promptContextAccess" : "conversationAccess";
+    field.label = t(`pluginsPage.${labelKey}`);
+    field.help = t(`pluginsPage.${labelKey}Description`);
+    field.effectiveValue = props.inspection.grants.hooks[key].effective;
   }
-  return html`${controls}
-  ${
-    query
-      ? nothing
-      : html`${renderAccess(props)}
-          <div class="plugin-editor__permission-details">
-            ${renderPluginDeclaredCapabilities(props.inspection.declared)}
-            ${renderPluginGrants(props.inspection.grants, props.inspection.plugin.origin)}
-          </div>`
-  }`;
+  return { fields };
 }
 
 export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
@@ -423,7 +365,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
     );
   }
   const key = pluginRowKey(plugin.id);
-  const catalog = props.inspection?.catalog;
+  const catalog = props.catalog ?? props.inspection?.catalog;
   const components = props.inspection?.components;
   const settings = props.tab === "configuration";
   const notices = html`${props.error ? renderRetryError(props.error, props.onRefresh) : nothing}
@@ -438,7 +380,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
           .model=${props}
           .renderCredential=${props.renderCredential}
           .onAskSetting=${props.onAskSetting}
-          .renderPermissions=${(query: string) => renderPermissions(props, query)}
+          .permissions=${permissionSettings(props)}
         ></openclaw-plugin-settings-editor>
       `,
       { wide: true, carapace: true },
@@ -449,7 +391,8 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
     name,
     description: catalog?.detail.skills.find((skill) => skill.name === name)?.description,
   }));
-  const tools = props.tools ?? names(props.inspection?.declared.tools);
+  const tools: Array<{ name: string; description?: string }> =
+    props.tools ?? names(props.inspection?.declared.tools ?? catalog?.detail.contracts?.tools);
   return renderSettingsPage(
     renderPluginDetailShell({
       id: "plugin-installed-detail",
@@ -458,30 +401,58 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
       backHref: props.backHref,
       backLabel: props.backLabel,
       onBack: props.onBack,
-      icon: html`<span data-plugin-icon-id=${plugin.id}
-        >${props.iconUrls[plugin.id] ? html`<img src=${props.iconUrls[plugin.id]} alt="" @error=${() => props.onIconError(plugin.id)} />` : icons.box}</span
-      >`,
+      icon: renderArtTile(
+        plugin.id,
+        plugin.name,
+        props.iconUrls[plugin.id] ??
+          (catalog?.plugin.catalog.imageUrl
+            ? props.catalogIconUrls?.[catalog.plugin.catalog.imageUrl]
+            : undefined),
+        () => props.onIconError(plugin.id),
+        "plugins-tile",
+        catalog?.detail.author?.imageUrl
+          ? props.catalogIconUrls?.[catalog.detail.author.imageUrl]
+          : undefined,
+      ),
       identity: renderPluginPublisher(catalog, props.inspection?.overview?.publisherName),
-      titleAction: html`${renderPluginLifecycle(
-        {
-          ...props,
-          settingsHref: props.settingsHref ?? "#configuration",
-          onSettings: () => props.onTabChange("configuration"),
-        },
-        plugin,
-      )}${renderPluginAskAction(props.onAskPlugin)}`,
+      titleAction: props.installProgress
+        ? html`<openclaw-plugin-install-action
+              .buttonClass=${"btn oc-action plugin-catalog-detail__install"}
+              .primary=${true}
+              .progress=${props.installProgress}
+            ></openclaw-plugin-install-action
+            >${renderPluginAskAction(props.onAskPlugin, false)}`
+        : renderPluginLifecycle(
+            {
+              ...props,
+              settingsHref: props.settingsHref ?? "#configuration",
+              onSettings: () => props.onTabChange("configuration"),
+            },
+            plugin,
+          ),
       sidebar:
-        catalog || plugin.version || props.inspection?.overview
-          ? renderPluginMetadata(catalog, plugin.version, props.inspection?.overview)
+        catalog || plugin.version || props.inspection?.overview || props.catalogLoading
+          ? renderPluginMetadata(
+              catalog,
+              plugin.version,
+              props.inspection?.overview,
+              props.catalogLoading,
+            )
           : undefined,
       panel: html`${notices}
-      ${!props.inspection && !props.inspectionError ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : nothing}
-      ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills, icons.book)}
-      ${renderPluginCapabilitySection(t("pluginsPage.detailMcpServers"), names(components?.mcpServers), icons.plug)}
-      ${renderPluginCapabilitySection(t("pluginsPage.detailTools"), tools, icons.wrench, props.onOpenTool)}
-      ${renderPluginCapabilitySection(t("pluginsPage.detailTabs.commands"), names(components?.commands), icons.terminal)}
-      ${renderPluginCapabilitySection(t("pluginsPage.detailTabs.hooks"), names(components?.hooks), icons.plug)}
-      ${renderPluginCapabilitySection(t("pluginsPage.detailTabs.lspServers"), names(components?.lspServers), icons.fileText)} `,
+      ${!props.inspection && !catalog && !props.inspectionError ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : nothing}
+      ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills, icons.bookOpenText)}
+      ${renderPluginCapabilitySection(
+        t("pluginsPage.detailTools"),
+        tools.map(({ name, description }) => ({
+          name,
+          description,
+          onOpen:
+            description?.trim() && props.onOpenTool ? () => props.onOpenTool?.(name) : undefined,
+        })),
+        icons.wrench,
+      )}
+      ${renderPluginCapabilitySection(t("pluginsPage.detailMcpServers"), names(components?.mcpServers ?? catalog?.detail.mcpServers), icons.plug)}`,
       readme:
         props.inspection?.overview?.readme || catalog?.detail.readme
           ? renderPluginReadme(props.inspection?.overview?.readme ?? catalog?.detail.readme)

@@ -12,6 +12,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -516,7 +517,18 @@ describe("legacy media persistence doctor migration", () => {
         },
       });
 
-      const result = await migrateLegacyMediaPersistence({ env });
+      const scope = createOpenClawDatabaseMaintenanceScope();
+      if (schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+        scope.addAgentSchemaMigrationCheck(() => {
+          throw new Error("Same-schema media cleanup must not require versioned backup coverage");
+        });
+      }
+      let result: Awaited<ReturnType<typeof migrateLegacyMediaPersistence>>;
+      try {
+        result = await scope.run(() => migrateLegacyMediaPersistence({ env }));
+      } finally {
+        await scope.close();
+      }
       expect(result).toEqual({
         changes: [
           ...(schemaVersion < OPENCLAW_AGENT_SCHEMA_VERSION

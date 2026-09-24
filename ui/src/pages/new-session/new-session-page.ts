@@ -228,6 +228,25 @@ export class NewSessionPage extends OpenClawLightDomElement {
     }
   }
 
+  focusComposer(): void {
+    const context = this.context;
+    const owner = this.routeOwnerKey();
+    const previousFocus = document.activeElement;
+    void this.updateComplete.then(() => {
+      if (
+        this.isConnected &&
+        !this.retainedForHandoff &&
+        this.context === context &&
+        this.routeOwnerKey() === owner &&
+        // A later interaction owns focus even if this draft is still mounted.
+        (document.activeElement === previousFocus || document.activeElement === document.body) &&
+        !document.openClawModalLayers?.size
+      ) {
+        this.submission.composerTextarea.getTextarea()?.focus({ preventScroll: true });
+      }
+    });
+  }
+
   override connectedCallback() {
     super.connectedCallback();
     this.submission.draftPersistence.connect();
@@ -313,6 +332,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         ownedMessage,
         ownedMentions,
       );
+      this.focusComposer();
       return;
     }
     if (this.openedGroupDefaults !== groupDefaults) {

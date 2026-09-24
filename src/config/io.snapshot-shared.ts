@@ -15,6 +15,7 @@ export function createConfigFileSnapshot(params: {
   exists: boolean;
   raw: string | null;
   parsed: unknown;
+  authoredConfig?: OpenClawConfig;
   sourceConfigBeforeMigrations?: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   valid: boolean;
@@ -59,6 +60,7 @@ export function createConfigFileSnapshot(params: {
     exists: params.exists,
     raw: params.raw,
     parsed: params.parsed,
+    ...(params.authoredConfig ? { authoredConfig: params.authoredConfig } : {}),
     ...(sourceConfigBeforeMigrations ? { sourceConfigBeforeMigrations } : {}),
     sourceConfig,
     resolved: sourceConfig,

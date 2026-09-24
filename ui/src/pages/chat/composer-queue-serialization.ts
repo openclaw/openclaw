@@ -3,12 +3,40 @@ import {
   INTERRUPTED_SETTINGS_WAIT_ERROR,
   normalizeStoredQueueItem,
   sameQueuedDeliveryVersion,
+  type StoredComposerSession,
 } from "../../lib/chat/outbox-store-codec.ts";
 import {
   applyStoredChatOutboxScope,
   type StoredChatOutboxScope,
+  type StoredComposerState,
 } from "../../lib/chat/outbox-store.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+
+export function writeStoredComposerSession(
+  store: StoredComposerState,
+  storeSessionKey: string,
+  session: StoredComposerSession | null,
+  queue: ChatQueueItem[],
+): void {
+  if (
+    !session?.draft &&
+    !session?.goalMode &&
+    session?.draftRevision === undefined &&
+    queue.length === 0
+  ) {
+    delete store.sessions[storeSessionKey];
+    return;
+  }
+  store.sessions[storeSessionKey] = {
+    ...(session?.awaitingDefaults ? { awaitingDefaults: true } : {}),
+    ...(session?.draft ? { draft: session.draft } : {}),
+    ...(session?.draftMentions ? { draftMentions: session.draftMentions } : {}),
+    ...(session?.goalMode ? { goalMode: session.goalMode } : {}),
+    ...(session?.draftRevision !== undefined ? { draftRevision: session.draftRevision } : {}),
+    ...(queue.length ? { queue } : {}),
+    updatedAt: Date.now(),
+  };
+}
 
 function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   if (

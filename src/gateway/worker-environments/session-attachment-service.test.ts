@@ -225,8 +225,8 @@ describe("conversation-owned temporary environments", () => {
     );
     const reserveSpy = vi
       .spyOn(support.testState.store, "createSessionAttachmentIntent")
-      .mockImplementation((...args) => {
-        const reserved = reserve(...args);
+      .mockImplementation(async (...args) => {
+        const reserved = await reserve(...args);
         support.testState.config.tools = { deny: ["screen"] };
         return reserved;
       });
@@ -316,6 +316,64 @@ describe("conversation-owned temporary environments", () => {
     await expect(creation).rejects.toThrow("was stopped");
     expect(provision).not.toHaveBeenCalled();
     expect(support.testState.store.list()).toEqual([]);
+  });
+
+  it("cancels creations registered while Stop is awaiting the inventory", async () => {
+    const provision = vi.fn(async () => ({ leaseId: "lease-one", ssh: support.SSH_ENDPOINT }));
+    const service = support.createService(support.createProvider({ provision }));
+    const closeEntered = createDeferredCore();
+    const releaseClose = createDeferredCore();
+    const creationEntered = createDeferredCore();
+    const releaseCreation = createDeferredCore();
+    const ready = support.testState.store.ready.bind(support.testState.store);
+    vi.spyOn(support.testState.store, "ready")
+      .mockImplementationOnce(async () => {
+        await ready();
+        closeEntered.resolve();
+        await releaseClose.promise;
+      })
+      .mockImplementationOnce(async () => {
+        await ready();
+        creationEntered.resolve();
+        await releaseCreation.promise;
+      });
+    const closing = service
+      .destroySessionAttachment({ sessionId: identity.sessionId }, authorize)
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+    let creation: Promise<unknown> | undefined;
+    try {
+      await Promise.race([
+        closeEntered.promise,
+        closing.then((result) => {
+          throw new Error("Stop ended before inventory readiness", { cause: result });
+        }),
+      ]);
+      creation = service.createSessionAttachment(request, authorize).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await Promise.race([
+        creationEntered.promise,
+        creation.then((result) => {
+          throw new Error("Creation ended before inventory readiness", { cause: result });
+        }),
+      ]);
+      releaseClose.resolve();
+      expect(await closing).toEqual({ value: undefined });
+      releaseCreation.resolve();
+      expect(await creation).toMatchObject({
+        error: { message: "Conversation environment was stopped" },
+      });
+      expect(provision).not.toHaveBeenCalled();
+      expect(support.testState.store.list()).toEqual([]);
+    } finally {
+      releaseClose.resolve();
+      releaseCreation.resolve();
+      await Promise.all([closing, creation]);
+    }
   });
 
   it.each([
@@ -551,6 +609,66 @@ describe("conversation-owned temporary environments", () => {
     expect(next.attachment.generation).toBe(created.attachment.generation + 1);
   });
 
+  it("reports bounded current cleanup failures without losing the original failure or lease", async () => {
+    const originalFailure = "worker bootstrap could not finish";
+    const firstCleanupFailure = "initial provider cleanup is unavailable";
+    vi.mocked(support.testState.bootstrapWorker).mockRejectedValue(new Error(originalFailure));
+    const destroy = vi.fn().mockRejectedValue(new Error(firstCleanupFailure));
+    const warn = vi.fn<(message: string) => void>();
+    const service = support.createService(support.createProvider({ destroy }), {
+      logger: { warn },
+    });
+
+    await expect(service.createSessionAttachment(request, authorize)).rejects.toThrow(
+      originalFailure,
+    );
+    await expect(
+      service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize),
+    ).rejects.toThrow(firstCleanupFailure);
+    const environmentId = service.getSessionAttachmentStatus(identity.sessionId)!.environment
+      .environmentId;
+    const pending = support.testState.store.get(environmentId)!;
+    expect(pending).toMatchObject({
+      state: "destroying",
+      leaseId: "lease-1",
+      teardownTerminalState: "failed",
+      lastError: originalFailure,
+    });
+    expect(warn).not.toHaveBeenCalled();
+    const secret = `synthetic-cleanup-auth-${"x".repeat(48)}`;
+    const currentDiagnosis = "provider stop timed out while confirming release";
+    destroy.mockRejectedValue(
+      new Error(
+        `Current cleanup failed: Authorization: Bearer ${secret}\n${"provider progress ".repeat(200)}\n${currentDiagnosis}`,
+      ),
+    );
+    await service.reconcileSessionAttachments();
+
+    expect(warn).toHaveBeenCalledOnce();
+    const warning = warn.mock.calls[0]![0];
+    const prefix = `Conversation environment cleanup will retry (${environmentId}): `;
+    expect.soft(warning).toContain(prefix);
+    expect.soft(warning).toContain("Current cleanup failed:");
+    expect.soft(warning).toContain(currentDiagnosis);
+    expect(warning).not.toContain(secret);
+    expect(warning).not.toContain(originalFailure);
+    expect(warning.length).toBeLessThanOrEqual(prefix.length + 1_024);
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "destroying",
+      leaseId: pending.leaseId,
+      lastError: originalFailure,
+    });
+
+    destroy.mockResolvedValue(undefined);
+    await service.reconcileSessionAttachments();
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      lastError: originalFailure,
+    });
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
   it("retains a failed cleanup owner and forbids replacement until provider destruction is confirmed", async () => {
     const destroy = vi
       .fn()
@@ -585,7 +703,7 @@ describe("conversation-owned temporary environments", () => {
     support.getDevelopmentProfile().suspendAfter = "1m";
     const created = await service.createSessionAttachment(request, authorize);
     support.testState.nowMs += 59_000;
-    service.touchSessionAttachment(created.attachment);
+    await service.touchSessionAttachment(created.attachment);
     support.testState.nowMs += 59_000;
     await service.reconcileSessionAttachments();
     expect(service.findSessionAttachment(identity)).toBeDefined();

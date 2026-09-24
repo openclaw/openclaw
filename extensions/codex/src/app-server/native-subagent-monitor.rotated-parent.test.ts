@@ -244,6 +244,7 @@ it.each([
           database!.prepare("SELECT * FROM task_runs ORDER BY created_at, task_id").all();
         let initialRows = rows();
         expect(initialRows).toHaveLength(1);
+        const initialTaskId = initialRows[0]!.task_id;
         expect(initialRows[0]).toMatchObject({
           run_id: initialRunId,
           status: scenario === "interrupted" ? "running" : "succeeded",
@@ -512,10 +513,12 @@ it.each([
           expect(unsubscribe).toHaveBeenCalledExactlyOnceWith({ threadId: "child-thread" });
           const retired = rows();
           expect(retired).toHaveLength(1);
+          expect(retired[0]!.last_event_at).toBeGreaterThan(Number(initialRows[0]!.last_event_at));
           expect(retired[0]).toEqual({
             ...initialRows[0],
             delivery_status: "failed",
             error: "Subagent parent session ended.",
+            last_event_at: retired[0]!.last_event_at,
           });
           releaseInitialDelivery();
           await initialDelivery;
@@ -580,12 +583,8 @@ it.each([
             terminal_summary: "B result",
           });
         } else {
-          expect(afterStart.find((row) => row.task_id === initialRows[0]!.task_id)).toEqual(
-            initialRows[0],
-          );
-          expect(after.find((row) => row.task_id === initialRows[0]!.task_id)).toEqual(
-            initialRows[0],
-          );
+          expect(afterStart.find((row) => row.task_id === initialTaskId)).toEqual(initialRows[0]);
+          expect(after.find((row) => row.task_id === initialTaskId)).toEqual(initialRows[0]);
           if (scenario === "completed" || holdInitialDelivery) {
             expect(after).toHaveLength(2);
             expect(after.find((row) => row.run_id === followupRunId)).toMatchObject({

@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveRootPathSync } from "../infra/boundary-path.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { openPluginRootFileSync } from "./path-safety.js";
 import type {
   PluginEntryCheck,
   PluginFileCacheEntry,
@@ -169,8 +170,10 @@ export function checkPluginCacheEntry(params: {
       checked = { ok: false, reason: "validation", error };
     }
   } else {
-    const opened = openRootFileSync({
-      absolutePath,
+    // A junction at the admitted root is trusted. Only replace the root spelling
+    // when Windows supplied a child through a different (for example 8.3) alias.
+    const opened = openPluginRootFileSync({
+      filePath: absolutePath,
       rootPath: params.rootDir,
       rootRealPath: params.rootRealPath,
       boundaryLabel: "plugin package directory",
@@ -234,10 +237,10 @@ export function readPluginCacheFile(params: {
     return enforceFileSize(canonicalCached, maxBytes);
   }
   const absolutePath = path.resolve(canonicalRoot, params.relativePath);
-  const opened = openRootFileSync({
-    absolutePath,
-    rootPath: canonicalRoot,
+  const opened = openPluginRootFileSync({
+    filePath: absolutePath,
     rootRealPath: canonicalRoot,
+    rootPath: canonicalRoot,
     boundaryLabel: "plugin root",
     rejectHardlinks: params.rejectHardlinks,
     maxBytes,

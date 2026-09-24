@@ -213,7 +213,7 @@ export class CodexAssistantProjection {
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
-      if (item.text && this.isCommentaryAssistantItem(item.id)) {
+      if (this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text, phase: "end" });
         this.pendingRawCommentaryEchoes += 1;
       } else if (
@@ -267,18 +267,12 @@ export class CodexAssistantProjection {
       this.pendingRawCommentaryEchoes -= 1;
       return;
     }
-    const text = extractRawAssistantText(item);
     if (isPendingTerminalAssistantEcho) {
-      const typedItemId = pendingTerminalAssistantEchoItemId;
       this.pendingRawTerminalAssistantEchoItemId = undefined;
-      // Contributors may rewrite the typed completion without rewriting its raw echo.
-      if (this.assistantTextByItem.get(typedItemId)?.trim() || !text) {
-        return;
-      }
-      this.rememberAssistantItem(typedItemId);
-      this.assistantTextByItem.set(typedItemId, text);
+      // Contributors may rewrite or erase typed text without changing its raw echo.
       return;
     }
+    const text = extractRawAssistantText(item);
     if (
       text === undefined ||
       (!text &&

@@ -29,8 +29,103 @@ title: "Agent schema history"
 | 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | Unreleased                                      |
 | 20      | Authoritative cold transcript archives with exact restoration metadata and self-contained backup payloads                                                                                                                                              | Unreleased                                      |
 | 21      | Incremental canonical-session validation with transactional node, window, and main-key invalidation                                                                                                                                                    | Unreleased                                      |
+| 22      | Exact transcript FTS row ownership for session-local deletion and reconciliation ([#153834](https://github.com/openclaw/openclaw/pull/153834))                                                                                                         | Unreleased                                      |
+| 23      | Selective transcript compression, binary memory embeddings, and stable memory full-text index identities                                                                                                                                               | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
+
+### Compact agent payload storage
+
+Agent schema **23** changes the transcript and memory storage representations.
+The [storage design](https://github.com/openclaw/openclaw/issues/153618) records
+the migration scope and required proof. Shared-state schema remains 17.
+
+Each transcript event retains its original JSON in exactly one representation:
+identity `TEXT` or a checksummed level-1 Zstd `BLOB`. Compression applies only to
+eligible UTF-8 events from 1 KiB through 4 MiB, and only when the frame plus its
+navigation metadata saves at least 64 bytes and 10 percent. Small, oversized,
+malformed, and exceptional Unicode records retain identity storage. UTF-16
+databases retain identity storage and their existing native byte accounting.
+The metadata holds navigation projections, report-selection facts, and exact
+context-budget sizes. Report deduplication and database size statistics use these
+facts without decoding unrelated bodies; selected body reads reconstruct the
+original text. No extension or new
+SQLite file format is required. A runtime without Zstd can write identity rows,
+but refuses to decode an existing compressed row.
+
+Memory chunks and embedding caches use little-endian Float64 vectors, preserving
+the provider's finite numbers without a Float32 precision change. The optional
+vector accelerator remains derived Float32 storage. Chunks keep their logical
+IDs and gain a stable integer identity used by full-text maintenance triggers.
+Malformed legacy vectors preserve chunk text and provenance and record existing
+source/vector rebuild debt. Usage rollups also move to a metadata envelope plus
+an identity or compressed body in the existing cache table; obsolete or invalid
+derived caches can be rebuilt.
+
+Transcript full-text search keeps its existing content and rowids. A derived row
+map indexes session/message ownership so cleanup and reconciliation delete
+selected FTS rowids without scanning the full text table. Duplicate and null
+message IDs remain valid. Migration copies existing rowids without rebuilding
+or retokenizing text. Both schema 21 and the deployed schema 22 migrate directly
+to schema 23. Schema 22's lazy `(session_id, fts_rowid)` map can be empty or
+incomplete, so the new `(id, session_id, message_id)` map is populated from
+existing FTS content. The migration retires `fts_row_count` after retaining its
+unknown or incomplete state as `needs_rebuild`. Clean mappings remain clean;
+existing rebuild claims, cursors, active-path rows, and canonical-validation
+pending rows are preserved. The unpublished compressed schema-22 draft is not
+a supported predecessor.
+
+The admitted migration converts one transcript record at a time, verifies each
+compressed frame against its original bytes, preserves row identities and
+timestamps, and commits table replacements with both schema markers. Unknown
+columns or dependencies that a rebuild would discard cause a refusal. Earlier
+supported schemas run their prerequisite migrations first. Conversion needs
+temporary space for old and replacement tables, journal/WAL activity, and the
+verified backup. Freed pages are reusable; a smaller payload does not by itself
+shrink the database file. Existing maintenance owns physical reclamation.
+
+Stop all writers and take a verified WAL-aware backup before upgrading. Supported
+updaters run the candidate's Doctor under the existing maintenance owner. The
+2026.9.2 package updater rehearses on private copies before its post-core Doctor
+verifies recovery-backup coverage and performs the live migration. Unverified
+authority or backup coverage retains the refusal and
+[manual recovery instructions](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
+Interrupted conversion rolls back its transaction. Earlier prerequisite migrations
+can already be committed; keep writers stopped and resume Doctor with the
+compatible build. Older builds refuse schema 23. Rollback requires the
+pre-upgrade backup and matching build; lowering markers cannot restore the old
+payload representation.
+
+### Transcript FTS row ownership
+
+Agent schema **22** adds `session_transcript_fts_rows` and the nullable
+`session_transcript_index_state.fts_row_count`. The transcript projection owner
+records every inserted FTS rowid in the same transaction as its FTS row. An index
+on `session_id` makes deletion proportional to the session's indexed rows even
+when different sessions' appends are interleaved. These are derived search facts;
+raw transcript bytes, visibility, retention and synchronous rebuild limits stay
+unchanged.
+
+Migration creates an empty mapping and marks existing index state
+`needs_rebuild = 1`, with `fts_row_count = NULL`. It does not scan or backfill FTS
+content. On the next reconcile, unknown or incomplete ownership takes the legacy
+session-filtered delete during that first rebuild and publishes exact mappings
+with their count. Worker rebuilds retain bounded delete chunks, so a legacy
+projection may need a fallback scan per chunk until that first rebuild finishes.
+Subsequent deletes use exact rowids. Synchronous and worker reconciliation,
+suffix replacement, deletion and cold restoration maintain the same ownership.
+There is no foreign-key cascade on the mapping: deletion needs those rowids even
+after the session window has been removed; the projection owner removes them
+with their FTS rows.
+
+Both schema version markers advance through the existing maintenance owner in
+the same transaction. Stop writers and take a verified WAL-aware backup before
+running the compatible build's `openclaw doctor --fix`. Older builds refuse
+schema 22 because their writes cannot maintain row ownership. Rollback requires
+the pre-migration backup and matching build; lowering version markers is unsafe.
+The existing [older-updater contract](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+applies, including private rehearsal and verified backup coverage for supported
+2026.9.2 package updates.
 
 ### Incremental canonical-session validation
 
@@ -63,6 +158,12 @@ their established raw-row parser behavior; a fresh reader, policy change or
 owner replacement must cross admission again. Pending keys make that admission
 incremental without caching session identity or permission results.
 
+Typed worker reads can continue an existing committed reader admission for one
+retained request. The continuation expires with its source admission or connection
+and remains bound to the physical file, main-key policy, and readiness. It cannot
+admit an unrelated pooled read or replace strict validation when that proof is
+missing, transactional, changed, or revoked.
+
 Gateway startup reuses valid canonical receipts for the same physical generation;
 they do not replace integrity checks. Stores needing fresh proof are certified up
 to two at a time, using the same disk-work bound as database preflight. Two
@@ -93,9 +194,10 @@ malformed rows for Doctor and keep writers stopped if migration is interrupted.
 Older builds refuse schema 21 and do not recognize its triggers. Take and verify
 a WAL-aware backup before migration. Rollback restores that backup with its
 matching build; removing the derived objects or lowering the version markers
-does not provide a supported lossless downgrade. The 2026.9.2 updater cannot
-fence an agent-schema bump; use its
-[manual update path](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
+does not provide a supported lossless downgrade. Updates driven by 2026.9.2
+require the candidate's private rehearsal and verified recovery-backup path;
+see [older updaters](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+for supported migration and refusal conditions.
 
 ### Cold transcript storage
 
@@ -118,8 +220,10 @@ extracting any transcripts. Extraction is disabled until
 
 Take and verify a backup before upgrading. If migration fails, keep writers
 stopped and finish Doctor with the compatible build before restarting. The
-2026.9.2 updater cannot fence an agent schema bump; follow its
-[manual update path](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
+2026.9.2 updater follows the candidate's private rehearsal and verified
+recovery-backup path; see
+[older updaters](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+for supported migration and refusal conditions.
 Older builds refuse schema 20. Rollback requires the pre-upgrade backup and
 its matching build; do not lower version markers or drop the cold archive
 table. Restoring cold events alone does not make the newer schema a supported

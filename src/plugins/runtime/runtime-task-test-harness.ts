@@ -8,11 +8,7 @@ import {
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 
 const runtimeTaskMocks = vi.hoisted(() => ({
@@ -23,6 +19,18 @@ const runtimeTaskMocks = vi.hoisted(() => ({
     status: "skipped" as const,
     reason: "disabled",
   })),
+}));
+
+vi.mock("../../tasks/task-registry-delivery-runtime.js", () => ({
+  sendMessage: runtimeTaskMocks.sendMessageMock,
+  resolveTaskControlUiSessionUrl: () => undefined,
+}));
+
+vi.mock("../../tasks/task-registry-control.runtime.js", () => ({
+  cancelBackgroundExecSession: () => false,
+  cancelActiveCronTaskRun: () => false,
+  getAcpSessionManager: () => ({ cancelSession: runtimeTaskMocks.cancelSessionMock }),
+  killSubagentRunAdmin: runtimeTaskMocks.killSubagentRunAdminMock,
 }));
 
 const HEARTBEAT_FLUSH_REASON = "runtime-task-test-flush";
@@ -38,16 +46,6 @@ export function installRuntimeTaskDeliveryMock(): void {
   // the shared worker installs, and that file then observes a foreign wake.
   disposeHeartbeatWakeHandler?.();
   disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(runtimeTaskMocks.heartbeatWakeMock);
-  setTaskRegistryDeliveryRuntimeForTests({
-    sendMessage: runtimeTaskMocks.sendMessageMock,
-  });
-  setTaskRegistryControlRuntimeForTests({
-    cancelActiveCronTaskRun: () => false,
-    getAcpSessionManager: () => ({
-      cancelSession: runtimeTaskMocks.cancelSessionMock,
-    }),
-    killSubagentRunAdmin: (params: unknown) => runtimeTaskMocks.killSubagentRunAdminMock(params),
-  });
 }
 
 // Runtime task tests write durable rows into the worker's shared state store.
@@ -59,8 +57,6 @@ export async function resetRuntimeTaskTestState(): Promise<void> {
   disposeHeartbeatWakeHandler?.();
   disposeHeartbeatWakeHandler = undefined;
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryControlRuntimeForTests();
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests();
   resetTaskFlowRegistryForTests();
   vi.clearAllMocks();

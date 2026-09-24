@@ -1,16 +1,36 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
+import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
+import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 import { releaseSqliteWorkerActorCoordinators } from "./sqlite-worker-broker-admission.js";
-import type { Actor, EnqueueOptions, Slot, StoreClient } from "./sqlite-worker-broker.types.js";
+import {
+  receiveSqliteWorkerReply,
+  type SqliteWorkerReplyOwner,
+} from "./sqlite-worker-broker-reply.js";
+import type {
+  Actor,
+  EnqueueOptions,
+  Slot,
+  StoreClient,
+  PreparedSqliteWorkerOpen,
+} from "./sqlite-worker-broker.types.js";
+import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";
+import { createCpuTrackedWorker } from "./worker-cpu.js";
+
+const runOutsideCaller = AsyncLocalStorage.snapshot();
 
 /** The broker retains these maps; this owner drains clients before native close custody. */
 export function createSqliteWorkerLifecycle({
   actors,
+  slots,
   stores,
   enqueueClose,
   fail,
 }: {
   actors: Map<string, Actor>;
+  slots: Set<Slot>;
   stores: Map<object, StoreClient>;
   enqueueClose: (
     actor: Actor,
@@ -18,6 +38,74 @@ export function createSqliteWorkerLifecycle({
   ) => Promise<unknown>;
   fail: (slot: Slot, error: unknown) => void;
 }) {
+  function createSlot(
+    options: PreparedSqliteWorkerOpen,
+    borrowedGenerationSlot: boolean,
+    createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
+  ): Slot {
+    if (process.versions.bun && process.platform === "darwin") {
+      ensureSqliteLibrarySelected();
+    }
+    options.assertCurrent?.();
+    const worker = runOutsideCaller(() =>
+      createCpuTrackedWorker(options.carrierUrl, {
+        resourceLimits: { maxOldGenerationSizeMb: 512 },
+        env: resolveNodeCompileCacheEnv(),
+        execArgv: options.carrierUrl.pathname.endsWith(".ts")
+          ? ["--import", import.meta.resolve("tsx/esm")]
+          : [],
+      }),
+    );
+    const exited = createDeferredCore();
+    const slot: Slot = {
+      runtimeGeneration: options.runtimeGeneration,
+      ...(borrowedGenerationSlot ? { borrowedGenerationSlot: true as const } : {}),
+      worker,
+      receiveReply: (reply, pumping) => receiveSqliteWorkerReply(slot, reply, replyOwner, pumping),
+      actors: new Set(),
+      queue: [],
+      exit: exited.promise,
+      exited: false,
+      pendingOpens: 1,
+    };
+    const replyOwner = createReplyOwner(slot);
+    slots.add(slot);
+    worker.on("message", (reply: SqliteWorkerReply) => slot.receiveReply(reply));
+    worker.on("error", (error) => fail(slot, error));
+    worker.on("messageerror", (error) => fail(slot, error));
+    worker.once("exit", (code) => {
+      slot.exited = true;
+      for (const actor of slot.actors) {
+        actor.backendClosed = true;
+        actor.markNativeStopped();
+      }
+      fail(slot, new Error(`SQLite worker exited with code ${code}`));
+      slots.delete(slot);
+      exited.resolve();
+    });
+    worker.unref();
+    return slot;
+  }
+
+  async function closeGeneration(generation: RuntimeWorkerGeneration): Promise<void> {
+    const results = await Promise.allSettled(
+      [...actors.values()]
+        .filter((actor) => actor.runtimeGeneration === generation)
+        .map((actor) => retireActor(actor)),
+    );
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length) {
+      throw new AggregateError(errors, "Retained SQLite worker cleanup failed");
+    }
+    await Promise.all(
+      [...slots]
+        .filter((slot) => slot.runtimeGeneration === generation)
+        .map((slot) => retireEmpty(slot)),
+    );
+  }
+
   function releaseActorReference(actor: Actor): void {
     actor.references -= 1;
     if (!actor.references) {
@@ -96,6 +184,9 @@ export function createSqliteWorkerLifecycle({
         try {
           await enqueueClose(actor, maintenanceScope);
           actor.backendClosed = true;
+          if (!process.versions.bun) {
+            actor.markNativeStopped();
+          }
         } catch (error) {
           errors.push(error);
           fail(actor.slot, error instanceof Error ? error : new Error(String(error)));
@@ -185,6 +276,8 @@ export function createSqliteWorkerLifecycle({
   }
 
   return {
+    createSlot,
+    closeGeneration,
     releaseActorReference,
     rejectSlotAdmission,
     retireActor,

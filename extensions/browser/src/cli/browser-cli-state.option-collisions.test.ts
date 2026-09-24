@@ -1,4 +1,3 @@
-// Browser tests cover browser cli state.option collisions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliResizeModule from "./browser-cli-resize.js";
 import { mockBrowserGateway } from "./browser-cli.test-support.js";
@@ -97,10 +96,27 @@ describe("browser state option collisions", () => {
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout: "60000" }),
+      expect.objectContaining({ timeout: "70000" }),
       expect.objectContaining({ path, timeoutMs: 60000 }),
       expect.objectContaining({ scopes: ["operator.admin"] }),
     );
+  });
+
+  it("reads the exact quoted storage key", async () => {
+    const entries = [
+      ["account", "plain"],
+      [" account ", "padded"],
+    ];
+    gatewayMock.mockImplementationOnce(async (_method, _opts, request) => ({
+      values: Object.fromEntries(
+        entries.filter(([key]) => request.query?.key === undefined || key === request.query.key),
+      ),
+    }));
+
+    await runBrowserCommand(["storage", "local", "get", " account "]);
+
+    const { runtimeLogs } = getBrowserCliRuntimeCapture();
+    expect(runtimeLogs.map((line) => JSON.parse(line))).toEqual([{ " account ": "padded" }]);
   });
 
   it("inherits the parent timeout for the viewport resize alias", async () => {
@@ -128,7 +144,7 @@ describe("browser state option collisions", () => {
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout: "60000" }),
+      expect.objectContaining({ timeout: "70000" }),
       expect.objectContaining({
         path: "/act",
         query: { profile: "work" },

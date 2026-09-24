@@ -3,93 +3,8 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
-import type { SessionsListResult } from "../../api/types.ts";
-import { renderSessions, type SessionsProps } from "./view.ts";
-
-function buildResult(
-  session: SessionsListResult["sessions"][number],
-  defaults?: Partial<SessionsListResult["defaults"]>,
-): SessionsListResult {
-  return {
-    ts: Date.now(),
-    path: "(multiple)",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null, ...defaults },
-    sessions: [session],
-  };
-}
-
-function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
-  return {
-    ts: Date.now(),
-    path: "(multiple)",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
-}
-
-function buildProps(result: SessionsListResult): SessionsProps {
-  return {
-    loading: false,
-    refreshing: false,
-    agentId: "main",
-    mainKey: "main",
-    result,
-    error: null,
-    activeMinutes: "",
-    limit: "120",
-    includeGlobal: false,
-    includeUnknown: false,
-    statusFilter: "active",
-    basePath: "",
-    searchQuery: "",
-    transcriptSearchAvailable: true,
-    transcriptSearchQuery: "",
-    transcriptSearch: { status: "idle" },
-    agentIdentityById: {},
-    sortColumn: "updated",
-    sortDir: "desc",
-    groupBy: "none",
-    personGroupingAvailable: true,
-    knownCategories: [],
-    page: 0,
-    pageSize: 10,
-    selectedKeys: new Set<string>(),
-    sessionMenu: null,
-    expandedSessionKey: null,
-    checkpointItemsByKey: {},
-    checkpointLoadingKey: null,
-    checkpointBusyKey: null,
-    checkpointErrorByKey: {},
-    onFiltersChange: () => undefined,
-    onClearFilters: () => undefined,
-    onSearchChange: () => undefined,
-    onTranscriptSearchChange: () => undefined,
-    onTranscriptSearch: () => undefined,
-    onClearTranscriptSearch: () => undefined,
-    onSortChange: () => undefined,
-    onGroupByChange: () => undefined,
-    onAssignCategory: () => undefined,
-    onRequestNewCategory: () => undefined,
-    onLoadMore: () => undefined,
-    onPageChange: () => undefined,
-    onPageSizeChange: () => undefined,
-    onRefresh: () => undefined,
-    onStatusFilterChange: () => undefined,
-    onDeleteAllArchived: () => undefined,
-    onPatch: () => undefined,
-    onToggleSelect: () => undefined,
-    onSelectPage: () => undefined,
-    onDeselectPage: () => undefined,
-    onDeselectAll: () => undefined,
-    onDeleteSelected: () => undefined,
-    onOpenSessionMenu: () => undefined,
-    onToggleDetails: () => undefined,
-    onBranchFromCheckpoint: () => undefined,
-    onRestoreCheckpoint: () => undefined,
-  };
-}
+import { buildMultiResult, buildProps, buildResult } from "./view.test-support.ts";
+import { renderSessions } from "./view.ts";
 
 function readSessionDetailStats(container: ParentNode): Map<string, string> {
   return new Map(
@@ -270,23 +185,6 @@ describe("sessions view", () => {
     const alert = container.querySelector('[role="alert"]');
     expect(alert?.classList.contains("sessions-error")).toBe(true);
     expect(alert?.textContent).toContain("group name exceeds 512 characters");
-  });
-
-  it("announces checkpoint failures in their expanded session details", async () => {
-    const sessionKey = "agent:main:checkpoint-failure";
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(buildResult({ key: sessionKey, kind: "direct", updatedAt: 1 })),
-        expandedSessionKey: sessionKey,
-        checkpointErrorByKey: { [sessionKey]: "Checkpoint request timed out" },
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const alert = container.querySelector('.session-details-panel [role="alert"]');
-    expect(alert?.textContent).toContain("Checkpoint request timed out");
   });
 
   it("identifies each selectable session before destructive bulk actions", async () => {
@@ -798,7 +696,6 @@ describe("sessions view", () => {
       { x: expect.any(Number), y: expect.any(Number) },
       button,
     );
-
     const row = container.querySelector(".session-data-row");
     if (!row) {
       throw new Error("Expected session row");
@@ -1250,51 +1147,6 @@ describe("sessions view", () => {
     ).toEqual(["Status: Queued", "Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
   });
 
-  it("renders session goals in the status cell", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:goal",
-            kind: "direct",
-            updatedAt: 20,
-            hasActiveRun: true,
-            status: "running",
-            goal: {
-              schemaVersion: 1,
-              id: "goal-1",
-              objective: "Ship the web goal indicator",
-              status: "active",
-              createdAt: 1,
-              updatedAt: 2,
-              tokenStart: 100,
-              tokensUsed: 12_400,
-              tokenBudget: 50_000,
-              continuationTurns: 0,
-            },
-          }),
-        ),
-        searchQuery: "web goal",
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const statuses = container.querySelectorAll(".session-status-stack .settings-status");
-    const goal = statuses[1];
-    expect(goal?.textContent?.replace(/\s+/g, " ").trim()).toBe("Pursuing goal (12k/50k)");
-    // The wrapper span exposes the objective to keyboard/screen-reader users.
-    const wrapper = goal?.parentElement;
-    expect(wrapper?.getAttribute("tabindex")).toBe("0");
-    expect(wrapper?.getAttribute("aria-label")).toBe(
-      "Pursuing goal (12k/50k): Ship the web goal indicator",
-    );
-    const tooltip = wrapper?.parentElement as (HTMLElement & { content: string }) | null;
-    expect(tooltip?.content).toBe("Pursuing goal (12k/50k): Ship the web goal indicator");
-    expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
-  });
-
   it("renders the effective runtime including fallback in the details drawer", async () => {
     const container = document.createElement("div");
     render(
@@ -1360,12 +1212,6 @@ describe("sessions view", () => {
             updatedAt: Date.now(),
             totalTokens: 123456,
             contextTokens: 200000,
-            compactionCheckpointCount: 1,
-            latestCompactionCheckpoint: {
-              checkpointId: "checkpoint-1",
-              createdAt: Date.now(),
-              reason: "manual",
-            },
           }),
         ),
         onToggleDetails,
@@ -1383,61 +1229,7 @@ describe("sessions view", () => {
     expect(tokenCell?.textContent?.trim()).toBe("123.5k / 200k");
   });
 
-  it("renders the checkpoint count on the details disclosure", async () => {
-    const container = document.createElement("div");
-    const onToggleDetails = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            compactionCheckpointCount: 1,
-            latestCompactionCheckpoint: {
-              checkpointId: "checkpoint-1",
-              createdAt: Date.now(),
-              reason: "manual",
-            },
-          }),
-        ),
-        onToggleDetails,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const trigger = container.querySelector<HTMLButtonElement>(".session-details-toggle");
-    expect(trigger?.querySelector(".session-compaction-count")?.textContent?.trim()).toBe("1");
-    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
-
-    expect(trigger).toBeInstanceOf(HTMLButtonElement);
-    trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
-  });
-
-  it("omits the checkpoint count pill when a session has no checkpoints", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-          }),
-        ),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    const trigger = container.querySelector<HTMLButtonElement>(".session-details-toggle");
-    expect(trigger).toBeInstanceOf(HTMLButtonElement);
-    expect(trigger?.querySelector(".session-compaction-count")).toBeNull();
-  });
-
-  it("renders expanded session details with compaction history", async () => {
+  it("renders expanded session details without checkpoint actions", async () => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -1465,32 +1257,10 @@ describe("sessions view", () => {
               lastStatusNote: "Waiting for owner review",
               blockedAt: 3,
             },
-            compactionCheckpointCount: 1,
-            latestCompactionCheckpoint: {
-              checkpointId: "checkpoint-1",
-              createdAt: Date.now(),
-              reason: "manual",
-            },
           }),
         ),
         expandedSessionKey: "agent:main:main",
         patchAdminDisabledReason: "Operator admin access is required.",
-        checkpointItemsByKey: {
-          "agent:main:main": [
-            {
-              checkpointId: "checkpoint-1",
-              sessionKey: "agent:main:main",
-              sessionId: "session-1",
-              createdAt: Date.now(),
-              reason: "manual",
-              tokensBefore: 123456,
-              tokensAfter: 38920,
-              summary: "Trimmed earlier setup chatter and kept the active execution plan.",
-              preCompaction: { sessionId: "session-1" },
-              postCompaction: { sessionId: "session-1" },
-            },
-          ],
-        },
       }),
       container,
     );
@@ -1516,15 +1286,15 @@ describe("sessions view", () => {
     expect(stats.get("Runtime")).toBe("-");
     expect(stats.get("Run duration")).toBe("2m 5s");
     expect(stats.get("Tokens")).toBe("123456 / 200000");
-    expect(stats.get("Compaction")).toBe("1 Checkpoint");
+    expect(stats.has("Compaction")).toBe(false);
     expect(stats.get("Goal")).toBe(
       "Goal blocked (24k used): Finish the compaction details - Waiting for owner review",
     );
     expect(stats.get("Goal note")).toBe("Waiting for owner review");
 
     const sections = Array.from(details?.querySelectorAll(".session-details-section") ?? []);
-    expect(sections).toHaveLength(2);
-    const [overridesSection, compactionSection] = sections;
+    expect(sections).toHaveLength(1);
+    const [overridesSection] = sections;
     expect(
       overridesSection?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim(),
     ).toBe("Overrides");
@@ -1539,19 +1309,9 @@ describe("sessions view", () => {
       expect(select.disabled).toBe(true);
       expect(select.title).toBe("Operator admin access is required.");
     }
-
-    expect(
-      compactionSection?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim(),
-    ).toBe("Compaction history");
-    expect(
-      compactionSection?.querySelector(".session-details-section__title")?.textContent?.trim(),
-    ).toBe("1 Checkpoint");
-    expect(
-      compactionSection?.querySelector(".session-checkpoint-card__delta")?.textContent?.trim(),
-    ).toBe("123,456 to 38,920 tokens");
   });
 
-  it("opens details for sessions without checkpoints but ignores nested control clicks", async () => {
+  it("opens details and ignores nested control clicks", async () => {
     const container = document.createElement("div");
     const onToggleDetails = vi.fn();
     render(
@@ -1559,21 +1319,14 @@ describe("sessions view", () => {
         ...buildProps(
           buildMultiResult([
             {
-              key: "agent:main:with-checkpoint",
+              key: "agent:main:first",
               kind: "direct",
               updatedAt: 20,
-              compactionCheckpointCount: 1,
-              latestCompactionCheckpoint: {
-                checkpointId: "checkpoint-1",
-                createdAt: 20,
-                reason: "manual",
-              },
             },
             {
-              key: "agent:main:no-checkpoint",
+              key: "agent:main:second",
               kind: "direct",
               updatedAt: 10,
-              compactionCheckpointCount: 0,
             },
           ]),
         ),
@@ -1594,11 +1347,10 @@ describe("sessions view", () => {
     checkbox.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onToggleDetails).not.toHaveBeenCalled();
 
-    // Sessions without checkpoints still open the drawer for overrides and stats.
+    // Sessions open the drawer for overrides and stats.
     rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onToggleDetails).toHaveBeenCalledWith("agent:main:no-checkpoint");
+    expect(onToggleDetails).toHaveBeenCalledWith("agent:main:second");
   });
-
   it("keeps session selects stable and deselects only the current page", async () => {
     const container = document.createElement("div");
     render(

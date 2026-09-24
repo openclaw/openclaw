@@ -14,8 +14,6 @@ import {
   tryAcquireSharedSqliteCoordinator,
 } from "./sqlite-coordinator.js";
 import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
-import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
-import { prepareSingleFlightSqliteSnapshot } from "./sqlite-snapshot-single-flight.js";
 import {
   attachCoordinatorDelegate,
   attachLifecycleCoordinatorDelegate,
@@ -47,11 +45,8 @@ type HeldCoordinator = {
 
 type SourceReadScope = {
   active: boolean;
-  mutation?: boolean;
   assertCurrent: () => void;
   pin: () => { release: () => void };
-  snapshot?: (signal?: AbortSignal) => Promise<PreparedSqliteReadOnlyLocation>;
-  snapshots?: Promise<unknown>[];
 };
 export type StateDatabaseCoordinatorRuntime = Readonly<{
   directory: string;
@@ -524,6 +519,7 @@ export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
     ensurePrivateSqliteCoordinatorDirectory(path.dirname(pathname), "state-handles coordinator");
     const coordinator = tryAcquireSharedSqliteCoordinator(pathname, {
       busyTimeoutMs: params.busyTimeoutMs,
+      keepAlive: shouldKeepStateCoordinatorAlive(params),
     });
     if (!coordinator) {
       throw new StateDatabaseCoordinatorContentionError("state-handles");
@@ -560,67 +556,6 @@ export function acquireStateDatabaseHandleExclusion(params: CoordinatorOptions) 
     release() {
       released = true;
       coordinator.release();
-    },
-    assertNoPins() {
-      assertCurrent();
-      if (owner.references !== 1) {
-        throw new SqliteCoordinatorError("SQLite mutation left a participating handle open");
-      }
-    },
-    assertMutationCurrent(this: void) {
-      const scope = canonicalWriteScopes.getStore()?.get(coordinator.path);
-      if (!scope?.active || !scope.mutation) {
-        throw new SqliteCoordinatorError("SQLite canonical mutation scope is closed");
-      }
-      scope.assertCurrent();
-    },
-    async runWithCanonicalMutation<T>(
-      assertAuthority: () => void,
-      operation: () => Promise<T>,
-      snapshot: (
-        assertCurrent: () => void,
-        signal?: AbortSignal,
-      ) => Promise<PreparedSqliteReadOnlyLocation>,
-    ): Promise<T> {
-      const retained = pin();
-      const snapshots: Promise<unknown>[] = [];
-      const scope: SourceReadScope = {
-        active: true,
-        mutation: true,
-        snapshots,
-        assertCurrent: () => {
-          assertCurrent();
-          assertAuthority();
-        },
-        pin,
-      };
-      const scopes = new Map(canonicalWriteScopes.getStore());
-      scopes.set(coordinator.path, scope);
-      scope.snapshot = (signal) =>
-        snapshot(() => {
-          if (!scope.active) {
-            throw new SqliteCoordinatorError("SQLite mutation inspection scope is closed");
-          }
-          scope.assertCurrent();
-        }, signal);
-      try {
-        scope.assertCurrent();
-        const result = await canonicalWriteScopes.run(scopes, operation);
-        scope.assertCurrent();
-        return result;
-      } finally {
-        // Close admission first, then join any snapshot that escaped its caller.
-        // An escaped operation cannot use this context after the owner returns.
-        scope.active = false;
-        await Promise.allSettled(snapshots);
-        retained.release();
-      }
-    },
-    assertDrainedDuringMutation() {
-      assertCurrent();
-      if (owner.references !== 2) {
-        throw new SqliteCoordinatorError("SQLite inspection requires drained source handles");
-      }
     },
     // Synchronous admission only. Inherited async contexts cannot continue
     // canonical writes after this callback returns, even after fence release.
@@ -715,51 +650,4 @@ export function prepareStateDatabaseSourceExclusion(
   };
   assertCurrent();
   return assertCurrent;
-}
-
-/** Capture the exact task-local mutation interval, never just its physical owner. */
-export function prepareStateDatabaseCanonicalMutation(
-  databasePath: string,
-): (() => void) | undefined {
-  const pathname = resolveSourceScopePath(databasePath);
-  const scope = canonicalWriteScopes.getStore()?.get(pathname);
-  if (!scope?.mutation) {
-    return undefined;
-  }
-  const assertCurrent = () => {
-    if (!scope.active || canonicalWriteScopes.getStore()?.get(pathname) !== scope) {
-      throw new SqliteCoordinatorError(
-        "SQLite canonical mutation scope is closed or no longer current",
-      );
-    }
-    scope.assertCurrent();
-  };
-  assertCurrent();
-  return assertCurrent;
-}
-
-/** The mutation owner alone supplies private snapshots while its native source
- * may still be open. This never authorizes a child process or a source reopen. */
-export function prepareStateDatabaseMutationSnapshot(databasePath: string, signal?: AbortSignal) {
-  signal?.throwIfAborted();
-  const pathname = resolveSourceScopePath(databasePath);
-  const scope = canonicalWriteScopes.getStore()?.get(pathname);
-  if (!scope?.mutation) {
-    return undefined;
-  }
-  if (!scope.active || !scope.snapshot || !scope.snapshots) {
-    throw new SqliteCoordinatorError("SQLite mutation inspection scope is closed");
-  }
-  scope.assertCurrent();
-  const pending = prepareSingleFlightSqliteSnapshot(
-    databasePath,
-    "canonical-mutation",
-    (flightSignal) => scope.snapshot!(flightSignal),
-    signal,
-    {
-      trackProducer: (producer) => scope.snapshots!.push(producer),
-    },
-  );
-  void pending.catch(() => undefined);
-  return pending;
 }

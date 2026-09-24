@@ -162,6 +162,12 @@ jobs:
             exit 1
           fi
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Validate frozen-target Node exclusions
         id: node_test_exclusions
         env:
@@ -825,7 +831,7 @@ jobs:
 
       - name: Run plugin inspector advisory sweep
         env:
-          OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.21"
+          OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.26"
           OPENCLAW_PLUGIN_INSPECTOR_ROOT: .artifacts/plugin-inspector
         shell: bash
         run: |

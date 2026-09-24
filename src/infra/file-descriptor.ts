@@ -2,7 +2,11 @@ import type { BigIntStats } from "node:fs";
 import { sha256FileSync } from "@openclaw/fs-safe/durability";
 import "./fs-safe-defaults.js";
 
-export { copyFileHandle, overwriteFileHandle } from "@openclaw/fs-safe/advanced";
+export {
+  copyFileHandle,
+  overwriteFileHandle,
+  writeFileWindowFully,
+} from "@openclaw/fs-safe/advanced";
 
 export type FileMutationFingerprint = Pick<
   BigIntStats,
@@ -25,7 +29,10 @@ export function sameFileMutationFingerprint(
 }
 
 /** Maps the borrowed-descriptor digest to OpenClaw's persisted artifact fields. */
-export function hashFileDescriptorSync(fd: number): { sha256: string; sizeBytes: number } {
-  const { digest, bytes } = sha256FileSync(fd);
+export function hashFileDescriptorSync(
+  fd: number,
+  maxBytes?: number,
+): { sha256: string; sizeBytes: number } {
+  const { digest, bytes } = sha256FileSync(fd, { maxBytes });
   return { sha256: digest, sizeBytes: bytes };
 }

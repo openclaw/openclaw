@@ -25,6 +25,37 @@
   animation: chatWorkingIndicatorEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.chat-reading-indicator--neutral {
+  gap: 3px;
+}
+
+.chat-reading-indicator--neutral > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: chatWorkingDotPulse 1.2s ease-in-out infinite;
+}
+
+.chat-reading-indicator--neutral > span:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.chat-reading-indicator--neutral > span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+@keyframes chatWorkingDotPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
 .chat-working-indicator__status {
   display: inline-flex;
   align-items: baseline;
@@ -792,6 +823,7 @@
   /* Includes the bubble itself: the southpaw surprise animates the bubble,
      not the svg, and must stay still under reduced motion too. */
   .chat-reading-indicator,
+  .chat-reading-indicator--neutral > span,
   .chat-reading-indicator svg,
   .chat-reading-indicator svg .claw-icon__jaw {
     animation: none;

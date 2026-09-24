@@ -1,11 +1,12 @@
 /** Real registry and SQLite proof for explicit parent-owned resume admission. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useSubagentControlFixture } from "../agents/subagents/registry/subagent-control.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { AgentWaitResult } from "../agents/run-wait.js";
 import { resolveSubagentController } from "../agents/subagents/registry/subagent-control-scope.js";
 import { killAllControlledSubagentRuns } from "../agents/subagents/registry/subagent-control.js";
-import { useSubagentControlFixture } from "../agents/subagents/registry/subagent-control.test-support.js";
-import { subagentRegistryDeps } from "../agents/subagents/registry/subagent-registry-deps.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
@@ -310,12 +311,8 @@ it("rolls back a rejected durable replacement instead of accepting untracked wor
 it("delivers a result once after the former synchronous wait window, through the task owner", async () => {
   const state = await arrangePausedChild();
   const completion = createDeferred<AgentWaitResult>();
-  const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
-    .mockResolvedValue("delivered");
-  vi.spyOn(subagentRegistryDeps, "callGateway").mockImplementation(
-    async () => await completion.promise,
-  );
+  const announce = fixture.announce.mockResolvedValue("delivered");
+  fixture.gateway.mockReturnValue(completion.promise);
   const now = Date.now();
   vi.useFakeTimers({ toFake: ["Date"] });
   const adopt = await state.prepare();

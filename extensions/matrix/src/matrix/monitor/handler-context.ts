@@ -182,6 +182,7 @@ export async function resolveMatrixInboundContext(config: {
     {
       agentId: _route.agentId,
       sessionKey: _route.sessionKey,
+      nativeChannelId: roomId,
       messageId,
       inboundEventKind: "user_request",
     },

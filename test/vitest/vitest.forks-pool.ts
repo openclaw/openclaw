@@ -36,7 +36,7 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
         this.execArgv = [
           ...this.execArgv,
           "--report-on-signal",
-          "--report-signal=SIGUSR2",
+          "--report-signal=SIGQUIT",
           `--report-directory=${this.reportDir}`,
           "--report-filename=diagnostic.json",
           "--report-exclude-env",
@@ -108,7 +108,7 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
           ? collectVitestForkOsDiagnostics(child.pid)
           : Promise.resolve("OS process diagnostics unavailable.");
         let report = "Node diagnostic report unavailable on this runtime or host.";
-        if (this.reportDir && child.kill("SIGUSR2")) {
+        if (this.reportDir && child.kill("SIGQUIT")) {
           report = await collectNodeDiagnosticReport(path.join(this.reportDir, "diagnostic.json"));
         }
         const boundedReport =

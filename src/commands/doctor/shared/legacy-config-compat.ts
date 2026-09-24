@@ -75,6 +75,7 @@ export function applyLegacyDoctorMigrations(
       : { config: compat.next, changes: [] };
   changes.push(...ownership.changes);
   const warnings = [
+    ...(compat.warnings ?? []),
     ...(ownership.warnings ?? []),
     ...collectToolPolicyConflictWarnings(ownership.config),
   ];

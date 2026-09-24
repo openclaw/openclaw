@@ -1,10 +1,9 @@
 // Openai plugin module implements native web search behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isOpenAIApiBaseUrl } from "./base-url.js";
+import { resolveNativeWebSearch } from "./native-web-search-policy.js";
 
 const OPENAI_WEB_SEARCH_TOOL = { type: "web_search" } as const;
 
@@ -12,39 +11,6 @@ type OpenAINativeWebSearchPatchResult =
   | "payload_not_object"
   | "native_tool_already_present"
   | "injected";
-
-function isOpenAINativeWebSearchEligibleModel(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-}): boolean {
-  const provider = typeof model.provider === "string" ? model.provider : undefined;
-  if (model.api !== "openai-responses" || !provider || normalizeProviderId(provider) !== "openai") {
-    return false;
-  }
-  const baseUrl = typeof model.baseUrl === "string" ? model.baseUrl : undefined;
-  return !baseUrl || isOpenAIApiBaseUrl(baseUrl);
-}
-
-function shouldUseOpenAINativeWebSearchProvider(config: OpenClawConfig | undefined): boolean {
-  const provider = config?.tools?.web?.search?.provider;
-  if (typeof provider !== "string") {
-    return true;
-  }
-  const normalized = provider.trim().toLowerCase();
-  return normalized === "" || normalized === "auto" || normalized === "openai";
-}
-
-function shouldEnableOpenAINativeWebSearch(params: {
-  config?: OpenClawConfig;
-  model: { api?: unknown; provider?: unknown; baseUrl?: unknown };
-}): boolean {
-  return (
-    params.config?.tools?.web?.search?.enabled !== false &&
-    shouldUseOpenAINativeWebSearchProvider(params.config) &&
-    isOpenAINativeWebSearchEligibleModel(params.model)
-  );
-}
 
 function isNativeWebSearchTool(tool: unknown): boolean {
   return isRecord(tool) && tool.type === OPENAI_WEB_SEARCH_TOOL.type;
@@ -101,7 +67,13 @@ export function createOpenAINativeWebSearchWrapper(
     {
       shouldPatch: ({ model }) =>
         params.nativeWebSearchAllowedByToolPolicy !== false &&
-        shouldEnableOpenAINativeWebSearch({ config: params.config, model }),
+        resolveNativeWebSearch({
+          config: params.config,
+          provider: model.provider,
+          modelId: model.id,
+          api: model.api,
+          baseUrl: model.baseUrl,
+        }),
     },
   );
 }

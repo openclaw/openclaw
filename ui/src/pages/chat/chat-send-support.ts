@@ -254,7 +254,10 @@ export function retireDeliveredQueuedUserTurn(
     // Delivery proof must never become a fresh-send retry because local bytes
     // were unavailable. Keep the same run identity and its no-replay barrier.
     updateQueuedMessage(host, stored.id, (item) =>
-      failOutboxPayload({ ...item, sendState: "unconfirmed" }, reason),
+      failOutboxPayload(
+        { ...item, sendState: item.sendState === "held" ? "held" : "unconfirmed" },
+        reason,
+      ),
     );
     return "retained";
   });

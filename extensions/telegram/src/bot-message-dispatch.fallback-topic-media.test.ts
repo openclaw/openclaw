@@ -4,6 +4,7 @@ import {
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -487,7 +488,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     };
 
     it("deduplicates block-sent media from final reply", async () => {
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },
@@ -507,13 +507,14 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
         telegramDeps: telegramDepsForTest,
       });
 
-      expect(finalDeliveryPayload().mediaUrls).toEqual([]);
+      const finalPayload = finalDeliveryPayload();
+      expect(resolveSendableOutboundReplyParts(finalPayload).mediaUrls).toEqual([]);
+      expect(finalPayload.text).toBe("Here is the image");
     });
 
     it("does not restore block-sent legacy media when the final includes another attachment", async () => {
       const sentMediaUrl = "/tmp/cat.jpg";
       const remainingMediaUrl = "/tmp/dog.jpg";
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },
@@ -551,7 +552,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
 
     it("preserves final media when block delivery reports no visible send", async () => {
       deliverReplies.mockResolvedValueOnce({ delivered: false });
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },
@@ -576,7 +576,6 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
 
     it("preserves final media when block delivery fails", async () => {
       deliverReplies.mockRejectedValueOnce(new Error("Telegram API error"));
-      deliverReplies.mockResolvedValue({ delivered: true });
       deliverInboundReplyWithMessageSendContext.mockResolvedValue({
         status: "handled_visible",
         delivery: { messageIds: ["101"], visibleReplySent: true },

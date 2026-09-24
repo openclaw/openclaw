@@ -15,6 +15,7 @@ import {
   contextWithClient,
   contextWeight,
   createPage,
+  createPendingUsageRouteData,
   focusDocument,
   preloadUsage,
   refreshButton,
@@ -698,17 +699,7 @@ describe("UsagePage detail requests", () => {
     const page = await createPage(client);
     const gateway = page.context.gateway;
     page.routeData = {
-      gateway,
-      gatewaySnapshot: gateway.snapshot,
-      query: {
-        startDate: "2026-05-14",
-        endDate: "2026-05-14",
-        scope: "family" as const,
-        timeZone: "local" as const,
-        agentId: null,
-      },
-      result: null,
-      costSummary: null,
+      ...createPendingUsageRouteData(gateway, "2026-05-14"),
       providerUsage: {
         state: "settled" as const,
         result: {
@@ -717,7 +708,6 @@ describe("UsagePage detail requests", () => {
         },
       },
       loadedAtMs: 0,
-      error: null,
     };
     await page.updateComplete;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -746,17 +736,7 @@ describe("UsagePage detail requests", () => {
     const page = await createPage({ request } as unknown as GatewayBrowserClient);
     const gateway = page.context.gateway;
     page.routeData = {
-      gateway,
-      gatewaySnapshot: gateway.snapshot,
-      query: {
-        startDate: "2026-05-14",
-        endDate: "2026-05-14",
-        scope: "family",
-        timeZone: "local",
-        agentId: null,
-      },
-      result: null,
-      costSummary: null,
+      ...createPendingUsageRouteData(gateway, "2026-05-14"),
       providerUsage: {
         state: "settled",
         result: {
@@ -765,7 +745,6 @@ describe("UsagePage detail requests", () => {
         },
       },
       loadedAtMs: 1,
-      error: null,
     } satisfies UsageRouteData;
     await page.updateComplete;
 

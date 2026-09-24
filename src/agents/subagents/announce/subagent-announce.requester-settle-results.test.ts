@@ -52,6 +52,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
       "run-b",
       "main",
       null,
+      1_000,
     );
   });
 

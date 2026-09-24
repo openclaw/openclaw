@@ -1,9 +1,7 @@
-import {
-  claimDeliveryQueueEntryPlatformSend,
-  dispatchDeliveryQueueEntryPlatformSend,
-  renewDeliveryQueueEntryPlatformSendLease,
-} from "../delivery-queue-sqlite-claim.js";
+import { dispatchDeliveryQueueEntryPlatformSend } from "../delivery-queue-sqlite-claim.js";
 import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
+import { executeDeliveryQueueOperation } from "../delivery-queue-worker-store.js";
+import { generateSecureUuid } from "../secure-random.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 
 /** Atomically transfer a stable pending producer intent to one platform sender. */
@@ -14,16 +12,16 @@ export async function claimDeliveryPlatformSendAttempt(
   reconciledPlatformSendAttemptId?: string,
   context?: DeliveryQueueStateContext,
 ): Promise<string | undefined> {
-  return claimDeliveryQueueEntryPlatformSend(
-    {
+  return executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.claimPlatformSend",
+    input: {
       queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
       id,
-      stateDir,
+      claimId: generateSecureUuid(),
       ...(reconciledPlatformSendStartedAt !== undefined ? { reconciledPlatformSendStartedAt } : {}),
       ...(reconciledPlatformSendAttemptId !== undefined ? { reconciledPlatformSendAttemptId } : {}),
     },
-    context,
-  );
+  });
 }
 
 /** Claim and atomically upgrade a live reusable producer to renewable ownership. */
@@ -32,15 +30,15 @@ export async function claimReusableDeliveryPlatformSendAttempt(
   stateDir?: string,
   context?: DeliveryQueueStateContext,
 ): Promise<string | undefined> {
-  return claimDeliveryQueueEntryPlatformSend(
-    {
+  return executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.claimPlatformSend",
+    input: {
       queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
       id,
-      stateDir,
+      claimId: generateSecureUuid(),
       requiresProducerClaim: true,
     },
-    context,
-  );
+  });
 }
 
 /** Extend the exact active producer lease without changing ownership. */
@@ -50,15 +48,14 @@ export async function renewDeliveryPlatformSendLease(
   claimId: string,
   context?: DeliveryQueueStateContext,
 ): Promise<number | undefined> {
-  return renewDeliveryQueueEntryPlatformSendLease(
-    {
+  return executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.renewPlatformSendLease",
+    input: {
       queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
       id,
-      stateDir,
       claimId,
     },
-    context,
-  );
+  });
 }
 
 /** Promote or refresh the exact live owner at recipient-visible dispatch. */

@@ -34,6 +34,8 @@ describe("gateway restart handoff state migration", () => {
     ).sql;
     const flexibleCreateSql = strictCreateSql.replace(/\s+STRICT$/u, "");
     expect(flexibleCreateSql).not.toBe(strictCreateSql);
+    // The synthetic pre-STRICT database predates this placement index.
+    legacy.exec("DROP INDEX idx_worker_session_placements_environment;");
     legacy.exec(`
       DROP INDEX idx_gateway_restart_handoff_expiry;
       ALTER TABLE gateway_restart_handoff RENAME TO gateway_restart_handoff_strict;

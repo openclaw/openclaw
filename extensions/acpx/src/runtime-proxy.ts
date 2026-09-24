@@ -2,6 +2,7 @@
  * Lazy ACP runtime proxy for ACPX. It defers resolving the real runtime until
  * the first ACP call while preserving the SDK runtime shape.
  */
+import type { AcpxRuntime as UpstreamRuntime } from "acpx/runtime";
 import type { AcpRuntime, AcpRuntimeTurn, AcpRuntimeTurnInput } from "../runtime-api.js";
 
 export type CompleteAcpRuntimeTurn = AcpRuntimeTurn &
@@ -14,19 +15,24 @@ export type CompleteAcpRuntimeTurn = AcpRuntimeTurn &
  * implements the full surface. Requiring them here turns an absent hook into
  * a compile error instead of a silently fabricated success at runtime.
  */
-export type CompleteAcpRuntime = Omit<AcpRuntime, "startTurn"> &
-  Required<
-    Pick<
-      AcpRuntime,
-      | "getCapabilities"
-      | "getStatus"
-      | "setMode"
-      | "setConfigOption"
-      | "doctor"
-      | "prepareFreshSession"
-    >
-  > & {
+export type CompleteAcpRuntime = Omit<
+  AcpRuntime,
+  "startTurn" | "getStatus" | "prepareFreshSession"
+> &
+  Required<Pick<AcpRuntime, "getCapabilities" | "setMode" | "setConfigOption" | "doctor">> & {
     startTurn(input: AcpRuntimeTurnInput): CompleteAcpRuntimeTurn;
+    getStatus: UpstreamRuntime["getStatus"];
+    setModel: UpstreamRuntime["setModel"];
+    prepareFreshSession(
+      input:
+        | Parameters<NonNullable<AcpRuntime["prepareFreshSession"]>>[0]
+        | Parameters<UpstreamRuntime["prepareFreshSession"]>[0],
+    ): Promise<void>;
+    findSession(input: {
+      sessionKey: string;
+      agent: string;
+      agentId?: string;
+    }): ReturnType<UpstreamRuntime["findSession"]>;
     shutdown(): Promise<void>;
   };
 
@@ -62,6 +68,9 @@ export function createLazyAcpRuntimeProxy(
 ): CompleteAcpRuntime {
   return {
     ownerAwareSessions: 1,
+    async findSession(input) {
+      return await (await resolveRuntime()).findSession(input);
+    },
     async shutdown() {
       await (await resolveRuntime()).shutdown();
     },
@@ -82,6 +91,9 @@ export function createLazyAcpRuntimeProxy(
     },
     async setMode(input) {
       await (await resolveRuntime()).setMode(input);
+    },
+    async setModel(input) {
+      await (await resolveRuntime()).setModel(input);
     },
     async setConfigOption(input) {
       return await (await resolveRuntime()).setConfigOption(input);

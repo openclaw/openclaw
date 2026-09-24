@@ -14,7 +14,7 @@ import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
-import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type {
   CronCompletionStatus,
   CronTriggerEvaluationResult,
@@ -39,6 +39,11 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../types.js";
+import type {
+  CronNotificationIntent,
+  CronNotificationJob,
+  ResolvedFailureAlert,
+} from "./notification-intents.js";
 
 /** Event payload emitted for cron lifecycle changes and completed runs. */
 export type CronEvent = {
@@ -95,7 +100,7 @@ export type CronSystemEventEnqueueResult =
     };
 
 /** Notifications queued by cron mutations until their state is durable. */
-export type DeferredCronNotifications = Array<() => void>;
+export type DeferredCronNotifications = CronNotificationIntent[];
 
 export type CronRunDeliveryResult = {
   /** True after verified delivery, including a matching messaging-tool send. */
@@ -190,6 +195,7 @@ export type CronServiceDeps = {
   ) => number | undefined;
   runIsolatedAgentJob: (params: {
     job: CronJob;
+    admissionSource?: AdmittedRunContext["admissionSource"];
     message: string;
     abortSignal?: AbortSignal;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
@@ -242,7 +248,7 @@ export type CronServiceDeps = {
     timeoutMs: number;
   }) => void | Promise<void>;
   sendCronFailureAlert?: (params: {
-    job: CronJob;
+    job: CronNotificationJob;
     payload: ReplyPayload;
     runAtMs?: number;
     channel: CronMessageChannel;
@@ -260,13 +266,20 @@ export type CronServiceDeps = {
 export type CronExecutionIdentityAdmission = {
   ingress: ExecutionIdentityAdmissionFacts["ingress"];
   invoker?: ExecutionIdentityAdmissionFacts["invoker"];
-  onPostAdmission?: (context: AdmittedRunContext) => void;
-  onExecutionStarted?: () => void;
+  onPostAdmission?: (context: AdmittedRunContext) => void | Promise<void>;
+  onExecutionStarted?: () => void | Promise<void>;
 };
 
 /** Cron deps after optional defaults have been made concrete. */
 type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
   nowMs: () => number;
+};
+
+/** Dependencies consumed by job policy before its mutation is committed. */
+export type CronJobPolicyContext = {
+  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log">;
+  /** Resolved by the host for this exact job while its recovery transaction holds the row. */
+  preparedFailureAlert?: { jobId: string; value: ResolvedFailureAlert | null };
 };
 
 /** Process-local admission state shared by every execution entry point of one cron service. */

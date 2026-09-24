@@ -6,6 +6,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
+import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
+import { FsSafeError } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import {
@@ -31,7 +33,6 @@ import {
 } from "./doctor-session-sqlite-migration-run.js";
 import type { DoctorSessionSqliteRestoreReport } from "./doctor-session-sqlite-types.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
-const RESTORE_ARCHIVE_HASH_CHUNK_BYTES = 64 * 1024;
 
 export async function restoreSessionSqliteMigrationRuns(params: {
   env: NodeJS.ProcessEnv;
@@ -417,21 +418,6 @@ type RestoreArchiveInspection =
   | { state: "invalid"; reason: string }
   | { state: "missing" };
 
-function hashRestoreArchive(fd: number, size: number): string {
-  const hash = createHash("sha256");
-  const buffer = Buffer.allocUnsafe(RESTORE_ARCHIVE_HASH_CHUNK_BYTES);
-  let offset = 0;
-  while (offset < size) {
-    const read = fs.readSync(fd, buffer, 0, Math.min(buffer.length, size - offset), offset);
-    if (read === 0) {
-      throw new Error("archive changed while it was inspected");
-    }
-    hash.update(buffer.subarray(0, read));
-    offset += read;
-  }
-  return hash.digest("hex");
-}
-
 function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchiveInspection {
   if (hasSymbolicLinkInDirectoryPath(path.dirname(move.archivePath))) {
     return { state: "invalid", reason: "archive parent is a symbolic link; refusing restore" };
@@ -449,6 +435,10 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
     return { state: "invalid", reason: "archive is not a regular file; refusing restore" };
   }
 
+  const changed: RestoreArchiveInspection = {
+    state: "invalid",
+    reason: "archive changed while it was inspected; refusing restore",
+  };
   let fd: number | undefined;
   try {
     const flags =
@@ -462,10 +452,7 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
       descriptorStat.dev !== pathStat.dev ||
       descriptorStat.ino !== pathStat.ino
     ) {
-      return {
-        state: "invalid",
-        reason: "archive changed while it was inspected; refusing restore",
-      };
+      return changed;
     }
     let digest: string;
     let legacyEntryCount: number | undefined;
@@ -491,7 +478,11 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
     } else {
       // Transcript-like archives can be arbitrarily large. Hash them incrementally so duplicate
       // planning cannot turn a Doctor restore into a synchronous whole-file allocation.
-      digest = hashRestoreArchive(fd, descriptorStat.size);
+      const hashed = hashFileDescriptorSync(fd, descriptorStat.size);
+      if (hashed.sizeBytes !== descriptorStat.size) {
+        throw new Error("archive changed while it was inspected");
+      }
+      digest = hashed.sha256;
     }
     const finalPathStat = fs.lstatSync(move.archivePath);
     if (
@@ -499,10 +490,7 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
       finalPathStat.ino !== descriptorStat.ino ||
       finalPathStat.size !== descriptorStat.size
     ) {
-      return {
-        state: "invalid",
-        reason: "archive changed while it was inspected; refusing restore",
-      };
+      return changed;
     }
     return {
       state: "available",
@@ -513,6 +501,13 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
       },
     };
   } catch (error) {
+    if (
+      move.kind !== "legacy-store" &&
+      error instanceof FsSafeError &&
+      error.code === "too-large"
+    ) {
+      return changed;
+    }
     const code = isRecord(error) ? error.code : undefined;
     return code === "ENOENT" || code === "ENOTDIR"
       ? { state: "missing" }

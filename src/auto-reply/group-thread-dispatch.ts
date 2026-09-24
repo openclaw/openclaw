@@ -39,13 +39,13 @@ import { captureReplyDispatchDeliveryOutcome } from "./reply/reply-dispatcher.js
 import {
   mapReplyDispatchCounts,
   type ReplyDispatchKind,
+  type ReplyDispatchOperation,
   type ReplyDispatcher,
 } from "./reply/reply-dispatcher.types.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply/reply-operation-run-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./reply/source-turn-id.js";
 import { withReplySystemEventContext } from "./reply/system-event-session-key.js";
 import type { FinalizedMsgContext } from "./templating.js";
-import type { ReplyPayload } from "./types.js";
 
 function participantDispatcher(parent: ReplyDispatcher): ReplyDispatcher {
   const queued = { tool: 0, block: 0, final: 0 };
@@ -55,14 +55,17 @@ function participantDispatcher(parent: ReplyDispatcher): ReplyDispatcher {
     final: createReplyDispatchSettledCounts(),
   };
   const pending: Promise<void>[] = [];
-  const send = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+  const send = (kind: ReplyDispatchKind, operation: ReplyDispatchOperation) => {
+    const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
     const outcome = captureReplyDispatchDeliveryOutcome(payload);
     const accepted =
-      kind === "tool"
-        ? parent.sendToolResult(payload)
-        : kind === "block"
-          ? parent.sendBlockReply(payload)
-          : parent.sendFinalReply(payload);
+      operation.kind === "prepared" && parent.sendPreparedReply
+        ? parent.sendPreparedReply(kind, operation.plan)
+        : kind === "tool"
+          ? parent.sendToolResult(payload)
+          : kind === "block"
+            ? parent.sendBlockReply(payload)
+            : parent.sendFinalReply(payload);
     if (accepted) {
       queued[kind]++;
     }
@@ -90,9 +93,12 @@ function participantDispatcher(parent: ReplyDispatcher): ReplyDispatcher {
   };
   return {
     prepareReplyPayload: parent.prepareReplyPayload,
-    sendToolResult: (payload) => send("tool", payload),
-    sendBlockReply: (payload) => send("block", payload),
-    sendFinalReply: (payload) => send("final", payload),
+    sendToolResult: (payload) => send("tool", { kind: "raw", payload }),
+    sendBlockReply: (payload) => send("block", { kind: "raw", payload }),
+    sendFinalReply: (payload) => send("final", { kind: "raw", payload }),
+    ...(parent.sendPreparedReply
+      ? { sendPreparedReply: (kind, plan) => send(kind, { kind: "prepared", plan }) }
+      : {}),
     supportsSettledReceipt: true,
     waitForIdle: async () => {
       await Promise.all(pending);

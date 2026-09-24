@@ -13,6 +13,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -48,6 +49,7 @@ import type {
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
 } from "./session-cold-storage-worker.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -186,7 +188,7 @@ function stageTranscriptArchiveContent(
       database,
       db
         .selectFrom("transcript_events")
-        .select("event_json")
+        .select(transcriptEventJsonSql(database).as("event_json"))
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     )) {
@@ -448,6 +450,7 @@ async function runArchiveSession(
 ): Promise<void> {
   let operationId = 0;
   for await (const [message] of on(port, "message")) {
+    cancelWorkerIdleGc();
     // SAFETY: only the paired scoped archive owner sends this private port's requests.
     const request = message as SqliteArchiveSessionRequest | { type: "close" };
     if (request.type === "close") {
@@ -505,6 +508,7 @@ async function runArchiveSession(
       response.results.some((result) => result.error !== undefined);
     response.results.length = 0;
     request.plans = [];
+    scheduleWorkerIdleGc();
     if (failed) {
       break;
     }
@@ -518,7 +522,7 @@ if (isSqliteTranscriptArchiveWorkerData(workerData)) {
   }
   const operation = (workerData as { operation?: unknown }).operation;
   if (operation === "canonical-validation-pool") {
-    const { serveWorkerTasks } = await import("../../infra/worker-task-pool.js");
+    const { serveWorkerTasks } = await import("../../infra/worker-task-server.js");
     const { runReclamationWorkerPort } =
       await import("./session-accessor.sqlite-mutation-worker.runtime.js");
     // Coordination actor IDs remain unique even when the previous task retained failed cleanup.

@@ -47,6 +47,26 @@ describe("PDF document extractor worker", () => {
     expect(buffer).toEqual(fixture);
   });
 
+  it.each([false, true])(
+    "preserves image-only pages beside selectable text (image first: %s)",
+    async (imageFirst) => {
+      const textPage = `BT /F1 12 Tf 40 700 Td (${"Selectable report text. ".repeat(12)}) Tj ET`;
+      const imagePage = "1 0 0 rg 50 50 300 500 re f";
+      const pages = imageFirst ? [imagePage, textPage] : [textPage, imagePage];
+      const extractor = createPdfDocumentExtractor();
+      const input = { ...request, buffer: createPdfFixture(pages), minTextChars: 200 };
+      const result = await extractor.extract(input);
+      const imageOnly = await extractor.extract({ ...input, pageNumbers: [imageFirst ? 1 : 2] });
+
+      expect(result?.text).toContain("Selectable report text.");
+      expect(result?.images).toHaveLength(1);
+      expect(result?.images).toEqual(imageOnly?.images);
+      const textOnly = await extractor.extract({ ...input, pageNumbers: [imageFirst ? 2 : 1] });
+      expect(textOnly?.images).toEqual([]);
+      expect(textOnly?.text).toBe(result?.text);
+    },
+  );
+
   it("renders real pages within the aggregate pixel budget", async () => {
     const result = await createPdfDocumentExtractor().extract({ ...request, minTextChars: 10_000 });
     expect(result?.images).toHaveLength(2);

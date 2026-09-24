@@ -17,6 +17,9 @@ export class QuestionDispatchRefusedError extends Error {
   override name = "QuestionDispatchRefusedError";
 }
 
+/** No input was submitted; the inherited name preserves legacy runtime refusal propagation. */
+export class QuestionDispatchUnsupportedError extends QuestionDispatchRefusedError {}
+
 /** A failed transport cannot release possibly committed input for another route. */
 export class QuestionAnswerUnconfirmedError extends Error {
   override name = "QuestionAnswerUnconfirmedError";
@@ -52,7 +55,8 @@ export function resolveAgentQuestionGatewayCall(
     const [method, options, params, extra] = args;
     if (typeof dispatcher === "function") {
       if (extra?.dispatchAuthority?.kind === "source-bound") {
-        throw new QuestionDispatchRefusedError(
+        extra.dispatchAuthority.assertCurrent();
+        throw new QuestionDispatchUnsupportedError(
           "source-bound question input requires the default or a version 2 dispatcher",
         );
       }

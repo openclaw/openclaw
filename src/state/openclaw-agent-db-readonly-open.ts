@@ -105,7 +105,9 @@ export function openOpenClawAgentDatabaseReadOnly(
       return;
     }
     clearNodeSqliteKyselyCacheForDatabase(db);
-    db.close();
+    if (db.isOpen) {
+      db.close();
+    }
     closed = true;
   };
   try {

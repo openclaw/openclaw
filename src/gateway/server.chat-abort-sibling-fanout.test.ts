@@ -136,7 +136,7 @@ for (const { name, fault, replaceParent } of [
         agentCommandMock.mockImplementationOnce(async (input) => {
           const command = input as AgentCommandOpts;
           expect(command.abortSignal).toBeInstanceOf(AbortSignal);
-          command.onExecutionStarted?.();
+          await command.onExecutionStarted?.();
           parentStarted.resolve(command);
           await parentFinish.promise;
           command.abortSignal!.throwIfAborted();
@@ -166,7 +166,7 @@ for (const { name, fault, replaceParent } of [
               reserveSwarmRun({ groupId, runId, maxConcurrent: 8, activeRunIds: running }),
             ).toBe(true);
           }
-          registerSubagentRun({
+          await registerSubagentRun({
             runId,
             childSessionKey: sessionKey(runId),
             requesterSessionKey: parentKey,

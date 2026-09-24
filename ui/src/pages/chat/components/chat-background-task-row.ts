@@ -109,13 +109,11 @@ export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): T
   const detail = taskDetail(task);
   const delivery = backgroundTaskDeliveryLabel(task);
   const cancelling = props.cancellingTaskIds.has(task.id);
-  const open = props.openTaskId === task.id;
   return html`
     <div
-      class="chat-tasks-rail__task ${open ? "chat-tasks-rail__task--open" : ""}"
+      class="chat-tasks-rail__task"
       role="listitem"
       data-task-id=${task.id}
-      aria-current=${open ? "true" : nothing}
       @click=${(event: MouseEvent) => {
         const target = event.target;
         if (target instanceof Element && target.closest("button, a")) {

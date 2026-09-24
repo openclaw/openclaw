@@ -1,4 +1,5 @@
 // Telegram supersede policy for durable ingress (authorization-gated).
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   addChannelAllowFromStoreEntry,
@@ -10,9 +11,12 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setTelegramRuntime } from "./runtime.js";
 
 let openClawState: OpenClawTestState | undefined;
+
+beforeEach(() => setTelegramRuntime(createPluginRuntimeMock()));
 
 afterEach(async () => {
   clearRuntimeConfigSnapshot();

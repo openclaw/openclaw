@@ -36,8 +36,8 @@ import {
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -78,6 +78,7 @@ import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "./compaction.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
+import { resolveAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import {
   clearAgentHarnesses,
@@ -87,9 +88,7 @@ import {
 import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
 import { resolveAgentHarnessDeliveryDefaults } from "./selection-decision.js";
 import {
-  resolveAgentHarnessNativeToolPolicyRestricted,
   resolveAvailableAgentHarnessPolicy,
-  resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
   runAgentHarnessSettledTurnFinalization,
   selectAgentHarness,
@@ -269,10 +268,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   vi.unstubAllEnvs();
   clearRuntimeConfigSnapshot();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   trajectoryTempDirs.cleanup();
   selectionAdmission.close();
   resetAgentRunRegistryForTest();
@@ -2191,66 +2190,6 @@ describe("runAgentHarnessAttempt", () => {
     const attempt = runAttempt.mock.calls[0]?.[0];
     expect(attempt?.toolsAllow).toEqual([]);
     expect(attempt?.extraSystemPrompt).toContain("this chat is not allowed by policy");
-  });
-
-  it.each([
-    {
-      name: "narrow allowlist",
-      config: { tools: { allow: ["message"] } } as OpenClawConfig,
-    },
-    {
-      name: "specific denylist",
-      config: { tools: { deny: ["exec"] } } as OpenClawConfig,
-    },
-    {
-      name: "narrow profile",
-      config: { tools: { profile: "coding" } } as OpenClawConfig,
-    },
-  ])("marks plugin side questions restricted for a $name", ({ config }) => {
-    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toEqual([]);
-  });
-
-  it.each([
-    { name: "full tool profile", config: { tools: { profile: "full" } } as OpenClawConfig },
-    { name: "explicit empty allowlist", config: { tools: { allow: [] } } as OpenClawConfig },
-  ])("leaves plugin side questions unrestricted for an $name", ({ config }) => {
-    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toBeUndefined();
-  });
-
-  it("leaves owner WebChat unrestricted by wildcard sender policy for plugin harnesses", () => {
-    const config = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["*"] },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolvePluginHarnessPolicyToolsAllow({
-        ...createAttemptParams(config),
-        messageProvider: "webchat",
-        senderIsOwner: true,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("keeps non-owner WebChat restricted by wildcard sender policy for plugin harnesses", () => {
-    const config = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["*"] },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolvePluginHarnessPolicyToolsAllow({
-        ...createAttemptParams(config),
-        messageProvider: "webchat",
-        senderIsOwner: false,
-      }),
-    ).toEqual([]);
   });
 
   it("leaves OpenClaw harness params unchanged for channel group sender deny-all policy", async () => {

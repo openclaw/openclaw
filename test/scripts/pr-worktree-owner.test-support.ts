@@ -36,8 +36,8 @@ export function createProvisionOwnerFixture(
     gh,
     `#!/bin/sh
 [ "$1" != auth ] || exit 1
-[ "$1" = api ] && [ "$2" = graphql ] || exit 2
-printf 'HTTP/2.0 200 OK\\r\\n\\r\\n{"data":{"viewer":{"login":"fixture"}}}\\n'
+[ "$*" = 'api user --include' ] || exit 2
+printf 'HTTP/2.0 200 OK\\r\\n\\r\\n{"login":"fixture"}\\n'
 `,
   );
   chmodSync(gh, 0o755);

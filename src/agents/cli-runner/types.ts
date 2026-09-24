@@ -162,7 +162,7 @@ export type RunCliAgentParams = {
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
   assertCurrent?: () => void;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: () => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -231,6 +231,10 @@ export type CliSessionBindingFacts = {
   requireExplicitMessageTarget?: boolean;
 };
 
+export function captureCliRunStartTime() {
+  return { started: Date.now(), startedMonotonicMs: performance.now() };
+}
+
 /** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
@@ -241,10 +245,14 @@ export type PreparedCliRunContext = {
   authProfileStore?: AuthProfileStore;
   agentDir?: string;
   started: number;
+  /** Monotonic anchor for elapsed-budget measurements, immune to wall-clock steps. */
+  startedMonotonicMs: number;
   workspaceDir: string;
   cwd?: string;
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
+  /** Enforced timeout of this run's managed Claude MCP server, when present. */
+  managedMcpToolTimeoutMs?: number;
   executionTarget: CliExecutionTarget;
   /** Keeps a plugin-owned turn admitted on its backend instance across a plugin hot reload. */
   pluginExecutionConsumer?: PluginInstanceConsumer;

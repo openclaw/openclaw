@@ -6,11 +6,13 @@ export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";
 export const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";
 export const WORKER_BUNDLE_IMAGE_PROCESSOR_PATH = "image-processor.worker.mjs";
 export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";
+export const WORKER_BUNDLE_SQLITE_STORE_PATH = "sqlite-store.worker.mjs";
 export const WORKER_BUNDLE_ARTIFACT_PATHS = [
   WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
   WORKER_BUNDLE_IMAGE_PROCESSOR_PATH,
   "service-child-group-anchor.mjs",
   "service-child-relay.mjs",
+  WORKER_BUNDLE_SQLITE_STORE_PATH,
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 ] as const;

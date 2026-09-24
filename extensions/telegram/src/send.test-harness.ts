@@ -322,3 +322,19 @@ export async function importTelegramSendModule() {
   vi.resetModules();
   return await import("./send.js");
 }
+
+export function mockLoadedMedia({
+  buffer = Buffer.from("media"),
+  contentType,
+  fileName,
+}: {
+  buffer?: Buffer;
+  contentType?: string;
+  fileName?: string;
+}): void {
+  loadWebMedia.mockResolvedValueOnce({
+    buffer,
+    ...(contentType ? { contentType } : {}),
+    ...(fileName ? { fileName } : {}),
+  });
+}

@@ -28,7 +28,7 @@ import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
-import { clearMemoryPluginState, registerMemoryCapability } from "../../plugins/memory-state.js";
+import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -36,6 +36,7 @@ import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { runReplyAgent } from "./agent-runner.js";
 import {
   createTestFollowupRun,
+  installAgentRunnerMemoryFixture,
   isModelRuntimeContextCarrier,
 } from "./agent-runner.test-fixtures.js";
 import { createTypingController } from "./typing.js";
@@ -275,17 +276,15 @@ it.each(["completed", "interrupted"] as const)(
           model: "owner-model",
           auth: {},
         });
-        registerMemoryCapability("memory-core", {
-          flushPlanResolver: () => ({
-            softThresholdTokens: 4_000,
-            reserveTokensFloor: 8_192,
-            forceFlushTranscriptBytes: 2 * 1024 * 1024,
-            prompt: "Checkpoint durable notes. Reply NO_REPLY.",
-            systemPrompt: "Write durable notes only.",
-            relativePath: "memory/checkpoint.md",
-            model: "test-provider/test-model",
-          }),
-        });
+        installAgentRunnerMemoryFixture(() => ({
+          softThresholdTokens: 4_000,
+          reserveTokensFloor: 8_192,
+          forceFlushTranscriptBytes: 2 * 1024 * 1024,
+          prompt: "Checkpoint durable notes. Reply NO_REPLY.",
+          systemPrompt: "Write durable notes only.",
+          relativePath: "memory/checkpoint.md",
+          model: "test-provider/test-model",
+        }));
         admission = await beginSessionWorkAdmission({
           scope: scope.storePath,
           identities: [scope.sessionKey, scope.sessionId],

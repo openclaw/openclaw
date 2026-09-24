@@ -4,7 +4,8 @@ import * as sqlitePostCommit from "../infra/sqlite-post-commit.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
-import { updateTask, upsertTaskDeliveryState } from "./task-registry-mutation.js";
+import { commitTaskDeliveryFixture } from "./task-registry-delivery.test-support.js";
+import { updateTask } from "./task-registry-mutation.js";
 import { createProjectionTransactionDatabase } from "./task-registry-projection.test-support.js";
 import { deleteTaskRecordById, resetTaskRegistryForTests } from "./task-registry-query.js";
 import { markTaskTerminalById } from "./task-registry-record-api.js";
@@ -63,9 +64,13 @@ describe("worker publication scope", () => {
     createdAt: 1,
   };
 
-  it.each(["before read", "during read", "during effects"] as const)(
-    "does not recover stale committed publication across task ABA %s",
-    async (phase) => {
+  it.each(
+    (["before read", "during read", "during effects"] as const).flatMap((phase) =>
+      (["newer write", "ABA"] as const).map((change) => ({ phase, change })),
+    ),
+  )(
+    "does not recover stale committed publication across $change $phase",
+    async ({ phase, change }) => {
       const { store, context, events } = await prepare([task]);
       const committed = { ...task, task: "Committed" };
       const started = createDeferred();
@@ -114,13 +119,17 @@ describe("worker publication scope", () => {
       try {
         await started.promise;
         expect(updateTask(task.taskId, { task: "Other write" })).not.toBeNull();
-        expect(updateTask(task.taskId, { task: "Committed" })).not.toBeNull();
+        if (change === "ABA") {
+          expect(updateTask(task.taskId, { task: "Committed" })).not.toBeNull();
+        }
         release.resolve();
         await rejected;
-        expect(events).toEqual([
-          "upserted:existing-task:original-run",
-          "upserted:existing-task:original-run",
-        ]);
+        expect(events).toEqual(
+          change === "ABA"
+            ? ["upserted:existing-task:original-run", "upserted:existing-task:original-run"]
+            : ["upserted:existing-task:original-run"],
+        );
+        expect(tasks.get(task.taskId)?.task).toBe(change === "ABA" ? "Committed" : "Other write");
         expect(effects).not.toHaveBeenCalled();
       } finally {
         release.resolve();
@@ -287,13 +296,14 @@ describe("worker publication scope", () => {
     }
   });
 
-  it.each(
-    (["queued", "read", "effects"] as const).flatMap((phase) =>
+  it.each([
+    ...(["queued", "read", "effects"] as const).flatMap((phase) =>
       (["none", "no-op refresh", "delivery", "unrelated row", "row ABA"] as const).map(
         (change) => ({ phase, change }),
       ),
     ),
-  )(
+    { phase: "effects", change: "overlapping worker ABA" } as const,
+  ])(
     "keeps receipt readiness correct across $change while $phase waits",
     async ({ phase, change }) => {
       const other = { ...task, taskId: "other-task", runId: "other-run" };
@@ -333,6 +343,7 @@ describe("worker publication scope", () => {
             return new Map([[task.taskId, receipt]]);
           },
           forcePublish: () => receipt,
+          ...(change === "overlapping worker ABA" ? { recoverPublication: () => undefined } : {}),
           beforeObservers: async () => {
             if (phase === "effects") {
               started.resolve();
@@ -355,10 +366,36 @@ describe("worker publication scope", () => {
       );
       try {
         await started.promise;
-        if (change === "no-op refresh") {
+        if (change === "overlapping worker ABA") {
+          const bothCommitted = createDeferred();
+          const writes = [{ ...receipt, task: "Other writer" }, receipt].map((row, index) =>
+            runTaskRegistryWorkerMutation(
+              {
+                admission: context.admission,
+                scope: { taskId: task.taskId },
+                publicationRecords: () => new Map([[task.taskId, row]]),
+              },
+              async () => {
+                store.upsertTaskWithDeliveryState({ task: row });
+                if (index === 1) {
+                  bothCommitted.resolve();
+                }
+                await bothCommitted.promise;
+              },
+              async () => store.loadSnapshot(),
+            ),
+          );
+          try {
+            await Promise.all(writes);
+            expect(events).toEqual(["upserted:existing-task:original-run"]);
+          } finally {
+            bothCommitted.resolve();
+            await Promise.allSettled(writes);
+          }
+        } else if (change === "no-op refresh") {
           withTaskRegistryMutation(() => {});
         } else if (change === "delivery") {
-          upsertTaskDeliveryState({ taskId: task.taskId, lastNotifiedEventAt: 42 });
+          commitTaskDeliveryFixture({ taskId: task.taskId, lastNotifiedEventAt: 42 });
         } else if (change === "unrelated row") {
           expect(updateTask(other.taskId, { task: "Other changed" })).not.toBeNull();
         } else if (change === "row ABA") {
@@ -369,7 +406,10 @@ describe("worker publication scope", () => {
         await expect(pending).resolves.toEqual(receipt);
         expect(tasks.get(task.taskId)).toEqual(receipt);
         expect(events).toEqual(
-          change === "delivery" || change === "none" || change === "no-op refresh"
+          change === "delivery" ||
+            change === "none" ||
+            change === "no-op refresh" ||
+            change === "overlapping worker ABA"
             ? ["upserted:existing-task:original-run"]
             : change === "unrelated row"
               ? ["upserted:other-task:other-run", "upserted:existing-task:original-run"]
@@ -381,6 +421,96 @@ describe("worker publication scope", () => {
       }
     },
   );
+
+  it("does not deliver an acknowledged receipt superseded by queued worker readbacks", async () => {
+    const other = { ...task, taskId: "blocking-task", runId: "blocking-run" };
+    const { store, context } = await prepare([task, other]);
+    const receipt = { ...task, task: "Ready" };
+    const predecessorStarted = createDeferred();
+    const releasePredecessor = createDeferred();
+    const written = createDeferred();
+    const acknowledge = createDeferred();
+    const claimed = createDeferred();
+    const published = vi.fn();
+    const publicationError = vi.fn();
+    const owners: Promise<unknown>[] = [];
+    const predecessor = runTaskRegistryWorkerMutation(
+      {
+        admission: context.admission,
+        scope: { taskId: other.taskId },
+        publicationRecords: () => new Map(),
+      },
+      async () => {},
+      async () => {
+        const snapshot = store.loadSnapshot();
+        predecessorStarted.resolve();
+        await releasePredecessor.promise;
+        return snapshot;
+      },
+    );
+    owners.push(predecessor);
+    try {
+      await predecessorStarted.promise;
+      const pending = runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope: { taskId: task.taskId },
+          publicationRecords: () => {
+            claimed.resolve();
+            return new Map([[task.taskId, receipt]]);
+          },
+          recoverPublication: () => undefined,
+          forcePublish: () => receipt,
+          onPublished: published,
+          onPublicationError: publicationError,
+        },
+        async (beginRecovery) => {
+          beginRecovery();
+          store.upsertTaskWithDeliveryState({ task: receipt });
+          written.resolve();
+          await acknowledge.promise;
+          return receipt;
+        },
+        async () => store.loadSnapshot(),
+      );
+      owners.push(pending);
+      await written.promise;
+      // Later commits register their readbacks before the held receipt is acknowledged.
+      for (const record of [{ ...receipt, task: "Other writer" }, receipt]) {
+        const competingClaimed = createDeferred();
+        owners.push(
+          runTaskRegistryWorkerMutation(
+            {
+              admission: context.admission,
+              scope: { taskId: task.taskId },
+              publicationRecords: () => {
+                competingClaimed.resolve();
+                return new Map([[task.taskId, record]]);
+              },
+            },
+            async () => {
+              store.upsertTaskWithDeliveryState({ task: record });
+              return record;
+            },
+            async () => store.loadSnapshot(),
+          ),
+        );
+        await competingClaimed.promise;
+      }
+      acknowledge.resolve();
+      await claimed.promise;
+      releasePredecessor.resolve();
+      await expect(pending).resolves.toEqual(receipt);
+      await Promise.all(owners);
+      expect(tasks.get(task.taskId)).toEqual(receipt);
+      expect(publicationError).not.toHaveBeenCalled();
+      expect(published).not.toHaveBeenCalled();
+    } finally {
+      acknowledge.resolve();
+      releasePredecessor.resolve();
+      await Promise.allSettled(owners);
+    }
+  });
 
   it.each(["owner", "requester"] as const)(
     "does not publish a child related only through its %s session",
@@ -493,7 +623,7 @@ describe("worker publication during canonical reads", () => {
         if (change === "activity") {
           emitTaskRegistryObserverEvent(() => ({ kind: "upserted", task }));
         } else if (change === "delivery") {
-          upsertTaskDeliveryState({ taskId: task.taskId, lastNotifiedEventAt: 42 });
+          commitTaskDeliveryFixture({ taskId: task.taskId, lastNotifiedEventAt: 42 });
         } else {
           const database = createProjectionTransactionDatabase();
           const lookup = vi

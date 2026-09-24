@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { SQLInputValue } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   copyPluginInstallRecordMap,
   createPluginInstallRecordMap,
@@ -20,6 +21,7 @@ import {
   INSTALLED_PLUGIN_INDEX_VERSION,
   type InstalledPluginIndex,
 } from "../plugins/installed-plugin-index.js";
+import { repairLegacyTaskIdentifiers } from "../state/openclaw-state-db-task-identifiers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   LEGACY_DELIVERY_QUEUE_DIRS,
@@ -48,12 +50,11 @@ import {
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import {
+  insertFlowRunRowSql,
   insertTaskDeliveryRowSql,
   insertTaskRunRowSql,
-  legacyBindValue,
-  listSqliteColumns,
   normalizeLegacySqliteInteger,
-  pickLegacyColumn,
+  readLegacyFlowRows,
   readLegacyTaskDeliveryRows,
   readLegacyTaskRows,
   type SqliteBindRow,
@@ -543,46 +544,6 @@ function legacyKeyValue(value: SQLInputValue): string {
   return "";
 }
 
-function normalizeLegacyFlowRow(row: Record<string, unknown>): SqliteBindRow {
-  const syncMode =
-    row.sync_mode === "task_mirrored" || row.shape === "single_task" ? "task_mirrored" : "managed";
-  const ownerKey =
-    typeof row.owner_key === "string" && row.owner_key.trim()
-      ? row.owner_key.trim()
-      : typeof row.owner_session_key === "string"
-        ? row.owner_session_key.trim()
-        : "";
-  const controllerId =
-    syncMode === "managed"
-      ? typeof row.controller_id === "string" && row.controller_id.trim()
-        ? row.controller_id.trim()
-        : "core/legacy-restored"
-      : null;
-  return {
-    flow_id: legacyBindValue(row.flow_id ?? ""),
-    shape: legacyBindValue(row.shape),
-    sync_mode: syncMode,
-    owner_key: ownerKey,
-    requester_origin_json: legacyBindValue(row.requester_origin_json),
-    controller_id: controllerId,
-    revision: normalizeLegacySqliteInteger(row.revision as number | bigint | null) ?? 0,
-    status: legacyBindValue(row.status ?? ""),
-    notify_policy: legacyBindValue(row.notify_policy ?? ""),
-    goal: legacyBindValue(row.goal ?? ""),
-    current_step: legacyBindValue(row.current_step),
-    blocked_task_id: legacyBindValue(row.blocked_task_id),
-    blocked_summary: legacyBindValue(row.blocked_summary),
-    state_json: legacyBindValue(row.state_json),
-    wait_json: legacyBindValue(row.wait_json),
-    cancel_requested_at: normalizeLegacySqliteInteger(
-      row.cancel_requested_at as number | bigint | null,
-    ),
-    created_at: normalizeLegacySqliteInteger(row.created_at as number | bigint | null) ?? 0,
-    updated_at: normalizeLegacySqliteInteger(row.updated_at as number | bigint | null) ?? 0,
-    ended_at: normalizeLegacySqliteInteger(row.ended_at as number | bigint | null),
-  };
-}
-
 function legacyRowsMatch(
   existing: Record<string, unknown>,
   incoming: Record<string, unknown>,
@@ -593,63 +554,6 @@ function legacyRowsMatch(
       normalizeLegacySqliteInteger(existing[column] as number | bigint | null) ===
       normalizeLegacySqliteInteger(incoming[column] as number | bigint | null),
   );
-}
-
-function readLegacyFlowRows(sourcePath: string): SqliteBindRow[] {
-  const db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
-  try {
-    const columns = listSqliteColumns(db, "flow_runs");
-    if (columns.size === 0) {
-      return [];
-    }
-    const selectColumns = [
-      "flow_id",
-      pickLegacyColumn(columns, "shape"),
-      pickLegacyColumn(columns, "sync_mode"),
-      pickLegacyColumn(columns, "owner_key"),
-      pickLegacyColumn(columns, "owner_session_key"),
-      pickLegacyColumn(columns, "requester_origin_json"),
-      pickLegacyColumn(columns, "controller_id"),
-      pickLegacyColumn(columns, "revision", "0"),
-      "status",
-      "notify_policy",
-      "goal",
-      pickLegacyColumn(columns, "current_step"),
-      pickLegacyColumn(columns, "blocked_task_id"),
-      pickLegacyColumn(columns, "blocked_summary"),
-      pickLegacyColumn(columns, "state_json"),
-      pickLegacyColumn(columns, "wait_json"),
-      pickLegacyColumn(columns, "cancel_requested_at"),
-      "created_at",
-      "updated_at",
-      pickLegacyColumn(columns, "ended_at"),
-    ];
-    return db
-      .prepare(
-        `SELECT ${selectColumns.join(", ")} FROM flow_runs ORDER BY created_at ASC, flow_id ASC`,
-      )
-      .all()
-      .map((row) => normalizeLegacyFlowRow(row as Record<string, unknown>));
-  } finally {
-    db.close();
-  }
-}
-
-function insertFlowRunRowSql(db: DatabaseSync, row: SqliteBindRow): void {
-  db.prepare(
-    `
-      INSERT INTO flow_runs (
-        flow_id, shape, sync_mode, owner_key, requester_origin_json, controller_id, revision,
-        status, notify_policy, goal, current_step, blocked_task_id, blocked_summary, state_json,
-        wait_json, cancel_requested_at, created_at, updated_at, ended_at
-      ) VALUES (
-        @flow_id, @shape, @sync_mode, @owner_key, @requester_origin_json, @controller_id,
-        @revision, @status, @notify_policy, @goal, @current_step, @blocked_task_id,
-        @blocked_summary, @state_json, @wait_json, @cancel_requested_at, @created_at,
-        @updated_at, @ended_at
-      )
-    `,
-  ).run(row);
 }
 
 async function migrateLegacyTaskRunsSidecar(params: {
@@ -720,7 +624,13 @@ async function migrateLegacyTaskRunsSidecar(params: {
             .prepare(`SELECT ${taskColumns.join(", ")} FROM task_runs WHERE task_id = ?`)
             .get(taskId);
           if (existing) {
-            if (!legacyRowsMatch(existing as Record<string, unknown>, row, taskColumns)) {
+            if (
+              !legacyRowsMatch(
+                { ...existing, run_id: normalizeOptionalString(existing.run_id) ?? null },
+                { ...row, run_id: normalizeOptionalString(row.run_id) ?? null },
+                taskColumns,
+              )
+            ) {
               conflicts.push(taskId);
             }
             continue;
@@ -753,6 +663,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
         if (conflicts.length > 0) {
           throw new LegacyTaskStateSidecarConflictError(conflicts);
         }
+        repairLegacyTaskIdentifiers(db);
       },
       { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
     );

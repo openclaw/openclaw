@@ -27,7 +27,7 @@ its exact prepared publication artifacts for both roles. For a later
 changelog-only Release SHA using evidence reuse, also record the reuse policy,
 complete changed-path set, green Code SHA parent run, and Release SHA parent
 run. For extended-stable, record the canonical branch, exact release SHA,
-fresh parent run id and attempt, workflow ref, every child run, and any
+accepted producer identity, parent run id and attempt, workflow ref, every child run, and any
 frozen-target compatibility repair or intentional omission.
 
 Useful artifacts:

@@ -456,7 +456,9 @@ export function resolveFinalDoctorHealthContributions(params: {
         defaultEnabled: false,
         detect: collectWriteConfigHealthFindings,
       },
-      run: runWriteConfigHealth,
+      async run(ctx) {
+        await runWriteConfigHealth(ctx);
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:workspace-suggestions",

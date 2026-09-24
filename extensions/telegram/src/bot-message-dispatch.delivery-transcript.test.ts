@@ -302,6 +302,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
           telegramDeps: {
             ...telegramDepsForTest,
             deliverReplies: actualDelivery.deliverReplies,
+            deliverStructuredReplies: actualDelivery.deliverStructuredReplies,
             recordOutboundMessageForPromptContext: async (params) => {
               if (params.promptContextProjection?.finalPart === !failLastSend) {
                 finalHistoryWrites.push(params.messageId);

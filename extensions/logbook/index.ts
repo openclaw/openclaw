@@ -226,11 +226,7 @@ export default definePluginEntry({
     registerWrite("logbook.frames", async (params) => {
       const startMs = readNumberParam(params, "startMs");
       const endMs = readNumberParam(params, "endMs");
-      const frames = (await requireService().framesInRange(startMs, endMs)).map((frame) => ({
-        id: frame.id,
-        capturedAtMs: frame.capturedAtMs,
-        idle: frame.idle,
-      }));
+      const frames = await requireService().framesInRange(startMs, endMs);
       return { frames };
     });
 

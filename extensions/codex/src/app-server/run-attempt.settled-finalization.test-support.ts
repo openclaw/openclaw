@@ -219,7 +219,7 @@ export function registerSettledFinalizationTests({
             name: "bash",
             arguments: JSON.stringify({ command: "echo sent-to-alice", cwd: workspaceDir }),
           },
-          { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice" },
+          { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice\n" },
         ]);
         expect(Object.isFrozen(context)).toBe(true);
       }

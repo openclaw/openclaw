@@ -54,3 +54,18 @@ export function withEphemeralCodexAuthStore(params: {
   const args = normalizeCodexAppServerArgs(startOptions.args, CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE);
   return args === startOptions.args ? startOptions : { ...startOptions, args };
 }
+
+export function withClearedEnvironmentVariables(
+  startOptions: CodexAppServerStartOptions,
+  envVars: readonly string[],
+): CodexAppServerStartOptions {
+  const clearEnv = startOptions.clearEnv ?? [];
+  const missingEnvVars = envVars.filter((envVar) => !clearEnv.includes(envVar));
+  if (missingEnvVars.length === 0) {
+    return startOptions;
+  }
+  return {
+    ...startOptions,
+    clearEnv: [...clearEnv, ...missingEnvVars],
+  };
+}

@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { appendPluginInstanceCleanupFailures } from "./host-hook-cleanup-result.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import type {
   PluginHostCleanupFailure,
@@ -383,12 +384,11 @@ export function createPluginHostRegistryRetirement(params: {
         return { ...result, deferredPluginIds: [pluginId] };
       }
       const disposed = await (instance ? instance.dispose() : completion);
+      const failures = [...result.failures];
+      appendPluginInstanceCleanupFailures(failures, pluginId, disposed.errors);
       return {
         cleanupCount: result.cleanupCount,
-        failures: [
-          ...result.failures,
-          ...disposed.errors.map((error) => ({ pluginId, hookId: "instance", error })),
-        ],
+        failures,
       };
     });
   }

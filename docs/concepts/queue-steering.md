@@ -70,6 +70,14 @@ browsers. The running turn keeps its original approval destination. A different
 browser identity alone does not defer the message, but changes to permissions,
 execution policy, workspace, or bound tools can require a followup turn.
 
+[Personal `USER.md` context](/concepts/user-model#personal-user-files-on-a-shared-gateway)
+follows the session's assigned human owner, otherwise its authenticated human
+creator. Another participant can steer normally without switching that personal
+context, and collected messages keep the same session selection. Reassignment
+takes effect on the next new turn; it does not replace the running turn's personal
+instructions. Personal context selection does not grant tool permissions or
+change the approval destination.
+
 A visible message or send acknowledgment does not mean the active runtime has
 consumed it. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.

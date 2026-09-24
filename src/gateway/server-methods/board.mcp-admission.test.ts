@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -262,6 +263,9 @@ describe("MCP App source authority at board write admission", () => {
         }
         if (cancel || retire) {
           expect((await pin)!.mock.calls.some(([ok]) => ok)).toBe(false);
+          if (retire) {
+            await closeOpenClawAgentDatabaseByPathAsync(database.path);
+          }
           expect(await boardStore.readWidgetMcpApp(target, "destination")).toBeUndefined();
           expect(board.broadcast).not.toHaveBeenCalled();
           expect(callTool).not.toHaveBeenCalled();

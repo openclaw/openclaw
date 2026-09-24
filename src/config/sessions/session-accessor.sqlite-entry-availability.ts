@@ -101,8 +101,7 @@ type SessionIdentityEvidenceProbe = {
 
 const SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE = 400;
 
-type SessionIdentityEvidenceItem = {
-  index: number;
+export type SessionIdentityEvidenceIdentity = {
   sessionId: string;
   sessionKey?: string;
 };
@@ -115,9 +114,9 @@ type SessionIdentityEvidenceRow = {
   updated_at: number;
 };
 
-function readSessionIdentityEvidenceRows(
+export function readSessionIdentityEvidenceInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
-  items: readonly SessionIdentityEvidenceItem[],
+  items: readonly SessionIdentityEvidenceIdentity[],
 ): SessionIdentityEvidenceResult[] {
   assertCanonicalSqliteSessionKeysCurrent(database);
   const db = getSessionKysely(database.db);
@@ -216,7 +215,7 @@ export function readSessionIdentityEvidenceBatch(
   const groups = new Map<
     string,
     {
-      items: SessionIdentityEvidenceItem[];
+      items: Array<SessionIdentityEvidenceIdentity & { index: number }>;
       options: ReturnType<typeof toDatabaseOptions>;
     }
   >();
@@ -243,7 +242,7 @@ export function readSessionIdentityEvidenceBatch(
       | { found: false; reason: "database-missing" | "schema-missing" };
     try {
       read = withOpenClawAgentDatabaseReadOnly(
-        (database) => readSessionIdentityEvidenceRows(database, group.items),
+        (database) => readSessionIdentityEvidenceInDatabase(database, group.items),
         group.options,
       );
     } catch {
