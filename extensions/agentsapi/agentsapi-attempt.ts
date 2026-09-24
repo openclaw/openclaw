@@ -226,7 +226,6 @@ export async function runAgentsApiAttempt(
           .filter(Boolean)
           .join("\n\n"),
         params.model.id,
-        reasoningEffort,
         {
           functions: surface.declarations,
           reasoning: {

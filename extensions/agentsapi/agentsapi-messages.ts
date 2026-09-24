@@ -94,10 +94,6 @@ class AgentsApiMessageProjection {
     };
   }
 
-  get hadPotentialSideEffects(): boolean {
-    return this.nativeTools.hadPotentialSideEffects;
-  }
-
   get resultClassification(): AgentHarnessAttemptResult["agentHarnessResultClassification"] {
     return this.classification;
   }

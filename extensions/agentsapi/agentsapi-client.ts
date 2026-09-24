@@ -122,10 +122,6 @@ export type AgentsApiFunctionDeclaration = {
   parameters: Record<string, unknown>;
   defer_loading?: boolean;
 };
-export type AgentsApiReasoning = {
-  effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
-  summary?: "concise" | "detailed" | "auto" | null;
-};
 export type AgentsApiFunctionResult =
   | { success: true; output: string }
   | { success: false; error: string };
@@ -173,10 +169,9 @@ export class AgentsApiClient {
     signal: AbortSignal,
     instructions: string,
     model: string,
-    reasoningEffort?: AgentReasoningParam["effort"],
-    extras?: {
+    options?: {
       functions?: AgentsApiFunctionDeclaration[];
-      reasoning?: AgentsApiReasoning;
+      reasoning?: AgentReasoningParam;
     },
   ): Promise<string> {
     const session = await this.sessions.create(
@@ -184,13 +179,9 @@ export class AgentsApiClient {
         agent: {
           model,
           instructions,
-          reasoning: extras?.reasoning
-            ? { ...extras.reasoning, effort: reasoningEffort }
-            : reasoningEffort === undefined
-              ? undefined
-              : { effort: reasoningEffort },
+          reasoning: options?.reasoning,
           multi_agent: { enabled: false },
-          tools: [{ type: "web_search", mode: "live" }, ...(extras?.functions ?? [])],
+          tools: [{ type: "web_search", mode: "live" }, ...(options?.functions ?? [])],
         },
         environment: { type: "openai_hosted" },
       },

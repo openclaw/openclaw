@@ -8,9 +8,9 @@ import {
   AgentsApiError,
   type AgentsApiEvent,
   type AgentsApiFunctionCall,
-  type AgentsApiFunctionResult,
   type AgentsApiItem,
 } from "./agentsapi-client.js";
+import type { AgentsApiToolExecutionResult } from "./agentsapi-tools.js";
 
 /** Native input receipts and session idle, together, establish Agents API completion. */
 export function createAgentsApiSession(options: {
@@ -25,10 +25,10 @@ export function createAgentsApiSession(options: {
   onSettled?: () => void;
   onUsageError?: (error: unknown) => void;
   onTranscriptOrderingGap?: () => void;
-  executeFunction?: (call: AgentsApiFunctionCall) => Promise<FunctionExecutionResult>;
+  executeFunction?: (call: AgentsApiFunctionCall) => Promise<AgentsApiToolExecutionResult>;
   onFunctionResult?: (
     call: AgentsApiFunctionCall,
-    result: FunctionExecutionResult,
+    result: AgentsApiToolExecutionResult,
   ) => void | Promise<void>;
 }) {
   const { client, cleanupClient, sessionId, signal, assertCurrent } = options;
@@ -226,7 +226,6 @@ export function createAgentsApiSession(options: {
     wasSubmitted: () => submitted,
     isSettled: () => settled,
     queueMessage: submit,
-    cancel,
     readUsageTurns() {
       if (!submitted || !settled) {
         return Promise.resolve([]);
@@ -665,11 +664,6 @@ export function createAgentsApiSession(options: {
     },
   };
 }
-
-type FunctionExecutionResult = AgentsApiFunctionResult & {
-  sourceReplyDelivered?: true;
-  terminate?: true;
-};
 
 function isTerminalTurn(status: string): boolean {
   return ["completed", "failed", "cancelled"].includes(status);

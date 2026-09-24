@@ -50,7 +50,11 @@ import {
   resolveLiveToolResultMaxChars,
   sliceToolResultTextToBudget,
 } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { AgentsApiFunctionCall, AgentsApiFunctionDeclaration } from "./agentsapi-client.js";
+import type {
+  AgentsApiFunctionCall,
+  AgentsApiFunctionDeclaration,
+  AgentsApiFunctionResult,
+} from "./agentsapi-client.js";
 import { recordAgentsApiToolTranscript } from "./agentsapi-transcript.js";
 
 type ToolDelivery = AgentHarnessMessagingDeliveryFacts &
@@ -60,10 +64,10 @@ type ToolDelivery = AgentHarnessMessagingDeliveryFacts &
     "didDeliverSourceReplyViaMessageTool" | "sourceReplyDelivered" | "toolTrustedLocalMedia"
   >;
 
-type AgentsApiToolExecutionResult = (
-  | { success: true; output: string }
-  | { success: false; error: string }
-) & { sourceReplyDelivered?: true; terminate?: true };
+export type AgentsApiToolExecutionResult = AgentsApiFunctionResult & {
+  sourceReplyDelivered?: true;
+  terminate?: true;
+};
 
 export type AgentsApiToolSurface = {
   declarations: AgentsApiFunctionDeclaration[];
