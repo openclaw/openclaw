@@ -49,14 +49,13 @@ export function resolveSessionVisibility(
   return entry.visibility ?? "shared";
 }
 
-/** Compare access facts only after the mutation owner has preserved the canonical target. */
+/** Compare access facts only after the caller has preserved the canonical target. */
 export function hasSessionReadAccessChanged(
   previous: SessionEntry | undefined,
   current: SessionEntry,
 ): boolean {
   return (
     !previous?.sessionId?.trim() ||
-    !previous.lifecycleRevision?.trim() ||
     previous.sessionId !== current.sessionId ||
     previous.lifecycleRevision !== current.lifecycleRevision ||
     sessionCreatorProfileId(previous.createdActor) !==

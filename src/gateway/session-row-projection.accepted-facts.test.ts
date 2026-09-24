@@ -792,6 +792,18 @@ it("keeps accepted resident facts after their native reader is retired", async (
   });
 });
 
+it("retains accepted facts through catalog publication between presentation slices", async () => {
+  await withAcceptedSuffix(async ({ projection, suffix, query, reads, resume }) => {
+    const pending = suffix.pendingDatabaseFacts;
+    sessionChanges.emit({ all: true, scope: "catalog" });
+    expect(suffix.pendingDatabaseFacts).toBe(pending);
+    await resume();
+    expect(reads).toHaveLength(1);
+    expect(projection.snapshot(query).row?.label).toBe("accepted-1");
+    expect(projection.dirtyRowCount).toBe(0);
+  });
+});
+
 it("presents current runtime activity without reacquiring accepted database facts", async () => {
   await withAcceptedSuffix(
     async ({ projection, suffix, query, entry, reads, viewerId, resume }) => {

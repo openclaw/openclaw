@@ -177,19 +177,10 @@ function closeIdleCoordinatorDatabase(database: DatabaseSync, location: string) 
 }
 
 function closeIdleCoordinatorsOnExit() {
-  const databases = new Map(failedIdleCloses);
-  for (const [location] of idleCoordinators) {
-    const idle = takeIdleCoordinator(location);
-    if (idle) {
-      databases.set(idle.database, location);
-    }
-  }
-  for (const [database, location] of databases) {
-    try {
-      closeIdleCoordinatorDatabase(database, location);
-    } catch {
-      // Process exit is the last cleanup opportunity for a failed native close.
-    }
+  try {
+    closeIdleCoordinatorPool();
+  } catch {
+    // Process exit is the last cleanup opportunity for a failed native close.
   }
 }
 

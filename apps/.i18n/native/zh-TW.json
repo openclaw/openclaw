@@ -593,7 +593,6 @@
     "native.android.56ba8fc553a399af": "套用、拒絕及隔離需要 operator.admin 範圍。請使用共用 Gateway 驗證重新連線，或核准 operator.admin 裝置範圍升級，以啟用生命週期動作。",
     "native.android.56d46eccb37487c3": "排程",
     "native.android.56d7703155f09152": "連線至 Gateway 以檢閱變更。",
-    "native.android.56da9a315483abe4": "語音對話已停止",
     "native.android.56de778dd64c4cba": "下一個週期",
     "native.android.56eac13e3394c87f": "登出",
     "native.android.5731193296f6ca25": "套用",

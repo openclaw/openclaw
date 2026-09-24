@@ -237,7 +237,9 @@ describe("context-engine maintenance transcript ownership", () => {
     async (executionMode) => {
       await withTranscriptOwners(async ({ memory, durable, params, target }) => {
         const release = createDeferredCore();
+        const foreignStarted = createDeferredCore();
         const foreignMaintain = vi.fn(async () => {
+          foreignStarted.resolve();
           await release.promise;
           return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
         });
@@ -250,7 +252,8 @@ describe("context-engine maintenance transcript ownership", () => {
         });
         let run: Promise<unknown> | undefined;
         try {
-          await vi.waitFor(() => expect(foreignMaintain).toHaveBeenCalledOnce());
+          await foreignStarted.promise;
+          expect(foreignMaintain).toHaveBeenCalledOnce();
           const tasksBefore = listTasksForOwnerKey(target.sessionKey);
           const maintain = vi.fn(async () => ({
             changed: false,

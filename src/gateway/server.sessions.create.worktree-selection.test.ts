@@ -11,10 +11,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  createOpenClawTestState,
-  withOpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
@@ -39,9 +36,11 @@ import {
 import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
 
 let gitWorkspaceTemplate: string;
-const { createSessionStoreDir } = setupSessionCreateTestHarness(async (makeTempDir) => {
-  gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
-});
+const { createSessionStoreDir, withSessionTestState } = setupSessionCreateTestHarness(
+  async (makeTempDir) => {
+    gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
+  },
+);
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -134,7 +133,7 @@ test.each([
 ])(
   "sessions.create shares a title routed through the $name selection with its worktree and first chat send",
   async ({ request, catalogTarget, parentEntry, expectedEntry, expectedTitleSelection }) =>
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    await withSessionTestState({ layout: "state-only" }, async (state) => {
       const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
       testState.agentConfig = {
         workspace,
