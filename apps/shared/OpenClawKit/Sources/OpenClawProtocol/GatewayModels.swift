@@ -13881,6 +13881,11 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
     public let timestamp: String?
     public let model: String?
     public let sender: SessionParticipant?
+    public let toolname: String?
+    public let toolcallid: String?
+    public let toolinput: AnyCodable?
+    public let iserror: Bool?
+    public let exitcode: Int?
     public let truncated: Bool?
     public let raw: AnyCodable?
 
@@ -13891,6 +13896,11 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
         timestamp: String? = nil,
         model: String? = nil,
         sender: SessionParticipant? = nil,
+        toolname: String? = nil,
+        toolcallid: String? = nil,
+        toolinput: AnyCodable? = nil,
+        iserror: Bool? = nil,
+        exitcode: Int? = nil,
         truncated: Bool? = nil,
         raw: AnyCodable? = nil)
     {
@@ -13900,8 +13910,29 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
         self.timestamp = timestamp
         self.model = model
         self.sender = sender
+        self.toolname = toolname
+        self.toolcallid = toolcallid
+        self.toolinput = toolinput
+        self.iserror = iserror
+        self.exitcode = exitcode
         self.truncated = truncated
         self.raw = raw
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case text
+        case timestamp
+        case model
+        case sender
+        case toolname = "toolName"
+        case toolcallid = "toolCallId"
+        case toolinput = "toolInput"
+        case iserror = "isError"
+        case exitcode = "exitCode"
+        case truncated
+        case raw
     }
 }
 

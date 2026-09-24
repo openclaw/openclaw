@@ -3,10 +3,8 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   SessionCatalogHost,
   SessionCatalogProvider,
-  SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { adoptedSourceKey, CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 import { continueClaudeSession } from "./session-catalog-continue.js";
 import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
@@ -23,7 +21,7 @@ import { type BoundClaudeSession, listBoundClaudeSessions } from "./session-cata
 import { configuredClaudeConfigDir, gatewayClaudeScanOptions } from "./session-catalog-scan.js";
 import { ClaudeCatalogParamsError } from "./session-catalog-shared.js";
 import * as catalogTerminal from "./session-catalog-terminal.js";
-import { collectTranscriptText, type ClaudeTranscriptItem } from "./session-catalog-transcript.js";
+import { toGenericClaudeItems } from "./session-catalog-transcript.js";
 import type { ClaudeSessionCatalogHost } from "./session-catalog-types.js";
 import * as upstream from "./session-upstream-activity.js";
 
@@ -32,70 +30,6 @@ export {
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
 } from "./session-catalog-listing.js";
-
-const CLAUDE_TRANSCRIPT_TYPES = new Map<string, SessionCatalogTranscriptItem["type"]>([
-  ["userMessage", "userMessage"],
-  ["agentMessage", "agentMessage"],
-  ["reasoning", "reasoning"],
-  ["toolCall", "toolCall"],
-  ["toolResult", "toolResult"],
-]);
-const CLAUDE_BLOCK_TYPES = new Map<unknown, SessionCatalogTranscriptItem["type"]>([
-  ["thinking", "reasoning"],
-  ["tool_use", "toolCall"],
-  ["tool_result", "toolResult"],
-]);
-
-function toGenericClaudeItems(item: ClaudeTranscriptItem): SessionCatalogTranscriptItem[] {
-  const common = {
-    ...(item.timestamp ? { timestamp: item.timestamp } : {}),
-    ...(item.model ? { model: item.model } : {}),
-    ...(item.truncated ? { truncated: true } : {}),
-  };
-  if (!Array.isArray(item.content)) {
-    return [
-      {
-        ...common,
-        ...(item.uuid ? { id: item.uuid } : {}),
-        // Oversized rows lose their native blocks; their flattened text can contain
-        // reasoning or tools, so consumers must not treat it as ordinary prose.
-        type: item.truncated ? "other" : (CLAUDE_TRANSCRIPT_TYPES.get(item.type) ?? "other"),
-        ...(item.text ? { text: item.text } : {}),
-      },
-    ];
-  }
-  // Mixed tools/reasoning must not inherit the row's user or assistant label.
-  return item.content
-    .flatMap((block, index): SessionCatalogTranscriptItem[] => {
-      if (!isRecord(block)) {
-        return [];
-      }
-      const messageType = item.type === "userMessage" ? "userMessage" : "agentMessage";
-      const type =
-        block.type === "text" ? messageType : (CLAUDE_BLOCK_TYPES.get(block.type) ?? "other");
-      const fragments: string[] = [];
-      if (block.type === "tool_use") {
-        fragments.push(typeof block.name === "string" ? block.name : "tool");
-        if (block.input !== undefined) {
-          fragments.push(JSON.stringify(block.input));
-        }
-      } else {
-        const content =
-          block.type === "text" ? (typeof block.text === "string" ? block.text : "") : block;
-        collectTranscriptText(content, fragments);
-      }
-      const text = fragments.join("\n\n");
-      return [
-        {
-          ...common,
-          ...(item.uuid ? { id: `${item.uuid}:${index}` } : {}),
-          type,
-          ...(text ? { text } : {}),
-        },
-      ];
-    })
-    .toReversed();
-}
 
 function toGenericClaudeHost(
   host: ClaudeSessionCatalogHost,

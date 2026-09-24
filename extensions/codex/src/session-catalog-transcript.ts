@@ -1,6 +1,7 @@
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog-paging";
 import { z } from "zod";
+import { readItem } from "./app-server/event-projector-values.js";
 import type { CodexThreadItem } from "./app-server/protocol.js";
 import {
   readCodexThreadHistoryPage,
@@ -27,7 +28,31 @@ const transcriptPageSchema = z.strictObject({
 });
 
 export function parseCodexCatalogTranscriptPage(value: unknown): TranscriptPage {
-  return transcriptPageSchema.parse(value);
+  const page = transcriptPageSchema.parse(value);
+  for (const item of page.items) {
+    const native = readItem(item.raw);
+    if (!native) {
+      continue;
+    }
+    // Recover metadata locally; preserve the node's bounded text and cursor.
+    const { id: _id, text: _text, raw: _raw, ...metadata } = toGenericTranscriptItem(native);
+    Object.assign(item, metadata);
+  }
+  return page;
+}
+
+/** Released v1 readers reject extra keys, even when the generic fields are optional. */
+export function serializeCodexCatalogTranscriptPage(page: TranscriptPage): string {
+  return JSON.stringify({
+    ...page,
+    items: page.items.map(({ id, type, text, raw, truncated }) => ({
+      id,
+      type,
+      text,
+      raw,
+      truncated,
+    })),
+  });
 }
 
 function projectTranscriptPage(

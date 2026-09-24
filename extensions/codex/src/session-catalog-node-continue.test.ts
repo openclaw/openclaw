@@ -865,6 +865,66 @@ describe("Codex supervision actions", () => {
     expect(control.readThread).not.toHaveBeenCalled();
   });
 
+  it("enriches released v1 tool records without changing bounded text or cursors", async () => {
+    const source = catalogThreadItem("completed-tool", {
+      type: "commandExecution",
+      command: "false",
+      cwd: "/repo",
+      status: "failed",
+      aggregatedOutput: "x".repeat(600 * 1024),
+      exitCode: 1,
+    });
+    const boundedText = `${source.aggregatedOutput?.slice(0, 512 * 1024 - 3)}…`;
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
+      payloadJSON: JSON.stringify({
+        items: [
+          { id: source.id, type: "toolResult", text: boundedText, raw: source, truncated: true },
+        ],
+        nextCursor: "native-older",
+      }),
+    }));
+    const { runtime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [
+            CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+            CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
+          ],
+        },
+      ],
+      invoke,
+    });
+    const page = await readCodexSessionTranscript({
+      runtime,
+      control: createControl(),
+      hostId: "node:devbox",
+      threadId: "thread-remote",
+      limit: 25,
+    });
+    expect(page.nextCursor).toBe("native-older");
+    expect(page.items).toEqual([
+      {
+        id: source.id,
+        type: "toolResult",
+        text: boundedText,
+        raw: source,
+        truncated: true,
+        toolName: "shell",
+        toolCallId: source.id,
+        toolInput: { command: "false", cwd: "/repo" },
+        exitCode: 1,
+        isError: true,
+      },
+    ]);
+    expect(invoke.mock.calls[0]?.[0].params).toEqual({
+      agentId: "main",
+      threadId: "thread-remote",
+      limit: 25,
+    });
+  });
+
   it.each([
     { mode: "bounded", command: CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, nativeLimit: 25 },
     { mode: "legacy", command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, nativeLimit: 1 },

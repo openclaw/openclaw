@@ -1,3 +1,5 @@
+import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
+import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -7,7 +9,7 @@ const MAX_TRANSCRIPT_TEXT_LENGTH = 1_000_000;
 export type ClaudeTranscriptItem = {
   type: string;
   text?: string;
-  content?: unknown;
+  content?: PluginJsonValue;
   timestamp?: string;
   model?: string;
   uuid?: string;
@@ -61,9 +63,10 @@ export function parseTranscriptLine(
   line: Buffer,
   optionalString: (value: unknown, maxLength: number) => string | undefined,
 ): ClaudeTranscriptItem | undefined {
-  let raw: unknown;
+  let raw: PluginJsonValue;
   try {
-    raw = JSON.parse(line.toString("utf8")) as unknown;
+    // SAFETY: JSON.parse produces JSON values; the row and message shapes are checked below.
+    raw = JSON.parse(line.toString("utf8")) as PluginJsonValue;
   } catch {
     return undefined;
   }
@@ -81,8 +84,9 @@ export function parseTranscriptLine(
   const fragments: string[] = [];
   collectTranscriptText(content, fragments);
   const text = [...new Set(fragments)].join("\n\n");
+  const itemType = transcriptItemType(role, content);
   const item: ClaudeTranscriptItem = {
-    type: transcriptItemType(role, content),
+    type: itemType,
     ...(text ? { text } : {}),
     content,
     ...(optionalString(raw.timestamp, 128)
@@ -104,4 +108,85 @@ export function parseTranscriptLine(
     ...(item.uuid ? { uuid: item.uuid } : {}),
     truncated: true,
   };
+}
+
+const CLAUDE_TRANSCRIPT_TYPES = new Map<string, SessionCatalogTranscriptItem["type"]>([
+  ["userMessage", "userMessage"],
+  ["agentMessage", "agentMessage"],
+  ["reasoning", "reasoning"],
+  ["toolCall", "toolCall"],
+  ["toolResult", "toolResult"],
+]);
+const CLAUDE_BLOCK_TYPES = new Map<unknown, SessionCatalogTranscriptItem["type"]>([
+  ["thinking", "reasoning"],
+  ["tool_use", "toolCall"],
+  ["tool_result", "toolResult"],
+]);
+
+export function toGenericClaudeItems(item: ClaudeTranscriptItem): SessionCatalogTranscriptItem[] {
+  const common = {
+    ...(item.timestamp ? { timestamp: item.timestamp } : {}),
+    ...(item.model ? { model: item.model } : {}),
+    ...(item.truncated ? { truncated: true } : {}),
+  };
+  if (!Array.isArray(item.content)) {
+    return [
+      {
+        ...common,
+        ...(item.uuid ? { id: item.uuid } : {}),
+        // Oversized rows lose their native blocks; their flattened text can contain
+        // reasoning or tools, so consumers must not treat it as ordinary prose.
+        type: item.truncated ? "other" : (CLAUDE_TRANSCRIPT_TYPES.get(item.type) ?? "other"),
+        ...(item.text ? { text: item.text } : {}),
+      },
+    ];
+  }
+  // Mixed tools/reasoning must not inherit the row's user or assistant label.
+  return item.content
+    .flatMap((block, index): SessionCatalogTranscriptItem[] => {
+      if (!isRecord(block)) {
+        return [];
+      }
+      const messageType = item.type === "userMessage" ? "userMessage" : "agentMessage";
+      const type =
+        block.type === "text" ? messageType : (CLAUDE_BLOCK_TYPES.get(block.type) ?? "other");
+      const fragments: string[] = [];
+      if (block.type === "tool_use") {
+        if (typeof block.name === "string") {
+          fragments.push(block.name);
+        }
+        if (block.input !== undefined) {
+          fragments.push(JSON.stringify(block.input));
+        }
+      } else {
+        const content =
+          block.type === "text" ? (typeof block.text === "string" ? block.text : "") : block;
+        collectTranscriptText(content, fragments);
+      }
+      const text = fragments.join("\n\n");
+      return [
+        {
+          ...common,
+          ...(item.uuid ? { id: `${item.uuid}:${index}` } : {}),
+          type,
+          ...(block.type === "tool_use"
+            ? {
+                ...(typeof block.name === "string" ? { toolName: block.name } : {}),
+                ...(typeof block.id === "string" ? { toolCallId: block.id } : {}),
+                ...(block.input !== undefined ? { toolInput: block.input } : {}),
+              }
+            : block.type === "tool_result"
+              ? {
+                  toolName: "tool",
+                  ...(typeof block.tool_use_id === "string"
+                    ? { toolCallId: block.tool_use_id }
+                    : {}),
+                  isError: block.is_error === true,
+                }
+              : {}),
+          ...(text ? { text } : {}),
+        },
+      ];
+    })
+    .toReversed();
 }

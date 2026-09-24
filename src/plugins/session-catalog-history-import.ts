@@ -1,4 +1,5 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
@@ -11,54 +12,100 @@ const SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS = 200;
 const SESSION_CATALOG_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 const SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT = 100;
 
-function importedSessionCatalogMessage(params: {
+function importedSessionCatalogMessages(params: {
   catalogId: string;
   item: SessionCatalogTranscriptItem;
   fallbackTimestamp: number;
-}): AgentMessage | undefined {
+}): AgentMessage[] {
   const timestamp = parseDateStringTimestampMs(params.item.timestamp) ?? params.fallbackTimestamp;
   const importedText = params.item.text?.trim();
   if (!importedText && params.item.type === "reasoning") {
-    return undefined;
+    return [];
   }
-  const text = importedText || "[Unsupported catalog transcript item]";
+  const toolInput = asNullableRecord(params.item.toolInput);
+  const nonObjectInput = params.item.toolInput !== undefined && !toolInput;
+  // Native toolCall blocks require object arguments. Keep other JSON inputs
+  // visible as labelled text instead of inventing a different argument shape.
+  const text =
+    params.item.type === "toolCall" && nonObjectInput
+      ? `${params.item.toolName ?? "tool"}\n\n${JSON.stringify(params.item.toolInput, null, 2)}`
+      : importedText || "[Unsupported catalog transcript item]";
   if (params.item.type === "userMessage") {
     // Imported native rows are not OpenClaw-authored; mirrorOrigin excludes them
     // from self-echo provenance so a repeated external prompt stays observable.
-    return {
-      role: "user",
-      content: text,
+    return [
+      {
+        role: "user",
+        content: text,
+        timestamp,
+        __openclaw: { mirrorOrigin: `${params.catalogId}-catalog-import` },
+      } as AgentMessage,
+    ];
+  }
+  if (params.item.type === "toolResult" && params.item.toolName && params.item.toolCallId) {
+    const result: AgentMessage = {
+      role: "toolResult",
+      toolCallId: params.item.toolCallId,
+      toolName: params.item.toolName,
+      content: [{ type: "text", text: params.item.text ?? "" }],
+      isError: params.item.isError === true,
+      ...(params.item.exitCode !== undefined
+        ? { details: { exitCode: params.item.exitCode } }
+        : {}),
       timestamp,
-      __openclaw: { mirrorOrigin: `${params.catalogId}-catalog-import` },
-    } as AgentMessage;
+    };
+    // Some native stores retain one completed item with both input and output.
+    // Expand it only at import so catalog cursors still count native items.
+    return params.item.toolInput !== undefined
+      ? [
+          ...importedSessionCatalogMessages({
+            ...params,
+            item: { ...params.item, type: "toolCall" },
+          }),
+          result,
+        ]
+      : [result];
   }
   const prefix =
+    params.item.type === "toolCall" && (!params.item.toolName || nonObjectInput)
+      ? "Tool call\n\n"
+      : params.item.type === "toolResult"
+        ? "Tool result\n\n"
+        : params.item.type === "other"
+          ? "Other\n\n"
+          : "";
+  const content =
     params.item.type === "reasoning"
-      ? "Thinking\n\n"
-      : params.item.type === "toolCall"
-        ? "Tool call\n\n"
-        : params.item.type === "toolResult"
-          ? "Tool result\n\n"
-          : params.item.type === "other"
-            ? "Other\n\n"
-            : "";
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: `${prefix}${text}` }],
-    timestamp,
-    api: "openai-responses",
-    provider: params.catalogId,
-    model: params.item.model ?? "native-history",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      ? [{ type: "thinking" as const, thinking: text }]
+      : params.item.type === "toolCall" && params.item.toolName && !nonObjectInput
+        ? [
+            {
+              type: "toolCall" as const,
+              id: params.item.toolCallId ?? `${params.catalogId}:${params.item.id ?? timestamp}`,
+              name: params.item.toolName,
+              arguments: toolInput ?? {},
+            },
+          ]
+        : [{ type: "text" as const, text: `${prefix}${text}` }];
+  return [
+    {
+      role: "assistant",
+      content,
+      timestamp,
+      api: "openai-responses",
+      provider: params.catalogId,
+      model: params.item.model ?? "native-history",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
     },
-    stopReason: "stop",
-  };
+  ];
 }
 
 function sessionCatalogContinuationNotice(text: string, timestamp: number): AgentMessage {
@@ -88,14 +135,32 @@ function fitSessionCatalogItemToBytes(
   if (Buffer.byteLength(JSON.stringify(item), "utf8") <= maxBytes) {
     return item;
   }
-  const text = item.text;
+  let retainedItem = item;
+  // Text truncation cannot shrink structured input. Keep the visible result
+  // with an explicit omission notice when that input alone exhausts the budget.
+  if (
+    item.toolInput !== undefined &&
+    Buffer.byteLength(JSON.stringify({ ...item, text: "…", truncated: true }), "utf8") > maxBytes
+  ) {
+    const { toolInput: _toolInput, ...withoutInput } = item;
+    retainedItem = {
+      ...withoutInput,
+      ...(item.type === "toolCall" ? { toolName: undefined } : {}),
+      text: `${item.text ?? item.toolName ?? "Tool call"}\n\n[Oversized tool input omitted]`,
+      truncated: true,
+    };
+    if (Buffer.byteLength(JSON.stringify(retainedItem), "utf8") <= maxBytes) {
+      return retainedItem;
+    }
+  }
+  const text = retainedItem.text;
   if (typeof text !== "string") {
     return undefined;
   }
   const candidate = (length: number): SessionCatalogTranscriptItem => {
     const safeLength =
       length > 0 && /[\uD800-\uDBFF]/u.test(text.charAt(length - 1)) ? length - 1 : length;
-    return { ...item, text: `${text.slice(0, safeLength)}…`, truncated: true };
+    return { ...retainedItem, text: `${text.slice(0, safeLength)}…`, truncated: true };
   };
   let low = 0;
   let high = text.length;
@@ -182,24 +247,24 @@ export async function importSessionCatalogHistory(params: {
   const fallbackTimestamp = Date.now();
   await withSessionTranscriptWriteLock(params, async (transcript) => {
     for (const [index, item] of items.entries()) {
-      const imported = importedSessionCatalogMessage({
+      const messages = importedSessionCatalogMessages({
         catalogId: params.catalogId,
         item,
         fallbackTimestamp: fallbackTimestamp + index,
       });
-      if (!imported) {
-        continue;
+      for (const imported of messages) {
+        const kind =
+          messages.length === 2 && imported.role === "assistant" ? "catalog-tool-call" : "catalog";
+        await transcript.appendMessage({
+          message: {
+            ...imported,
+            idempotencyKey: `${params.catalogId}-${kind}:${params.threadId}:${item.id ?? index}`,
+          },
+          idempotencyLookup: "scan",
+          cwd: params.cwd,
+          ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
+        });
       }
-      const message = {
-        ...imported,
-        idempotencyKey: `${params.catalogId}-catalog:${params.threadId}:${item.id ?? index}`,
-      };
-      await transcript.appendMessage({
-        message,
-        idempotencyLookup: "scan",
-        cwd: params.cwd,
-        ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
-      });
     }
     const notice = params.continuationNotice?.trim();
     if (notice) {
