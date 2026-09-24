@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -84,25 +85,37 @@ describe("external supervisor guidance", () => {
     "keeps generic guidance when %s",
     async (mode) => {
       const plugins = config.plugins!;
-      if (mode === "disabled") plugins.entries!.deployment.enabled = false;
-      if (mode === "denied") plugins.deny = ["deployment"];
-      if (mode === "not-allowed") plugins.allow = ["another-plugin"];
-      if (mode === "missing") plugins.load = { paths: [] };
-      if (mode === "unselected") plugins.slots = {};
-      if (mode === "non-external") vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
+      if (mode === "disabled") {
+        expectDefined(plugins.entries?.deployment, "deployment fixture").enabled = false;
+      }
+      if (mode === "denied") {
+        plugins.deny = ["deployment"];
+      }
+      if (mode === "not-allowed") {
+        plugins.allow = ["another-plugin"];
+      }
+      if (mode === "missing") {
+        plugins.load = { paths: [] };
+      }
+      if (mode === "unselected") {
+        plugins.slots = {};
+      }
+      if (mode === "non-external") {
+        vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
+      }
       expect(await resolveExternalSupervisorGuidance("start", { config })).toBeUndefined();
     },
   );
 
   it("uses fresh configured values and never renders a malformed command", async () => {
     expect(await resolveExternalSupervisorGuidance("start", { config })).toBeDefined();
-    config.plugins!.entries!.deployment.config = {
+    expectDefined(config.plugins?.entries?.deployment, "deployment fixture").config = {
       guidance: { ...guidance, actions: { start: "new deployment command" } },
     };
     expect(await resolveExternalSupervisorGuidance("start", { config })).toMatchObject({
       command: "new deployment command",
     });
-    config.plugins!.entries!.deployment.config = {
+    expectDefined(config.plugins?.entries?.deployment, "deployment fixture").config = {
       guidance: { ...guidance, actions: { start: "unsafe\ncommand" } },
     };
     expect(await resolveExternalSupervisorGuidance("start", { config })).toBeUndefined();

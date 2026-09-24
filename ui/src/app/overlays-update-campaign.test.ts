@@ -243,6 +243,53 @@ describe("application update campaign overlays", () => {
     }
   });
 
+  it("retires supervisor guidance across a same-client reconnect and failed status read", async () => {
+    const externalSupervisorGuidance = {
+      version: 1,
+      action: "update",
+      name: "Example Fleet",
+      command: "fleet update example",
+    };
+    const retiredStatus = deferred<unknown>();
+    const currentStatus = deferred<unknown>();
+    let statusReads = 0;
+    let reconnected = false;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method !== "update.status") {
+        return Promise.resolve({});
+      }
+      statusReads += 1;
+      if (statusReads === 1) {
+        return Promise.resolve({ externalSupervisorGuidance });
+      }
+      return reconnected ? currentStatus.promise : retiredStatus.promise;
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await flushMicrotasks();
+      expect(overlays.snapshot.externalSupervisorGuidance).toEqual(externalSupervisorGuidance);
+      const refresh = overlays.refreshUpdateStatus();
+
+      harness.update({ phase: "reconnecting" });
+      expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
+      reconnected = true;
+      harness.update({ phase: "connected" });
+      expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
+
+      retiredStatus.resolve({ externalSupervisorGuidance });
+      expect(await refresh).toBe(false);
+      expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
+      currentStatus.reject(new Error("Current deployment status unavailable"));
+      await flushMicrotasks();
+      expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
+    } finally {
+      retiredStatus.resolve({});
+      currentStatus.resolve({});
+      overlays.dispose();
+    }
+  });
+
   it.each([false, true])(
     "discards an explicit refresh after administrator access is revoked (restored: %s)",
     async (restoreAdmin) => {

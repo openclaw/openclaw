@@ -37,10 +37,6 @@ describe("supervisor guidance display contract", () => {
     { ...guidance, actions: { update: "" } },
     { ...guidance, actions: { update: "x".repeat(1025) } },
     { ...guidance, actions: { update: "é".repeat(513) } },
-    ...["\n", "\r", "\x1b", "\u202e", "\u2028", "\u2029", "\ud800"].map((character) => ({
-      ...guidance,
-      actions: { update: `echo${character}command` },
-    })),
     {
       ...guidance,
       actions: Object.fromEntries(
@@ -53,4 +49,16 @@ describe("supervisor guidance display contract", () => {
   ])("rejects invalid or unsafe copy as a whole (%#)", (value) => {
     expect(parseSupervisorGuidance(value)).toBeUndefined();
   });
+
+  it.each(["\n", "\r", "\x1b", "\u202e", "\u2028", "\u2029", "\ud800"])(
+    "rejects control and formatting characters in commands (%#)",
+    (character) => {
+      expect(
+        parseSupervisorGuidance({
+          ...guidance,
+          actions: { update: `echo${character}command` },
+        }),
+      ).toBeUndefined();
+    },
+  );
 });

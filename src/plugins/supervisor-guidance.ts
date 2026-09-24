@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 /** Display-only deployment guidance. Commands never confer execution authority. */
 export type SupervisorAction =
   | "start"
@@ -40,10 +42,6 @@ const ACTIONS: readonly SupervisorAction[] = [
 ];
 const textEncoder = new TextEncoder();
 const FORBIDDEN_TEXT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isText(value: unknown, maxLength: number): value is string {
   return (
