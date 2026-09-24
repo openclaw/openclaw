@@ -157,7 +157,8 @@ type SubagentRegistryStateModule =
 type DetachedTaskRuntimeModule = typeof import("../src/tasks/detached-task-runtime.js");
 type SessionAccessorModule = typeof import("../src/config/sessions/session-accessor.js");
 type SwarmSchedulerModule = typeof import("../src/agents/subagents/swarm/swarm-scheduler.js");
-type SubagentListModule = typeof import("../src/agents/subagents/registry/subagent-list.js");
+type SubagentListModule =
+  typeof import("../src/agents/subagents/registry/subagent-list.test-support.js");
 type AgentEventsModule = typeof import("../src/infra/agent-events.js");
 
 const repoRoot = process.env.PROOF_REPO_ROOT ?? process.cwd();
@@ -287,7 +288,7 @@ try {
     "src/agents/subagents/swarm/swarm-scheduler.js",
   )) as SwarmSchedulerModule;
   const subagentList = (await importSource(
-    "src/agents/subagents/registry/subagent-list.js",
+    "src/agents/subagents/registry/subagent-list.test-support.js",
   )) as SubagentListModule;
   const agentEvents = (await importSource("src/infra/agent-events.js")) as AgentEventsModule;
   log(`[boot] production modules imported in ${Math.round((Date.now() - bootStartedAt) / 1_000)}s`);
@@ -639,7 +640,7 @@ try {
   // under recent timeouts here would contradict, in the same turn, both the
   // completion warning and the still-`running` detached task — and a parent that
   // believes the listing is the one that spawns the destructive replacement.
-  const unconfirmedList = subagentList.buildSubagentList({
+  const unconfirmedList = await subagentList.buildSubagentListForTests({
     cfg: depsModule.subagentRegistryDeps.getRuntimeConfig(),
     runs: registryRead.listSubagentRunsForRequester(REQUESTER_SESSION_KEY),
     recentMinutes: 30,

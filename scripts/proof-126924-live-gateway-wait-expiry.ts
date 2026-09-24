@@ -766,6 +766,7 @@ try {
     `no child was observed doing work after its wait expired; observed: ${describeObservations(observations)}`,
   );
   const activeExample = stillActive[0];
+  assert.ok(activeExample, "stillActive must have a first entry");
   const childRequestsFinal = countChildProviderRequests();
   assert.ok(
     childRequestsFinal > (activeExample.childRequestsAtExpiry ?? 0),
@@ -789,6 +790,7 @@ try {
     `no provisional wait-expiry notification settled; observed: ${describeObservations(observations)}`,
   );
   const announcedExample = announced[0];
+  assert.ok(announcedExample, "announced must have a first entry");
   assert.equal(
     announcedExample.endedAtWhenAnnounced,
     undefined,
@@ -815,6 +817,7 @@ try {
     `no child's later success survived its expired wait; observed: ${describeObservations(observations)}`,
   );
   const deliveredExample = delivered[0];
+  assert.ok(deliveredExample, "delivered must have a first entry");
   assert.equal(
     typeof deliveredExample.finalExpiryObservedAt,
     "number",
@@ -885,6 +888,7 @@ try {
       )}`,
   );
   const receiptExample = receipts[0];
+  assert.ok(receiptExample, "receipts must have a first entry");
   assert.equal(
     receiptExample.observation.deliveryWhenAnnounced?.status === "delivered",
     false,

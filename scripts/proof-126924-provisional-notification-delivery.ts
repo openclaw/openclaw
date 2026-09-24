@@ -75,8 +75,8 @@ const finalText = "FINAL: this same child completed after notification settlemen
 let exitCode = 0;
 try {
   const delivery = await import("../src/agents/subagents/announce/subagent-announce-delivery.js");
-  const deliveryRuntime =
-    await import("../src/agents/subagents/announce/subagent-announce-delivery.runtime.js");
+  const overrides =
+    await import("../src/agents/subagents/announce/subagent-announce-overrides.test-support.js");
   const announce = await import("../src/agents/subagents/announce/subagent-announce.js");
   const registry = await import("../src/agents/subagents/registry/subagent-registry.js");
   const deps = await import("../src/agents/subagents/registry/subagent-registry-deps.js");
@@ -125,13 +125,13 @@ try {
     // and the assertions below validate its shape at each consumer.
     return response as T;
   };
-  deliveryRuntime.setSubagentAnnounceDeliveryDepsForTest({
+  overrides.setSubagentAnnounceDeliveryDepsForTest({
     callGateway: gateway,
     sendMessage: localSend,
     getRequesterSessionActivity: () => ({ sessionId: "proof-requester", isActive: false }),
     resolveRequesterSessionAbandonment: () => undefined,
   });
-  announce.testing.setDepsForTest({ callGateway: gateway });
+  overrides.announceTesting.setDepsForTest({ callGateway: gateway });
   await sessions.replaceSessionEntry(
     { sessionKey: dmRequester, agentId: "main" },
     {
@@ -182,7 +182,6 @@ try {
         requesterAgentId: "main",
         triggerMessage: "process child observation",
         steerMessage: "process child observation",
-        requesterOrigin: dmOrigin,
         requesterSessionOrigin: dmOrigin,
         completionDirectOrigin: dmOrigin,
         directOrigin: dmOrigin,

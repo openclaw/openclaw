@@ -53,6 +53,8 @@ import path from "node:path";
 type SpawnedContextModule = typeof import("../src/agents/spawned-context.js");
 type SessionAccessorModule = typeof import("../src/config/sessions/session-accessor.js");
 type SubagentListModule = typeof import("../src/agents/subagents/registry/subagent-list.js");
+type SubagentRegistryQueriesModule =
+  typeof import("../src/agents/subagents/registry/subagent-registry-queries.js");
 type SubagentsCommandModule =
   typeof import("../src/auto-reply/reply/commands-subagents/action-list.js");
 type SubagentRunRecord =
@@ -102,8 +104,10 @@ async function main(): Promise<void> {
     (await import("../src/agents/spawned-context.js")) as SpawnedContextModule;
   const { upsertSessionEntryCore } =
     (await import("../src/config/sessions/session-accessor.js")) as SessionAccessorModule;
-  const { buildSubagentList } =
+  const { buildSubagentList, captureSubagentListReadContext, readSubagentListSessionEntries } =
     (await import("../src/agents/subagents/registry/subagent-list.js")) as SubagentListModule;
+  const { buildSubagentRunReadIndexFromRuns } =
+    (await import("../src/agents/subagents/registry/subagent-registry-queries.js")) as SubagentRegistryQueriesModule;
   const { handleSubagentsListAction } =
     (await import("../src/auto-reply/reply/commands-subagents/action-list.js")) as SubagentsCommandModule;
 
@@ -132,11 +136,21 @@ async function main(): Promise<void> {
 
   const listFor = (storePath: string, runs: SubagentRunRecord[]) => {
     const cfg = { session: { store: storePath } } as OpenClawConfig;
-    const list = buildSubagentList({ cfg, runs, recentMinutes: 30 });
+    const runsById = new Map(runs.map((run) => [run.runId, run]));
+    const context = captureSubagentListReadContext(
+      runs,
+      buildSubagentRunReadIndexFromRuns({ runs: new Map(), inMemoryRuns: runs }),
+      runsById,
+      30,
+    );
+    const list = buildSubagentList({
+      context,
+      sessionEntries: readSubagentListSessionEntries(cfg, context),
+    });
     // The `/subagents` command surface, driven for real off the same build.
     const text = handleSubagentsListAction({
       params: { cfg },
-      runs,
+      readContext: { list: context },
     } as never);
     return { list, text };
   };
