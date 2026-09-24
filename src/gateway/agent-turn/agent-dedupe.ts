@@ -122,6 +122,17 @@ export function setGatewayDedupeEntries(params: {
   }
 }
 
+export function buildAbortedAgentPayload(runId: string, stopReason: string) {
+  return {
+    runId,
+    status: "timeout" as const,
+    summary: "aborted",
+    stopReason,
+    timeoutPhase: "queue" as const,
+    providerStarted: false,
+  };
+}
+
 export function setAbortedAgentDedupeEntries(params: {
   dedupe: GatewayRequestContext["dedupe"];
   keys: readonly string[];
@@ -139,14 +150,9 @@ export function setAbortedAgentDedupeEntries(params: {
       ts: Date.now(),
       ok: true,
       payload: {
-        runId: params.runId,
+        ...buildAbortedAgentPayload(params.runId, params.stopReason),
         ...(params.agentId ? { agentId: params.agentId } : {}),
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        status: "timeout" as const,
-        summary: "aborted",
-        stopReason: params.stopReason,
-        timeoutPhase: "queue",
-        providerStarted: false,
       },
     },
   });
